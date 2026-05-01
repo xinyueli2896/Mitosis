@@ -1,0 +1,10 @@
+__pycache__
+ckpt
+lightning_logs
+tb_logs
+.idea
+/data
+/temp/
+/save_models
+/test_results/
+/score_data/
