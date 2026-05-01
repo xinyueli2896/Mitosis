@@ -159,6 +159,53 @@ class DualRoFormerShift2(RoFormerSymbolicTransformer):
         loss_c = F.cross_entropy(y_c.reshape(-1, n), x_c.reshape(-1), ignore_index=pad)
         return loss_m, loss_c
 
+    def dual_global_sampling(self, x_m, x_c, max_seq_len=384, temperature=1.0,
+                             sampling_func=None):
+        """Autoregressively generate melody and chord in parallel.
+
+        x_m, x_c: prompt tensors as produced by self.preprocess(), shapes
+        [B, S0, subseq_m] and [B, S0, subseq_c]. At each step t >= S0 the model
+        predicts the pair (m_t, c_t) jointly from all prior melody/chord
+        subseqs. Returns (y_m, y_c) where each is a list of length max_seq_len
+        of [B, subseq_*] long-tensors covering the full sequence (prompt
+        included)."""
+        B, S0, subseq_m = x_m.shape
+        subseq_c = x_c.shape[2]
+        h_m, _ = self.local_encode(x_m)
+        h_c, _ = self.local_encode(x_c)
+        h_m = h_m.view(B, S0, -1)
+        h_c = h_c.view(B, S0, -1)
+        sos_m = self.global_sos_m.view(1, 1, -1).expand(B, 1, -1)
+        sos_c = self.global_sos_c.view(1, 1, -1).expand(B, 1, -1)
+        pairs = torch.stack([h_m, h_c], dim=2).reshape(B, 2 * S0, -1)
+        # h_buffer at the start of step t has length 2 + 2*t. Output positions
+        # 2*t and 2*t+1 then predict m_t and c_t respectively.
+        h_buffer = torch.cat([sos_m, sos_c, pairs], dim=1)
+
+        y_m_list = [x_m[:, i, :] for i in range(S0)]
+        y_c_list = [x_c[:, i, :] for i in range(S0)]
+        for t in range(S0, max_seq_len):
+            if t % 10 == 0:
+                print(f'Sampling {t} / {max_seq_len}')
+            mask = self.buffered_pair_causal_mask(h_buffer)
+            h_out = self.model(h_buffer, attention_mask=mask)[0]
+            h_m_pred = h_out[:, 2 * t]
+            h_c_pred = h_out[:, 2 * t + 1]
+            y_m_next = self.local_sampling(
+                h_m_pred, max_subseq_len=subseq_m, temperature=temperature,
+                global_step=t, sampling_func=sampling_func,
+            )
+            y_c_next = self.local_sampling(
+                h_c_pred, max_subseq_len=subseq_c, temperature=temperature,
+                global_step=t, sampling_func=sampling_func,
+            )
+            y_m_list.append(y_m_next)
+            y_c_list.append(y_c_next)
+            new_h_m = self.local_encode(y_m_next.unsqueeze(1))[0].unsqueeze(1)
+            new_h_c = self.local_encode(y_c_next.unsqueeze(1))[0].unsqueeze(1)
+            h_buffer = torch.cat([h_buffer, new_h_m, new_h_c], dim=1)
+        return y_m_list, y_c_list
+
     def training_step(self, batch, batch_idx):
         loss_m, loss_c = self.loss(*batch)
         loss = 0.5 * (loss_m + loss_c)
