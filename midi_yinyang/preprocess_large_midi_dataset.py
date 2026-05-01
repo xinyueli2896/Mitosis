@@ -1,7 +1,7 @@
 import numpy as np
 import xf_midi
 import pretty_midi
-from settings import RWC_DATASET_PATH, LA_DATASET_PATH, NOTTINGHAM_DATASET_PATH
+from settings import RWC_DATASET_PATH, LA_DATASET_PATH, NOTTINGHAM_DATASET_PATH, POP909_MELODY_PATH
 import os
 from joblib import Parallel, delayed
 import torch
@@ -217,7 +217,7 @@ def preprocess_midi(midi_path, max_polyphony, beat_div=4, ins_ids='all', filter=
     return torch.tensor(result_rolls.reshape(midi_end_time, -1)), torch.tensor([pitch_shift_min, pitch_shift_max], dtype=torch.int8)
 
 
-def create_npy_dataset_from_midi(folder, max_polyphony, dataset_name, ins_ids='all', scan_subfolders=True, dedup=False, max_idx=None):
+def create_npy_dataset_from_midi(folder, max_polyphony, dataset_name, ins_ids='all', scan_subfolders=True, dedup=False, max_idx=None, filter=True):
     # Get all midi files in the folder, recursively
     midi_files = []
     if scan_subfolders:
@@ -233,7 +233,7 @@ def create_npy_dataset_from_midi(folder, max_polyphony, dataset_name, ins_ids='a
         midi_files = midi_files[:max_idx]
     # Process files in parallel
     print(f'Processing {len(midi_files)} files')
-    results = Parallel(n_jobs=-1, verbose=10)(delayed(preprocess_midi)(midi_file, max_polyphony, ins_ids=ins_ids, dedup=dedup) for midi_file in midi_files)
+    results = Parallel(n_jobs=-1, verbose=10)(delayed(preprocess_midi)(midi_file, max_polyphony, ins_ids=ins_ids, dedup=dedup, filter=filter) for midi_file in midi_files)
     # Filter out None results
     midi_files = [os.path.relpath(midi_files[i], folder) for i, result in enumerate(results) if result is not None]
     results = [result for result in results if result is not None]
@@ -298,5 +298,23 @@ def create_la_med(max_polyphony=16):
     la_folder = os.path.join(LA_DATASET_PATH, 'MIDIs')
     create_npy_dataset_from_midi(la_folder, max_polyphony, f'la_cp{max_polyphony}_v2_med_dedup', max_idx=50000, dedup=True)
 
+def create_pop909_melody(max_polyphony=4):
+    # POP909 melody is monophonic; max_polyphony=4 leaves headroom for any
+    # incidental overlap. filter=False because POP909 is already curated and
+    # the LA-quantization heuristic is for noisy datasets.
+    create_npy_dataset_from_midi(
+        POP909_MELODY_PATH,
+        max_polyphony,
+        f'pop909_melody_cp{max_polyphony}_v2',
+        ins_ids='all',
+        scan_subfolders=False,
+        filter=False,
+    )
+
+
 if __name__ == '__main__':
-    create_rwc_cp()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == 'pop909_melody':
+        create_pop909_melody()
+    else:
+        create_rwc_cp()
