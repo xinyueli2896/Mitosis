@@ -1,15 +1,21 @@
 """Realign POP909 MIDI files so their beat grid matches beat_midi.txt.
 
 Each song folder POP909-Dataset/POP909/<id>/ contains <id>.mid and beat_midi.txt
-(columns: time_sec, beat_in_measure, downbeat_flag). The midi's own tempo track
-does not match the true beat positions. This script preserves all event ticks
-(so musical beat positions stay intact) and replaces the tempo track with one
-tempo event per beat such that beat i (tick i * PPQ) plays at beat_midi[i] -
-beat_midi[0]. Within a beat segment the tempo is constant, which is the natural
-linear interpolation in time for sub-beat events.
+(columns: time_sec, strong_beat_flag, downbeat_flag — each row is one quarter
+note beat). The midi's own tempo track does not match the audio beat times;
+this script rewrites the tempo so audio beat i lands at output midi tick
+(i + 1) * PPQ at exactly beat_midi[i] seconds. Concretely:
 
-The absolute lead-in offset (beat_midi[0]) is dropped: in the output, audio
-beat 0 plays at midi time 0. Re-add it by inserting a silent preroll if needed.
+  * Output tick 0 .. PPQ           -> tempo such that the segment takes beats[0]
+                                       seconds (the audio lead-in).
+  * Output tick i*PPQ .. (i+1)*PPQ -> tempo such that the segment takes
+                                       beats[i] - beats[i-1] seconds, for i >= 1.
+  * Every original event is shifted forward by PPQ ticks so the musical beat
+    structure aligns: original tick i*PPQ -> output tick (i+1)*PPQ.
+
+Within a beat segment the tempo is constant, which is the natural linear
+interpolation in time for sub-beat events. After realignment, audio time t
+corresponds exactly to output midi time t (no offset needed for sync).
 
 Output: <out_root>/<id>.mid (preserves original PPQ).
 """
@@ -25,11 +31,16 @@ import numpy as np
 def realign_midi(midi_path, beat_path, out_path):
     mid = mido.MidiFile(midi_path)
     ppq = mid.ticks_per_beat
-    new_beats = np.loadtxt(beat_path)[:, 0]
-    if len(new_beats) < 2:
-        raise ValueError(f"need >=2 beats, got {len(new_beats)}")
-    # tempo per beat segment, in microseconds per quarter note
-    tempos_us = np.maximum(1, np.round(np.diff(new_beats) * 1e6).astype(np.int64))
+    beats = np.loadtxt(beat_path)[:, 0]
+    if len(beats) < 2:
+        raise ValueError(f"need >=2 beats, got {len(beats)}")
+
+    # Tempo for segment [i*PPQ, (i+1)*PPQ]:
+    #   i == 0:  duration = beats[0]                  (lead-in before audio beat 0)
+    #   i >= 1:  duration = beats[i] - beats[i-1]     (audio beat i-1 -> beat i)
+    tempos_us = [int(round(max(beats[0], 1e-6) * 1e6))]
+    for dt in np.diff(beats):
+        tempos_us.append(int(round(max(dt, 1e-6) * 1e6)))
 
     out = mido.MidiFile(ticks_per_beat=ppq)
 
@@ -37,26 +48,29 @@ def realign_midi(midi_path, beat_path, out_path):
     last_tick = 0
     for i, tempo in enumerate(tempos_us):
         tick = i * ppq
-        tempo_track.append(mido.MetaMessage("set_tempo", tempo=int(tempo), time=tick - last_tick))
+        tempo_track.append(mido.MetaMessage("set_tempo", tempo=tempo, time=tick - last_tick))
         last_tick = tick
     tempo_track.append(mido.MetaMessage("end_of_track", time=0))
     out.tracks.append(tempo_track)
 
-    # Copy all original tracks verbatim except: drop their set_tempo events
-    # (replaced by the dedicated tempo track above). end_of_track stays.
+    # Shift every other event forward by one beat (PPQ ticks) so the original
+    # musical position at tick i*PPQ lands on output tick (i+1)*PPQ, which under
+    # the tempo schedule above plays at beats[i].
+    SHIFT = ppq
     for track in mid.tracks:
-        new_track = mido.MidiTrack()
+        events = []
         abs_tick = 0
-        last_emit_tick = 0
         for msg in track:
             abs_tick += msg.time
-            if msg.type == "set_tempo":
-                continue  # absorbed; the next emitted message gets the accumulated delta
-            if msg.type == "end_of_track":
-                continue  # we'll re-append at the end
-            new_track.append(msg.copy(time=abs_tick - last_emit_tick))
-            last_emit_tick = abs_tick
-        new_track.append(mido.MetaMessage("end_of_track", time=max(0, abs_tick - last_emit_tick)))
+            if msg.type in ("set_tempo", "end_of_track"):
+                continue
+            events.append((abs_tick + SHIFT, msg))
+        new_track = mido.MidiTrack()
+        prev = 0
+        for at, msg in events:
+            new_track.append(msg.copy(time=at - prev))
+            prev = at
+        new_track.append(mido.MetaMessage("end_of_track", time=0))
         out.tracks.append(new_track)
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
