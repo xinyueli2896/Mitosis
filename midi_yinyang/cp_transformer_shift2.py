@@ -8,6 +8,7 @@ from transformers.models.roformer.modeling_roformer import RoFormerModel, RoForm
 import pytorch_lightning as L
 from torch.utils.data import DataLoader, IterableDataset
 from pytorch_lightning.loggers.tensorboard import TensorBoardLogger
+from pytorch_lightning.loggers import WandbLogger
 import sys
 
 TRAIN_LENGTH = 384
@@ -366,7 +367,13 @@ if __name__ == '__main__':
                         limit_val_batches=25,
                         check_val_every_n_epoch=None,
                         gradient_clip_val=gradient_clip,
-                        logger=TensorBoardLogger("tb_logs", name=model_name),
+                        logger=[
+                            TensorBoardLogger("tb_logs", name=model_name),
+                            WandbLogger(
+                                project=os.environ.get("WANDB_PROJECT", "mitosis"),
+                                name=model_name,
+                            ),
+                        ],
                         num_sanity_val_steps=0 if checkpoint_path is not None else 2,
                         strategy=strategy)
     trainer.fit(net, train_set_loader, val_set_loader, ckpt_path=checkpoint_path)
