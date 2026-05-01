@@ -78,6 +78,7 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         self.final_decoder = nn.Linear(self.hidden_size, self.tokenizer.n_tokens)
         self.global_sos = nn.Parameter(torch.randn(self.hidden_size))
         self._future_mask = torch.empty(0)
+        self._pair_future_mask = torch.empty(0)
         self.with_velocity = with_velocity
         self.max_lr = max_lr
 
@@ -92,47 +93,53 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         mask = x != self.tokenizer.pad_token
         emb = self.local_embedding(x)
         h = self.local_encoder(emb, encoder_attention_mask=mask)[0]
-        # get representation of the first token
-        return h[:, 0], emb[:, :-1]
+        # h[:, 0]: pooled representation; emb[:, 1:-2]: token embeddings of a_0,b_0,...,a_{N-2},b_{N-2}
+        # for shift-by-2 teacher forcing (two seed slots are filled with the global h in local_decode)
+        return h[:, 0], emb[:, 1:-2]
 
     def local_decode(self, h, emb):
-        batch_size, subseq_len, _ = emb.shape
-        # Add h as the first token of emb
-        h = h.view(batch_size, 1, -1)
-        emb = torch.cat([h, emb[:, 1:]], dim=1)
-        # Create an autoregressive mask
-
-        h = self.local_decoder(emb, attention_mask=self.buffered_future_mask(emb))[0]
+        # emb: [B*S, 2N-2, H] holding a_0,b_0,...,a_{N-2},b_{N-2}; h: global context [B*S, H]
+        # Build [h, h, a_0, b_0, ..., a_{N-2}, b_{N-2}] of length 2N (shift-by-2)
+        bs_seq = emb.shape[0]
+        h = h.reshape(bs_seq, 1, -1)
+        emb = torch.cat([h, h, emb], dim=1)
+        h = self.local_decoder(emb, attention_mask=self.buffered_pair_causal_mask(emb))[0]
         return self.final_decoder(h)
 
     def local_sampling(self, h, max_subseq_len=32, temperature=1.0, global_step=None, sampling_func=None):
-        batch_size, _ = h.shape
+        # Pair-parallel sampling: at step i, predict a_i and b_i jointly, conditioned on a_{<i}, b_{<i}.
+        # max_subseq_len must be even (interleaved a/b tokens).
+        assert max_subseq_len % 2 == 0
+        batch_size, hidden = h.shape
+        n_pairs = max_subseq_len // 2
+        # seed both modality slots with the global context h
+        cur_emb = h[:, None, :].expand(batch_size, 2, hidden).contiguous()
         y = torch.zeros((batch_size, 0), dtype=torch.long, device=h.device)
-        emb = h[:, None, :]
         eos_triggered = torch.zeros(batch_size, dtype=torch.bool, device=h.device)
-        past_key_values = None
-        local_emb = emb
-        for i in range(max_subseq_len):
-            h, past_key_values = self.local_decoder(local_emb, past_key_values=past_key_values, use_cache=True, return_dict=False)
-            # h_out_ref = self.local_decoder(emb, attention_mask=self.buffered_future_mask(emb))[0]
-            # assert torch.allclose(h[:, -1:], h_out_ref[:, -1:], rtol=1e-3, atol=1e-5)
-            p = self.final_decoder(h[:, -1])
+        for i in range(n_pairs):
+            out = self.local_decoder(cur_emb, attention_mask=self.buffered_pair_causal_mask(cur_emb))[0]
+            logits = self.final_decoder(out[:, -2:])  # [B, 2, n_tokens]
             if sampling_func is not None:
-                p = sampling_func(global_step, i, p)
+                logits = torch.stack([
+                    sampling_func(global_step, 2 * i, logits[:, 0]),
+                    sampling_func(global_step, 2 * i + 1, logits[:, 1]),
+                ], dim=1)
             if temperature == 0:
-                p = F.one_hot(p.argmax(dim=-1), self.tokenizer.n_tokens).float()
+                sampled = logits.argmax(dim=-1)  # [B, 2]
             else:
-                p = F.softmax(p / temperature, dim=-1)
-            y_next = torch.multinomial(p, 1)
-            y_next[eos_triggered, :] = self.tokenizer.pad_token  # If EOS has been triggered, pad the rest
-            eos_triggered = eos_triggered | (y_next.squeeze(1) == self.tokenizer.eos_token)
-            y = torch.cat([y, y_next], dim=1)
+                probs = F.softmax(logits / temperature, dim=-1)
+                sampled = torch.multinomial(
+                    probs.reshape(-1, self.tokenizer.n_tokens), 1
+                ).view(batch_size, 2)
+            sampled[eos_triggered] = self.tokenizer.pad_token
+            eos_triggered = eos_triggered | (sampled == self.tokenizer.eos_token).any(dim=-1)
+            y = torch.cat([y, sampled], dim=1)
             if torch.all(eos_triggered):
-                # Pad remaining tokens
-                y = torch.cat([y, torch.full((batch_size, max_subseq_len - i - 1), self.tokenizer.pad_token, dtype=torch.long, device=h.device)], dim=1)
+                remaining = max_subseq_len - 2 * (i + 1)
+                if remaining > 0:
+                    y = torch.cat([y, torch.full((batch_size, remaining), self.tokenizer.pad_token, dtype=torch.long, device=h.device)], dim=1)
                 break
-            local_emb = self.local_embedding(y_next)
-            # emb = torch.cat([emb, self.local_embedding(y_next)], dim=1)
+            cur_emb = torch.cat([cur_emb, self.local_embedding(sampled)], dim=1)
         return y
 
     def global_sampling(self, x, max_seq_len=384, temperature=1.0, sampling_func=None):
@@ -175,6 +182,24 @@ class RoFormerSymbolicTransformer(L.LightningModule):
             )
         self._future_mask = self._future_mask.to(tensor)
         return self._future_mask[:dim, :dim]
+
+    def buffered_pair_causal_mask(self, tensor):
+        # Block-causal mask over pairs: position i may attend to j iff (j // 2) <= (i // 2).
+        # Within a pair {2k, 2k+1} both slots attend to all earlier pairs and to each other,
+        # implementing parallel decoding of a_k and b_k from a_{<k}, b_{<k}.
+        dim = tensor.size(1)
+        if (
+                self._pair_future_mask.size(0) == 0
+                or (not self._pair_future_mask.device == tensor.device)
+                or self._pair_future_mask.size(0) < dim
+        ):
+            rows = torch.arange(dim).unsqueeze(1) // 2
+            cols = torch.arange(dim).unsqueeze(0) // 2
+            mask = torch.zeros([dim, dim])
+            mask.masked_fill_(cols > rows, float("-inf"))
+            self._pair_future_mask = mask
+        self._pair_future_mask = self._pair_future_mask.to(tensor)
+        return self._pair_future_mask[:dim, :dim]
 
     def forward(self, x):
         # x: [batch, seq, subseq]
@@ -309,7 +334,7 @@ if __name__ == '__main__':
     max_lr = 5e-5 if model_size >= 2 else 1e-4
     n_gpus = max(torch.cuda.device_count(), 1)
     suffix = 'vel' if with_velocity else ''
-    model_name = f'cp_transformer_v0.42{suffix}_size{model_size}_batch_{batch_size * n_gpus}_schedule'
+    model_name = f'cp_transformer_shift2_v0.42{suffix}_size{model_size}_batch_{batch_size * n_gpus}_schedule'
     net = RoFormerSymbolicTransformer(size=model_size, max_lr=max_lr, with_velocity=with_velocity)
     train_set_loader = DataLoader(FramedDataset('data/la_cp16_v2.pt', TRAIN_LENGTH, batch_size), batch_size=None, num_workers=1, persistent_workers=True)
     val_set_loader = DataLoader(FramedDataset('data/rwc_cp16_v2.pt', TRAIN_LENGTH, batch_size), batch_size=None, num_workers=1, persistent_workers=True)
