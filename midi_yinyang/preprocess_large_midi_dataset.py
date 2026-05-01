@@ -1,7 +1,7 @@
 import numpy as np
 import xf_midi
 import pretty_midi
-from settings import RWC_DATASET_PATH, LA_DATASET_PATH, NOTTINGHAM_DATASET_PATH, POP909_MELODY_PATH
+from settings import RWC_DATASET_PATH, LA_DATASET_PATH, NOTTINGHAM_DATASET_PATH, POP909_MELODY_PATH, POP909_CHORD_PATH
 import os
 from joblib import Parallel, delayed
 import torch
@@ -312,9 +312,26 @@ def create_pop909_melody(max_polyphony=4):
     )
 
 
+def create_pop909_chord(max_polyphony=8):
+    # Chord midis carry one bass note plus 3-5 upper voices per chord, all
+    # struck simultaneously; max_polyphony=8 gives headroom for the largest
+    # voicings (e.g. 9th chords).
+    create_npy_dataset_from_midi(
+        POP909_CHORD_PATH,
+        max_polyphony,
+        f'pop909_chord_cp{max_polyphony}_v2',
+        ins_ids='all',
+        scan_subfolders=False,
+        filter=False,
+    )
+
+
 if __name__ == '__main__':
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == 'pop909_melody':
+    arg = sys.argv[1] if len(sys.argv) > 1 else None
+    if arg == 'pop909_melody':
         create_pop909_melody()
+    elif arg == 'pop909_chord':
+        create_pop909_chord()
     else:
         create_rwc_cp()
