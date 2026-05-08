@@ -229,6 +229,11 @@ def create_npy_dataset_from_midi(folder, max_polyphony, dataset_name, ins_ids='a
         for file in os.listdir(folder):
             if file.endswith('.mid') or file.endswith('.MID'):
                 midi_files.append(os.path.join(folder, file))
+    # Sort deterministically. os.listdir / os.walk return inode order, which is
+    # not lexicographic and can differ between sibling folders that contain the
+    # same file names — that breaks paired-stream datasets (melody vs chord)
+    # since song i in one .pt would map to a different song in the other.
+    midi_files.sort()
     if max_idx is not None:
         midi_files = midi_files[:max_idx]
     # Process files in parallel
