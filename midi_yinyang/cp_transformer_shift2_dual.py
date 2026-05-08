@@ -259,6 +259,30 @@ if __name__ == '__main__':
         DualFramedDataset(melody_data, chord_data, TRAIN_LENGTH, batch_size, split='val'),
         batch_size=None, num_workers=1, persistent_workers=True,
     )
+
+    # Sanity dump: take one training batch, run it through preprocess, decode
+    # each example back to a midi (MELODY + CHORD tracks) so you can listen and
+    # confirm the data fed to the model is what you expect.
+    print('Dumping 10 training-input samples to temp/<model_name>/inputs/...')
+    from cp_transformer_shift2_dual_inference import decode_output_dual
+    sample_iter = iter(DataLoader(
+        DualFramedDataset(melody_data, chord_data, TRAIN_LENGTH,
+                          batch_size=10, split='train', random_order=False, repeat=False),
+        batch_size=None, num_workers=0,
+    ))
+    x_m_raw, x_c_raw, pitch_shift_dump = next(sample_iter)
+    with torch.no_grad():
+        x_m_dump = net.preprocess(x_m_raw, pitch_shift_dump)
+        x_c_dump = net.preprocess(x_c_raw, pitch_shift_dump)
+    n_dump = min(10, x_m_dump.shape[0])
+    for i in range(n_dump):
+        m_steps = [x_m_dump[i:i + 1, t, :] for t in range(x_m_dump.shape[1])]
+        c_steps = [x_c_dump[i:i + 1, t, :] for t in range(x_c_dump.shape[1])]
+        decode_output_dual(
+            m_steps, c_steps,
+            save_path=f'temp/{model_name}/inputs/sample_{i}.mid',
+        )
+    print(f'  wrote {n_dump} samples.')
     checkpoint_callback = L.callbacks.ModelCheckpoint(
         monitor='val_loss', save_top_k=10, save_last=True,
         enable_version_counter=False,
