@@ -107,7 +107,33 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         h = self.local_decoder(emb, attention_mask=self.buffered_pair_causal_mask(emb))[0]
         return self.final_decoder(h)
 
-    def local_sampling(self, h, max_subseq_len=32, temperature=1.0, global_step=None, sampling_func=None):
+    def _build_slot_logit_mask(self):
+        """Per-slot additive logit mask. The CP vocab is shared across both
+        slots of a (program, pitch+duration) pair, but each slot has a
+        disjoint set of legal token ids; an undertrained model otherwise
+        leaks tokens across slots and decode_output rejects them. Apply
+        this mask before softmax/argmax to constrain sampling."""
+        n = self.tokenizer.n_tokens
+        a_mask = torch.full((n,), float("-inf"))
+        b_mask = torch.full((n,), float("-inf"))
+        if self.with_velocity:
+            # a-slot: program + 128 * velocity_bin in [0, 128*16)
+            a_mask[: 128 * 16] = 0
+            # b-slot: pitch + (duration + 16) * 128 in [128*16, 128*16 + 24*128)
+            b_mask[128 * 16 : 128 * 16 + 24 * 128] = 0
+        else:
+            # a-slot: program in [0, 128)
+            a_mask[:128] = 0
+            # b-slot: pitch + (duration + 1) * 128 in [128, 128 + 24*128) = [128, 3200)
+            b_mask[128 : 128 + 24 * 128] = 0
+        # eos terminates the local subseq from the a-slot; pad fills both slots.
+        a_mask[self.tokenizer.eos_token] = 0
+        a_mask[self.tokenizer.pad_token] = 0
+        b_mask[self.tokenizer.pad_token] = 0
+        return torch.stack([a_mask, b_mask], dim=0)  # [2, n_tokens]
+
+    def local_sampling(self, h, max_subseq_len=32, temperature=1.0, global_step=None, sampling_func=None,
+                       constrain_to_slot=True):
         # Pair-parallel sampling: at step i, predict a_i and b_i jointly, conditioned on a_{<i}, b_{<i}.
         # max_subseq_len must be even (interleaved a/b tokens).
         assert max_subseq_len % 2 == 0
@@ -117,9 +143,12 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         cur_emb = h[:, None, :].expand(batch_size, 2, hidden).contiguous()
         y = torch.zeros((batch_size, 0), dtype=torch.long, device=h.device)
         eos_triggered = torch.zeros(batch_size, dtype=torch.bool, device=h.device)
+        slot_mask = self._build_slot_logit_mask().to(h.device) if constrain_to_slot else None
         for i in range(n_pairs):
             out = self.local_decoder(cur_emb, attention_mask=self.buffered_pair_causal_mask(cur_emb))[0]
             logits = self.final_decoder(out[:, -2:])  # [B, 2, n_tokens]
+            if slot_mask is not None:
+                logits = logits + slot_mask[None]
             if sampling_func is not None:
                 logits = torch.stack([
                     sampling_func(global_step, 2 * i, logits[:, 0]),
