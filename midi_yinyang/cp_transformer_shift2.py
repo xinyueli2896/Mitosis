@@ -133,7 +133,7 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         return torch.stack([a_mask, b_mask], dim=0)  # [2, n_tokens]
 
     def local_sampling(self, h, max_subseq_len=32, temperature=1.0, global_step=None, sampling_func=None,
-                       constrain_to_slot=True):
+                       constrain_to_slot=False):
         # Pair-parallel sampling: at step i, predict a_i and b_i jointly, conditioned on a_{<i}, b_{<i}.
         # max_subseq_len must be even (interleaved a/b tokens).
         assert max_subseq_len % 2 == 0
