@@ -12,6 +12,7 @@ Run from midi_yinyang/:
 """
 
 import os
+import re
 import sys
 
 import torch
@@ -69,7 +70,18 @@ if __name__ == '__main__':
     n_samples = int(sys.argv[6]) if len(sys.argv) > 6 else 2
     max_polyphony = int(sys.argv[7]) if len(sys.argv) > 7 else 16
 
-    model = RoFormerSymbolicTransformer.load_from_checkpoint(ckpt)
+    # Constructor args weren't saved with the checkpoint, so we have to pass
+    # the right size/with_velocity manually. Auto-detect size from the
+    # filename pattern "_sizeN_" when present.
+    size = 1
+    m = re.search(r'_size(\d+)_', os.path.basename(ckpt))
+    if m:
+        size = int(m.group(1))
+        print(f'Auto-detected size={size} from checkpoint filename.')
+    with_velocity = 'vel' in os.path.basename(ckpt).split('_size')[0]
+    model = RoFormerSymbolicTransformer.load_from_checkpoint(
+        ckpt, size=size, with_velocity=with_velocity,
+    )
     model.save_name = os.path.basename(ckpt)
     model.cuda()
     model.eval()

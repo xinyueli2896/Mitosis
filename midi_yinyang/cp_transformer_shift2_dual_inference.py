@@ -24,6 +24,7 @@ Run from the midi_yinyang/ directory with either argparse-style flags:
 
 import argparse
 import os
+import re
 from glob import glob
 
 import torch
@@ -148,14 +149,32 @@ def main():
     p.add_argument('--n-samples', type=int, default=1)
     p.add_argument('--max-poly-m', type=int, default=4)
     p.add_argument('--max-poly-c', type=int, default=8)
+    p.add_argument('--size', type=int, default=0,
+                   help='Model size used at training (0..3). Must match the '
+                        'checkpoint or load will fail with shape mismatches. '
+                        'Auto-detected from the filename pattern "_sizeN_" '
+                        'when present.')
+    p.add_argument('--with-velocity', action='store_true',
+                   help='Set if the checkpoint was trained with velocity.')
     args = p.parse_args()
+
+    # Auto-detect size from the checkpoint filename if it matches "_sizeN_".
+    m = re.search(r'_size(\d+)_', os.path.basename(args.ckpt))
+    if m:
+        detected = int(m.group(1))
+        if detected != args.size:
+            print(f'Auto-detected size={detected} from checkpoint filename '
+                  f'(overriding --size={args.size}).')
+            args.size = detected
 
     if args.melody and not args.chord:
         p.error('--melody requires --chord')
     if args.mel_folder and not args.chord_folder:
         p.error('--mel-folder requires --chord-folder')
 
-    model = DualRoFormerShift2.load_from_checkpoint(args.ckpt)
+    model = DualRoFormerShift2.load_from_checkpoint(
+        args.ckpt, size=args.size, with_velocity=args.with_velocity,
+    )
     model.save_name = os.path.basename(args.ckpt)
     model.cuda()
     model.eval()
