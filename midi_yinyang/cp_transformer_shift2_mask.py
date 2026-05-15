@@ -345,7 +345,7 @@ if __name__ == '__main__':
         max_steps=MAX_STEPS,
         accelerator='gpu' if torch.cuda.is_available() else 'cpu',
         callbacks=[checkpoint_callback],
-        val_check_interval=2500,
+        val_check_interval=500,
         limit_val_batches=25,
         check_val_every_n_epoch=None,
         gradient_clip_val=gradient_clip,
