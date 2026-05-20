@@ -281,6 +281,7 @@ if __name__ == '__main__':
         decode_output_dual(
             m_steps, c_steps,
             save_path=f'temp/{model_name}/inputs/sample_{i}.mid',
+            with_velocity=with_velocity,
         )
     print(f'  wrote {n_dump} samples.')
     checkpoint_callback = L.callbacks.ModelCheckpoint(

@@ -7,7 +7,6 @@ import torch
 import pretty_midi
 import os
 def decode_output(outputs, save_path=None, tempo=120.0, ratio=1.0, velocity=100, with_velocity=False, extra_instruments=None, fixed_program=None):
-    assert with_velocity == False, 'Velocity is not supported yet'
     tokenizer = CPTokenizer(with_velocity=with_velocity)
     midi = pretty_midi.PrettyMIDI(initial_tempo=tempo)
     time_step_length = 60.0 / tempo / 4
@@ -21,17 +20,31 @@ def decode_output(outputs, save_path=None, tempo=120.0, ratio=1.0, velocity=100,
             content = data.squeeze(0)
             start_time = time_step * time_step_length
             for i in range(0, len(content), 2):
-                program = int(content[i].item())
-                if program == tokenizer.eos_token:
+                a_token = int(content[i].item())
+                if a_token == tokenizer.eos_token:
                     break
                 if i + 1 >= len(content):
                     print('Incomplete note @', time_step, i)
                     break
-                pitch_duration = int(content[i + 1].item()) - 128
+                b_token = int(content[i + 1].item())
+                if with_velocity:
+                    # a-slot: program + 128 * velocity_bin in [0, 128*16)
+                    program = a_token % 128
+                    velocity_bin = a_token // 128
+                    note_velocity = velocity_bin * 8 + 4  # midpoint of 8-wide bin
+                    # b-slot: pitch + (duration + 16) * 128 in [128*16, 128*16 + 24*128)
+                    pitch_duration = b_token - 16 * 128
+                else:
+                    program = a_token
+                    note_velocity = velocity
+                    pitch_duration = b_token - 128
                 pitch = pitch_duration % 128
                 duration = pitch_duration // 128
                 if program < 0 or program >= 128:
                     print('Invalid program:', program, '@', time_step, i)
+                    break
+                if with_velocity and (velocity_bin < 0 or velocity_bin >= 16):
+                    print('Invalid velocity bin:', velocity_bin, '@', time_step, i)
                     break
                 if pitch < 0 or pitch >= 128:
                     print('Invalid pitch:', pitch, '@', time_step, i)
@@ -47,7 +60,7 @@ def decode_output(outputs, save_path=None, tempo=120.0, ratio=1.0, velocity=100,
                         instrument_map[program] = pretty_midi.Instrument(fixed_program if fixed_program is not None else program)
                     midi.instruments.append(instrument_map[program])
                 instrument = instrument_map[program]
-                instrument.notes.append(pretty_midi.Note(velocity=velocity, pitch=pitch, start=start_time * r, end=end_time * r))
+                instrument.notes.append(pretty_midi.Note(velocity=note_velocity, pitch=pitch, start=start_time * r, end=end_time * r))
     if extra_instruments is not None:
         for instrument in extra_instruments:
             midi.instruments.append(instrument)

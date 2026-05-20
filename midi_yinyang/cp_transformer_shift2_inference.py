@@ -34,9 +34,11 @@ def continuation(model, midi_path, prompt_length=75, generation_length=384,
     x = x[:, :prompt_length]
 
     out_dir = f'temp/{model.save_name}'
+    with_velocity = getattr(model, 'with_velocity', False)
     decode_output(
         [x[:, i, :] for i in range(x.shape[1])],
         save_path=os.path.join(out_dir, f'{os.path.basename(midi_path)}_prompt.mid'),
+        with_velocity=with_velocity,
     )
 
     with torch.no_grad():
@@ -53,6 +55,7 @@ def continuation(model, midi_path, prompt_length=75, generation_length=384,
                 out_dir,
                 f'{os.path.basename(midi_path)}_temp{temperature}_continuation_{i}.mid',
             ),
+            with_velocity=with_velocity,
         )
 
 

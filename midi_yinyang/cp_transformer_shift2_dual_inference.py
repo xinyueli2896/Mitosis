@@ -36,16 +36,22 @@ from preprocess_large_midi_dataset import preprocess_midi
 
 
 def decode_output_dual(melody_steps, chord_steps, save_path=None,
-                       tempo=120.0, ratio=1.0, velocity=100):
+                       tempo=120.0, ratio=1.0, velocity=100,
+                       with_velocity=False):
     """Render a melody-stream + chord-stream sample as a single midi.
 
     Each stream is rendered with the existing decode_output (one Instrument per
     program), then merged into one PrettyMIDI; instruments are renamed
-    "MELODY" / "CHORD" for clarity in DAWs."""
+    "MELODY" / "CHORD" for clarity in DAWs.
+
+    with_velocity must match the model's training-time encoding (program +
+    velocity_bin packed into the a-slot, duration offset +16 instead of +1)."""
     midi_m = decode_output(melody_steps, save_path=None, tempo=tempo,
-                           ratio=ratio, velocity=velocity)
+                           ratio=ratio, velocity=velocity,
+                           with_velocity=with_velocity)
     midi_c = decode_output(chord_steps, save_path=None, tempo=tempo,
-                           ratio=ratio, velocity=velocity)
+                           ratio=ratio, velocity=velocity,
+                           with_velocity=with_velocity)
     combined = pretty_midi.PrettyMIDI(initial_tempo=tempo)
     for ins in midi_m.instruments:
         ins.name = 'MELODY'
@@ -85,10 +91,12 @@ def dual_continuation(model, melody_path, chord_path, prompt_length=100,
 
     tag = out_subdir or os.path.splitext(os.path.basename(melody_path))[0]
     out_dir = os.path.join(f'temp/{model.save_name}', tag)
+    with_velocity = getattr(model, 'with_velocity', False)
     decode_output_dual(
         [x_m[:, i, :] for i in range(x_m.shape[1])],
         [x_c[:, i, :] for i in range(x_c.shape[1])],
         save_path=os.path.join(out_dir, 'prompt.mid'),
+        with_velocity=with_velocity,
     )
 
     with torch.no_grad():
@@ -105,6 +113,7 @@ def dual_continuation(model, melody_path, chord_path, prompt_length=100,
         decode_output_dual(
             m_i, c_i,
             save_path=os.path.join(out_dir, f'continuation_{i}_temp{temperature}.mid'),
+            with_velocity=with_velocity,
         )
 
 
