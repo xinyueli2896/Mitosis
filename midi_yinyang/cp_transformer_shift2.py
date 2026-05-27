@@ -78,6 +78,14 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         self.local_decoder = RoFormerEncoder(local_decoder_config)
         self.final_decoder = nn.Linear(self.hidden_size, self.tokenizer.n_tokens)
         self.global_sos = nn.Parameter(torch.randn(self.hidden_size))
+        # The two slots of the LOCAL seed pair are identical h vectors and
+        # only differ by RoPE phase, which is a weak signal for "this slot is
+        # a-type vs b-type". Without these offsets the first b-token tends
+        # to land in the a-vocab range at greedy decoding. Each seed gets a
+        # learned slot-specific offset so the model has a content-level
+        # signal of which slot it's predicting from training step 1.
+        self.local_slot_a = nn.Parameter(torch.randn(self.hidden_size) * 0.02)
+        self.local_slot_b = nn.Parameter(torch.randn(self.hidden_size) * 0.02)
         self._future_mask = torch.empty(0)
         self._pair_future_mask = torch.empty(0)
         self.with_velocity = with_velocity
@@ -100,10 +108,15 @@ class RoFormerSymbolicTransformer(L.LightningModule):
 
     def local_decode(self, h, emb):
         # emb: [B*S, 2N-2, H] holding a_0,b_0,...,a_{N-2},b_{N-2}; h: global context [B*S, H]
-        # Build [h, h, a_0, b_0, ..., a_{N-2}, b_{N-2}] of length 2N (shift-by-2)
+        # Build [h+slot_a, h+slot_b, a_0, b_0, ..., a_{N-2}, b_{N-2}] of length 2N
+        # (shift-by-2). The two seeds carry slot-specific offsets so the model
+        # can disambiguate a-slot vs b-slot at position 0 and 1 even though
+        # both are otherwise the same h vector.
         bs_seq = emb.shape[0]
         h = h.reshape(bs_seq, 1, -1)
-        emb = torch.cat([h, h, emb], dim=1)
+        seed_a = h + self.local_slot_a.view(1, 1, -1)
+        seed_b = h + self.local_slot_b.view(1, 1, -1)
+        emb = torch.cat([seed_a, seed_b, emb], dim=1)
         h = self.local_decoder(emb, attention_mask=self.buffered_pair_causal_mask(emb))[0]
         return self.final_decoder(h)
 
@@ -139,8 +152,12 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         assert max_subseq_len % 2 == 0
         batch_size, hidden = h.shape
         n_pairs = max_subseq_len // 2
-        # seed both modality slots with the global context h
-        cur_emb = h[:, None, :].expand(batch_size, 2, hidden).contiguous()
+        # Seed each slot with h plus its slot-specific offset, so the two seed
+        # positions have different content and the model can tell which slot
+        # it should be predicting from position 1's input alone.
+        seed_a = h + self.local_slot_a
+        seed_b = h + self.local_slot_b
+        cur_emb = torch.stack([seed_a, seed_b], dim=1).contiguous()  # [B, 2, H]
         y = torch.zeros((batch_size, 0), dtype=torch.long, device=h.device)
         eos_triggered = torch.zeros(batch_size, dtype=torch.bool, device=h.device)
         slot_mask = self._build_slot_logit_mask().to(h.device) if constrain_to_slot else None
