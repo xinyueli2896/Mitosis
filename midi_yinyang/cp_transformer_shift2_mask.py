@@ -300,7 +300,8 @@ if __name__ == '__main__':
     model_size = int(sys.argv[2])
     melody_data = sys.argv[3]
     chord_data = sys.argv[4]
-    checkpoint_path = sys.argv[5] if len(sys.argv) > 5 else None
+    checkpoint_path = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] else None
+    suffix = sys.argv[6] if len(sys.argv) > 6 else '0.42'
 
     with_velocity = False
     if model_size < 0:
@@ -310,8 +311,7 @@ if __name__ == '__main__':
     gradient_clip = 1.0 if model_size >= 2 else None
     max_lr = 5e-5 if model_size >= 2 else 1e-4
     n_gpus = max(torch.cuda.device_count(), 1)
-    suffix = 'vel' if with_velocity else ''
-    model_name = (f'cp_transformer_shift2_mask_v0.42{suffix}'
+    model_name = (f'cp_transformer_shift2_mask_v{suffix}'
                   f'_size{model_size}_batch_{batch_size * n_gpus}_schedule')
 
     net = MaskPredictDualRoFormer(size=model_size, max_lr=max_lr, with_velocity=with_velocity)

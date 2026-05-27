@@ -372,6 +372,11 @@ class FramedDataset(IterableDataset):
 if __name__ == '__main__':
     batch_size = int(sys.argv[1])
     model_size = int(sys.argv[2])
+    # argv[3] is the existing optional resume checkpoint; argv[4] is the new
+    # version/run-name suffix. Pass "" for argv[3] if you want a suffix
+    # without resuming.
+    checkpoint_path = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
+    suffix = sys.argv[4] if len(sys.argv) > 4 else '0.42'
     with_velocity = False
     if model_size < 0:  # with velocity
         model_size = -model_size - 1
@@ -380,8 +385,7 @@ if __name__ == '__main__':
     gradient_clip = 1.0 if model_size >= 2 else None
     max_lr = 5e-5 if model_size >= 2 else 1e-4
     n_gpus = max(torch.cuda.device_count(), 1)
-    suffix = 'vel' if with_velocity else ''
-    model_name = f'cp_transformer_shift2_v0.42{suffix}_size{model_size}_batch_{batch_size * n_gpus}_schedule'
+    model_name = f'cp_transformer_shift2_v{suffix}_size{model_size}_batch_{batch_size * n_gpus}_schedule'
     net = RoFormerSymbolicTransformer(size=model_size, max_lr=max_lr, with_velocity=with_velocity)
     train_set_loader = DataLoader(FramedDataset('data/la_cp16_v2.pt', TRAIN_LENGTH, batch_size), batch_size=None, num_workers=1, persistent_workers=True)
     val_set_loader = DataLoader(FramedDataset('data/rwc_cp16_v2.pt', TRAIN_LENGTH, batch_size), batch_size=None, num_workers=1, persistent_workers=True)
@@ -392,12 +396,9 @@ if __name__ == '__main__':
                                                       dirpath=f'ckpt/{model_name}',
                                                       filename=model_name + '.{epoch:02d}.{val_loss:.5f}')
 
-    # load from checkpoint
-    checkpoint_path = None
-    if len(sys.argv) > 3:
-        checkpoint_path = sys.argv[3]
-        if not os.path.exists(checkpoint_path):
-            checkpoint_path = None
+    # checkpoint_path was parsed above; just verify it exists.
+    if checkpoint_path is not None and not os.path.exists(checkpoint_path):
+        checkpoint_path = None
     if n_gpus > 1:
         import pytorch_lightning.strategies as strategies
         import datetime
