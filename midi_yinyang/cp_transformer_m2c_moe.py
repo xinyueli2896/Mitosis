@@ -816,11 +816,26 @@ class FramedDataset(IterableDataset):
         split_ratio=10,
     ):
         self.file_path = file_path
-        self.length = _robust_load(file_path[:-3] + '.length.pt')
-        self.start = torch.cumsum(self.length, dim=0) - self.length
+        self.mel_path = file_path.replace('chord', 'melody')
+        # Per-song lengths for both streams. Chord and melody can differ in
+        # length per song (e.g. chord_midi.txt segments may extend slightly
+        # past the melody track's last note), so we use min() per song as
+        # the effective length and keep separate cumulative-start offsets
+        # for each stream when indexing.
+        self.length_chord = _robust_load(file_path[:-3] + '.length.pt')
+        self.length_mel = _robust_load(self.mel_path[:-3] + '.length.pt')
+        if len(self.length_chord) != len(self.length_mel):
+            raise RuntimeError(
+                f"chord ({len(self.length_chord)} songs) and melody "
+                f"({len(self.length_mel)} songs) length files disagree on "
+                "song count -- re-preprocess so they match."
+            )
+        self.length = torch.minimum(self.length_chord, self.length_mel)
+        self.start_chord = torch.cumsum(self.length_chord, dim=0) - self.length_chord
+        self.start_mel = torch.cumsum(self.length_mel, dim=0) - self.length_mel
         # Invalid samples are those whose length is less than min_length
         is_valid = self.length >= target_length
-        self.valid_indices = torch.arange(len(self.start))[is_valid]
+        self.valid_indices = torch.arange(len(self.length))[is_valid]
         # Get training or validation split
         if split == 'all':
             pass
@@ -835,12 +850,12 @@ class FramedDataset(IterableDataset):
         print('Metadata for dataset', file_path, 'loaded. Number of valid songs:', self.valid_song_count)
 
     def __iter__(self):
-        data = _robust_load(self.file_path) #伴奏
-        data_c = _robust_load(self.file_path.replace('chord', 'melody')) #旋律
+        data = _robust_load(self.file_path)        # chord stream
+        data_c = _robust_load(self.mel_path)       # melody stream (yes, named data_c)
         pitch_shift_range = _robust_load(self.file_path[:-3] + '.pitch_shift_range.pt').reshape(-1, 2)
         pitch_shift_range[pitch_shift_range[:, 0] < -5, 0] = -5
         pitch_shift_range[pitch_shift_range[:, 1] > 6, 1] = 6
-        pitch_shift_range_c = _robust_load(self.file_path.replace('chord', 'melody')[:-3] + '.pitch_shift_range.pt').reshape(-1, 2)
+        pitch_shift_range_c = _robust_load(self.mel_path[:-3] + '.pitch_shift_range.pt').reshape(-1, 2)
         pitch_shift_range_c[pitch_shift_range_c[:, 0] < -5, 0] = -5
         pitch_shift_range_c[pitch_shift_range_c[:, 1] > 6, 1] = 6
         if self.split == 'val':
@@ -852,12 +867,15 @@ class FramedDataset(IterableDataset):
             for i in range(0, len(self.valid_indices), self.batch_size):
                 batch_indices = indices[i:i + self.batch_size]
                 raw_ids = self.valid_indices[batch_indices]
+                # Sample a window offset that fits in BOTH streams (use min length).
                 to_be_added = torch.floor(torch.rand(len(raw_ids)) * (self.length[raw_ids] - self.target_length)).long()
                 to_be_added -= to_be_added % 16
-                # print("-1", to_be_added%8)
-                starts = to_be_added + self.start[raw_ids] # 在每首歌的开始时间上 加上（整首歌的长度-target_length）
-                # starts = torch.floor(torch.rand(len(raw_ids)) * (self.length[raw_ids] - self.target_length)).long() + self.start[raw_ids]
-                index_matrix = torch.arange(self.target_length).view(1, -1) + starts.view(-1, 1)
+                # Per-stream absolute starts: same window offset, different cumulative bases.
+                starts_chord = to_be_added + self.start_chord[raw_ids]
+                starts_mel = to_be_added + self.start_mel[raw_ids]
+                offset_grid = torch.arange(self.target_length).view(1, -1)
+                idx_chord = offset_grid + starts_chord.view(-1, 1)
+                idx_mel = offset_grid + starts_mel.view(-1, 1)
                 batch_pitch_shift_range = pitch_shift_range[raw_ids]
                 batch_pitch_shift_range_c = pitch_shift_range_c[raw_ids]
                 minmax = torch.minimum(batch_pitch_shift_range_c[:, 1], batch_pitch_shift_range[:, 1])
@@ -866,7 +884,7 @@ class FramedDataset(IterableDataset):
                 span = (minmax - maxmin + 1).clamp_min(1)
                 batch_pitch_shift = torch.floor(torch.rand(len(raw_ids)) * span).long() + maxmin
                 batch_pitch_shift = torch.where(valid, batch_pitch_shift, torch.zeros_like(batch_pitch_shift))
-                yield data_c[index_matrix], data[index_matrix], batch_pitch_shift
+                yield data_c[idx_mel], data[idx_chord], batch_pitch_shift
 
 
 
