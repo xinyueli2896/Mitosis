@@ -538,17 +538,15 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         mask_mel[diag_idx, diag_idx] = 0.0
         mask_chord[diag_idx, diag_idx] = 0.0
 
-        out_mel, aux_mel = self.global_roformer(
-            h,
-            attention_mask=mask_mel,
-            return_aux_loss=True,
-        )
-
-        out_chord, aux_chord = self.global_roformer(
-            h,
-            attention_mask=mask_chord,
-            return_aux_loss=True,
-        )
+        # The vendored fork's RoFormerEncoder.forward doesn't accept
+        # return_aux_loss and its MoE block discards the router balance
+        # loss silently. Drop the kwarg and synthesize a zero aux loss;
+        # the load-balancing term can be wired in later if/when the fork
+        # exposes it.
+        out_mel = self.global_roformer(h, attention_mask=mask_mel)
+        out_chord = self.global_roformer(h, attention_mask=mask_chord)
+        aux_mel = h.new_zeros(())
+        aux_chord = h.new_zeros(())
 
         out_mel_states = out_mel.last_hidden_state
         out_chord_states = out_chord.last_hidden_state
