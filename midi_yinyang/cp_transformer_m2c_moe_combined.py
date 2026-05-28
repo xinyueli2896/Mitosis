@@ -49,7 +49,9 @@ from cp_transformer_m2c_moe_inference import (
     make_actions_single,
     _load_prompt_tokens,
     load_model,
+    gate_off,
 )
+import contextlib
 from preprocess_large_midi_dataset import DURATION_TEMPLATES
 
 
@@ -218,12 +220,22 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
     else:
         raise ValueError(f'unknown mode {mode}')
 
-    mel_frames, chord_frames = general_inference(
-        model, gen_length, B=1, subseq_len=subseq_len,
-        temperature=args.temperature,
-        mel_action_fn=mel_action,
-        chord_action_fn=chord_action,
-    )
+    # Single-stream modes: drop the cross-attention adapter so the silenced
+    # modality's silence frames don't leak in (o_m = u_mm / o_c = u_cc).
+    if mode == 'mel_only':
+        gate_ctx = gate_off(model, 'mel')
+    elif mode == 'chord_only':
+        gate_ctx = gate_off(model, 'chord')
+    else:
+        gate_ctx = contextlib.nullcontext()
+
+    with gate_ctx:
+        mel_frames, chord_frames = general_inference(
+            model, gen_length, B=1, subseq_len=subseq_len,
+            temperature=args.temperature,
+            mel_action_fn=mel_action,
+            chord_action_fn=chord_action,
+        )
     mel_end, chord_end = _prompt_ends(
         mode, args.prompt_length, gen_length, used_b_prompt,
     )

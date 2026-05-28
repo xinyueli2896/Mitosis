@@ -59,10 +59,12 @@ if _MOE_ROOT not in _sys.path:
     _sys.path.insert(0, _MOE_ROOT)
 
 import argparse
+import contextlib
 import os
 from glob import glob
 
 import torch
+import torch.nn as nn
 import pretty_midi
 
 from cp_transformer_m2c_moe import RoFormerSymbolicTransformer
@@ -70,6 +72,35 @@ from preprocess_large_midi_dataset import preprocess_midi, DURATION_TEMPLATES
 
 
 MODES = ['co', 'mel2chord', 'chord2mel', 'mel_only', 'chord_only']
+
+
+class _ConstNegGate(nn.Module):
+    """Stand-in for gate_m / gate_c that returns a large negative scalar so
+    sigmoid(.) ~= 0. Drops the cross-attention adapter contribution u_mc (or
+    u_cm), leaving o_m = u_mm (resp. o_c = u_cc) -- i.e. the modality's pure
+    self-attention path. Matches the "two parameter-shared single-modality
+    self-attention models joined by a gated cross-attention adapter" view of
+    the m2c MoE architecture: zeroing the gate turns the adapter off."""
+
+    def forward(self, x):
+        return torch.full(
+            x.shape[:-1] + (1,), -1e9, dtype=x.dtype, device=x.device,
+        )
+
+
+@contextlib.contextmanager
+def gate_off(model, which):
+    """Temporarily replace model.gate_m or model.gate_c with a constant-zero
+    gate. `which` is 'mel' (zero gate_m -> drop u_mc into o_m) or 'chord'
+    (zero gate_c -> drop u_cm into o_c). Used for single-stream generation so
+    the silenced modality's frames cannot leak into the generated modality."""
+    attr = 'gate_m' if which == 'mel' else 'gate_c'
+    orig = getattr(model, attr)
+    setattr(model, attr, _ConstNegGate().to(next(model.parameters()).device))
+    try:
+        yield
+    finally:
+        setattr(model, attr, orig)
 
 
 def make_silence_frame(B, subseq_len, tokenizer, device):
@@ -379,12 +410,23 @@ def run_one(model, mode, mel_path, chord_path, args, out_subdir):
         chord_action = _broadcast(chord_action)
         B = n
 
-    mel_frames, chord_frames = general_inference(
-        model, gen_length, B, subseq_len,
-        temperature=args.temperature,
-        mel_action_fn=mel_action,
-        chord_action_fn=chord_action,
-    )
+    # For single-stream modes, drop the cross-attention adapter contribution
+    # so the silenced modality's silence-frame stream cannot influence the
+    # generated modality: o_m = u_mm (mel_only) or o_c = u_cc (chord_only).
+    if mode == 'mel_only':
+        gate_ctx = gate_off(model, 'mel')
+    elif mode == 'chord_only':
+        gate_ctx = gate_off(model, 'chord')
+    else:
+        gate_ctx = contextlib.nullcontext()
+
+    with gate_ctx:
+        mel_frames, chord_frames = general_inference(
+            model, gen_length, B, subseq_len,
+            temperature=args.temperature,
+            mel_action_fn=mel_action,
+            chord_action_fn=chord_action,
+        )
 
     save_name = getattr(model, 'save_name', 'm2c_moe_run')
     tag = out_subdir
