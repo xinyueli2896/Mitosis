@@ -125,10 +125,19 @@ class DualRoFormerShift2(RoFormerSymbolicTransformer):
     an interleaved [m_t, c_t] sequence and decoded with the pair-causal mask,
     so (m_t, c_t) are predicted in parallel from {m_{<t}, c_{<t}}."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, melody_loss_weight=1.0, chord_loss_weight=1.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.global_sos_m = nn.Parameter(torch.randn(self.hidden_size))
         self.global_sos_c = nn.Parameter(torch.randn(self.hidden_size))
+        # Per-modality loss weights. Total loss is
+        #     loss = (mw*loss_m + cw*loss_c) / (mw + cw)
+        # so the average magnitude stays comparable to the 1:1 case.
+        # Chord is lower-entropy than melody (small chord vocab, slow changes)
+        # and converges much faster; downweighting it (e.g. cw=0.5) shifts
+        # more gradient to melody during the first few thousand steps when
+        # both are still learning. Defaults 1:1 preserve original behavior.
+        self.melody_loss_weight = melody_loss_weight
+        self.chord_loss_weight = chord_loss_weight
 
     def forward(self, x_m, x_c):
         B, S = x_m.shape[:2]
@@ -206,9 +215,14 @@ class DualRoFormerShift2(RoFormerSymbolicTransformer):
             h_buffer = torch.cat([h_buffer, new_h_m, new_h_c], dim=1)
         return y_m_list, y_c_list
 
+    def _weighted_loss(self, loss_m, loss_c):
+        mw = self.melody_loss_weight
+        cw = self.chord_loss_weight
+        return (mw * loss_m + cw * loss_c) / max(mw + cw, 1e-8)
+
     def training_step(self, batch, batch_idx):
         loss_m, loss_c = self.loss(*batch)
-        loss = 0.5 * (loss_m + loss_c)
+        loss = self._weighted_loss(loss_m, loss_c)
         self.log('train_loss', loss)
         self.log('train_loss_melody', loss_m)
         self.log('train_loss_chord', loss_c)
@@ -219,7 +233,7 @@ class DualRoFormerShift2(RoFormerSymbolicTransformer):
 
     def validation_step(self, batch, batch_idx):
         loss_m, loss_c = self.loss(*batch)
-        loss = 0.5 * (loss_m + loss_c)
+        loss = self._weighted_loss(loss_m, loss_c)
         self.log('val_loss', loss)
         self.log('val_loss_melody', loss_m)
         self.log('val_loss_chord', loss_c)
@@ -247,10 +261,16 @@ if __name__ == '__main__':
     gradient_clip = 1.0 if model_size >= 2 else None
     max_lr = 5e-5 if model_size >= 2 else 1e-4
     n_gpus = max(torch.cuda.device_count(), 1)
+    melody_loss_weight = float(os.environ.get('MELODY_LOSS_WEIGHT', 1.0))
+    chord_loss_weight = float(os.environ.get('CHORD_LOSS_WEIGHT', 1.0))
+    print(f'Loss weights: melody={melody_loss_weight}, chord={chord_loss_weight}')
     model_name = (f'cp_transformer_shift2_dual_v{suffix}'
                   f'_size{model_size}_batch_{batch_size * n_gpus}_schedule')
 
-    net = DualRoFormerShift2(size=model_size, max_lr=max_lr, with_velocity=with_velocity)
+    net = DualRoFormerShift2(
+        size=model_size, max_lr=max_lr, with_velocity=with_velocity,
+        melody_loss_weight=melody_loss_weight, chord_loss_weight=chord_loss_weight,
+    )
     train_loader = DataLoader(
         DualFramedDataset(melody_data, chord_data, TRAIN_LENGTH, batch_size, split='train'),
         batch_size=None, num_workers=1, persistent_workers=True,

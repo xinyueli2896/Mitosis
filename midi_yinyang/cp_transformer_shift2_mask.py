@@ -58,10 +58,14 @@ class MaskPredictDualRoFormer(RoFormerSymbolicTransformer):
     visible same-block sibling AND from all earlier blocks of both modalities.
     """
 
-    def __init__(self, size=1, max_position_embeddings=1536, with_velocity=False, max_lr=None):
+    def __init__(self, size=1, max_position_embeddings=1536, with_velocity=False, max_lr=None,
+                 melody_loss_weight=1.0, chord_loss_weight=1.0):
         super().__init__(size=size, max_position_embeddings=max_position_embeddings,
                          with_velocity=with_velocity, max_lr=max_lr)
         self.save_hyperparameters()
+        # Per-modality loss weights (see dual model for rationale).
+        self.melody_loss_weight = melody_loss_weight
+        self.chord_loss_weight = chord_loss_weight
 
         # Extend the CP vocab by 1 to accommodate the [MASK] token used at the
         # local level for masked blocks.
@@ -175,9 +179,14 @@ class MaskPredictDualRoFormer(RoFormerSymbolicTransformer):
         loss_c = (loss_c_tok * block_c).sum() / denom_c
         return loss_m, loss_c
 
+    def _weighted_loss(self, loss_m, loss_c):
+        mw = self.melody_loss_weight
+        cw = self.chord_loss_weight
+        return (mw * loss_m + cw * loss_c) / max(mw + cw, 1e-8)
+
     def training_step(self, batch, batch_idx):
         loss_m, loss_c = self.loss(*batch)
-        loss = 0.5 * (loss_m + loss_c)
+        loss = self._weighted_loss(loss_m, loss_c)
         self.log('train_loss', loss)
         self.log('train_loss_melody', loss_m)
         self.log('train_loss_chord', loss_c)
@@ -188,7 +197,7 @@ class MaskPredictDualRoFormer(RoFormerSymbolicTransformer):
 
     def validation_step(self, batch, batch_idx):
         loss_m, loss_c = self.loss(*batch)
-        loss = 0.5 * (loss_m + loss_c)
+        loss = self._weighted_loss(loss_m, loss_c)
         self.log('val_loss', loss)
         self.log('val_loss_melody', loss_m)
         self.log('val_loss_chord', loss_c)
@@ -314,7 +323,13 @@ if __name__ == '__main__':
     model_name = (f'cp_transformer_shift2_mask_v{suffix}'
                   f'_size{model_size}_batch_{batch_size * n_gpus}_schedule')
 
-    net = MaskPredictDualRoFormer(size=model_size, max_lr=max_lr, with_velocity=with_velocity)
+    melody_loss_weight = float(os.environ.get('MELODY_LOSS_WEIGHT', 1.0))
+    chord_loss_weight = float(os.environ.get('CHORD_LOSS_WEIGHT', 1.0))
+    print(f'Loss weights: melody={melody_loss_weight}, chord={chord_loss_weight}')
+    net = MaskPredictDualRoFormer(
+        size=model_size, max_lr=max_lr, with_velocity=with_velocity,
+        melody_loss_weight=melody_loss_weight, chord_loss_weight=chord_loss_weight,
+    )
     train_loader = DataLoader(
         DualFramedDataset(melody_data, chord_data, TRAIN_LENGTH, batch_size, split='train'),
         batch_size=None, num_workers=1, persistent_workers=True,
