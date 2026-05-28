@@ -68,21 +68,6 @@ def _snap_up_to_bar(t_sec, bar_sec):
     return math.ceil(t_sec / bar_sec - 1e-9) * bar_sec
 
 
-def _first_nonempty_timestep(tokens, tokenizer):
-    """tokens: [1, T, subseq] long tensor of preprocessed CP tokens.
-    Return the first t where the timestep has at least one real note
-    (i.e. the very first a-slot isn't EOS or PAD). If every timestep is
-    empty, return T."""
-    T = tokens.shape[1]
-    eos = tokenizer.eos_token
-    pad = tokenizer.pad_token
-    a0 = tokens[0, :, 0]  # [T]
-    nonempty = (a0 != eos) & (a0 != pad)
-    if not bool(nonempty.any()):
-        return T
-    return int(torch.nonzero(nonempty, as_tuple=False)[0, 0].item())
-
-
 def add_frames_to_track(inst, frames, time_offset, tokenizer,
                         with_velocity=False, tempo=120.0):
     """Decode a list of frames into notes appended to `inst`, with every
@@ -140,19 +125,13 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
         if not mel_path:
             return None, None
         condition = _load_prompt_tokens(model, mel_path, args.max_polyphony)
-        # Skip leading silent timesteps -- conditioning the chord on a silent
-        # mel for those steps is meaningless, and the song listens better
-        # when the output starts at the first actual melody note.
-        first_t = _first_nonempty_timestep(condition, model.tokenizer)
-        condition = condition[:, first_t:]
 
         # Optional chord prefix: use the first prompt_length timesteps of the
-        # chord midi (aligned with mel's trim) so chord generation has a seed
-        # instead of starting from scratch.
+        # chord midi so chord generation has a seed instead of starting from
+        # scratch. mel is still given throughout.
         b_prompt = None
         if chord_path and args.prompt_length > 0:
             b_prompt = _load_prompt_tokens(model, chord_path, args.max_polyphony)
-            b_prompt = b_prompt[:, first_t:]
             b_prompt = b_prompt[:, :args.prompt_length]
 
         gen_length = min(args.gen_length, condition.shape[1])
@@ -166,13 +145,10 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
         if not chord_path:
             return None, None
         condition = _load_prompt_tokens(model, chord_path, args.max_polyphony)
-        first_t = _first_nonempty_timestep(condition, model.tokenizer)
-        condition = condition[:, first_t:]
 
         b_prompt = None
         if mel_path and args.prompt_length > 0:
             b_prompt = _load_prompt_tokens(model, mel_path, args.max_polyphony)
-            b_prompt = b_prompt[:, first_t:]
             b_prompt = b_prompt[:, :args.prompt_length]
 
         gen_length = min(args.gen_length, condition.shape[1])
@@ -186,9 +162,6 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
         if not mel_path:
             return None, None
         prompt = _load_prompt_tokens(model, mel_path, args.max_polyphony)
-        # Same idea: skip silent intro so the prompt budget goes to actual notes.
-        first_t = _first_nonempty_timestep(prompt, model.tokenizer)
-        prompt = prompt[:, first_t:]
         common = min(prompt.shape[1], args.prompt_length)
         prompt = prompt[:, :common]
         subseq_len = prompt.shape[2]
@@ -199,8 +172,6 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
         if not chord_path:
             return None, None
         prompt = _load_prompt_tokens(model, chord_path, args.max_polyphony)
-        first_t = _first_nonempty_timestep(prompt, model.tokenizer)
-        prompt = prompt[:, first_t:]
         common = min(prompt.shape[1], args.prompt_length)
         prompt = prompt[:, :common]
         subseq_len = prompt.shape[2]
