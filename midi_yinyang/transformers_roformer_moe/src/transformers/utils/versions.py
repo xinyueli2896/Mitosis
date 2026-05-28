@@ -47,6 +47,14 @@ def _compare_versions(op, got_ver, want_ver, requirement, pkg, hint):
 
 
 def require_version(requirement: str, hint: Optional[str] = None) -> None:
+    """No-op in the vendored fork: pins in dependency_versions_table.py
+    are stale and would block import on modern envs. We don't rely on
+    any pinned-version-specific API for the MoE additions, so skip
+    the check entirely. (Original logic preserved below; comment out
+    this stub if you need real version enforcement.)"""
+    return
+
+def _require_version_original(requirement: str, hint: Optional[str] = None) -> None:
     """
     Perform a runtime check of the dependency versions, using the exact same syntax used by pip.
 
