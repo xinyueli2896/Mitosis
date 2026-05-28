@@ -37,16 +37,19 @@ from cp_transformer_m2c_moe_inference import (
     general_inference,
     make_actions_co,
     make_actions_conditional,
+    make_actions_single,
     _load_prompt_tokens,
     load_model,
 )
 from preprocess_large_midi_dataset import DURATION_TEMPLATES
 
 
-MODES = ['co', 'mel2chord', 'chord2mel']
+MODES = ['co', 'mel2chord', 'chord2mel', 'mel_only', 'chord_only']
 
 # (program, track name). Programs picked so each (mode, modality) sounds
 # different in GarageBand's default GM playback — easy to A/B by ear.
+# Single-stream modes only populate one of the two tracks; the other one
+# still exists in the file but stays empty for those songs.
 TRACK_SPECS = {
     ('co',         'mel'):   (24, 'co-mel  (Nylon Guitar)'),
     ('co',         'chord'): ( 0, 'co-chord  (Acoustic Piano)'),
@@ -54,6 +57,8 @@ TRACK_SPECS = {
     ('mel2chord',  'chord'): ( 4, 'mel2chord-chord  GEN  (Electric Piano 1)'),
     ('chord2mel',  'mel'):   (26, 'chord2mel-mel  GEN  (Jazz Guitar)'),
     ('chord2mel',  'chord'): ( 5, 'chord2mel-chord  GIVEN  (Electric Piano 2)'),
+    ('mel_only',   'mel'):   (27, 'mel_only-mel  GEN  (Clean Guitar)'),
+    ('chord_only', 'chord'): ( 6, 'chord_only-chord  GEN  (Harpsichord)'),
 }
 
 
@@ -127,6 +132,26 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
         condition = condition[:, :gen_length]
         subseq_len = condition.shape[2]
         mel_action, chord_action = make_actions_conditional(condition, 'chord')
+
+    elif mode == 'mel_only':
+        if not mel_path:
+            return None, None
+        prompt = _load_prompt_tokens(model, mel_path, args.max_polyphony)
+        common = min(prompt.shape[1], args.prompt_length)
+        prompt = prompt[:, :common]
+        subseq_len = prompt.shape[2]
+        mel_action, chord_action = make_actions_single(prompt, 'mel', common)
+        gen_length = args.gen_length
+
+    elif mode == 'chord_only':
+        if not chord_path:
+            return None, None
+        prompt = _load_prompt_tokens(model, chord_path, args.max_polyphony)
+        common = min(prompt.shape[1], args.prompt_length)
+        prompt = prompt[:, :common]
+        subseq_len = prompt.shape[2]
+        mel_action, chord_action = make_actions_single(prompt, 'chord', common)
+        gen_length = args.gen_length
 
     else:
         raise ValueError(f'unknown mode {mode}')
@@ -223,23 +248,30 @@ def main():
                 mel_frames, chord_frames = run_mode_for_song(
                     model, mode, mel_path, chord_path, args,
                 )
-                add_frames_to_track(
-                    instruments[(mode, 'mel')], mel_frames, current_offset,
-                    model.tokenizer, model.with_velocity, tempo,
-                )
-                add_frames_to_track(
-                    instruments[(mode, 'chord')], chord_frames, current_offset,
-                    model.tokenizer, model.with_velocity, tempo,
-                )
+                # Single-stream modes populate only one of the two tracks;
+                # don't write the silenced stream into the combined midi.
+                if (mode, 'mel') in instruments:
+                    add_frames_to_track(
+                        instruments[(mode, 'mel')], mel_frames, current_offset,
+                        model.tokenizer, model.with_velocity, tempo,
+                    )
+                if (mode, 'chord') in instruments:
+                    add_frames_to_track(
+                        instruments[(mode, 'chord')], chord_frames, current_offset,
+                        model.tokenizer, model.with_velocity, tempo,
+                    )
             except Exception as e:
                 print(f'    failed: {e!r}')
         current_offset += slot_sec
 
-    # Assemble midi in a deterministic, viewer-friendly track order.
+    # Assemble midi in a deterministic, viewer-friendly track order matching
+    # MODES x ('mel', 'chord'), skipping (mode, modality) pairs that don't
+    # exist (e.g. single-stream modes only define one of the two slots).
     midi = pretty_midi.PrettyMIDI(initial_tempo=tempo)
     for mode in MODES:
         for modality in ('mel', 'chord'):
-            midi.instruments.append(instruments[(mode, modality)])
+            if (mode, modality) in instruments:
+                midi.instruments.append(instruments[(mode, modality)])
 
     out_dir = os.path.dirname(args.output) or '.'
     os.makedirs(out_dir, exist_ok=True)
