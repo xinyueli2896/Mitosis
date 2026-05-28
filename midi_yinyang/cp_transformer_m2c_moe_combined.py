@@ -273,6 +273,10 @@ def main():
     p.add_argument('--moe-num-experts', type=int, default=4)
     p.add_argument('--moe-topk', type=int, default=2)
     p.add_argument('--moe-intermediate-size', type=int, default=None)
+    p.add_argument('--global-num-layers', type=int, default=None,
+                   help='Override global transformer depth. Default: auto-detect '
+                        'from checkpoint hyperparameters / filename _gnlN_ tag / '
+                        'state_dict layer count / size-based fallback (6 or 12).')
     args = p.parse_args()
 
     # Build paired list
@@ -294,6 +298,7 @@ def main():
         moe_num_experts=args.moe_num_experts,
         moe_topk=args.moe_topk,
         moe_intermediate_size=args.moe_intermediate_size,
+        global_num_layers=args.global_num_layers,
     )
     model.cuda()
     model.eval()

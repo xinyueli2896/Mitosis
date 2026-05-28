@@ -499,16 +499,62 @@ def run_folder(model, mode, mel_folder, chord_folder, args):
 # Checkpoint loading
 # ---------------------------------------------------------------------------
 
+def _infer_global_num_layers(ckpt_path, ck, model_size):
+    """Resolve global_num_layers, in order of priority:
+      1. ck['hyper_parameters']['global_num_layers']  (training script persists this)
+      2. _gnl(\\d+)_ substring in the filename (default model_name template)
+      3. shape-infer from the state_dict (count distinct layer indices)
+      4. size-based default: 12 if large else 6  (matches training defaults)
+    """
+    if isinstance(ck, dict):
+        hp = ck.get('hyper_parameters') or {}
+        if isinstance(hp, dict) and hp.get('global_num_layers') is not None:
+            return int(hp['global_num_layers']), 'hyper_parameters'
+
+    import re as _re
+    m = _re.search(r'_gnl(\d+)_', os.path.basename(ckpt_path))
+    if m:
+        return int(m.group(1)), 'filename'
+
+    state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
+    if isinstance(state, dict):
+        layer_idxs = set()
+        pat = _re.compile(r'global_roformer\.(?:encoder\.)?layer\.(\d+)\.')
+        for k in state.keys():
+            mm = pat.search(k)
+            if mm:
+                layer_idxs.add(int(mm.group(1)))
+        if layer_idxs:
+            return max(layer_idxs) + 1, 'state_dict_inference'
+
+    return (12 if model_size == 'large' else 6), 'size_default'
+
+
 def load_model(ckpt_path, model_size='small', with_velocity=False,
-               moe_num_experts=4, moe_topk=2, moe_intermediate_size=None):
+               moe_num_experts=4, moe_topk=2, moe_intermediate_size=None,
+               global_num_layers=None):
+    """Instantiate RoFormerSymbolicTransformer and load weights from `ckpt_path`.
+
+    global_num_layers: if None, auto-detected from the checkpoint
+    (hyper_parameters dict, filename _gnlN_ tag, state_dict layer count, or
+    size-based default in that order). Pass an explicit int to override.
+    """
+    ck = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+    if global_num_layers is None:
+        global_num_layers, source = _infer_global_num_layers(ckpt_path, ck, model_size)
+        print(f'[load_model] global_num_layers={global_num_layers} '
+              f'(auto-detected from {source})')
+    else:
+        print(f'[load_model] global_num_layers={global_num_layers} (caller override)')
+
     net = RoFormerSymbolicTransformer(
         large=(model_size == 'large'),
         with_velocity=with_velocity,
         moe_num_experts=moe_num_experts,
         moe_topk=moe_topk,
         moe_intermediate_size=moe_intermediate_size,
+        global_num_layers=global_num_layers,
     )
-    ck = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)
     if missing:
@@ -537,6 +583,10 @@ def main():
     p.add_argument('--moe-num-experts', type=int, default=4)
     p.add_argument('--moe-topk', type=int, default=2)
     p.add_argument('--moe-intermediate-size', type=int, default=None)
+    p.add_argument('--global-num-layers', type=int, default=None,
+                   help='Override global transformer depth. Default: auto-detect '
+                        'from checkpoint hyperparameters / filename _gnlN_ tag / '
+                        'state_dict layer count / size-based fallback (6 or 12).')
     args = p.parse_args()
 
     if args.mel_folder or args.chord_folder:
@@ -550,6 +600,7 @@ def main():
         moe_num_experts=args.moe_num_experts,
         moe_topk=args.moe_topk,
         moe_intermediate_size=args.moe_intermediate_size,
+        global_num_layers=args.global_num_layers,
     )
     model.save_name = os.path.basename(args.ckpt)
     model.cuda()
