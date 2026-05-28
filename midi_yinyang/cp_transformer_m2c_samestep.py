@@ -36,6 +36,16 @@ Run from midi_yinyang/, same CLI as cp_transformer_m2c_moe.py:
         --wandb
 """
 
+# Inject the vendored transformers fork BEFORE anything else imports.
+# Without this, indirect transformers loads from pytorch_lightning / wandb
+# can cache the system package and shadow the fork (would manifest as
+# `ImportError: cannot import name 'RoFormerMoE'` later on).
+import os as _os
+import sys as _sys
+_MOE_ROOT = _os.path.join(_os.path.dirname(__file__), "transformers_roformer_moe", "src")
+if _MOE_ROOT not in _sys.path:
+    _sys.path.insert(0, _MOE_ROOT)
+
 import argparse
 import os
 import sys

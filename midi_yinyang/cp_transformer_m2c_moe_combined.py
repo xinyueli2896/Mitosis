@@ -25,6 +25,14 @@ Run from midi_yinyang/:
         --model-size large
 """
 
+# Inject the vendored transformers fork BEFORE anything else imports
+# (see cp_transformer_m2c_moe_mask.py for the full reasoning).
+import os as _os
+import sys as _sys
+_MOE_ROOT = _os.path.join(_os.path.dirname(__file__), "transformers_roformer_moe", "src")
+if _MOE_ROOT not in _sys.path:
+    _sys.path.insert(0, _MOE_ROOT)
+
 import argparse
 import math
 import os

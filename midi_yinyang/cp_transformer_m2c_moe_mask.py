@@ -45,6 +45,16 @@ Run from midi_yinyang/:
         --wandb
 """
 
+# Inject the vendored transformers fork into sys.path BEFORE anything else
+# imports. pytorch_lightning / wandb / their transitive deps can pull in the
+# system `transformers` package, which would then get cached in sys.modules
+# and shadow the fork even if we set sys.path later in cp_transformer_m2c_moe.
+import os as _os
+import sys as _sys
+_MOE_ROOT = _os.path.join(_os.path.dirname(__file__), "transformers_roformer_moe", "src")
+if _MOE_ROOT not in _sys.path:
+    _sys.path.insert(0, _MOE_ROOT)
+
 import argparse
 import os
 
