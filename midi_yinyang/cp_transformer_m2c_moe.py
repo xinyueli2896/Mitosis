@@ -938,6 +938,13 @@ if __name__ == '__main__':
         default=None,
         help="override MoE intermediate size (defaults to global intermediate size)",
     )
+    parser.add_argument(
+        "--global_num_layers",
+        type=int,
+        default=1,
+        help="number of global transformer layers (default 1; bump to match a "
+             "pretrained checkpoint when initializing from one)",
+    )
 
 
     args = parser.parse_args()
@@ -965,6 +972,7 @@ if __name__ == '__main__':
         moe_num_experts=args.moe_num_experts,
         moe_topk=args.moe_topk,
         moe_intermediate_size=args.moe_intermediate_size,
+        global_num_layers=args.global_num_layers,
     )
     print(f"MoE enabled: {net.global_roformer.config.moe}")
     train_set_loader = DataLoader(FramedDataset(dataset, TRAIN_LENGTH, batch_size, split = 'train'), batch_size=None, num_workers=1, persistent_workers=True)
@@ -1007,6 +1015,7 @@ if __name__ == '__main__':
                 "moe_num_experts": args.moe_num_experts,
                 "moe_topk": args.moe_topk,
                 "moe_intermediate_size": args.moe_intermediate_size,
+                "global_num_layers": args.global_num_layers,
             },
         },
         f'ckpt/{model_name}.pt',
