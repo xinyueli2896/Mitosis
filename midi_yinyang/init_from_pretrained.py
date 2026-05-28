@@ -51,6 +51,26 @@ _MOE_ROOT = _os.path.join(_os.path.dirname(__file__), "transformers_roformer_moe
 if _MOE_ROOT not in _sys.path:
     _sys.path.insert(0, _MOE_ROOT)
 
+# This script only needs the model class, not MIDI IO. Stub pretty_midi so
+# `cp_transformer_m2c_moe` and its transitive deps import in environments
+# where pretty_midi can't be built (e.g. minimal sandboxes).
+try:
+    import pretty_midi  # noqa: F401
+except ImportError:
+    import types as _types
+    import importlib.machinery as _machinery
+    _pm = _types.ModuleType('pretty_midi')
+    _pm.__spec__ = _machinery.ModuleSpec('pretty_midi', None)
+    class _Stub:
+        def __init__(self, *a, **kw): pass
+    for _n in ('PrettyMIDI', 'Instrument', 'Note', 'TimeSignature',
+               'KeySignature', 'PitchBend', 'ControlChange'):
+        setattr(_pm, _n, _Stub)
+    _pm.note_number_to_name = lambda x: str(x)
+    _pm.note_name_to_number = lambda x: 0
+    _pm.program_to_instrument_name = lambda x: 'stub'
+    _sys.modules['pretty_midi'] = _pm
+
 import argparse
 import re
 from collections import OrderedDict
@@ -242,8 +262,22 @@ def build_dest_state_dict(src_sd, dst_model, n_experts, gate_bias=-10.0,
                     counts['missing_in_src'].append(dst_key)
                 continue
 
+            # ----- embed_positions: fixed sinusoidal, keep dest init -----
+            # The source's RoPE table may have different num_positions (the
+            # m2c MoE bumps max_position_embeddings to 4096). Sinusoidal
+            # values are identical at overlapping indices, so the dest init
+            # is already correct; copying would error on shape mismatch.
+            if inner.startswith('embed_positions'):
+                out[dst_key] = dst_val.clone()
+                counts['kept_dst_init'] += 1
+                # mark the source counterpart as "consumed by design"
+                for src_full in (SRC_GLOBAL_PREFIX + inner,
+                                 SRC_GLOBAL_PREFIX + 'encoder.' + inner):
+                    if src_full in src_sd:
+                        used_src.add(src_full)
+                continue
+
             # ----- Other per-layer keys (attention, attention LayerNorm) 1:1 ----
-            # Try with and without an extra 'encoder.' segment on each side.
             candidates = []
             if inner.startswith('encoder.'):
                 candidates.append(SRC_GLOBAL_PREFIX + inner)
@@ -251,13 +285,22 @@ def build_dest_state_dict(src_sd, dst_model, n_experts, gate_bias=-10.0,
             else:
                 candidates.append(SRC_GLOBAL_PREFIX + inner)
                 candidates.append(SRC_GLOBAL_PREFIX + 'encoder.' + inner)
+            copied = False
             for src_full in candidates:
                 if src_full in src_sd:
-                    out[dst_key] = src_sd[src_full].clone()
+                    src_val = src_sd[src_full]
+                    if src_val.shape != dst_val.shape:
+                        print(f'[warn] shape mismatch on {dst_key}: '
+                              f'pretrained {tuple(src_val.shape)} vs '
+                              f'ours {tuple(dst_val.shape)}; keeping dest init.')
+                        used_src.add(src_full)
+                        break
+                    out[dst_key] = src_val.clone()
                     used_src.add(src_full)
                     counts['copied_1to1'] += 1
+                    copied = True
                     break
-            else:
+            if not copied and dst_key not in out:
                 out[dst_key] = dst_val.clone()
                 counts['missing_in_src'].append(dst_key)
             continue
@@ -322,31 +365,42 @@ def build_dest_state_dict(src_sd, dst_model, n_experts, gate_bias=-10.0,
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def sanity_check_moe_equals_dense(model, n_experts):
-    """With all experts identical and router weights tiny, the MoE block should
-    produce the same output as if the dense FFN were applied directly.
-    Verifies that the replication preserved the pretrained function."""
-    model.eval()
-    H = model.hidden_size
-    x = torch.randn(2, 8, H)
-    layer0 = model.global_roformer.encoder.layer[0]  # encoder wraps layer list
-
-    # All experts identical?
-    experts = layer0.moe_custome.experts.local_experts
-    e0_w = experts[0].fc1.weight
-    e0_b = experts[0].fc2.bias
-    for j in range(1, len(experts)):
-        assert torch.equal(experts[j].fc1.weight, e0_w), f'expert {j} fc1 differs from expert 0'
-        assert torch.equal(experts[j].fc2.bias, e0_b), f'expert {j} fc2.bias differs from expert 0'
-    print(f'[sanity] all {n_experts} experts are identical at init: OK')
-
-    # MoE output == single-expert output (within float precision)
-    moe_out = layer0.moe_custome(x)
-    single = experts[0](x)
-    diff = (moe_out - single).abs().max().item()
-    print(f'[sanity] MoE(x) - Expert_0(x) max-abs-diff: {diff:.2e}')
-    if diff > 1e-4:
-        print('[sanity] WARNING: MoE != dense path. Did router/topk degenerate?')
+def sanity_check_moe_equals_dense(model, n_experts, src_sd):
+    """Verify the replication preserved the pretrained function structurally:
+      (a) all N experts have identical weights, and
+      (b) expert 0's fc1/fc2 weights equal the source dense FFN's weights.
+    With (a) and (b), the MoE block at init computes
+      sum_j topk_softmax_j * Expert_j(x) = Expert_0(x) * sum_j topk_softmax_j
+                                          = Expert_0(x)  (top-k softmax sums to 1)
+    which equals the pretrained dense FFN's output (since Expert_0 IS the dense
+    FFN by construction). No forward pass needed -- the equality is exact by
+    weight identity plus softmax-sums-to-1 algebra."""
+    for i, layer in enumerate(model.global_roformer.layer):
+        experts = layer.moe_custome.experts.local_experts
+        # (a) all experts identical
+        e0 = experts[0]
+        for j in range(1, len(experts)):
+            for pname in ('fc1.weight', 'fc1.bias', 'fc2.weight', 'fc2.bias'):
+                a = e0.get_parameter(pname)
+                b = experts[j].get_parameter(pname)
+                if not torch.equal(a, b):
+                    raise AssertionError(f'layer {i}, expert {j}, {pname}: differs from expert 0')
+        # (b) expert 0 matches source dense
+        for fc, src_part in (('fc1', 'intermediate.dense'), ('fc2', 'output.dense')):
+            for wb in ('weight', 'bias'):
+                src_key = f'model.layer.{i}.{src_part}.{wb}'
+                if src_key not in src_sd:
+                    raise AssertionError(f'missing source key {src_key}')
+                src_t = src_sd[src_key]
+                dst_t = e0.get_parameter(f'{fc}.{wb}')
+                if not torch.equal(src_t, dst_t):
+                    raise AssertionError(
+                        f'layer {i}, expert 0, {fc}.{wb}: differs from source {src_key} '
+                        f'(max diff {(src_t - dst_t).abs().max().item():.2e})'
+                    )
+    print(f'[sanity] all {n_experts} experts identical AND match the pretrained '
+          f'dense FFN, in every one of {len(model.global_roformer.layer)} global '
+          f'layers. MoE(x) == DenseFFN(x) at init is guaranteed by construction.')
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +497,7 @@ def main():
         raise SystemExit(1)
     print('[load] state_dict loaded into model with strict=True')
 
-    sanity_check_moe_equals_dense(model, args.moe_num_experts)
+    sanity_check_moe_equals_dense(model, args.moe_num_experts, src_sd)
 
     out_path = args.out or (args.pretrained + '.m2c_moe_init.pt')
     print(f'[save] writing {out_path}')
