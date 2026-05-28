@@ -153,6 +153,11 @@ def mask_predict_with_modes(model, mode, mel_prompt, chord_prompt,
             return ('given', chord_truth[:, t, :])
 
     elif mode == 'mel_only':
+        # Keep the chord as [MASK] throughout, not silence frames. The mask-
+        # predict model has seen "chord modality fully masked" during random-
+        # mask training, so its mask_emb_c is an in-distribution signal for
+        # the mel predictions to condition on. Silence frames, by contrast,
+        # never appeared during training and pull mel generation off-manifold.
         assert mel_prompt is not None
         usable_mel = min(prompt_length, mel_prompt.shape[1])
         mel_truth = mel_prompt[:, :usable_mel]
@@ -163,7 +168,7 @@ def mask_predict_with_modes(model, mode, mel_prompt, chord_prompt,
             return 'sample'
 
         def chord_action(t):
-            return 'silence'
+            return 'mask'
 
     elif mode == 'chord_only':
         assert chord_prompt is not None
@@ -171,7 +176,7 @@ def mask_predict_with_modes(model, mode, mel_prompt, chord_prompt,
         chord_truth = chord_prompt[:, :usable_chord]
 
         def mel_action(t):
-            return 'silence'
+            return 'mask'
 
         def chord_action(t):
             if t < usable_chord:
@@ -198,28 +203,48 @@ def mask_predict_with_modes(model, mode, mel_prompt, chord_prompt,
         m_act = mel_action(t)
         c_act = chord_action(t)
 
-        # Initial frame placeholders + masks for this block.
+        # Track per-action intent. 'sample' slots get filled during
+        # refinement; 'mask' slots STAY masked permanently (used by
+        # mel_only / chord_only so the silenced modality looks like
+        # the mask-predict training distribution rather than silence
+        # tokens the model never saw).
         if isinstance(m_act, tuple) and m_act[0] == 'given':
             m_init = m_act[1]
             m_masked = False
+            m_fill = False
         elif m_act == 'silence':
             m_init = silence_frame()
             m_masked = False
+            m_fill = False
+        elif m_act == 'mask':
+            m_init = torch.full((B, subseq), model.mask_token_id,
+                                dtype=torch.long, device=device)
+            m_masked = True
+            m_fill = False
         else:  # 'sample'
             m_init = torch.full((B, subseq), model.mask_token_id,
                                 dtype=torch.long, device=device)
             m_masked = True
+            m_fill = True
 
         if isinstance(c_act, tuple) and c_act[0] == 'given':
             c_init = c_act[1]
             c_masked = False
+            c_fill = False
         elif c_act == 'silence':
             c_init = silence_frame()
             c_masked = False
+            c_fill = False
+        elif c_act == 'mask':
+            c_init = torch.full((B, subseq), model.mask_token_id,
+                                dtype=torch.long, device=device)
+            c_masked = True
+            c_fill = False
         else:
             c_init = torch.full((B, subseq), model.mask_token_id,
                                 dtype=torch.long, device=device)
             c_masked = True
+            c_fill = True
 
         x_m_full = torch.cat([x_m_full, m_init.unsqueeze(1)], dim=1)
         x_c_full = torch.cat([x_c_full, c_init.unsqueeze(1)], dim=1)
@@ -230,13 +255,27 @@ def mask_predict_with_modes(model, mode, mel_prompt, chord_prompt,
             mask_c_full, torch.full((B, 1), c_masked, dtype=torch.bool, device=device),
         ], dim=1)
 
-        # If nothing to sample, we're done for this block.
-        if not (m_masked or c_masked):
+        # If nothing to fill, we're done for this block. Slots marked 'mask'
+        # remain masked in mask_*_full so future blocks' forward passes still
+        # see the mask_emb signal for the silenced modality.
+        if not (m_fill or c_fill):
             mel_frames.append(x_m_full[:, t, :])
             chord_frames.append(x_c_full[:, t, :])
             continue
 
-        # K refinement passes for the masked slot(s).
+        # K refinement passes for the slot(s) marked _fill. Slots marked
+        # 'mask' stay masked here -- the model's forward pass still sees
+        # them as mask_emb, contributing in-distribution context to the
+        # slot we're actually filling, but we never overwrite their tokens.
+        # mask_full_fillable: still-masked AND was marked 'fill'.
+        m_fillable = (
+            torch.full((B,), m_fill, dtype=torch.bool, device=device)
+            & mask_m_full[:, t]
+        )
+        c_fillable = (
+            torch.full((B,), c_fill, dtype=torch.bool, device=device)
+            & mask_c_full[:, t]
+        )
         for k in range(n_refine_steps):
             logits_m, logits_c, _ = model(
                 x_m_full, x_c_full, mask_m_full, mask_c_full,
@@ -249,26 +288,31 @@ def mask_predict_with_modes(model, mode, mel_prompt, chord_prompt,
 
             last = (k == n_refine_steps - 1)
             if last:
-                m_active = mask_m_full[:, t].unsqueeze(-1)
-                c_active = mask_c_full[:, t].unsqueeze(-1)
+                m_active = m_fillable.unsqueeze(-1)
+                c_active = c_fillable.unsqueeze(-1)
                 x_m_full[:, t] = torch.where(m_active, m_sample, x_m_full[:, t])
                 x_c_full[:, t] = torch.where(c_active, c_sample, x_c_full[:, t])
-                mask_m_full[:, t] = False
-                mask_c_full[:, t] = False
+                # Unmask filled slots; leave 'mask'-action slots masked.
+                mask_m_full[:, t] = mask_m_full[:, t] & ~m_fillable
+                mask_c_full[:, t] = mask_c_full[:, t] & ~c_fillable
+                m_fillable = torch.zeros_like(m_fillable)
+                c_fillable = torch.zeros_like(c_fillable)
             else:
-                # Pick more-confident still-masked slot.
+                # Pick more-confident still-fillable slot.
                 conf_m = torch.softmax(m_block_logits.float(), dim=-1).max(dim=-1).values.mean(dim=-1)
                 conf_c = torch.softmax(c_block_logits.float(), dim=-1).max(dim=-1).values.mean(dim=-1)
-                pick_m = (conf_m >= conf_c) & mask_m_full[:, t]
-                pick_c = (conf_m < conf_c) & mask_c_full[:, t]
-                only_m = mask_m_full[:, t] & ~mask_c_full[:, t]
-                only_c = mask_c_full[:, t] & ~mask_m_full[:, t]
+                pick_m = (conf_m >= conf_c) & m_fillable
+                pick_c = (conf_m < conf_c) & c_fillable
+                only_m = m_fillable & ~c_fillable
+                only_c = c_fillable & ~m_fillable
                 pick_m = pick_m | only_m
                 pick_c = pick_c | only_c
                 x_m_full[:, t] = torch.where(pick_m.unsqueeze(-1), m_sample, x_m_full[:, t])
                 x_c_full[:, t] = torch.where(pick_c.unsqueeze(-1), c_sample, x_c_full[:, t])
                 mask_m_full[:, t] = mask_m_full[:, t] & ~pick_m
                 mask_c_full[:, t] = mask_c_full[:, t] & ~pick_c
+                m_fillable = m_fillable & ~pick_m
+                c_fillable = c_fillable & ~pick_c
 
         mel_frames.append(x_m_full[:, t, :])
         chord_frames.append(x_c_full[:, t, :])
