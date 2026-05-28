@@ -26,6 +26,7 @@ Run from midi_yinyang/:
 """
 
 import argparse
+import math
 import os
 from glob import glob
 
@@ -60,6 +61,26 @@ TRACK_SPECS = {
     ('mel_only',   'mel'):   (27, 'mel_only-mel  GEN  (Clean Guitar)'),
     ('chord_only', 'chord'): ( 6, 'chord_only-chord  GEN  (Harpsichord)'),
 }
+
+
+def _snap_up_to_bar(t_sec, bar_sec):
+    """Round t_sec UP to the next bar boundary (in seconds)."""
+    return math.ceil(t_sec / bar_sec - 1e-9) * bar_sec
+
+
+def _first_nonempty_timestep(tokens, tokenizer):
+    """tokens: [1, T, subseq] long tensor of preprocessed CP tokens.
+    Return the first t where the timestep has at least one real note
+    (i.e. the very first a-slot isn't EOS or PAD). If every timestep is
+    empty, return T."""
+    T = tokens.shape[1]
+    eos = tokenizer.eos_token
+    pad = tokenizer.pad_token
+    a0 = tokens[0, :, 0]  # [T]
+    nonempty = (a0 != eos) & (a0 != pad)
+    if not bool(nonempty.any()):
+        return T
+    return int(torch.nonzero(nonempty, as_tuple=False)[0, 0].item())
 
 
 def add_frames_to_track(inst, frames, time_offset, tokenizer,
@@ -119,6 +140,11 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
         if not mel_path:
             return None, None
         condition = _load_prompt_tokens(model, mel_path, args.max_polyphony)
+        # Skip leading silent timesteps -- conditioning the chord on a silent
+        # mel for those steps is meaningless, and the song listens better
+        # when the output starts at the first actual melody note.
+        first_t = _first_nonempty_timestep(condition, model.tokenizer)
+        condition = condition[:, first_t:]
         gen_length = min(args.gen_length, condition.shape[1])
         condition = condition[:, :gen_length]
         subseq_len = condition.shape[2]
@@ -128,6 +154,8 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
         if not chord_path:
             return None, None
         condition = _load_prompt_tokens(model, chord_path, args.max_polyphony)
+        first_t = _first_nonempty_timestep(condition, model.tokenizer)
+        condition = condition[:, first_t:]
         gen_length = min(args.gen_length, condition.shape[1])
         condition = condition[:, :gen_length]
         subseq_len = condition.shape[2]
@@ -137,6 +165,9 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
         if not mel_path:
             return None, None
         prompt = _load_prompt_tokens(model, mel_path, args.max_polyphony)
+        # Same idea: skip silent intro so the prompt budget goes to actual notes.
+        first_t = _first_nonempty_timestep(prompt, model.tokenizer)
+        prompt = prompt[:, first_t:]
         common = min(prompt.shape[1], args.prompt_length)
         prompt = prompt[:, :common]
         subseq_len = prompt.shape[2]
@@ -147,6 +178,8 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
         if not chord_path:
             return None, None
         prompt = _load_prompt_tokens(model, chord_path, args.max_polyphony)
+        first_t = _first_nonempty_timestep(prompt, model.tokenizer)
+        prompt = prompt[:, first_t:]
         common = min(prompt.shape[1], args.prompt_length)
         prompt = prompt[:, :common]
         subseq_len = prompt.shape[2]
@@ -233,14 +266,17 @@ def main():
     song_duration_sec = args.gen_length * time_step_sec
     bar_duration_sec = 4 * 60.0 / tempo
     gap_sec = args.gap_bars * bar_duration_sec
-    slot_sec = song_duration_sec + gap_sec
 
-    # Process every song; place its outputs at current_offset across all 6 tracks.
+    # Process every song; place its outputs at current_offset across the tracks.
+    # After each song advance to (song_duration + gap) and snap UP to the next
+    # bar boundary so every song starts on a whole-bar line in GarageBand.
     current_offset = 0.0
     song_offsets = []
     for song_idx, (mel_path, chord_path) in enumerate(pairs):
         sid = os.path.splitext(os.path.basename(mel_path))[0]
-        print(f'\n[{song_idx + 1}/{len(pairs)}] {sid}  start={current_offset:.1f}s')
+        start_bar = current_offset / bar_duration_sec
+        print(f'\n[{song_idx + 1}/{len(pairs)}] {sid}  '
+              f'start={current_offset:.2f}s ({start_bar:.0f} bars)')
         song_offsets.append((sid, current_offset))
         for mode in MODES:
             print(f'  mode={mode}')
@@ -262,7 +298,11 @@ def main():
                     )
             except Exception as e:
                 print(f'    failed: {e!r}')
-        current_offset += slot_sec
+        # Advance and snap to the next whole-bar line.
+        current_offset = _snap_up_to_bar(
+            current_offset + song_duration_sec + gap_sec,
+            bar_duration_sec,
+        )
 
     # Assemble midi in a deterministic, viewer-friendly track order matching
     # MODES x ('mel', 'chord'), skipping (mode, modality) pairs that don't
