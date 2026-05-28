@@ -47,19 +47,22 @@ from preprocess_large_midi_dataset import DURATION_TEMPLATES
 
 MODES = ['co', 'mel2chord', 'chord2mel', 'mel_only', 'chord_only']
 
-# (program, track name). Programs picked so each (mode, modality) sounds
-# different in GarageBand's default GM playback — easy to A/B by ear.
-# Single-stream modes only populate one of the two tracks; the other one
-# still exists in the file but stays empty for those songs.
+# (program, track name). All melody tracks use General MIDI Acoustic Guitar
+# (Nylon = Classical Guitar, program 24); all chord tracks use Acoustic
+# Grand Piano (program 0). Track names still encode mode + which side is
+# given vs generated, so you can identify them in GarageBand's track list
+# without relying on instrument timbre.
+MEL_PROGRAM = 24
+CHORD_PROGRAM = 0
 TRACK_SPECS = {
-    ('co',         'mel'):   (24, 'co-mel  (Nylon Guitar)'),
-    ('co',         'chord'): ( 0, 'co-chord  (Acoustic Piano)'),
-    ('mel2chord',  'mel'):   (25, 'mel2chord-mel  GIVEN  (Steel Guitar)'),
-    ('mel2chord',  'chord'): ( 4, 'mel2chord-chord  GEN  (Electric Piano 1)'),
-    ('chord2mel',  'mel'):   (26, 'chord2mel-mel  GEN  (Jazz Guitar)'),
-    ('chord2mel',  'chord'): ( 5, 'chord2mel-chord  GIVEN  (Electric Piano 2)'),
-    ('mel_only',   'mel'):   (27, 'mel_only-mel  GEN  (Clean Guitar)'),
-    ('chord_only', 'chord'): ( 6, 'chord_only-chord  GEN  (Harpsichord)'),
+    ('co',         'mel'):   (MEL_PROGRAM,   'co-mel  (Classical Guitar)'),
+    ('co',         'chord'): (CHORD_PROGRAM, 'co-chord  (Grand Piano)'),
+    ('mel2chord',  'mel'):   (MEL_PROGRAM,   'mel2chord-mel  GIVEN  (Classical Guitar)'),
+    ('mel2chord',  'chord'): (CHORD_PROGRAM, 'mel2chord-chord  GEN  (Grand Piano)'),
+    ('chord2mel',  'mel'):   (MEL_PROGRAM,   'chord2mel-mel  GEN  (Classical Guitar)'),
+    ('chord2mel',  'chord'): (CHORD_PROGRAM, 'chord2mel-chord  GIVEN  (Grand Piano)'),
+    ('mel_only',   'mel'):   (MEL_PROGRAM,   'mel_only-mel  GEN  (Classical Guitar)'),
+    ('chord_only', 'chord'): (CHORD_PROGRAM, 'chord_only-chord  GEN  (Grand Piano)'),
 }
 
 
