@@ -317,10 +317,11 @@ def create_pop909_melody(max_polyphony=4):
     )
 
 
-def create_pop909_chord(max_polyphony=8):
-    # Chord midis carry one bass note plus 3-5 upper voices per chord, all
-    # struck simultaneously; max_polyphony=8 gives headroom for the largest
-    # voicings (e.g. 9th chords).
+def create_pop909_chord(max_polyphony=4):
+    # Each chord is rendered as exactly 4 simultaneous notes (1 bass + 3 upper
+    # voices) by build_pop909_chord_midi.py, so max_polyphony=4 is tight and
+    # matches the melody side's subseq length (also 4) -- no padding waste,
+    # symmetric subseqs across modalities.
     create_npy_dataset_from_midi(
         POP909_CHORD_PATH,
         max_polyphony,
