@@ -101,14 +101,28 @@ def make_actions_co(mel_prompt, chord_prompt, prompt_length):
     return mel_action, chord_action
 
 
-def make_actions_conditional(condition_data, condition_modality):
-    """condition_data: [B, T, subseq] -- fully provided stream."""
+def make_actions_conditional(condition_data, condition_modality, b_prompt=None):
+    """condition_data: [B, T, subseq] -- the fully-given stream.
+    condition_modality: 'mel' or 'chord' -- which one is the condition.
+    b_prompt: optional [B, P, subseq] -- a prefix of the GENERATED stream
+        to seed it with, so it doesn't have to start from scratch. The
+        generated stream is given for the first P timesteps and sampled
+        afterwards. If None, the generated stream is sampled from t=0."""
+    p_b = 0 if b_prompt is None else b_prompt.shape[1]
     if condition_modality == 'mel':
         def mel_action(t):
             return ('given', condition_data[:, t, :])
-        chord_action = lambda t: 'sample'
+
+        def chord_action(t):
+            if t < p_b:
+                return ('given', b_prompt[:, t, :])
+            return 'sample'
     else:
-        mel_action = lambda t: 'sample'
+        def mel_action(t):
+            if t < p_b:
+                return ('given', b_prompt[:, t, :])
+            return 'sample'
+
         def chord_action(t):
             return ('given', condition_data[:, t, :])
     return mel_action, chord_action
@@ -296,18 +310,26 @@ def run_one(model, mode, mel_path, chord_path, args, out_subdir):
 
     elif mode in ('mel2chord', 'chord2mel'):
         cond_modality = 'mel' if mode == 'mel2chord' else 'chord'
-        if cond_modality == 'mel':
-            if mel_path is None:
-                raise ValueError('mode=mel2chord requires --melody')
-            condition = _load_prompt_tokens(model, mel_path, args.max_polyphony)
-        else:
-            if chord_path is None:
-                raise ValueError('mode=chord2mel requires --chord')
-            condition = _load_prompt_tokens(model, chord_path, args.max_polyphony)
+        cond_path = mel_path if cond_modality == 'mel' else chord_path
+        other_path = chord_path if cond_modality == 'mel' else mel_path
+        if cond_path is None:
+            raise ValueError(f'mode={mode} requires --{cond_modality}')
+        condition = _load_prompt_tokens(model, cond_path, args.max_polyphony)
+
+        # Optional prefix of the GENERATED stream so it doesn't have to
+        # start from scratch. If the partner midi is supplied and
+        # --prompt-length > 0, use its first prompt_length timesteps.
+        b_prompt = None
+        if other_path is not None and args.prompt_length > 0:
+            b_prompt = _load_prompt_tokens(model, other_path, args.max_polyphony)
+            b_prompt = b_prompt[:, :args.prompt_length]
+
         gen_length = min(args.gen_length, condition.shape[1])
         condition = condition[:, :gen_length]
         subseq_m = subseq_c = condition.shape[2]
-        mel_action, chord_action = make_actions_conditional(condition, cond_modality)
+        mel_action, chord_action = make_actions_conditional(
+            condition, cond_modality, b_prompt=b_prompt,
+        )
 
     elif mode in ('mel_only', 'chord_only'):
         prompt_modality = 'mel' if mode == 'mel_only' else 'chord'

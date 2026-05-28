@@ -145,10 +145,22 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
         # when the output starts at the first actual melody note.
         first_t = _first_nonempty_timestep(condition, model.tokenizer)
         condition = condition[:, first_t:]
+
+        # Optional chord prefix: use the first prompt_length timesteps of the
+        # chord midi (aligned with mel's trim) so chord generation has a seed
+        # instead of starting from scratch.
+        b_prompt = None
+        if chord_path and args.prompt_length > 0:
+            b_prompt = _load_prompt_tokens(model, chord_path, args.max_polyphony)
+            b_prompt = b_prompt[:, first_t:]
+            b_prompt = b_prompt[:, :args.prompt_length]
+
         gen_length = min(args.gen_length, condition.shape[1])
         condition = condition[:, :gen_length]
         subseq_len = condition.shape[2]
-        mel_action, chord_action = make_actions_conditional(condition, 'mel')
+        mel_action, chord_action = make_actions_conditional(
+            condition, 'mel', b_prompt=b_prompt,
+        )
 
     elif mode == 'chord2mel':
         if not chord_path:
@@ -156,10 +168,19 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
         condition = _load_prompt_tokens(model, chord_path, args.max_polyphony)
         first_t = _first_nonempty_timestep(condition, model.tokenizer)
         condition = condition[:, first_t:]
+
+        b_prompt = None
+        if mel_path and args.prompt_length > 0:
+            b_prompt = _load_prompt_tokens(model, mel_path, args.max_polyphony)
+            b_prompt = b_prompt[:, first_t:]
+            b_prompt = b_prompt[:, :args.prompt_length]
+
         gen_length = min(args.gen_length, condition.shape[1])
         condition = condition[:, :gen_length]
         subseq_len = condition.shape[2]
-        mel_action, chord_action = make_actions_conditional(condition, 'chord')
+        mel_action, chord_action = make_actions_conditional(
+            condition, 'chord', b_prompt=b_prompt,
+        )
 
     elif mode == 'mel_only':
         if not mel_path:
