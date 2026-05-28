@@ -69,9 +69,15 @@ def _snap_up_to_bar(t_sec, bar_sec):
 
 
 def add_frames_to_track(inst, frames, time_offset, tokenizer,
-                        with_velocity=False, tempo=120.0):
+                        with_velocity=False, tempo=120.0,
+                        prompt_end_timestep=0):
     """Decode a list of frames into notes appended to `inst`, with every
-    note's start/end shifted by time_offset (seconds)."""
+    note's start/end shifted by time_offset (seconds).
+
+    prompt_end_timestep is accepted but unused for note styling -- prompt
+    vs generated is signalled only by markers (added globally to the midi
+    file). All notes use the same velocity so the piano roll renders
+    consistently."""
     if frames is None:
         return
     time_step_length = 60.0 / tempo / 4
@@ -106,12 +112,37 @@ def add_frames_to_track(inst, frames, time_offset, tokenizer,
             ))
 
 
+def _prompt_ends(mode, prompt_length, gen_length, used_b_prompt):
+    """Per-modality timestep at which 'prompt' (given truth) ends and
+    'generated' (sampled) begins. Returns (mel_end, chord_end).
+
+    A modality fully given for the whole song (e.g., mel in mel2chord)
+    returns gen_length, meaning every note in that track is treated as
+    prompt (lower velocity, since it came from the source midi).
+    A modality with no prompt at all returns 0."""
+    if mode == 'co':
+        return prompt_length, prompt_length
+    if mode == 'mel2chord':
+        return gen_length, (prompt_length if used_b_prompt else 0)
+    if mode == 'chord2mel':
+        return (prompt_length if used_b_prompt else 0), gen_length
+    if mode == 'mel_only':
+        return prompt_length, 0
+    if mode == 'chord_only':
+        return 0, prompt_length
+    return 0, 0
+
+
 def run_mode_for_song(model, mode, mel_path, chord_path, args):
-    """Run one of the three modes on one (mel, chord) pair and return the
-    per-frame token lists for melody and chord."""
+    """Run one of the modes on one (mel, chord) pair. Returns
+    (mel_frames, chord_frames, mel_prompt_end, chord_prompt_end) where the
+    *_prompt_end values are the timestep at which 'prompt' transitions to
+    'generated' for each modality (used downstream for note velocity and
+    marker placement)."""
+    used_b_prompt = False
     if mode == 'co':
         if not mel_path or not chord_path:
-            return None, None
+            return None, None, 0, 0
         mel_prompt = _load_prompt_tokens(model, mel_path, args.max_polyphony)
         chord_prompt = _load_prompt_tokens(model, chord_path, args.max_polyphony)
         common = min(mel_prompt.shape[1], chord_prompt.shape[1], args.prompt_length)
@@ -123,17 +154,13 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
 
     elif mode == 'mel2chord':
         if not mel_path:
-            return None, None
+            return None, None, 0, 0
         condition = _load_prompt_tokens(model, mel_path, args.max_polyphony)
-
-        # Optional chord prefix: use the first prompt_length timesteps of the
-        # chord midi so chord generation has a seed instead of starting from
-        # scratch. mel is still given throughout.
         b_prompt = None
         if chord_path and args.prompt_length > 0:
             b_prompt = _load_prompt_tokens(model, chord_path, args.max_polyphony)
             b_prompt = b_prompt[:, :args.prompt_length]
-
+            used_b_prompt = True
         gen_length = min(args.gen_length, condition.shape[1])
         condition = condition[:, :gen_length]
         subseq_len = condition.shape[2]
@@ -143,14 +170,13 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
 
     elif mode == 'chord2mel':
         if not chord_path:
-            return None, None
+            return None, None, 0, 0
         condition = _load_prompt_tokens(model, chord_path, args.max_polyphony)
-
         b_prompt = None
         if mel_path and args.prompt_length > 0:
             b_prompt = _load_prompt_tokens(model, mel_path, args.max_polyphony)
             b_prompt = b_prompt[:, :args.prompt_length]
-
+            used_b_prompt = True
         gen_length = min(args.gen_length, condition.shape[1])
         condition = condition[:, :gen_length]
         subseq_len = condition.shape[2]
@@ -160,7 +186,7 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
 
     elif mode == 'mel_only':
         if not mel_path:
-            return None, None
+            return None, None, 0, 0
         prompt = _load_prompt_tokens(model, mel_path, args.max_polyphony)
         common = min(prompt.shape[1], args.prompt_length)
         prompt = prompt[:, :common]
@@ -170,7 +196,7 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
 
     elif mode == 'chord_only':
         if not chord_path:
-            return None, None
+            return None, None, 0, 0
         prompt = _load_prompt_tokens(model, chord_path, args.max_polyphony)
         common = min(prompt.shape[1], args.prompt_length)
         prompt = prompt[:, :common]
@@ -187,7 +213,10 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
         mel_action_fn=mel_action,
         chord_action_fn=chord_action,
     )
-    return mel_frames, chord_frames
+    mel_end, chord_end = _prompt_ends(
+        mode, args.prompt_length, gen_length, used_b_prompt,
+    )
+    return mel_frames, chord_frames, mel_end, chord_end
 
 
 def _list_midis(folder):
@@ -264,16 +293,21 @@ def main():
     # bar boundary so every song starts on a whole-bar line in GarageBand.
     current_offset = 0.0
     song_offsets = []
+    # Markers to inject into the midi after pretty_midi writes it. Each entry
+    # is (time_sec, text). GarageBand surfaces these as labelled lines in its
+    # arrangement-view ruler so you can scroll to a specific song / boundary.
+    markers = []
     for song_idx, (mel_path, chord_path) in enumerate(pairs):
         sid = os.path.splitext(os.path.basename(mel_path))[0]
         start_bar = current_offset / bar_duration_sec
         print(f'\n[{song_idx + 1}/{len(pairs)}] {sid}  '
               f'start={current_offset:.2f}s ({start_bar:.0f} bars)')
         song_offsets.append((sid, current_offset))
+        markers.append((current_offset, f'[{sid}] song start'))
         for mode in MODES:
             print(f'  mode={mode}')
             try:
-                mel_frames, chord_frames = run_mode_for_song(
+                mel_frames, chord_frames, mel_end, chord_end = run_mode_for_song(
                     model, mode, mel_path, chord_path, args,
                 )
                 # Single-stream modes populate only one of the two tracks;
@@ -282,12 +316,31 @@ def main():
                     add_frames_to_track(
                         instruments[(mode, 'mel')], mel_frames, current_offset,
                         model.tokenizer, model.with_velocity, tempo,
+                        prompt_end_timestep=mel_end,
                     )
                 if (mode, 'chord') in instruments:
                     add_frames_to_track(
                         instruments[(mode, 'chord')], chord_frames, current_offset,
                         model.tokenizer, model.with_velocity, tempo,
+                        prompt_end_timestep=chord_end,
                     )
+
+                # If this mode has a finite prompt boundary on either
+                # modality (i.e. there is generated content somewhere),
+                # add a marker so the user can jump to where generation
+                # starts. We add a separate marker per modality only when
+                # the two boundaries differ.
+                song_gen_len = args.gen_length
+                if mel_end > 0 and mel_end < song_gen_len:
+                    markers.append((
+                        current_offset + mel_end * time_step_sec,
+                        f'[{sid}] {mode} mel prompt -> gen',
+                    ))
+                if chord_end > 0 and chord_end < song_gen_len and chord_end != mel_end:
+                    markers.append((
+                        current_offset + chord_end * time_step_sec,
+                        f'[{sid}] {mode} chord prompt -> gen',
+                    ))
             except Exception as e:
                 print(f'    failed: {e!r}')
         # Advance and snap to the next whole-bar line.
@@ -309,6 +362,32 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     midi.write(args.output)
     print(f'\nWrote {args.output}')
+
+    # Inject MIDI marker meta-events. pretty_midi doesn't expose markers, so
+    # we open the just-written file with mido and append a dedicated marker
+    # track. GarageBand surfaces these as labelled lines in its arrangement
+    # ruler, letting you jump directly to a song or to where prompt -> gen
+    # for any (song, mode, modality).
+    if markers:
+        import mido
+        mid = mido.MidiFile(args.output)
+        ticks_per_beat = mid.ticks_per_beat
+        sec_per_tick = 60.0 / (tempo * ticks_per_beat)
+        events = sorted(
+            ((max(0, int(round(t / sec_per_tick))), text) for t, text in markers),
+            key=lambda e: e[0],
+        )
+        marker_track = mido.MidiTrack()
+        marker_track.append(mido.MetaMessage('track_name', name='MARKERS', time=0))
+        last_tick = 0
+        for tick, text in events:
+            delta = max(0, tick - last_tick)
+            marker_track.append(mido.MetaMessage('marker', text=text, time=delta))
+            last_tick = tick
+        marker_track.append(mido.MetaMessage('end_of_track', time=0))
+        mid.tracks.append(marker_track)
+        mid.save(args.output)
+        print(f'  + injected {len(events)} markers (song-start + prompt-end)')
 
     # Write the song offsets next to the midi for navigation.
     offsets_path = (args.output[:-4] if args.output.lower().endswith('.mid')
