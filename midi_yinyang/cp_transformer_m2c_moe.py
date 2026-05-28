@@ -207,7 +207,7 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         moe_num_experts: int = 4,
         moe_topk: int = 2,
         moe_intermediate_size: Optional[int] = None,
-        global_num_layers: int = 1,
+        global_num_layers: Optional[int] = None,
         global_dropout: float = 0.0,
     ):
         super().__init__()
@@ -219,6 +219,11 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         self.hidden_size = 768 if large else 512
         self.num_attention_heads = 12 if large else 8
         self.intermediate_size = 3072 if large else 1024
+        # Mirror the depth schedule of cp_transformer.py: size 0 (small) -> 6,
+        # size 1 (large) -> 12. Override via the constructor for non-defaults.
+        if global_num_layers is None:
+            global_num_layers = 12 if large else 6
+        self.global_num_layers = global_num_layers
 
         # Local encoder/decoder sizes
         self.local_model_num_layers = 3
@@ -941,9 +946,10 @@ if __name__ == '__main__':
     parser.add_argument(
         "--global_num_layers",
         type=int,
-        default=1,
-        help="number of global transformer layers (default 1; bump to match a "
-             "pretrained checkpoint when initializing from one)",
+        default=None,
+        help="number of global transformer layers. Default: 12 if model_size=large "
+             "else 6 (mirrors cp_transformer.py's depth schedule). Pass "
+             "--global_num_layers 1 to load a legacy single-layer checkpoint.",
     )
 
 
@@ -964,7 +970,12 @@ if __name__ == '__main__':
     n_gpus = max(torch.cuda.device_count(), 1)
     suffix = 'vel' if with_velocity else ''
 
-    default_name = f"m2c_transformer_moe_v4.0_{model_size}_batch_{batch_size * n_gpus}_schedule"
+    gnl = args.global_num_layers
+    if gnl is None:
+        gnl = 12 if model_size == 'large' else 6
+
+    default_name = (f"m2c_transformer_moe_v4.0_{model_size}_gnl{gnl}"
+                    f"_batch_{batch_size * n_gpus}_schedule")
     model_name = args.model_name if args.model_name is not None else default_name
     net = RoFormerSymbolicTransformer(
         model_size == 'large',
@@ -972,7 +983,7 @@ if __name__ == '__main__':
         moe_num_experts=args.moe_num_experts,
         moe_topk=args.moe_topk,
         moe_intermediate_size=args.moe_intermediate_size,
-        global_num_layers=args.global_num_layers,
+        global_num_layers=gnl,
     )
     print(f"MoE enabled: {net.global_roformer.config.moe}")
     train_set_loader = DataLoader(FramedDataset(dataset, TRAIN_LENGTH, batch_size, split = 'train'), batch_size=None, num_workers=1, persistent_workers=True)
@@ -1015,7 +1026,7 @@ if __name__ == '__main__':
                 "moe_num_experts": args.moe_num_experts,
                 "moe_topk": args.moe_topk,
                 "moe_intermediate_size": args.moe_intermediate_size,
-                "global_num_layers": args.global_num_layers,
+                "global_num_layers": gnl,
             },
         },
         f'ckpt/{model_name}.pt',

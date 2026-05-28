@@ -146,6 +146,9 @@ if __name__ == '__main__':
     parser.add_argument('--moe_num_experts', type=int, default=4)
     parser.add_argument('--moe_topk', type=int, default=2)
     parser.add_argument('--moe_intermediate_size', type=int, default=None)
+    parser.add_argument('--global_num_layers', type=int, default=None,
+                        help='Override global transformer depth. Default: '
+                             '12 if model_size=large else 6.')
 
     args = parser.parse_args()
 
@@ -157,7 +160,11 @@ if __name__ == '__main__':
     with_velocity = False
     n_gpus = max(torch.cuda.device_count(), 1)
 
-    default_name = (f"m2c_samestep_sym_moe_v1.0_{model_size}"
+    gnl = args.global_num_layers
+    if gnl is None:
+        gnl = 12 if model_size == 'large' else 6
+
+    default_name = (f"m2c_samestep_sym_moe_v1.0_{model_size}_gnl{gnl}"
                     f"_batch_{batch_size * n_gpus}_schedule")
     model_name = args.model_name if args.model_name is not None else default_name
 
@@ -167,6 +174,7 @@ if __name__ == '__main__':
         moe_num_experts=args.moe_num_experts,
         moe_topk=args.moe_topk,
         moe_intermediate_size=args.moe_intermediate_size,
+        global_num_layers=gnl,
     )
     print(f'MoE enabled: {net.global_roformer.config.moe}')
     print('Same-step cross-stream attention: ALLOWED and SYMMETRIC '
@@ -227,6 +235,7 @@ if __name__ == '__main__':
                 'moe_num_experts': args.moe_num_experts,
                 'moe_topk': args.moe_topk,
                 'moe_intermediate_size': args.moe_intermediate_size,
+                'global_num_layers': gnl,
                 'variant': 'same_step_symmetric_rope',
             },
         },

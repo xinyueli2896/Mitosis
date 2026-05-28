@@ -356,7 +356,10 @@ def sanity_check_moe_equals_dense(model, n_experts):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--pretrained', required=True, help='Path to pretrained .ckpt or .pt')
-    ap.add_argument('--size', type=int, default=1, choices=[0, 1, 2, 3])
+    ap.add_argument('--size', type=int, default=1, choices=[0, 1],
+                    help='0 = small (hidden=512, heads=8), 1 = large (hidden=768, heads=12). '
+                         'Our m2c MoE supports only these two; the original cp_transformer.py '
+                         'pretrained models at sizes 2/3 (hidden=1024/1280) are not loadable.')
     ap.add_argument('--with_velocity', action='store_true')
     ap.add_argument('--moe_num_experts', type=int, default=4)
     ap.add_argument('--moe_topk', type=int, default=2)
@@ -390,20 +393,22 @@ def main():
         gnl = src_info.get('global_num_layers', 1)
         print(f'[auto] destination global_num_layers = {gnl} (matched to pretrained)')
 
-    # Sanity check hidden size against the size flag's implied destination
-    expected_H = 768 if args.size >= 2 else 512
+    # Sanity check hidden size against the size flag's implied destination.
+    # Our m2c MoE has exactly two sizes: large=False -> 512, large=True -> 768.
+    expected_H = 768 if args.size == 1 else 512
     if 'hidden_size' in src_info and src_info['hidden_size'] != expected_H:
         raise SystemExit(
             f'[fail] hidden_size mismatch: pretrained={src_info["hidden_size"]}, '
-            f'destination (size={args.size})={expected_H}. '
-            f'Our m2c model supports only large={False if expected_H == 512 else True}. '
-            f'Re-run with the matching --size, or extend cp_transformer_m2c_moe.py to '
-            f'support hidden_size={src_info["hidden_size"]} (only 2 sizes currently).')
+            f'destination (size={args.size}, large={args.size == 1})={expected_H}. '
+            f'If the pretrained ckpt is size 2/3 (hidden=1024/1280) from '
+            f'cp_transformer.py, our m2c MoE does not support that hidden size; '
+            f'either extend cp_transformer_m2c_moe.py to add the larger size, '
+            f'or pick a smaller pretrained checkpoint.')
 
     print(f'[build] instantiating m2c MoE model (size={args.size}, '
           f'with_velocity={args.with_velocity}, global_num_layers={gnl})')
     model = RoFormerSymbolicTransformer(
-        large=(args.size >= 2),
+        large=(args.size == 1),
         with_velocity=args.with_velocity,
         moe_num_experts=args.moe_num_experts,
         moe_topk=args.moe_topk,
