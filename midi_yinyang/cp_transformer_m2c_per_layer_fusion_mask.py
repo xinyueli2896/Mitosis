@@ -53,6 +53,7 @@ from cp_transformer_m2c_moe import (
     MAX_STEPS,
 )
 from cp_transformer_m2c_per_layer_fusion import M2CPerLayerFusion
+from cp_transformer_m2c_samestep import TimestepRoPE
 
 
 class M2CPerLayerFusionMask(M2CPerLayerFusion):
@@ -94,6 +95,23 @@ class M2CPerLayerFusionMask(M2CPerLayerFusion):
         # "this slot is unknown" without leaking the masked token's identity.
         self.mask_emb_m = nn.Parameter(torch.randn(self.hidden_size))
         self.mask_emb_c = nn.Parameter(torch.randn(self.hidden_size))
+
+        # Symmetric same-step RoPE for every fusion block's two encoders.
+        # Without this, mel-Q -> chord-K and chord-Q -> mel-K have RoPE
+        # relative rotations -1 and +1 respectively (asymmetric); with it,
+        # positions 2t and 2t+1 share the same rotation R(t), so all
+        # relative rotations are R(t - t') -- self and both cross-attention
+        # directions match. Mask-predict's bidirectional symmetric coupling
+        # depends on this; without it, "m_t given c_t" and "c_t given m_t"
+        # learn out-of-alignment conditionals.
+        for block in self.fusion_blocks:
+            for enc in (block.layer_mel_pass, block.layer_chord_pass):
+                old = enc.embed_positions
+                new = TimestepRoPE(
+                    num_positions=old.num_embeddings,
+                    embedding_dim=old.embedding_dim,
+                )
+                enc.embed_positions = new
 
     # ------------------------------------------------------------------
     # Forward / loss
