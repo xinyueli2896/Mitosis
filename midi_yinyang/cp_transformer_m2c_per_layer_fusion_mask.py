@@ -128,25 +128,57 @@ class M2CPerLayerFusionMask(M2CPerLayerFusion):
             x,
         )
 
-    def forward(self, x_m, x_c, mask_m=None, mask_c=None):
-        """No shift-by-2. Positions align with targets; masking is what hides
-        the answer. Returns (logits_m, logits_c, aux_loss)."""
+    def forward(self, x_m, x_c, mask_m=None, mask_c=None,
+                decoder_x_m=None, decoder_x_c=None, return_h_out=False):
+        """No shift-by-2. Positions align with targets; masking hides the answer.
+
+        Args:
+          x_m, x_c: [B, T, subseq] tokens whose masked positions get replaced
+            with [MASK] before local_encode -- this builds the h fed into the
+            global tower. At masked blocks, h is then overridden by mask_emb_*.
+          mask_m, mask_c: [B, T] bool. True = block is masked.
+          decoder_x_m, decoder_x_c: optional [B, T, subseq] tokens used for
+            local_decode's teacher-forcing input. Defaults to x_m / x_c (the
+            REAL, non-masked tokens) so within-block AR is preserved at
+            masked positions during training. At inference, pass the current
+            buffer (with masked positions still [MASK]) plus iteratively-filled
+            real tokens to do within-block AR sampling.
+
+        Returns (logits_m, logits_c, aux_loss).
+        """
         B, T, subseq = x_m.shape
         device = x_m.device
 
-        x_m_in = self._apply_token_mask(x_m, mask_m)
-        x_c_in = self._apply_token_mask(x_c, mask_c)
+        # Global-tower input: tokens with masked blocks replaced by [MASK].
+        x_m_global = self._apply_token_mask(x_m, mask_m)
+        x_c_global = self._apply_token_mask(x_c, mask_c)
 
         type_m = torch.zeros(B, T, subseq + 1, dtype=torch.long, device=device)
         type_c = torch.ones(B, T, subseq + 1, dtype=torch.long, device=device)
 
-        h_m, emb_m = self.local_encode(x_m_in, type_m)
-        h_c, emb_c = self.local_encode(x_c_in, type_c)
+        # local_encode of the masked tokens -> gives us h for the global tower.
+        # We discard emb_m here because we want the local_decoder to see REAL
+        # token embeddings (teacher forcing within the block), not [MASK] embs.
+        h_m, _ = self.local_encode(x_m_global, type_m)
+        h_c, _ = self.local_encode(x_c_global, type_c)
         h_m = h_m.view(B, T, -1)
         h_c = h_c.view(B, T, -1)
 
+        # local_encode again, this time with the REAL (unmasked) tokens, to
+        # produce the within-block embeddings for local_decode's teacher
+        # forcing. Without this second pass, at masked blocks the decoder
+        # would see only [MASK] embeddings as within-block context and lose
+        # the within-block AR signal entirely -- breaking the (program,
+        # pitch+dur) correlation within each CP tuple and producing
+        # disconnected-sounding output at masked positions.
+        dec_x_m = decoder_x_m if decoder_x_m is not None else x_m
+        dec_x_c = decoder_x_c if decoder_x_c is not None else x_c
+        _, emb_m = self.local_encode(dec_x_m, type_m)
+        _, emb_c = self.local_encode(dec_x_c, type_c)
+
         # Override block summary at masked positions with the learned global
-        # mask embedding.
+        # mask embedding. The global tower never sees the masked block's
+        # token content -- only the per-modality mask_emb signal.
         if mask_m is not None:
             h_m = torch.where(
                 mask_m.unsqueeze(-1),
@@ -170,6 +202,8 @@ class M2CPerLayerFusionMask(M2CPerLayerFusion):
 
         logits_m = self.local_decode(h_m_out, emb_m).view(B, T, subseq, -1)
         logits_c = self.local_decode(h_c_out, emb_c).view(B, T, subseq, -1)
+        if return_h_out:
+            return logits_m, logits_c, aux_loss, h_m_out, h_c_out
         return logits_m, logits_c, aux_loss
 
     def loss(self, x_m_raw, x_c_raw, pitch_shift):
@@ -246,6 +280,44 @@ class M2CPerLayerFusionMask(M2CPerLayerFusion):
     # ------------------------------------------------------------------
     # Inference: block-by-block AR with K-step iterative refinement per block
     # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def _sample_block_within_block_ar(self, h_block, subseq_len, temperature,
+                                       token_type_id):
+        """Within-block CP-structured AR sampling.
+
+        h_block: [B, H] per-block hidden state (one block's slice of h_m_out
+                 or h_c_out from the global tower).
+        Returns: [B, subseq_len] sampled tokens for the block, pad-padded if
+                 EOS was hit early.
+
+        Uses the parent's local_sampling which enforces CP token-type
+        constraints (program tokens at even positions, pitch+dur tokens at
+        odd positions, valid pitch ranges, etc.) -- the same constraint
+        machinery the AR (non-mask) inference relies on. Bypasses the
+        broken "parallel sample over the full vocab" path that the
+        mask-predict default uses.
+        """
+        # local_sampling returns a tensor whose length is <= subseq_len
+        # depending on when EOS was hit. We pad to exactly subseq_len so the
+        # buffer shape stays fixed across blocks.
+        sampled = self.local_sampling(
+            h_block,
+            max_subseq_len=subseq_len,
+            temperature=temperature,
+            token_type_id=token_type_id,
+        )
+        B, L = sampled.shape
+        if L < subseq_len:
+            pad = torch.full(
+                (B, subseq_len - L),
+                self.tokenizer.pad_token,
+                dtype=sampled.dtype, device=sampled.device,
+            )
+            sampled = torch.cat([sampled, pad], dim=1)
+        elif L > subseq_len:
+            sampled = sampled[:, :subseq_len]
+        return sampled
 
     @torch.no_grad()
     def _sample_tokens(self, logits, temperature):
