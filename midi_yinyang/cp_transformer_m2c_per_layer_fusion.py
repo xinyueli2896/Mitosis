@@ -33,12 +33,13 @@ So we use two RoFormerLayer-inside-Encoder modules per fusion block. Their
 internal MoE FFNs handle p (self) and p' (cross) for one stream each. The
 per-block gates combine self and cross outputs into the next block's input.
 
-Inference caveat: same-step cross creates a chicken-and-egg dependency under
-strict autoregressive sampling (m_t needs c_t and vice versa). Training is
-fine -- teacher forcing exposes both. Inference will need sequential
-two-step sampling per timestep (m_t first with cross from c_{<t}, then c_t
-with cross from m_{<=t}) or iterative refinement (MaskGIT-style). Not
-implemented here; this file builds the training-time model.
+Inference works with the same shift-by-2 sampling loop the m2c MoE inference
+script uses. The "same-step cross-stream attention" the model allows at
+training only ever reads ALREADY-SAMPLED tokens at inference: positions 2t
+and 2t+1 of the inference buffer both hold the previously sampled m_{t-1}
+and c_{t-1}, so when predicting m_t and c_t in parallel from the last buffer
+pair, neither prediction depends on the not-yet-sampled counterpart. See
+cp_transformer_m2c_per_layer_fusion_inference.py.
 
 Run:
     python cp_transformer_m2c_per_layer_fusion.py \\
