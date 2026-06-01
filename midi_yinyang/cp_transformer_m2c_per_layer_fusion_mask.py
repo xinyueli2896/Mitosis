@@ -371,6 +371,12 @@ if __name__ == '__main__':
                         help='Default: 12 if model_size=large else 6.')
     parser.add_argument('--mel_loss_weight', type=float, default=1.0)
     parser.add_argument('--acc_loss_weight', type=float, default=1.0)
+    parser.add_argument('--run_tag', type=str, default=None,
+                        help='Optional free-form tag appended to the default '
+                             'model_name and persisted in hyper_parameters. '
+                             'Use to distinguish runs that share architecture '
+                             'but differ in some other dimension (e.g. '
+                             '--run_tag timestep_rope, --run_tag retry2).')
     args = parser.parse_args()
 
     batch_size = args.batch_size
@@ -385,7 +391,8 @@ if __name__ == '__main__':
     if gnl is None:
         gnl = 12 if model_size == 'large' else 6
 
-    default_name = (f"m2c_perlayer_fusion_mask_v1.0_{model_size}_gnl{gnl}"
+    tag = f'_{args.run_tag}' if args.run_tag else ''
+    default_name = (f"m2c_perlayer_fusion_mask_v1.0_{model_size}_gnl{gnl}{tag}"
                     f"_batch_{batch_size * n_gpus}_schedule")
     model_name = args.model_name if args.model_name is not None else default_name
 
@@ -449,6 +456,7 @@ if __name__ == '__main__':
                     'global_num_layers': gnl,
                     'mel_loss_weight': args.mel_loss_weight,
                     'acc_loss_weight': args.acc_loss_weight,
+                    'run_tag': args.run_tag,
                 },
             ) if args.wandb else TensorBoardLogger('tb_logs', name=model_name)
         ),
@@ -469,6 +477,7 @@ if __name__ == '__main__':
                 'mel_loss_weight': args.mel_loss_weight,
                 'acc_loss_weight': args.acc_loss_weight,
                 'variant': 'm2c_per_layer_fusion_mask',
+                'run_tag': args.run_tag,
             },
         },
         f'ckpt/{model_name}.pt',
