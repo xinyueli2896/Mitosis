@@ -282,6 +282,113 @@ class M2CPerLayerFusionMask(M2CPerLayerFusion):
     # ------------------------------------------------------------------
 
     @torch.no_grad()
+    def local_sampling(self, h, max_subseq_len=32, temperature=1.0,
+                       token_type_id=1):
+        """Within-block CP-structured AR sampling, vocab-extension-aware.
+
+        Override of the parent's local_sampling: the parent builds
+        ``vocab_ids = torch.arange(self.tokenizer.n_tokens)`` which has the
+        ORIGINAL vocab size; for the mask-predict model the logits and the
+        valid-mask have the EXTENDED vocab size (n_tokens + 1, including
+        [MASK]). The broadcast ``valid |= (vocab_ids ...)`` would then fail
+        with a 3331-vs-3332 shape mismatch.
+
+        Surgical fix: build vocab_ids with the logit dimension instead of
+        n_tokens. [MASK] (at index n_tokens) is correctly excluded by every
+        existing valid-range check below: its index is greater than every
+        pitch_max and greater than every program range, so it stays
+        masked-out automatically. Output token IDs are therefore still in
+        [0, n_tokens) -- never [MASK].
+        """
+        import torch.nn.functional as F  # local import; matches parent style
+
+        batch_size, _ = h.shape
+        device = h.device
+        y = torch.zeros((batch_size, 0), dtype=torch.long, device=device)
+        emb = h[:, None, :]
+        eos_triggered = torch.zeros(batch_size, dtype=torch.bool, device=device)
+
+        min_tokens_before_eos = (
+            self.min_acc_tokens_before_eos if token_type_id == 1 else 0
+        )
+        if token_type_id == 1 and min_tokens_before_eos >= max_subseq_len:
+            min_tokens_before_eos = 0
+
+        for step in range(max_subseq_len):
+            h_dec = self.local_decoder(
+                emb, attention_mask=self.buffered_future_mask(emb),
+            )[0]
+            logits = self.final_decoder(h_dec[:, -1])  # [B, vocab_size]
+
+            # Use the LOGIT dimension for vocab_ids so the broadcast against
+            # `valid` (also of size logits.shape[-1]) succeeds whether or not
+            # the vocab is extended.
+            vocab_ids = torch.arange(logits.shape[-1], device=device)
+
+            is_program_step = (y.size(1) % 2 == 0)
+            valid = torch.zeros_like(logits, dtype=torch.bool)
+
+            if is_program_step:
+                if not self.with_velocity:
+                    if token_type_id == 0:
+                        valid[:, 24] = True
+                    elif token_type_id == 1:
+                        valid[:, 0] = True
+                else:
+                    valid |= (vocab_ids <= 128 * 16 - 1)
+                valid[:, self.tokenizer.eos_token] = True
+                if token_type_id == 1 and step < min_tokens_before_eos:
+                    valid[:, self.tokenizer.eos_token] = False
+            else:
+                if self.with_velocity:
+                    pitch_min = 128 * 16
+                    pitch_max = 128 * (16 + 24) - 1
+                else:
+                    pitch_min = 128
+                    pitch_max = 128 * 25 - 1
+                valid |= (vocab_ids >= pitch_min) & (vocab_ids <= pitch_max)
+
+            valid[:, self.tokenizer.pad_token] = False
+            # Defensive: explicitly forbid [MASK] (would otherwise depend on
+            # whether the valid-range checks above happen to exclude it).
+            valid[:, self.mask_token_id] = False
+            logits = logits.masked_fill(~valid, float('-inf'))
+
+            if temperature == 0:
+                y_next = logits.argmax(dim=-1, keepdim=True)
+            else:
+                probs = F.softmax(logits / temperature, dim=-1)
+                probs_sum = probs.sum(dim=-1, keepdim=True)
+                fallback = probs_sum.squeeze(-1) == 0
+                if fallback.any():
+                    probs[fallback, self.tokenizer.eos_token] = 1.0
+                    probs_sum = probs.sum(dim=-1, keepdim=True)
+                probs = probs / probs_sum
+                y_next = torch.multinomial(probs, 1)
+
+            y_next[eos_triggered] = self.tokenizer.pad_token
+            eos_triggered = eos_triggered | (
+                y_next.squeeze(1) == self.tokenizer.eos_token
+            )
+            y = torch.cat([y, y_next], dim=1)
+            if torch.all(eos_triggered):
+                break
+            type_ids = torch.full_like(y_next, token_type_id)
+            emb = torch.cat(
+                [
+                    emb,
+                    self.local_embedding(y_next)
+                    + self.token_type_embeddings(type_ids),
+                ],
+                dim=1,
+            )
+
+        if y.size(1) < max_subseq_len:
+            pad_len = max_subseq_len - y.size(1)
+            y = F.pad(y, (0, pad_len), value=self.tokenizer.pad_token)
+        return y
+
+    @torch.no_grad()
     def _sample_block_within_block_ar(self, h_block, subseq_len, temperature,
                                        token_type_id):
         """Within-block CP-structured AR sampling.
