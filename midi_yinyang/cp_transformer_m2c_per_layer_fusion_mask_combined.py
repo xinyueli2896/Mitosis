@@ -82,8 +82,12 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
             chord_prompt = _load_prompt_tokens(model, chord_path, args.max_polyphony)
             chord_prompt = chord_prompt[:, :args.prompt_length]
             used_b_prompt = True
-        gen_length = min(args.gen_length, mel_prompt.shape[1])
-        mel_prompt = mel_prompt[:, :gen_length]
+        # Total output length = prompt + gen. Load enough mel for the whole
+        # thing. gen_length passed to mask_predict_with_modes_ar is the
+        # SAMPLING portion only; the function adds prompt_length internally.
+        total_T = min(args.prompt_length + args.gen_length, mel_prompt.shape[1])
+        mel_prompt = mel_prompt[:, :total_T]
+        gen_length = args.gen_length
         _prompt_length = args.prompt_length
 
     elif mode == 'chord2mel':
@@ -95,8 +99,9 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
             mel_prompt = _load_prompt_tokens(model, mel_path, args.max_polyphony)
             mel_prompt = mel_prompt[:, :args.prompt_length]
             used_b_prompt = True
-        gen_length = min(args.gen_length, chord_prompt.shape[1])
-        chord_prompt = chord_prompt[:, :gen_length]
+        total_T = min(args.prompt_length + args.gen_length, chord_prompt.shape[1])
+        chord_prompt = chord_prompt[:, :total_T]
+        gen_length = args.gen_length
         _prompt_length = args.prompt_length
 
     elif mode == 'mel_only':
@@ -131,9 +136,20 @@ def run_mode_for_song(model, mode, mel_path, chord_path, args):
         n_refine_steps=args.n_refine_steps,
         temperature=args.temperature,
     )
-    mel_end, chord_end = _prompt_ends(
-        mode, args.prompt_length, gen_length, used_b_prompt,
-    )
+    # Marker placement: where does the "given" portion end for each modality?
+    # In conditional modes the condition is given for the WHOLE output
+    # (prompt + sampled), and the generated track is given only for the
+    # prompt portion. Override the AR _prompt_ends defaults accordingly.
+    if mode == 'mel2chord':
+        mel_end = args.prompt_length + args.gen_length     # mel given throughout
+        chord_end = args.prompt_length if used_b_prompt else 0
+    elif mode == 'chord2mel':
+        mel_end = args.prompt_length if used_b_prompt else 0
+        chord_end = args.prompt_length + args.gen_length   # chord given throughout
+    else:
+        mel_end, chord_end = _prompt_ends(
+            mode, args.prompt_length, gen_length, used_b_prompt,
+        )
     return mel_frames, chord_frames, mel_end, chord_end
 
 

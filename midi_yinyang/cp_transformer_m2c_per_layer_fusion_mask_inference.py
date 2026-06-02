@@ -107,12 +107,15 @@ def mask_predict_with_modes_ar(model, mode, mel_prompt, chord_prompt,
 
     elif mode == 'mel2chord':
         assert mel_prompt is not None
-        gen_length = min(gen_length, mel_prompt.shape[1])
-        mel_truth = mel_prompt[:, :gen_length]
-        # Optional B-prompt: seed the generated chord stream with the first
-        # `prompt_length` timesteps of chord_prompt (if provided). Matches
-        # the AR inference's behavior so a conditional mode doesn't start
-        # generation from a cold start with nothing in the partner stream.
+        # Total output length = prompt_length + gen_length. Mel (condition)
+        # is given for the WHOLE thing; chord (generated) has its first
+        # prompt_length timesteps given as B-prompt, the next gen_length
+        # timesteps are sampled. gen_length here means the SAMPLING portion
+        # only -- semantically separate from the prompt portion.
+        total_T = prompt_length + gen_length
+        total_T = min(total_T, mel_prompt.shape[1])
+        mel_truth = mel_prompt[:, :total_T]
+
         p_b = 0
         chord_b = None
         if chord_prompt is not None and prompt_length > 0:
@@ -127,11 +130,16 @@ def mask_predict_with_modes_ar(model, mode, mel_prompt, chord_prompt,
                 return ('given', chord_b[:, t, :])
             return 'sample'
 
+        gen_length = total_T  # the iteration loop uses gen_length as total T
+
     elif mode == 'chord2mel':
         assert chord_prompt is not None
-        gen_length = min(gen_length, chord_prompt.shape[1])
-        chord_truth = chord_prompt[:, :gen_length]
-        # Symmetric B-prompt for mel.
+        # Symmetric: total = prompt_length + gen_length, chord given throughout,
+        # mel B-prompt for prompt_length then sampled for gen_length.
+        total_T = prompt_length + gen_length
+        total_T = min(total_T, chord_prompt.shape[1])
+        chord_truth = chord_prompt[:, :total_T]
+
         p_b = 0
         mel_b = None
         if mel_prompt is not None and prompt_length > 0:
@@ -145,6 +153,8 @@ def mask_predict_with_modes_ar(model, mode, mel_prompt, chord_prompt,
 
         def chord_action(t):
             return ('given', chord_truth[:, t, :])
+
+        gen_length = total_T
 
     elif mode == 'mel_only':
         assert mel_prompt is not None
