@@ -109,19 +109,38 @@ def mask_predict_with_modes_ar(model, mode, mel_prompt, chord_prompt,
         assert mel_prompt is not None
         gen_length = min(gen_length, mel_prompt.shape[1])
         mel_truth = mel_prompt[:, :gen_length]
+        # Optional B-prompt: seed the generated chord stream with the first
+        # `prompt_length` timesteps of chord_prompt (if provided). Matches
+        # the AR inference's behavior so a conditional mode doesn't start
+        # generation from a cold start with nothing in the partner stream.
+        p_b = 0
+        chord_b = None
+        if chord_prompt is not None and prompt_length > 0:
+            p_b = min(prompt_length, chord_prompt.shape[1])
+            chord_b = chord_prompt[:, :p_b]
 
         def mel_action(t):
             return ('given', mel_truth[:, t, :])
 
         def chord_action(t):
+            if t < p_b:
+                return ('given', chord_b[:, t, :])
             return 'sample'
 
     elif mode == 'chord2mel':
         assert chord_prompt is not None
         gen_length = min(gen_length, chord_prompt.shape[1])
         chord_truth = chord_prompt[:, :gen_length]
+        # Symmetric B-prompt for mel.
+        p_b = 0
+        mel_b = None
+        if mel_prompt is not None and prompt_length > 0:
+            p_b = min(prompt_length, mel_prompt.shape[1])
+            mel_b = mel_prompt[:, :p_b]
 
         def mel_action(t):
+            if t < p_b:
+                return ('given', mel_b[:, t, :])
             return 'sample'
 
         def chord_action(t):
