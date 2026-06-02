@@ -202,8 +202,21 @@ class M2CPerLayerFusion(RoFormerSymbolicTransformer):
         for block in self.fusion_blocks:
             h_cur = block(h_cur, mask_mel, mask_chord)
 
-        # The vendored MoE fork doesn't expose the router balance loss.
+        # Collect Switch-Transformer load-balancing losses from every MoE
+        # block in the fusion stack (the fork stores the per-MoE loss on
+        # last_balance_loss after each forward). Sum into a single aux_loss
+        # so the existing loss path picks it up with the 0.01 coefficient.
+        # Without this, the router has no signal to spread tokens across
+        # experts and tends to collapse to 1-2 always-on experts.
         aux_loss = h.new_zeros(())
+        n_collected = 0
+        for m in self.modules():
+            bl = getattr(m, 'last_balance_loss', None)
+            if bl is not None:
+                aux_loss = aux_loss + bl
+                n_collected += 1
+        if n_collected > 0:
+            aux_loss = aux_loss / n_collected  # average across MoE blocks
         return h_cur, aux_loss
 
 

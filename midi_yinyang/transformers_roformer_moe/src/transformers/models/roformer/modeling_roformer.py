@@ -186,10 +186,17 @@ class RoFormerTopKRouter(nn.Module):
         self.topk = config.topk
         self.num_experts = config.num_experts
         self.gating = nn.Linear(config.hidden_size, self.num_experts)
+        # Set on each forward: the FULL softmax over experts (before top-k
+        # restriction). Used by RoFormerMoE to compute the Switch Transformer
+        # load-balancing loss. Not a buffer / parameter, so not in state_dict.
+        self.last_full_probs = None
 
     def forward(self, input:torch.Tensor):
         self.hidden = input.shape[-1]
         gate = self.gating(input)
+        # Full softmax over experts (needed for balance loss). Kept on the
+        # autograd graph so gradients flow back to the gating linear.
+        self.last_full_probs = torch.softmax(gate, dim=-1, dtype=torch.float32).type_as(gate)
         scores,indices = torch.topk(gate, self.topk, dim=-1)
         probs = torch.softmax(scores, dim=-1, dtype=torch.float32).type_as(gate)
         return probs,indices
@@ -330,10 +337,34 @@ class RoFormerMoE(nn.Module):
         self.token_dispatcher = RoFormerDispatcher(self.expert_indices, config=self.config)
         # self.experts = GroupedMLP(self.config)
         self.experts = SequentialMLP(self.config)
+        # Set on each forward: the Switch Transformer load-balancing loss
+        # for this MoE block. Caller reads it via self.last_balance_loss
+        # (e.g. M2CPerLayerFusion._global_interaction collects from all
+        # MoE modules and sums into aux_loss). Not in state_dict.
+        self.last_balance_loss = None
 
     def forward(self, input:torch.Tensor):
         torch.set_printoptions(threshold=float('inf'))
         probs, indices = self.RoFormerTopKRouter(input)
+
+        # ---- Switch Transformer load-balancing loss ----
+        # f_i = fraction of tokens routed to expert i (counting top-k assignments)
+        # P_i = mean router-softmax probability for expert i across all tokens
+        # loss = num_experts * sum_i(f_i * P_i)   -- minimized when load is balanced
+        full_probs = self.RoFormerTopKRouter.last_full_probs  # [..., num_experts]
+        flat_full_probs = full_probs.view(-1, self.num_experts)
+        flat_indices = indices.view(-1, self.topk)
+        # one-hot mass for any of the top-k expert slots, then count per expert
+        one_hot = torch.zeros(
+            flat_full_probs.shape[0], self.num_experts,
+            device=flat_full_probs.device, dtype=flat_full_probs.dtype,
+        )
+        one_hot.scatter_(1, flat_indices, 1.0)
+        f_per_expert = one_hot.mean(dim=0)
+        p_per_expert = flat_full_probs.mean(dim=0)
+        self.last_balance_loss = self.num_experts * (f_per_expert * p_per_expert).sum()
+        # ---- end balance loss ----
+
         probs = probs.view(-1,self.topk)
         indices = indices.view(-1,self.topk)
         dispathced_input,tokens_per_expert = self.token_dispatcher.token_permutation(input,probs,indices)
