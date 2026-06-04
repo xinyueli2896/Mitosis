@@ -398,7 +398,8 @@ def _infer_mixture_K(ckpt_path, ck):
     return 8, 'default'
 
 
-def load_model(ckpt_path, model_size='small', moe_num_experts=4, moe_topk=2,
+def load_model(ckpt_path, model_size='small', with_velocity=False,
+               moe_num_experts=4, moe_topk=2,
                moe_intermediate_size=None, global_num_layers=None,
                mixture_K=None):
     ck = torch.load(ckpt_path, map_location='cpu', weights_only=False)
@@ -414,7 +415,7 @@ def load_model(ckpt_path, model_size='small', moe_num_experts=4, moe_topk=2,
 
     net = M2CMixtureHead(
         large=(model_size == 'large'),
-        with_velocity=False,
+        with_velocity=with_velocity,
         moe_num_experts=moe_num_experts,
         moe_topk=moe_topk,
         moe_intermediate_size=moe_intermediate_size,
