@@ -242,15 +242,19 @@ class M2CMixtureHead(M2CPerLayerFusion):
     # ------------------------------------------------------------------
 
     def loss(self, x_mel, x_acc, pitch_shift):
-        x = self.preprocess(x_mel, pitch_shift, y=x_acc)
-        # x: interleaved [B, 2T, subseq]
-        B, seq_len, subseq = x.shape
-        T = seq_len // 2
+        # preprocess returns two separate per-modality tensors when y= is given.
+        x_mel, x_acc = self.preprocess(x_mel, pitch_shift, y=x_acc)
+        B, T, subseq = x_mel.shape
+
+        # Interleave into [B, 2T, subseq] for the shift-by-2 forward path.
+        stacked = torch.stack([x_mel, x_acc], dim=2)  # [B, T, 2, subseq]
+        x = stacked.view(B, T * 2, subseq)
 
         log_pi, logits_m_per_k, logits_c_per_k, aux_loss = self(x)
 
-        targets_m = x[:, 0::2]  # [B, T, subseq]
-        targets_c = x[:, 1::2]
+        # Targets are the per-modality slices (already separated).
+        targets_m = x_mel  # [B, T, subseq]
+        targets_c = x_acc
 
         # Per-component log-probs.
         log_probs_m = F.log_softmax(logits_m_per_k.float(), dim=-1)
