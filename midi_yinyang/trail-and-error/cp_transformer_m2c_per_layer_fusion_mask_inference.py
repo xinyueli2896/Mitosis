@@ -36,9 +36,17 @@ Run from midi_yinyang/:
 # Inject the vendored fork BEFORE anything else imports.
 import os as _os
 import sys as _sys
-_MOE_ROOT = _os.path.join(_os.path.dirname(__file__), "transformers_roformer_moe", "src")
+# This file was moved to trail-and-error/ (archived "trial" variant).
+# Add the parent midi_yinyang/ folder so imports of kept modules
+# (cp_transformer_m2c_moe, cp_transformer_m2c_per_layer_fusion,
+# cp_transformer_m2c_moe_combined, etc.) still resolve, and update
+# the vendored transformers fork path accordingly.
+_PARENT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+_MOE_ROOT = _os.path.join(_PARENT, "transformers_roformer_moe", "src")
 if _MOE_ROOT not in _sys.path:
     _sys.path.insert(0, _MOE_ROOT)
+if _PARENT not in _sys.path:
+    _sys.path.insert(0, _PARENT)
 
 import os
 import re
