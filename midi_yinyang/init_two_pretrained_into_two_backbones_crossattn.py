@@ -155,7 +155,7 @@ def _dest_keys_for(src_key, modality, untie_local, num_layers):
 # Build dest
 # ---------------------------------------------------------------------------
 
-def build_dest(model, src_m, src_c, untie_local):
+def build_dest(model, src_m, src_c, untie_local, warm_start_adapter=True):
     dest_template = model.state_dict()
     out = OrderedDict(
         (k, v.clone()) for k, v in dest_template.items()
@@ -213,6 +213,66 @@ def build_dest(model, src_m, src_c, untie_local):
             else:
                 counts['copied_c'] += 1
 
+    # ----- Warm-start adapter Q/K/V/O from the backbones' projections -----
+    # At init the cross-attention adapter behaves like the backbones' learned
+    # attention compatibility kernel (with cross-stream K/V). Combined with
+    # gate_bias = -10 the adapter contribution is still ~0 at step 0, but the
+    # Q/K/V matrices are warm-started instead of random -- so when training
+    # lifts the gates the adapter immediately has a sensible compatibility
+    # function instead of needing to learn one from scratch.
+    counts['adapter_warm_started'] = 0
+    counts['adapter_warm_skipped'] = 0
+    # Note: RoFormer applies RoPE inside its self-attention before the dot
+    # product, but nn.MultiheadAttention in the adapter doesn't. This means
+    # the adapter at init is NOT exactly equivalent to backbone self-attention
+    # -- it's "backbone self-attn without positional rotation". This is fine
+    # as a warm start; the adapter learns to compensate during training.
+    warm_layers = range(num_layers) if warm_start_adapter else range(0)
+    for i in warm_layers:
+        try:
+            m_q_w = out[f'global_layers_m.{i}.layer.0.attention.self.query.weight']
+            m_q_b = out[f'global_layers_m.{i}.layer.0.attention.self.query.bias']
+            m_k_w = out[f'global_layers_m.{i}.layer.0.attention.self.key.weight']
+            m_k_b = out[f'global_layers_m.{i}.layer.0.attention.self.key.bias']
+            m_v_w = out[f'global_layers_m.{i}.layer.0.attention.self.value.weight']
+            m_v_b = out[f'global_layers_m.{i}.layer.0.attention.self.value.bias']
+            m_o_w = out[f'global_layers_m.{i}.layer.0.attention.output.dense.weight']
+            m_o_b = out[f'global_layers_m.{i}.layer.0.attention.output.dense.bias']
+            c_q_w = out[f'global_layers_c.{i}.layer.0.attention.self.query.weight']
+            c_q_b = out[f'global_layers_c.{i}.layer.0.attention.self.query.bias']
+            c_k_w = out[f'global_layers_c.{i}.layer.0.attention.self.key.weight']
+            c_k_b = out[f'global_layers_c.{i}.layer.0.attention.self.key.bias']
+            c_v_w = out[f'global_layers_c.{i}.layer.0.attention.self.value.weight']
+            c_v_b = out[f'global_layers_c.{i}.layer.0.attention.self.value.bias']
+            c_o_w = out[f'global_layers_c.{i}.layer.0.attention.output.dense.weight']
+            c_o_b = out[f'global_layers_c.{i}.layer.0.attention.output.dense.bias']
+        except KeyError as e:
+            counts['adapter_warm_skipped'] += 1
+            continue
+
+        # cross_attn_m_reads_c[i]: Q from MEL, K and V from CHORD, O from MEL.
+        # in_proj_weight is packed as cat([Q, K, V]) along dim 0 -> [3H, H].
+        out[f'cross_attn_m_reads_c.{i}.attn.in_proj_weight'] = torch.cat(
+            [m_q_w, c_k_w, c_v_w], dim=0,
+        )
+        out[f'cross_attn_m_reads_c.{i}.attn.in_proj_bias'] = torch.cat(
+            [m_q_b, c_k_b, c_v_b], dim=0,
+        )
+        out[f'cross_attn_m_reads_c.{i}.attn.out_proj.weight'] = m_o_w.clone()
+        out[f'cross_attn_m_reads_c.{i}.attn.out_proj.bias'] = m_o_b.clone()
+
+        # cross_attn_c_reads_m[i]: Q from CHORD, K and V from MEL, O from CHORD.
+        out[f'cross_attn_c_reads_m.{i}.attn.in_proj_weight'] = torch.cat(
+            [c_q_w, m_k_w, m_v_w], dim=0,
+        )
+        out[f'cross_attn_c_reads_m.{i}.attn.in_proj_bias'] = torch.cat(
+            [c_q_b, m_k_b, m_v_b], dim=0,
+        )
+        out[f'cross_attn_c_reads_m.{i}.attn.out_proj.weight'] = c_o_w.clone()
+        out[f'cross_attn_c_reads_m.{i}.attn.out_proj.bias'] = c_o_b.clone()
+
+        counts['adapter_warm_started'] += 1
+
     # Count "kept dst init": destination keys that no source rule wrote.
     written = set()
     for src_key in src_m.keys():
@@ -243,6 +303,12 @@ def main():
     ap.add_argument('--untie_local', action='store_true', default=False)
     ap.add_argument('--crossattn_num_heads', type=int, default=8)
     ap.add_argument('--gate_init_bias', type=float, default=-10.0)
+    ap.add_argument(
+        '--no_warm_start_adapter', action='store_true', default=False,
+        help='Skip the warm-start that copies backbones Q/K/V/O into the '
+             'cross-attention adapter slots. With this flag the adapter is '
+             'random-init (PyTorch default). Default behaviour warm-starts.',
+    )
     ap.add_argument('--inspect', action='store_true')
     ap.add_argument('--out', required=False, default=None)
     args = ap.parse_args()
@@ -280,6 +346,7 @@ def main():
 
     new_sd, counts = build_dest(
         model, src_m, src_c, args.untie_local,
+        warm_start_adapter=not args.no_warm_start_adapter,
     )
 
     print('\n=== Mapping report ===')
@@ -289,7 +356,14 @@ def main():
     print(f'  embed_positions replicated [c]:   {counts["replicated_embed_positions_c"]}')
     if counts['skipped_shared_dup'] > 0:
         print(f'  shared-local overlap dropped:     {counts["skipped_shared_dup"]}')
-    print(f'  kept dst init (cross-attn adapter, gates, type_emb): '
+    if counts['adapter_warm_started'] > 0:
+        print(f'  adapter Q/K/V/O warm-started from backbones: '
+              f'{counts["adapter_warm_started"]} per-layer pairs '
+              f'(2 directions x {counts["adapter_warm_started"]} layers '
+              f'= {2 * counts["adapter_warm_started"]} attention modules)')
+    elif args.no_warm_start_adapter:
+        print(f'  adapter warm-start: SKIPPED (--no_warm_start_adapter)')
+    print(f'  kept dst init (gates, type_emb, possibly adapter): '
           f'{counts["kept_dst_init"]} keys')
 
     missing, unexpected = model.load_state_dict(new_sd, strict=True)
