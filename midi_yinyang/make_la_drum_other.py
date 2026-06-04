@@ -88,10 +88,11 @@ def main():
     ap.add_argument('--max_polyphony', type=int, default=4,
                     help='Max simultaneous notes per timestep per stream. '
                          '4 matches the existing pop909_cp4_v2 setup.')
-    ap.add_argument('--max_idx', type=int, default=50000,
+    ap.add_argument('--max_idx', type=int, default=None,
                     help='Cap on number of MIDIs to process (after sort). '
-                         'Default 50000 matches the existing recipe in '
-                         'preprocess_large_midi_dataset.create_la_drums().')
+                         'Default: no cap (process all MIDIs in --midi_root). '
+                         'Pass --max_idx 50000 to match the existing recipe '
+                         'in preprocess_large_midi_dataset.create_la_drums().')
     ap.add_argument('--dedup', action='store_true', default=True,
                     help='Per-track note dedup (matches existing recipe).')
     ap.add_argument('--no_dedup', dest='dedup', action='store_false')
