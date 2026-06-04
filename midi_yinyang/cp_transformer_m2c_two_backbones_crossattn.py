@@ -1,47 +1,55 @@
-"""Two CP transformer backbones + cross-attention adapter.
+"""Two CP transformer backbones + per-layer cross-attention adapter.
 
-Architecture (matches the user spec):
+Architecture (matches the user spec, corrected):
 
-  mel tokens   --> mel_local_encoder   --> h_m_blocks  --> global_roformer_m (pretrained, SELF-ATTN ONLY)  --> u_mm
-  chord tokens --> chord_local_encoder --> h_c_blocks  --> global_roformer_c (pretrained, SELF-ATTN ONLY)  --> u_cc
+  Input: SAME interleaved 2T layout as M2CMixtureHead / m2c MoE
+         x = [m_0, c_0, m_1, c_1, ..., m_{T-1}, c_{T-1}]   shape [B, 2T, subseq]
 
-  Cross-attention adapter (NEW, trainable; the only learned bridge):
-    u_mc = CrossAttn(Q = u_mm, K = u_cc, V = u_cc)   # mel queries reading chord
-    u_cm = CrossAttn(Q = u_cc, K = u_mm, V = u_mm)   # chord queries reading mel
+  Internally the input gets routed: mel-position tokens flow into the mel
+  backbone, chord-position tokens flow into the chord backbone. Each
+  backbone runs SELF-ATTENTION ONLY on its modality's single-stream
+  sequence (length T).
 
-  Gated combination per stream:
-    o_m = u_mm + sigmoid(gate_m(h_m_in)) * u_mc
-    o_c = u_cc + sigmoid(gate_c(h_c_in)) * u_cm
+  PER LAYER:
+    u_mm^i = mel_layer[i](h_m^i)         # self-attn on mel stream, layer i
+    u_cc^i = chord_layer[i](h_c^i)       # self-attn on chord stream, layer i
 
-  Per-modality local decoder + final head produce per-token logits for each stream.
+    Cross-attention adapter at layer i (NEW, trainable):
+      u_mc^i = CrossAttn(Q = u_mm^i, K = u_cc^i, V = u_cc^i)
+      u_cm^i = CrossAttn(Q = u_cc^i, K = u_mm^i, V = u_mm^i)
 
-Properties:
+    Gated combination per stream:
+      h_m^{i+1} = u_mm^i + sigmoid(gate_m^i(h_m^i)) * u_mc^i
+      h_c^{i+1} = u_cc^i + sigmoid(gate_c^i(h_c^i)) * u_cm^i
 
-  - Each pretrained backbone keeps its original self-attention behaviour
-    (it only ever sees its own modality's sequence). At init with the cross-
-    attention gate set to ~0 (bias = -10), the model computes EXACTLY what
-    each pretrained model would alone -- training lifts the gate.
-  - Two physically separate models: each backbone is a standalone CP
-    transformer. Loadable from a pretrained ckpt with a 1:1 key map.
-  - Future modalities: untie local_embedding / local_encoder / local_decoder
-    per modality (--untie_local flag) and the architecture supports
-    different per-modality vocab sizes.
-  - No mixture head -- the cross-attention adapter is the cross-modal
-    coupling mechanism. Each modality has its own per-token decoder head.
+  After L layers, per-modality local decoders + final heads produce
+  per-token logits for each stream.
 
-Mask choices:
-  - Self-attention (inside each backbone): standard causal across the
-    modality's sequence (shift-by-1 within each stream).
-  - Cross-attention (in the adapter): causal across timesteps + same-step
-    allowed. Both Q and K at the SAME timestep are PREDICTION states
-    derived from the past (not the current target), so no chicken-and-egg
-    at sampling time.
+Compared to M2CMixtureHead (per-layer fusion with one shared backbone):
+
+  - Two PHYSICALLY SEPARATE backbones (untied). Each gets its own pretrained
+    init at step 0.
+  - Each backbone sees ONLY its own modality (no interleaved 2T sequence
+    hitting one backbone). In-distribution for pretrained CP transformers
+    from step 0.
+  - Cross-modal coupling is per-LAYER (not end-of-stack), via the dedicated
+    cross-attention adapter.
+  - The cross-attention adapter has its OWN Q/K/V projections (separate
+    from the backbones' self-attention projections). The backbones'
+    pretrained weights are never used for cross-attention.
+
+Init from pretrained:
+  - global_layers_m[i] <-- pretrained model.layer[i]
+  - global_layers_c[i] <-- pretrained model.layer[i] (same ckpt or different)
+  - cross-attention adapters / gates: fresh init, gate bias = -10 so
+    sigmoid ~ 0 at step 0 -> adapter starts ~off -> model behaves like
+    two independent pretrained backbones at init.
 
 Run:
     python cp_transformer_m2c_two_backbones_crossattn.py \\
-        --batch_size 8 --model_size large \\
+        --batch_size 8 --size 1 \\
         --path_to_dataset data/pop909_chord_cp4_v2.pt \\
-        --checkpoint_path <init_from_pretrained.pt>  # OPTIONAL \\
+        --checkpoint_path pretrained/two_backbones_crossattn_init.pt \\
         --wandb
 """
 
@@ -52,6 +60,7 @@ if _MOE_ROOT not in _sys.path:
     _sys.path.insert(0, _MOE_ROOT)
 
 import argparse
+import copy
 import os
 from typing import Optional
 
@@ -76,21 +85,16 @@ from transformers.models.roformer.modeling_roformer import (
 
 
 # ---------------------------------------------------------------------------
-# Cross-attention adapter: a single attention layer with Q and K/V from
-# different streams. PyTorch's nn.MultiheadAttention does exactly this.
+# Cross-attention adapter
 # ---------------------------------------------------------------------------
 
 class CrossAttentionAdapter(nn.Module):
-    """Bidirectional cross-attention between two streams.
+    """Single direction of cross-attention (Q from one stream, K/V from the
+    other). One instance per direction per layer.
 
-    Note: a SINGLE adapter instance computes cross-attention in one direction
-    (Q from one stream, K/V from the other). We instantiate TWO per fusion
-    block -- one for mel-reads-chord, one for chord-reads-mel.
-
-    The adapter is the only NEW trainable parameters in the model (beyond
-    the per-stream gates). At init the output should be small / near-zero
-    so the gated combination o = u_self + sigmoid(gate) * u_cross starts
-    close to u_self (preserving the pretrained backbone's behaviour).
+    Output projection is init'd small so the gate has a clean "off" signal
+    at step 0; combined with gate bias = -10 the adapter contributes
+    ~0 to its host stream at init.
     """
 
     def __init__(self, hidden_size, num_heads, dropout=0.0):
@@ -101,16 +105,12 @@ class CrossAttentionAdapter(nn.Module):
             dropout=dropout,
             batch_first=True,
         )
-        # Initialize output projection close to zero so the gate has a clean
-        # "off" signal at init. This is the standard pattern for additive
-        # adapters layered onto a frozen backbone.
         with torch.no_grad():
             self.attn.out_proj.weight.mul_(0.01)
             if self.attn.out_proj.bias is not None:
                 self.attn.out_proj.bias.zero_()
 
     def forward(self, query, key, value, attn_mask=None):
-        # query, key, value: [B, T, H]
         out, _ = self.attn(
             query, key, value,
             attn_mask=attn_mask, need_weights=False,
@@ -119,34 +119,25 @@ class CrossAttentionAdapter(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# The two-backbones + cross-attention adapter model
+# Two-backbones + per-layer cross-attention adapter
 # ---------------------------------------------------------------------------
 
 class M2CTwoBackbonesCrossAttn(L.LightningModule):
-    """Two pretrained CP backbones with a cross-attention adapter bridge.
-
-    Inherits from LightningModule directly (not RoFormerSymbolicTransformer)
-    because the standard CP transformer's forward / loss are not
-    representative of the two-stream structure -- we override them entirely.
-
-    Local encoder / decoder / embedding can be either shared across modalities
-    (default, fine for melody+chord using the same CP vocab) or untied per
-    modality (--untie_local, needed for audio+symbolic later). Final per-token
-    decoder heads are always per-modality.
-    """
+    """Two pretrained CP backbones, per-layer cross-attention adapter,
+    per-layer gates. Input is interleaved 2T but each backbone only ever
+    sees its own modality's single-stream sequence."""
 
     def __init__(
         self,
-        size: int = 1,                # 0=512, 1=768, 2=1024, 3=1280 (matches cp_transformer.py)
+        size: int = 1,                # 0=512, 1=768, 2=1024, 3=1280
         with_velocity: bool = False,
         untie_local: bool = False,
         crossattn_num_heads: int = 8,
-        gate_init_bias: float = -10.0,  # sigmoid(-10) ~ 4.5e-5; adapter starts off
+        gate_init_bias: float = -10.0,
         max_lr: Optional[float] = None,
+        max_position_embeddings: int = 1536,
     ):
         super().__init__()
-        # Mirror cp_transformer.py's size schedule for direct pretrained
-        # compatibility.
         self.hidden_size = [512, 768, 1024, 1280][size]
         self.num_layers = [6, 12, 24, 32][size]
         self.num_attention_heads = [8, 12, 16, 16][size]
@@ -158,12 +149,11 @@ class M2CTwoBackbonesCrossAttn(L.LightningModule):
         self.with_velocity = with_velocity
         self.max_lr = max_lr
 
-        # Tokenizer (shared, CP vocab is per-CP-encoding).
         from cp_transformer import CPTokenizer
         self.tokenizer = CPTokenizer(with_velocity=with_velocity)
         V = self.tokenizer.n_tokens
 
-        # ----- Local components (per-modality if untied) -----
+        # ----- Local components (shared by default; untie for cross-modality) -----
         local_config = RoFormerConfig(
             hidden_size=self.hidden_size,
             num_hidden_layers=self.local_model_num_layers,
@@ -198,52 +188,62 @@ class M2CTwoBackbonesCrossAttn(L.LightningModule):
         with torch.no_grad():
             self.token_type_embeddings.weight.mul_(2.0)
 
-        # ----- Per-modality global backbones (THE pretrained-loadable ones) -----
-        global_config = RoFormerConfig(
+        # ----- Per-modality global backbones AS LISTS of single-layer encoders -----
+        # Single-layer wrappers let us intercept between layers to apply the
+        # cross-attention adapter. Pretrained loading copies each pretrained
+        # layer i into global_layers_m[i].layer[0] and global_layers_c[i].layer[0].
+        single_layer_global_config = RoFormerConfig(
             hidden_size=self.hidden_size,
-            num_hidden_layers=self.num_layers,
+            num_hidden_layers=1,                         # ONE layer per wrapper
             num_attention_heads=self.num_attention_heads,
             intermediate_size=self.intermediate_size,
             hidden_act='gelu',
             hidden_dropout_prob=0.1,
             attention_probs_dropout_prob=0.1,
-            max_position_embeddings=1536,
+            max_position_embeddings=max_position_embeddings,
             is_decoder=True,
         )
-        self.global_roformer_m = RoFormerEncoder(global_config)
-        self.global_roformer_c = RoFormerEncoder(global_config)
+        self.global_layers_m = nn.ModuleList([
+            RoFormerEncoder(single_layer_global_config)
+            for _ in range(self.num_layers)
+        ])
+        self.global_layers_c = nn.ModuleList([
+            RoFormerEncoder(single_layer_global_config)
+            for _ in range(self.num_layers)
+        ])
         self.global_sos_m = nn.Parameter(torch.randn(self.hidden_size))
         self.global_sos_c = nn.Parameter(torch.randn(self.hidden_size))
 
-        # ----- Cross-attention adapter (the only new trainable bridge) -----
-        self.cross_attn_m_reads_c = CrossAttentionAdapter(
-            self.hidden_size, num_heads=crossattn_num_heads,
-        )
-        self.cross_attn_c_reads_m = CrossAttentionAdapter(
-            self.hidden_size, num_heads=crossattn_num_heads,
-        )
+        # ----- PER-LAYER cross-attention adapters (the new trainable bridges) -----
+        self.cross_attn_m_reads_c = nn.ModuleList([
+            CrossAttentionAdapter(self.hidden_size, num_heads=crossattn_num_heads)
+            for _ in range(self.num_layers)
+        ])
+        self.cross_attn_c_reads_m = nn.ModuleList([
+            CrossAttentionAdapter(self.hidden_size, num_heads=crossattn_num_heads)
+            for _ in range(self.num_layers)
+        ])
 
-        # ----- Per-stream gates: scalar gating of the adapter contribution -----
-        self.gate_m = nn.Linear(self.hidden_size, 1)
-        self.gate_c = nn.Linear(self.hidden_size, 1)
-        # Initialize gate bias so sigmoid(bias) ~ 0 at start -- the adapter
-        # starts OFF and the model behaves like two independent pretrained
-        # backbones at step 0. Training lifts the gate.
+        # ----- PER-LAYER gates -----
+        self.gates_m = nn.ModuleList([
+            nn.Linear(self.hidden_size, 1) for _ in range(self.num_layers)
+        ])
+        self.gates_c = nn.ModuleList([
+            nn.Linear(self.hidden_size, 1) for _ in range(self.num_layers)
+        ])
         with torch.no_grad():
-            self.gate_m.bias.fill_(gate_init_bias)
-            self.gate_c.bias.fill_(gate_init_bias)
-            self.gate_m.weight.zero_()
-            self.gate_c.weight.zero_()
+            for gate in list(self.gates_m) + list(self.gates_c):
+                gate.bias.fill_(gate_init_bias)
+                gate.weight.zero_()
 
         # ----- Per-modality final decoders -----
         self.final_decoder_m = nn.Linear(self.hidden_size, V)
         self.final_decoder_c = nn.Linear(self.hidden_size, V)
 
-        # AR mask buffer (within-block local decoder).
         self._future_mask = torch.empty(0)
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Local component getters (handles shared / untied)
     # ------------------------------------------------------------------
 
     def _emb_table(self, modality):
@@ -265,36 +265,46 @@ class M2CTwoBackbonesCrossAttn(L.LightningModule):
         return self.local_decoder
 
     def buffered_future_mask(self, tensor):
-        """Causal AR mask cached buffer. Pulled from RoFormerSymbolicTransformer
-        so subclasses don't drag in the full parent dependency just for this."""
         dim = tensor.size(1)
         if self._future_mask.device != tensor.device or self._future_mask.size(0) < dim:
             self._future_mask = torch.triu(
-                torch.zeros([dim, dim]).float().fill_(float('-inf')),
-                1,
+                torch.zeros([dim, dim]).float().fill_(float('-inf')), 1,
             ).to(tensor.device)
         return self._future_mask[:dim, :dim]
 
-    def local_encode(self, x, token_type_ids, modality):
-        """Returns (h_block_summary, emb_for_decoder) for one modality."""
-        batch_size, seq_len, subseq_len = x.shape
-        x = x.view(-1, subseq_len)
-        x = torch.cat(
-            [torch.full((x.shape[0], 1), self.tokenizer.sos_token,
-                        dtype=torch.long, device=x.device), x],
+    def _causal_mask(self, T, device, dtype=torch.float32):
+        return torch.triu(
+            torch.full((T, T), float('-inf'), device=device, dtype=dtype),
+            diagonal=1,
+        )
+
+    # ------------------------------------------------------------------
+    # Local encode / decode (same as standard CP)
+    # ------------------------------------------------------------------
+
+    def local_encode_modality(self, x_blocks, modality):
+        """x_blocks: [B, T, subseq] for ONE modality.
+        Returns (h_block_summary, emb_for_decoder).
+        """
+        B, T, subseq = x_blocks.shape
+        flat = x_blocks.view(-1, subseq)
+        flat = torch.cat(
+            [torch.full((flat.shape[0], 1), self.tokenizer.sos_token,
+                        dtype=torch.long, device=flat.device), flat],
             dim=-1,
         )
-        mask = x != self.tokenizer.pad_token
-        word_emb = self._emb_table(modality)(x)
-        type_emb = self.token_type_embeddings(token_type_ids.view(-1, subseq_len + 1))
+        mask = flat != self.tokenizer.pad_token
+        word_emb = self._emb_table(modality)(flat)
+        token_type_id = 0 if modality == 'm' else 1
+        types = torch.full_like(flat, token_type_id)
+        type_emb = self.token_type_embeddings(types)
         emb = word_emb + type_emb
         h = self._local_enc(modality)(emb, encoder_attention_mask=mask)[0]
-        return h[:, 0], emb[:, :-1]
+        return h[:, 0], emb[:, :-1]  # h: [B*T, H], emb: [B*T, subseq, H]
 
-    def local_decode(self, o, emb, modality):
-        """o: [B*T, H] per-block hidden state with cross-attn already mixed in.
-        emb: [B*T, subseq, H] from local_encode.
-        Returns per-token logits via the modality-specific final head.
+    def local_decode_modality(self, o, emb, modality):
+        """o: [B*T, H] -- per-block state with cross-attn already mixed in.
+        emb: [B*T, subseq, H] from local_encode_modality.
         """
         batch_size, subseq_len, _ = emb.shape
         o = o.contiguous().view(batch_size, 1, -1)
@@ -305,91 +315,98 @@ class M2CTwoBackbonesCrossAttn(L.LightningModule):
         head = self.final_decoder_m if modality == 'm' else self.final_decoder_c
         return head(h)
 
-    def _causal_mask(self, T, device, dtype=torch.float32):
-        return torch.triu(
-            torch.full((T, T), float('-inf'), device=device, dtype=dtype),
-            diagonal=1,
-        )
-
-    def _causal_same_step_ok_mask(self, T, device, dtype=torch.float32):
-        """Cross-attention mask: causal across timesteps, same-step ALLOWED.
-        Same shape as the standard causal mask -- they're identical here
-        because we treat positions as timesteps directly (no shift offset).
-        Both Q and K at the SAME timestep are prediction states derived from
-        encoded PAST tokens, so no chicken-egg dependency at inference.
-        """
-        return self._causal_mask(T, device, dtype)
-
     # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
 
-    def forward(self, x_m, x_c):
-        """x_m, x_c: [B, T, subseq] preprocessed CP tokens for each modality.
-        Returns (logits_m, logits_c) per [B, T, subseq, V].
+    def forward(self, x):
+        """x: interleaved [B, 2T, subseq] in [m_0, c_0, m_1, c_1, ...] order.
+
+        Internally:
+          - Split x at the position-parity boundary: mel = x[:, 0::2], chord = x[:, 1::2].
+          - Each modality's tokens go ONLY into its own backbone.
+          - Per-layer cross-attention adapter exchanges info between the two
+            backbones at every layer.
+
+        Returns (logits_m, logits_c), each [B, T, subseq, V_m or V_c].
         """
-        B, T, subseq = x_m.shape
-        device = x_m.device
+        B, seq_len, subseq = x.shape
+        assert seq_len % 2 == 0, 'input must have an even number of slots (m+c interleaved)'
+        T = seq_len // 2
+        device = x.device
 
-        type_m = torch.zeros(B, T, subseq + 1, dtype=torch.long, device=device)
-        type_c = torch.ones(B, T, subseq + 1, dtype=torch.long, device=device)
+        # Split the interleaved input. Each modality's tokens go into its own
+        # backbone -- this is the "different tokens go into different backbones"
+        # constraint, expressed at the input boundary.
+        x_m = x[:, 0::2].contiguous()  # [B, T, subseq]
+        x_c = x[:, 1::2].contiguous()
 
-        h_m, emb_m = self.local_encode(x_m, type_m, 'm')
-        h_c, emb_c = self.local_encode(x_c, type_c, 'c')
+        h_m, emb_m = self.local_encode_modality(x_m, 'm')
+        h_c, emb_c = self.local_encode_modality(x_c, 'c')
         h_m = h_m.view(B, T, -1)
         h_c = h_c.view(B, T, -1)
 
-        # Shift-by-1 each stream independently. Each stream is a standard
-        # single-modality AR sequence over its own modality's tokens only.
+        # Shift-by-1 each single-stream backbone (standard CP transformer AR).
         sos_m = self.global_sos_m.view(1, 1, -1).expand(B, 1, -1)
         sos_c = self.global_sos_c.view(1, 1, -1).expand(B, 1, -1)
-        h_m_in = torch.cat([sos_m, h_m[:, :-1]], dim=1)
-        h_c_in = torch.cat([sos_c, h_c[:, :-1]], dim=1)
+        h_m_seq = torch.cat([sos_m, h_m[:, :-1]], dim=1)  # [B, T, H]
+        h_c_seq = torch.cat([sos_c, h_c[:, :-1]], dim=1)
 
+        # Self-attention causal mask for each backbone's layers.
         causal = self._causal_mask(T, device)
-        out_m = self.global_roformer_m(h_m_in, attention_mask=causal)
-        out_c = self.global_roformer_c(h_c_in, attention_mask=causal)
-        u_mm = out_m.last_hidden_state  # [B, T, H]
-        u_cc = out_c.last_hidden_state
 
-        # Cross-attention adapter (causal + same-step allowed).
-        cross_mask = self._causal_same_step_ok_mask(T, device)
-        u_mc = self.cross_attn_m_reads_c(
-            query=u_mm, key=u_cc, value=u_cc, attn_mask=cross_mask,
-        )
-        u_cm = self.cross_attn_c_reads_m(
-            query=u_cc, key=u_mm, value=u_mm, attn_mask=cross_mask,
-        )
+        u_m, u_c = h_m_seq, h_c_seq
+        for i in range(self.num_layers):
+            # Self-attention only -- each backbone sees only its modality.
+            u_mm_i = self.global_layers_m[i](
+                u_m, attention_mask=causal,
+            ).last_hidden_state
+            u_cc_i = self.global_layers_c[i](
+                u_c, attention_mask=causal,
+            ).last_hidden_state
 
-        # Gated combination.
-        g_m = torch.sigmoid(self.gate_m(h_m_in))  # [B, T, 1]
-        g_c = torch.sigmoid(self.gate_c(h_c_in))
-        o_m = u_mm + g_m * u_mc
-        o_c = u_cc + g_c * u_cm
+            # Per-layer cross-attention adapter (the only cross-modal flow).
+            # Causal across timesteps; same-step allowed (Q at t reads K at t
+            # too, both are prediction states derived from past tokens).
+            u_mc_i = self.cross_attn_m_reads_c[i](
+                u_mm_i, u_cc_i, u_cc_i, attn_mask=causal,
+            )
+            u_cm_i = self.cross_attn_c_reads_m[i](
+                u_cc_i, u_mm_i, u_mm_i, attn_mask=causal,
+            )
+
+            # Gated combination -> next-layer input.
+            g_m_i = torch.sigmoid(self.gates_m[i](u_m))  # [B, T, 1]
+            g_c_i = torch.sigmoid(self.gates_c[i](u_c))
+            u_m = u_mm_i + g_m_i * u_mc_i
+            u_c = u_cc_i + g_c_i * u_cm_i
 
         # Per-modality local decode + final head.
-        logits_m = self.local_decode(
-            o_m.reshape(B * T, -1), emb_m, 'm',
+        logits_m = self.local_decode_modality(
+            u_m.reshape(B * T, -1), emb_m, 'm',
         ).view(B, T, subseq, -1)
-        logits_c = self.local_decode(
-            o_c.reshape(B * T, -1), emb_c, 'c',
+        logits_c = self.local_decode_modality(
+            u_c.reshape(B * T, -1), emb_c, 'c',
         ).view(B, T, subseq, -1)
         return logits_m, logits_c
 
     # ------------------------------------------------------------------
-    # Loss (uses parent's preprocess via cp_transformer_m2c_moe)
+    # Loss
     # ------------------------------------------------------------------
 
     def preprocess(self, x_mel, pitch_shift, y):
-        """Defer to RoFormerSymbolicTransformer.preprocess; same CP encoding."""
-        # Temporarily borrow the parent's preprocess via a thin shim.
         return RoFormerSymbolicTransformer.preprocess(
             self, x_mel, pitch_shift, y=y,
         )
 
     def loss(self, x_mel, x_acc, pitch_shift):
         x_m, x_c = self.preprocess(x_mel, pitch_shift, y=x_acc)
-        logits_m, logits_c = self(x_m, x_c)
+        B, T, subseq = x_m.shape
+        # Build interleaved [m_0, c_0, m_1, c_1, ...] for the forward.
+        stacked = torch.stack([x_m, x_c], dim=2)
+        x = stacked.view(B, T * 2, subseq)
+
+        logits_m, logits_c = self(x)
         pad = self.tokenizer.pad_token
         ce_m = F.cross_entropy(
             logits_m.reshape(-1, logits_m.shape[-1]),
@@ -404,8 +421,11 @@ class M2CTwoBackbonesCrossAttn(L.LightningModule):
         loss = 0.5 * (ce_m + ce_c)
         self._last_ce_m = ce_m.detach()
         self._last_ce_c = ce_c.detach()
-        self._last_gate_m = self.gate_m.bias.detach().sigmoid().mean()
-        self._last_gate_c = self.gate_c.bias.detach().sigmoid().mean()
+        # Average per-layer gate value (sanity for adapter activation).
+        gates = torch.stack(
+            [g.bias for g in self.gates_m] + [g.bias for g in self.gates_c],
+        ).detach().sigmoid().mean()
+        self._last_gate_avg = gates
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -413,8 +433,7 @@ class M2CTwoBackbonesCrossAttn(L.LightningModule):
         self.log('train_loss', loss)
         self.log('train_ce_m', self._last_ce_m, on_step=True)
         self.log('train_ce_c', self._last_ce_c, on_step=True)
-        self.log('gate_m_avg', self._last_gate_m, on_step=True)
-        self.log('gate_c_avg', self._last_gate_c, on_step=True)
+        self.log('gate_avg', self._last_gate_avg, on_step=True)
         lr = self.trainer.optimizers[0].param_groups[0]['lr']
         self.log('training/lr', lr, prog_bar=True, on_step=True, on_epoch=False)
         return loss
@@ -444,13 +463,9 @@ class M2CTwoBackbonesCrossAttn(L.LightningModule):
 # ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description='Train the two-backbones + cross-attention adapter model.',
-    )
+    parser = argparse.ArgumentParser()
     parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--size', type=int, default=1, choices=[0, 1, 2, 3],
-                        help='Hidden-size schedule (matches cp_transformer.py): '
-                             '0=512, 1=768, 2=1024, 3=1280.')
+    parser.add_argument('--size', type=int, default=1, choices=[0, 1, 2, 3])
     parser.add_argument('--path_to_dataset', type=str)
     parser.add_argument('--model_name', type=str, default=None)
     parser.add_argument('--checkpoint_path', type=str, default=None)
@@ -463,7 +478,7 @@ if __name__ == '__main__':
 
     n_gpus = max(torch.cuda.device_count(), 1)
     tag = f'_{args.run_tag}' if args.run_tag else ''
-    default_name = (f"m2c_two_backbones_crossattn_v1.0_sz{args.size}"
+    default_name = (f"m2c_two_backbones_crossattn_v2.0_perlayer_sz{args.size}"
                     f"{'_untiedlocal' if args.untie_local else ''}{tag}"
                     f"_batch_{args.batch_size * n_gpus}_schedule")
     model_name = args.model_name if args.model_name is not None else default_name
@@ -475,13 +490,14 @@ if __name__ == '__main__':
         crossattn_num_heads=args.crossattn_num_heads,
         gate_init_bias=args.gate_init_bias,
     )
-    print(f'Two backbones (untied), size={args.size}, hidden={net.hidden_size}, '
-          f'global_layers={net.num_layers}')
-    print(f'Cross-attention adapter: {args.crossattn_num_heads} heads per direction')
-    print(f'Local components: {"untied per modality" if args.untie_local else "shared"}')
-    print(f'Gate init bias: {args.gate_init_bias}  '
-          f'(sigmoid -> {torch.sigmoid(torch.tensor(args.gate_init_bias)).item():.2e}, '
-          f'adapter starts ~off)')
+    print(f'Two backbones (untied per modality), size={args.size}, '
+          f'hidden={net.hidden_size}, layers={net.num_layers}')
+    print(f'Per-LAYER cross-attention adapter: '
+          f'{args.crossattn_num_heads} heads per direction, '
+          f'{net.num_layers} layers')
+    print(f'Local: {"untied per modality" if args.untie_local else "shared"}')
+    print(f'Gate init bias: {args.gate_init_bias} '
+          f'(sigmoid -> {torch.sigmoid(torch.tensor(args.gate_init_bias)).item():.2e})')
 
     train_set_loader = DataLoader(
         FramedDataset(args.path_to_dataset, TRAIN_LENGTH, args.batch_size, split='train'),
@@ -521,7 +537,7 @@ if __name__ == '__main__':
                     'batch_size': args.batch_size,
                     'size': args.size,
                     'train_length': TRAIN_LENGTH,
-                    'variant': 'm2c_two_backbones_crossattn',
+                    'variant': 'm2c_two_backbones_crossattn_perlayer',
                     'untie_local': args.untie_local,
                     'crossattn_num_heads': args.crossattn_num_heads,
                     'gate_init_bias': args.gate_init_bias,
@@ -542,7 +558,7 @@ if __name__ == '__main__':
                 'untie_local': args.untie_local,
                 'crossattn_num_heads': args.crossattn_num_heads,
                 'gate_init_bias': args.gate_init_bias,
-                'variant': 'm2c_two_backbones_crossattn',
+                'variant': 'm2c_two_backbones_crossattn_perlayer',
                 'run_tag': args.run_tag,
             },
         },
