@@ -470,6 +470,38 @@ if __name__ == '__main__':
         num_sanity_val_steps=0 if args.checkpoint_path is not None else 2,
         strategy=strategy,
     )
+    # Differentiate "warm-start from a bare init ckpt" vs "resume from a full
+    # Lightning ckpt". Warm-start ckpts (from init_pretrained_into_jointattn.py)
+    # contain only {state_dict, ...} and lack Lightning's run metadata
+    # (pytorch-lightning_version, epoch, optimizer state). Pass the bare ckpt
+    # to trainer.fit(ckpt_path=...) and Lightning crashes with KeyError on the
+    # missing version key.
+    ckpt_path_for_resume = None
+    if args.checkpoint_path is not None:
+        loaded = torch.load(args.checkpoint_path, map_location='cpu',
+                             weights_only=False)
+        has_lightning_meta = (
+            isinstance(loaded, dict)
+            and 'pytorch-lightning_version' in loaded
+        )
+        if has_lightning_meta:
+            # Full Lightning ckpt -> resume mode (restores optimizer, lr,
+            # step counter, etc.).
+            print(f'[resume] full Lightning ckpt at {args.checkpoint_path}')
+            ckpt_path_for_resume = args.checkpoint_path
+        else:
+            # Bare warm-start ckpt -> load weights, start training from step 0.
+            print(f'[init] bare warm-start ckpt at {args.checkpoint_path}; '
+                   'loading state_dict only (no Lightning metadata).')
+            sd = loaded['state_dict'] if isinstance(loaded, dict) and 'state_dict' in loaded else loaded
+            missing, unexpected = net.load_state_dict(sd, strict=False)
+            if missing:
+                print(f'[init] {len(missing)} missing keys (fresh-init, '
+                       f'first few: {missing[:3]})')
+            if unexpected:
+                print(f'[init] {len(unexpected)} unexpected keys (ignored, '
+                       f'first few: {unexpected[:3]})')
+
     trainer.fit(net, train_set_loader, val_set_loader,
-                ckpt_path=args.checkpoint_path)
+                ckpt_path=ckpt_path_for_resume)
     torch.save(net.state_dict(), f'{ckpt_dir}/{model_name}.fin.ckpt')
