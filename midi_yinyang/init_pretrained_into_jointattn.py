@@ -34,27 +34,36 @@ import torch
 from cp_transformer_m2c_jointattn import M2CJointAttn
 
 
+# Pretrained CP-transformer stores the global RoFormer stack under
+# `model.layer.{N}.*` (see inspect_pretrained_ckpt.py output). The standard
+# HF RoFormer naming inside each layer:
+#     attention.self.query/key/value.{weight,bias}
+#     attention.output.dense.{weight,bias}            <- Wo
+#     attention.output.LayerNorm.{weight,bias}        <- post-attn LN
+#     intermediate.dense.{weight,bias}                <- FFN fc1
+#     output.dense.{weight,bias}                      <- FFN fc2
+#     output.LayerNorm.{weight,bias}                  <- post-FFN LN
+
+_SRC_PREFIX = r'^model\.layer\.(\d+)\.'
+
 _PER_LAYER_ATTN = re.compile(
-    r'^global_roformer\.layer\.(\d+)\.attention\.(self|output)\.(.+)$'
+    _SRC_PREFIX + r'attention\.(self|output)\.(.+)$'
 )
 _PER_LAYER_FFN_FC1 = re.compile(
-    r'^global_roformer\.layer\.(\d+)\.intermediate\.dense\.(weight|bias)$'
+    _SRC_PREFIX + r'intermediate\.dense\.(weight|bias)$'
 )
 _PER_LAYER_FFN_FC2 = re.compile(
-    r'^global_roformer\.layer\.(\d+)\.output\.dense\.(weight|bias)$'
-)
-_PER_LAYER_LN_ATTN = re.compile(
-    r'^global_roformer\.layer\.(\d+)\.attention\.output\.LayerNorm\.(weight|bias)$'
+    _SRC_PREFIX + r'output\.dense\.(weight|bias)$'
 )
 _PER_LAYER_LN_FFN = re.compile(
-    r'^global_roformer\.layer\.(\d+)\.output\.LayerNorm\.(weight|bias)$'
+    _SRC_PREFIX + r'output\.LayerNorm\.(weight|bias)$'
 )
 
 
 def _count_pretrained_layers(sd):
     layer_ids = set()
     for k in sd.keys():
-        m = re.match(r'^global_roformer\.layer\.(\d+)\.', k)
+        m = re.match(_SRC_PREFIX, k)
         if m:
             layer_ids.add(int(m.group(1)))
     return max(layer_ids) + 1 if layer_ids else 0
@@ -62,44 +71,47 @@ def _count_pretrained_layers(sd):
 
 def _map_global_key(src_key, src_val, moe_num_experts):
     """Return list of (target_key, transformed_tensor_or_None) pairs. None
-    means: copy src_val directly. Returns [] if the key has no target."""
-    # Self-attention Q/K/V projections + output projection. RoFormer stores
-    # 'attention.self.query/key/value' and 'attention.output.dense'; the
-    # vendored fork uses 'attention.output.dense' as Wo.
+    means: copy src_val directly. Returns [] if the key has no target.
+
+    Source schema (pretrained CP-transformer one-backbone):
+        model.layer.{N}.attention.self.{query,key,value}.{weight,bias}
+        model.layer.{N}.attention.output.dense.{weight,bias}
+        model.layer.{N}.attention.output.LayerNorm.{weight,bias}
+        model.layer.{N}.intermediate.dense.{weight,bias}     (FFN fc1)
+        model.layer.{N}.output.dense.{weight,bias}           (FFN fc2)
+        model.layer.{N}.output.LayerNorm.{weight,bias}
+
+    Target schema (M2CJointAttn):
+        global_layers.{N}.{q,k,v,o}_{m,c}.{weight,bias}    (per-modality)
+        global_layers.{N}.ln_attn.{weight,bias}             (shared)
+        global_layers.{N}.ln_ffn.{weight,bias}              (shared)
+        global_layers.{N}.ffn.fc1.{j}.{weight,bias}         (replicated across K experts)
+        global_layers.{N}.ffn.fc2.{j}.{weight,bias}
+    """
     m = _PER_LAYER_ATTN.match(src_key)
     if m:
         layer = int(m.group(1))
-        which = m.group(2)        # 'self' or 'output'
-        tail = m.group(3)         # 'query.weight' / 'key.bias' / etc.
-        # 'self.query.{weight,bias}' -> q_m, q_c
-        # 'self.key.{weight,bias}'   -> k_m, k_c
-        # 'self.value.{weight,bias}' -> v_m, v_c
-        # 'output.dense.{weight,bias}' -> o_m, o_c
-        # 'output.LayerNorm.{weight,bias}' -> ln_attn_m / ln_attn_c
+        which = m.group(2)         # 'self' or 'output'
+        tail = m.group(3)          # e.g. 'query.weight'
+        head, wb = tail.split('.', 1)
         if which == 'self':
-            kind = tail.split('.')[0]                 # query | key | value
-            wb = tail.split('.')[1]                   # weight | bias
-            short = {'query': 'q', 'key': 'k', 'value': 'v'}[kind]
+            # self.{query,key,value}.{weight,bias} -> q/k/v projections,
+            # replicated into both mel and chord branches.
+            short = {'query': 'q', 'key': 'k', 'value': 'v'}[head]
             return [
                 (f'global_layers.{layer}.{short}_m.{wb}', None),
                 (f'global_layers.{layer}.{short}_c.{wb}', None),
             ]
-        else:  # which == 'output'
-            head = tail.split('.')[0]
-            wb = tail.split('.')[1]
-            if head == 'dense':
-                return [
-                    (f'global_layers.{layer}.o_m.{wb}', None),
-                    (f'global_layers.{layer}.o_c.{wb}', None),
-                ]
-            if head == 'LayerNorm':
-                return [
-                    (f'global_layers.{layer}.ln_attn_m.{wb}', None),
-                    (f'global_layers.{layer}.ln_attn_c.{wb}', None),
-                ]
-            return []
+        # which == 'output': either Wo (dense) or post-attn LN.
+        if head == 'dense':
+            return [
+                (f'global_layers.{layer}.o_m.{wb}', None),
+                (f'global_layers.{layer}.o_c.{wb}', None),
+            ]
+        if head == 'LayerNorm':
+            return [(f'global_layers.{layer}.ln_attn.{wb}', None)]
+        return []
 
-    # FFN -- replicate dense FFN into every expert of the shared MoE.
     m = _PER_LAYER_FFN_FC1.match(src_key)
     if m:
         layer = int(m.group(1))
@@ -109,7 +121,8 @@ def _map_global_key(src_key, src_val, moe_num_experts):
                 (f'global_layers.{layer}.ffn.fc1.{j}.{wb}', None)
                 for j in range(moe_num_experts)
             ]
-        return [(f'global_layers.{layer}.ffn.0.{wb}', None)]  # dense fallback
+        # Dense fallback: nn.Sequential[Linear(0), GELU(1), Linear(2)]
+        return [(f'global_layers.{layer}.ffn.0.{wb}', None)]
 
     m = _PER_LAYER_FFN_FC2.match(src_key)
     if m:
@@ -120,7 +133,7 @@ def _map_global_key(src_key, src_val, moe_num_experts):
                 (f'global_layers.{layer}.ffn.fc2.{j}.{wb}', None)
                 for j in range(moe_num_experts)
             ]
-        return [(f'global_layers.{layer}.ffn.2.{wb}', None)]  # GELU at idx 1
+        return [(f'global_layers.{layer}.ffn.2.{wb}', None)]
 
     m = _PER_LAYER_LN_FFN.match(src_key)
     if m:
@@ -128,11 +141,10 @@ def _map_global_key(src_key, src_val, moe_num_experts):
         wb = m.group(2)
         return [(f'global_layers.{layer}.ln_ffn.{wb}', None)]
 
-    # global_sos and other non-layer params: pass through unchanged.
     if src_key == 'global_sos':
         return [('global_sos', None)]
 
-    return []  # silently drop unmatched global_* keys
+    return []
 
 
 def main():

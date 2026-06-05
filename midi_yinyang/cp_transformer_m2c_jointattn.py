@@ -175,9 +175,18 @@ class SimpleMoEFFN(nn.Module):
 # ---------------------------------------------------------------------------
 
 class M2CJointAttnLayer(nn.Module):
-    """One transformer block: per-modality Q/K/V/O + joint attention +
-    shared MoE FFN (with type embeddings to disambiguate streams to the
-    router)."""
+    """One transformer block matching HF RoFormer's post-LN structure but
+    with per-modality Q/K/V/O projections and a shared MoE FFN.
+
+    Order (matches transformers/models/roformer/modeling_roformer.py):
+        attn_out = self_attention(x)              # joint over interleaved 2T
+        x = LN_attn(x + Wo(attn_out))              # POST-LN, residual first
+        ffn_out = FFN(x)                           # GELU MLP (or MoE)
+        x = LN_ffn(x + ffn_out)                    # POST-LN
+
+    Per-modality parameters: q_m/q_c, k_m/k_c, v_m/v_c, o_m/o_c.
+    Shared parameters: ln_attn, ln_ffn, ffn (MoE or dense).
+    """
 
     def __init__(self, hidden_size, num_heads, intermediate_size,
                  moe_num_experts, moe_topk, moe_intermediate_size,
@@ -188,9 +197,7 @@ class M2CJointAttnLayer(nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
 
-        # Per-modality pre-LN and Q/K/V/O projections
-        self.ln_attn_m = nn.LayerNorm(hidden_size)
-        self.ln_attn_c = nn.LayerNorm(hidden_size)
+        # Per-modality Q/K/V/O projections (untied between mel and chord).
         self.q_m = nn.Linear(hidden_size, hidden_size)
         self.k_m = nn.Linear(hidden_size, hidden_size)
         self.v_m = nn.Linear(hidden_size, hidden_size)
@@ -200,7 +207,8 @@ class M2CJointAttnLayer(nn.Module):
         self.v_c = nn.Linear(hidden_size, hidden_size)
         self.o_c = nn.Linear(hidden_size, hidden_size)
 
-        # FFN side: shared LN + shared (MoE or dense) FFN
+        # Shared post-LN modules and shared (MoE or dense) FFN.
+        self.ln_attn = nn.LayerNorm(hidden_size)
         self.ln_ffn = nn.LayerNorm(hidden_size)
         self.use_moe = moe_num_experts > 1
         ffn_inter = moe_intermediate_size or intermediate_size
@@ -217,7 +225,7 @@ class M2CJointAttnLayer(nn.Module):
         self.drop = nn.Dropout(dropout)
 
     def _split_heads(self, x):
-        B, L, H = x.shape
+        B, L, _ = x.shape
         return x.view(B, L, self.num_heads, self.head_dim).transpose(1, 2)
 
     def _merge_heads(self, x):
@@ -231,53 +239,51 @@ class M2CJointAttnLayer(nn.Module):
         B, T, H = m.shape
         assert c.shape == m.shape
 
-        # 1. Pre-LN + per-modality QKV projection
-        m_n = self.ln_attn_m(m)
-        c_n = self.ln_attn_c(c)
-        q_m = self._split_heads(self.q_m(m_n))                      # [B, h, T, d]
-        k_m = self._split_heads(self.k_m(m_n))
-        v_m = self._split_heads(self.v_m(m_n))
-        q_c = self._split_heads(self.q_c(c_n))
-        k_c = self._split_heads(self.k_c(c_n))
-        v_c = self._split_heads(self.v_c(c_n))
+        # 1. Per-modality Q/K/V projection (NO pre-LN; RoFormer is post-LN).
+        q_m = self._split_heads(self.q_m(m))                        # [B, h, T, d]
+        k_m = self._split_heads(self.k_m(m))
+        v_m = self._split_heads(self.v_m(m))
+        q_c = self._split_heads(self.q_c(c))
+        k_c = self._split_heads(self.k_c(c))
+        v_c = self._split_heads(self.v_c(c))
 
         # 2. Interleave Q/K/V into 2T sequence so position 2t = mel_t,
         #    2t+1 = chord_t. RoPE applies to the 2T positions globally.
         def interleave(a_m, a_c):
-            # [B, h, T, d] each -> [B, h, 2T, d]
-            return torch.stack([a_m, a_c], dim=3).reshape(B, self.num_heads, 2 * T, self.head_dim)
+            return torch.stack([a_m, a_c], dim=3).reshape(
+                B, self.num_heads, 2 * T, self.head_dim
+            )
         q = interleave(q_m, q_c)
         k = interleave(k_m, k_c)
         v = interleave(v_m, v_c)
 
-        # 3. Apply RoPE to Q, K
+        # 3. Apply RoPE to Q, K (V is not rotated).
         cos_2t = cos[:, :, : 2 * T]
         sin_2t = sin[:, :, : 2 * T]
         q, k = _apply_rope(q, k, cos_2t, sin_2t)
 
-        # 4. Joint causal self-attention (PyTorch SDPA handles flash/cuDNN
-        #    paths; is_causal=True applies the lower-triangular mask)
+        # 4. Joint causal self-attention.
         out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         out = self._merge_heads(out)                                # [B, 2T, H]
 
-        # 5. Split, per-modality output projection + residual
+        # 5. Split, per-modality output projection, residual, POST-LN (shared).
         out_m = out[:, 0::2, :]
         out_c = out[:, 1::2, :]
-        m = m + self.drop(self.o_m(out_m))
-        c = c + self.drop(self.o_c(out_c))
+        m = self.ln_attn(m + self.drop(self.o_m(out_m)))
+        c = self.ln_attn(c + self.drop(self.o_c(out_c)))
 
-        # 6. Shared (MoE) FFN over interleaved 2T sequence
-        m_n = self.ln_ffn(m)
-        c_n = self.ln_ffn(c)
-        stacked = torch.stack([m_n, c_n], dim=2).reshape(B, 2 * T, H)
+        # 6. Shared FFN over the interleaved 2T sequence, then split, residual,
+        #    POST-LN (shared).
+        stacked = torch.stack([m, c], dim=2).reshape(B, 2 * T, H)
         if self.use_moe:
             ffn_out, aux_loss = self.ffn(stacked)
         else:
-            ffn_out, aux_loss = self.ffn(stacked), torch.zeros((), device=m.device)
+            ffn_out = self.ffn(stacked)
+            aux_loss = torch.zeros((), device=m.device, dtype=m.dtype)
         ffn_m = ffn_out[:, 0::2]
         ffn_c = ffn_out[:, 1::2]
-        m = m + self.drop(ffn_m)
-        c = c + self.drop(ffn_c)
+        m = self.ln_ffn(m + self.drop(ffn_m))
+        c = self.ln_ffn(c + self.drop(ffn_c))
         return m, c, aux_loss
 
 
@@ -319,17 +325,11 @@ class M2CJointAttn(M2CMoE):
             )
             for _ in range(self.global_num_layers)
         ])
-        # Final LN before sending to the local decoder (matches RoFormer
-        # post-norm-style finalize used in the original stack).
-        self.global_final_ln = nn.LayerNorm(self.hidden_size)
-
-        # Type embedding added to the FFN input so the shared router can
-        # condition on modality (mel=0, chord=1). Same shape as the
-        # parent's token_type_embeddings but a SEPARATE module so we can
-        # warm-start to zero (no init bias).
-        self.modality_type_emb = nn.Embedding(2, self.hidden_size)
-        with torch.no_grad():
-            self.modality_type_emb.weight.zero_()
+        # NOTE: HF RoFormer's post-LN stack already applies a LayerNorm at the
+        # end of each layer's FFN, so we do NOT add an extra final LN here.
+        # Per-modality differentiation is achieved by the per-modality Q/K/V/O
+        # projections alone -- a modality type embedding would shift the input
+        # distribution away from one-backbone equivalence at step 0.
 
     # ------------------------------------------------------------------
     # Override: global interaction is our custom joint-attn stack
@@ -349,12 +349,6 @@ class M2CJointAttn(M2CMoE):
         m = h[:, 0::2]                                              # [B, T, H]
         c = h[:, 1::2]
 
-        # Add modality type embedding once at entry so the routers see it.
-        mod_m = self.modality_type_emb(torch.zeros(1, dtype=torch.long, device=h.device))
-        mod_c = self.modality_type_emb(torch.ones(1, dtype=torch.long, device=h.device))
-        m = m + mod_m
-        c = c + mod_c
-
         # Precompute RoPE buffers for 2T positions.
         head_dim = H // self.num_attention_heads
         cos, sin = _rope_freqs(2 * T, head_dim, device=h.device, dtype=h.dtype)
@@ -363,8 +357,6 @@ class M2CJointAttn(M2CMoE):
         for layer in self.global_layers:
             m, c, aux = layer(m, c, cos, sin)
             total_aux = total_aux + aux
-        m = self.global_final_ln(m)
-        c = self.global_final_ln(c)
 
         # Re-interleave for downstream local decoder.
         out = torch.stack([m, c], dim=2).reshape(B, 2 * T, H)
