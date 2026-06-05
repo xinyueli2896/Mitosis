@@ -30,7 +30,61 @@ import os
 import random
 import shutil
 
+import pretty_midi
 import torch
+
+from preprocess_large_midi_dataset import DURATION_TEMPLATES
+
+
+def _render_tensor_to_midi(drum_rows, other_rows, save_path,
+                            max_polyphony, tempo=120.0, beat_div=4):
+    """Decode raw pack rows back into a .mid file.
+
+    drum_rows, other_rows: uint8 tensors of shape [T, max_polyphony * 4],
+    each row a sequence of (program, pitch, duration_idx, velocity) quads.
+    program == 254 is the per-timestep EOS sentinel; 255 is the empty-slot
+    fill. Drum half uses program == 127 for drums.
+    """
+    midi = pretty_midi.PrettyMIDI(initial_tempo=tempo)
+    step = 60.0 / tempo / beat_div
+    instrument_map = {}
+
+    def add_stream(rows):
+        if rows.numel() == 0:
+            return
+        arr = rows.view(rows.shape[0], max_polyphony, 4).cpu().numpy()
+        for t in range(arr.shape[0]):
+            for k in range(max_polyphony):
+                program = int(arr[t, k, 0])
+                if program == 254 or program == 255:
+                    break
+                pitch = int(arr[t, k, 1])
+                dur_idx = int(arr[t, k, 2])
+                velocity = int(arr[t, k, 3]) or 100
+                if dur_idx < 0 or dur_idx >= len(DURATION_TEMPLATES):
+                    continue
+                if pitch < 0 or pitch >= 128:
+                    continue
+                start = t * step
+                end = start + float(DURATION_TEMPLATES[dur_idx]) * step
+                if program == 127:
+                    key = ('drum',)
+                    if key not in instrument_map:
+                        instrument_map[key] = pretty_midi.Instrument(0, is_drum=True)
+                        midi.instruments.append(instrument_map[key])
+                else:
+                    key = ('inst', program)
+                    if key not in instrument_map:
+                        instrument_map[key] = pretty_midi.Instrument(program)
+                        midi.instruments.append(instrument_map[key])
+                instrument_map[key].notes.append(
+                    pretty_midi.Note(velocity=velocity, pitch=pitch,
+                                     start=start, end=end))
+
+    add_stream(drum_rows)
+    add_stream(other_rows)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    midi.write(save_path)
 
 
 def _load_pack(data_dir, prefix):
@@ -84,12 +138,19 @@ def main():
     ap.add_argument('--midi_root', default=None,
                     help='Root the .txt manifest paths are relative to (same as '
                          '--midi_root passed to make_la_drum_other.py). If '
-                         'omitted, the held-out .mid files are NOT copied -- '
-                         'only the trimmed tensors + a _heldout_manifest.txt '
-                         'listing relpaths are produced. Useful when the '
-                         'tensors live on a cluster but the raw MIDIs do not; '
-                         'rsync the listed paths from whichever machine has '
-                         'them.')
+                         'given, held-out raw .mid files are copied from here. '
+                         'If omitted, the script renders each held-out song '
+                         'back to .mid directly from its tensor rows -- no '
+                         'access to the original LAMD MIDIs required.')
+    ap.add_argument('--render_from_tensor', action='store_true',
+                    help='Force tensor rendering even when --midi_root is given.')
+    ap.add_argument('--tempo', type=float, default=120.0,
+                    help='Tempo to assume when rendering tensors back to MIDI. '
+                         'Only the absolute timing changes; the score itself is '
+                         'tempo-agnostic.')
+    ap.add_argument('--beat_div', type=int, default=4,
+                    help='Subbeats per beat used in preprocess_midi. Must match '
+                         'whatever you ran make_la_drum_other.py with (default 4).')
     ap.add_argument('--output_dir', default='input/lamd_test_prompts',
                     help='Where to copy the held-out .mid files.')
     ap.add_argument('--num_test', type=int, default=50)
@@ -135,8 +196,12 @@ def main():
         for i in test_idx:
             f.write(f'{i}\t{manifest_d[i]}\n')
 
-    # Copy raw MIDIs if we have access to them.
-    if args.midi_root is not None:
+    # Per-song row offsets via cumsum (reused for both copy and render paths).
+    offsets = torch.zeros(len(lengths_d) + 1, dtype=torch.long)
+    offsets[1:] = torch.cumsum(lengths_d.to(torch.long), dim=0)
+    P = rolls_d.shape[1] // 4
+
+    if args.midi_root is not None and not args.render_from_tensor:
         missing = []
         for i in test_idx:
             rel = manifest_d[i]
@@ -150,17 +215,20 @@ def main():
         if missing:
             print(f'[warn] {len(missing)} test MIDIs were not found under {args.midi_root}; '
                   f'first few: {missing[:3]}')
-        print(f'[copy] {len(test_idx) - len(missing)} MIDIs -> {args.output_dir}')
+        print(f'[copy] {len(test_idx) - len(missing)} raw MIDIs -> {args.output_dir}')
     else:
-        print(f'[skip] --midi_root not given; wrote relpaths to '
-              f'{args.output_dir}/_heldout_manifest.txt. Rsync those paths '
-              f'from wherever the LAMD MIDIs live, e.g.:')
-        print(f'       rsync -av --files-from={args.output_dir}/_heldout_manifest_rel.txt '
-              f'<src>:/path/to/LAMD/MIDIs/ {args.output_dir}/')
-        # rsync --files-from wants one path per line, no index column.
-        with open(os.path.join(args.output_dir, '_heldout_manifest_rel.txt'), 'w') as f:
-            for i in test_idx:
-                f.write(f'{manifest_d[i]}\n')
+        # Render each held-out song straight from its tensor rows.
+        for i in test_idx:
+            drum_rows = rolls_d[offsets[i]:offsets[i + 1]]
+            other_rows = rolls_o[offsets[i]:offsets[i + 1]]
+            stem = os.path.splitext(os.path.basename(manifest_d[i]))[0]
+            dst = os.path.join(args.output_dir,
+                               f'song{i:06d}_{stem}.mid')
+            _render_tensor_to_midi(drum_rows, other_rows, dst,
+                                    max_polyphony=P, tempo=args.tempo,
+                                    beat_div=args.beat_div)
+        print(f'[render] {len(test_idx)} songs decoded from tensors -> '
+              f'{args.output_dir} (tempo={args.tempo}, P={P})')
 
     # Rebuild train tensors.
     rolls_d2, lengths_d2, psr_d2, manifest_d2 = _split(rolls_d, lengths_d, psr_d, manifest_d, keep_idx, test_idx)
