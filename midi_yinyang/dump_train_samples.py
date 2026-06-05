@@ -108,11 +108,9 @@ class DumpInputSamplesCallback:
     def __init__(self, out_dir, n_samples=4, max_polyphony=16,
                  every_n_epochs=None, tempo=120.0, beat_div=4):
         try:
-            import lightning as L  # noqa: F401
+            from lightning.pytorch.callbacks import Callback as _Callback
         except ImportError:
-            import pytorch_lightning as L  # noqa: F401
-        from lightning.pytorch.callbacks import Callback as _Callback  # noqa
-        # Re-bind to whichever is available.
+            from pytorch_lightning.callbacks import Callback as _Callback
         self._Callback = _Callback
         self.out_dir = out_dir
         self.n_samples = n_samples
