@@ -35,18 +35,9 @@ import argparse
 import math
 from typing import Optional
 
-import lightning as L_modern  # noqa: F401  # if installed
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
-
-try:
-    import lightning as L
-    from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
-except ImportError:
-    import pytorch_lightning as L
-    from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
 
 from cp_transformer_m2c_moe import (
     M2CMoE, FramedDataset, TRAIN_LENGTH, MAX_STEPS,
@@ -368,6 +359,16 @@ class M2CJointAttn(M2CMoE):
 # ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
+    # Lightning / DataLoader imports are deferred to here so the module can
+    # be imported by init scripts that don't have lightning installed.
+    from torch.utils.data import DataLoader
+    try:
+        import lightning as L
+        from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
+    except ImportError:
+        import pytorch_lightning as L
+        from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
+
     parser = argparse.ArgumentParser(
         description='Train M2CJointAttn (per-modality Q/K/V/O + joint '
                     'self-attention + shared MoE FFN).',
