@@ -27,6 +27,7 @@ Run:
 """
 
 import argparse
+import os
 import re
 
 import torch
@@ -236,6 +237,9 @@ def main():
               f'(first few: {missing[:5]})')
 
     net.load_state_dict(target_sd, strict=False)
+    out_dir = os.path.dirname(args.output)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     print(f'[save] writing {args.output}')
     torch.save({'state_dict': net.state_dict()}, args.output)
     print('[done]')
