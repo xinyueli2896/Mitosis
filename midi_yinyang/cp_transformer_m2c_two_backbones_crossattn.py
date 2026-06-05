@@ -445,9 +445,57 @@ class M2CTwoBackbonesCrossAttn(L.LightningModule):
         self.log('val_ce_c', self._last_ce_c)
         return loss
 
+    # ------------------------------------------------------------------
+    # Two-phase finetuning support
+    # ------------------------------------------------------------------
+
+    def _adapter_param_prefixes(self):
+        """Substring prefixes for parameters that constitute the
+        cross-attention adapter and other 'fusion-only' bits NOT present
+        in the pretrained CP transformer ckpts. Phase 1 trains only these."""
+        return (
+            'cross_attn_m_reads_c.',
+            'cross_attn_c_reads_m.',
+            'gates_m.',
+            'gates_c.',
+            'token_type_embeddings.',
+        )
+
+    def freeze_backbones(self):
+        """Phase 1: freeze both pretrained backbones (global_layers_m/c) and
+        the local components (local_embedding/encoder/decoder, final_decoder_*,
+        global_sos_*). Train ONLY the cross-attention adapter, per-layer gates,
+        and token_type_embeddings.
+
+        Per-modality final decoders and global SOS are kept FROZEN here because
+        they were loaded from pretrained too -- if you want them trainable in
+        Phase 1, override this method or call .requires_grad = True on them
+        after this method.
+        """
+        keep = self._adapter_param_prefixes()
+        n_frozen = n_trained = 0
+        for name, p in self.named_parameters():
+            is_adapter = any(name.startswith(prefix) for prefix in keep)
+            p.requires_grad = is_adapter
+            if is_adapter:
+                n_trained += p.numel()
+            else:
+                n_frozen += p.numel()
+        print(f'[freeze_backbones] adapter-only training: '
+              f'frozen={n_frozen:,}  trainable={n_trained:,}  '
+              f'({100*n_trained/(n_frozen+n_trained):.2f}% trainable)')
+
+    def unfreeze_all(self):
+        """Phase 2: turn requires_grad back on for every parameter."""
+        for p in self.parameters():
+            p.requires_grad = True
+
     def configure_optimizers(self):
         max_lr = self.max_lr if self.max_lr is not None else 1e-4
-        optimizer = torch.optim.AdamW(self.parameters(), lr=max_lr)
+        # Filter to requires_grad=True so --freeze_backbones doesn't waste
+        # AdamW optimizer state on frozen backbone parameters.
+        trainable = [p for p in self.parameters() if p.requires_grad]
+        optimizer = torch.optim.AdamW(trainable, lr=max_lr)
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer, max_lr=max_lr,
             total_steps=MAX_STEPS, pct_start=0.005,
@@ -473,13 +521,23 @@ if __name__ == '__main__':
     parser.add_argument('--untie_local', action='store_true', default=False)
     parser.add_argument('--crossattn_num_heads', type=int, default=8)
     parser.add_argument('--gate_init_bias', type=float, default=-10.0)
+    parser.add_argument(
+        '--freeze_backbones', action='store_true', default=False,
+        help='Phase 1 finetuning: freeze both pretrained backbones + local '
+             'components; train only the cross-attention adapter, gates, '
+             'and token_type_embeddings. For Phase 2, drop this flag and '
+             'pass --checkpoint_path pointing at the Phase 1 checkpoint to '
+             'unfreeze everything for joint training.',
+    )
     parser.add_argument('--run_tag', type=str, default=None)
     args = parser.parse_args()
 
     n_gpus = max(torch.cuda.device_count(), 1)
     tag = f'_{args.run_tag}' if args.run_tag else ''
+    phase_tag = '_phase1adapter' if args.freeze_backbones else ''
     default_name = (f"m2c_two_backbones_crossattn_v2.0_perlayer_sz{args.size}"
-                    f"{'_untiedlocal' if args.untie_local else ''}{tag}"
+                    f"{'_untiedlocal' if args.untie_local else ''}"
+                    f"{phase_tag}{tag}"
                     f"_batch_{args.batch_size * n_gpus}_schedule")
     model_name = args.model_name if args.model_name is not None else default_name
 
@@ -498,6 +556,13 @@ if __name__ == '__main__':
     print(f'Local: {"untied per modality" if args.untie_local else "shared"}')
     print(f'Gate init bias: {args.gate_init_bias} '
           f'(sigmoid -> {torch.sigmoid(torch.tensor(args.gate_init_bias)).item():.2e})')
+
+    if args.freeze_backbones:
+        # Phase 1: only the adapter (and gates, token_type_embeddings) trains.
+        # The pretrained backbones and local components stay fixed -- their
+        # behaviour at this stage matches "two independent pretrained CP
+        # models", and the adapter learns where cross-modal info helps.
+        net.freeze_backbones()
 
     train_set_loader = DataLoader(
         FramedDataset(args.path_to_dataset, TRAIN_LENGTH, args.batch_size, split='train'),
@@ -541,6 +606,7 @@ if __name__ == '__main__':
                     'untie_local': args.untie_local,
                     'crossattn_num_heads': args.crossattn_num_heads,
                     'gate_init_bias': args.gate_init_bias,
+                    'freeze_backbones': args.freeze_backbones,
                     'run_tag': args.run_tag,
                 },
             ) if args.wandb else TensorBoardLogger('tb_logs', name=model_name)
@@ -558,6 +624,7 @@ if __name__ == '__main__':
                 'untie_local': args.untie_local,
                 'crossattn_num_heads': args.crossattn_num_heads,
                 'gate_init_bias': args.gate_init_bias,
+                'freeze_backbones': args.freeze_backbones,
                 'variant': 'm2c_two_backbones_crossattn_perlayer',
                 'run_tag': args.run_tag,
             },
