@@ -8,3 +8,4 @@ tb_logs
 /save_models
 /test_results/
 /score_data/
+/input

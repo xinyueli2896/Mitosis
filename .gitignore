@@ -1,4 +1,10 @@
 POP909-Dataset/
 midi_yinyang/pretrained/
 /ckpt
+/input
+/data
+/temp
 midi_yinyang/ckpt/
+midi_yinyang/input/
+midi_yinyang/data/
+midi_yinyang/temp/
