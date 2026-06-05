@@ -358,6 +358,15 @@ if __name__ == '__main__':
                              'Default: only once at on_train_start.')
     parser.add_argument('--dump_max_polyphony', type=int, default=16,
                         help='Must match the cp{N} of your dataset.')
+    parser.add_argument('--wandb_dir', type=str, default='/tmp/wandb',
+                        help='Where wandb writes local run files. Default '
+                             '/tmp/wandb so they vanish on container restart '
+                             'and never hit your homedir quota. Override only '
+                             'if you actually want to keep local copies.')
+    parser.add_argument('--save_top_k', type=int, default=2,
+                        help='How many best-val_loss checkpoints to retain '
+                             '(plus last.ckpt). Was 5; lowered to 2 to avoid '
+                             'eating disk quota on long runs.')
     args = parser.parse_args()
 
     n_gpus = max(torch.cuda.device_count(), 1)
@@ -407,7 +416,7 @@ if __name__ == '__main__':
         ).as_callback())
 
     checkpoint_callback = L.callbacks.ModelCheckpoint(
-        monitor='val_loss', save_top_k=5, save_last=True,
+        monitor='val_loss', save_top_k=args.save_top_k, save_last=True,
         enable_version_counter=False,
         dirpath=f'ckpt/{model_name}',
         filename=model_name + '.{epoch:02d}.{val_loss:.5f}',
@@ -432,6 +441,7 @@ if __name__ == '__main__':
         logger=(
             WandbLogger(
                 name=model_name, project='MusicMOE',
+                save_dir=args.wandb_dir,
                 config={
                     'batch_size': args.batch_size,
                     'model_size': args.model_size,
