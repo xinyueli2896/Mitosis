@@ -26,7 +26,7 @@ of the shared MoE FFN. At step 0 the model is provably equivalent to
 the pretrained one-backbone evaluated on the interleaved input.
 
 The local encoder/decoder, tokenizer, embeddings, preprocess, loss,
-and sampling are inherited from M2CMoE unchanged.
+and sampling are inherited from RoFormerSymbolicTransformer unchanged.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from cp_transformer_m2c_moe import (
-    M2CMoE, FramedDataset, TRAIN_LENGTH, MAX_STEPS,
+    RoFormerSymbolicTransformer, FramedDataset, TRAIN_LENGTH, MAX_STEPS,
 )
 
 
@@ -282,10 +282,10 @@ class M2CJointAttnLayer(nn.Module):
 # Top-level model
 # ---------------------------------------------------------------------------
 
-class M2CJointAttn(M2CMoE):
+class M2CJointAttn(RoFormerSymbolicTransformer):
     """One-backbone-equivalent two-backbones variant: per-modality Q/K/V/O,
     joint self-attention, shared MoE FFN. Inherits local encoder/decoder,
-    tokenizer, embeddings, preprocess, loss, and sampling from M2CMoE."""
+    tokenizer, embeddings, preprocess, loss, and sampling from RoFormerSymbolicTransformer."""
 
     def __init__(self, *args, moe_num_experts=4, moe_topk=2,
                  moe_intermediate_size=None, global_num_layers=None,
