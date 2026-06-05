@@ -123,27 +123,24 @@ class DumpInputSamplesCallback:
         outer = self
 
         class _Cb(self._Callback):
-            def on_train_start(self, trainer, pl_module):
-                try:
-                    batch = next(iter(trainer.train_dataloader))
-                except Exception as e:
-                    print(f'[dump_input_samples] failed to fetch batch: {e}')
-                    return
-                dump_batch(batch, outer.out_dir, outer.n_samples,
-                           outer.max_polyphony, tag='train_start',
-                           tempo=outer.tempo, beat_div=outer.beat_div)
+            _dumped_start = False
 
-            def on_train_epoch_start(self, trainer, pl_module):
+            def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
+                # Always dump the very first batch the trainer sees.
+                if not self._dumped_start:
+                    dump_batch(batch, outer.out_dir, outer.n_samples,
+                               outer.max_polyphony, tag='train_start',
+                               tempo=outer.tempo, beat_div=outer.beat_div)
+                    self._dumped_start = True
+                    return
+                # Optional periodic re-dump on the first batch of an epoch.
                 if outer.every_n_epochs is None:
                     return
-                if trainer.current_epoch == 0:
-                    return  # already dumped at on_train_start
-                if trainer.current_epoch % outer.every_n_epochs != 0:
+                if batch_idx != 0:
                     return
-                try:
-                    batch = next(iter(trainer.train_dataloader))
-                except Exception as e:
-                    print(f'[dump_input_samples] failed to fetch batch: {e}')
+                if trainer.current_epoch == 0:
+                    return
+                if trainer.current_epoch % outer.every_n_epochs != 0:
                     return
                 dump_batch(batch, outer.out_dir, outer.n_samples,
                            outer.max_polyphony,
