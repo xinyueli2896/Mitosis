@@ -54,28 +54,57 @@ from cp_transformer_m2c_moe import (
 
 
 # ---------------------------------------------------------------------------
-# RoPE (matches RoFormer convention with base=10000)
+# RoPE (matches HF RoFormer convention -- interleaved pairs, base=10000)
+#
+# RoFormer treats each consecutive pair (x_{2i}, x_{2i+1}) as a complex number
+# and rotates it by angle theta_i = pos * base^(-2i/D). This is the original
+# RoPE paper convention. It is NOT the same as LLaMA's "rotate half" trick
+# (which splits the head_dim down the middle); HF RoFormer's pretrained
+# weights are calibrated for interleaved pairs, so we must match here for the
+# warm-start to be numerically equivalent.
+#
+# Layout of cos/sin buffer at indices (2i, 2i+1):
+#   cos[..., 2i]   = cos(pos * theta_i)
+#   cos[..., 2i+1] = cos(pos * theta_i)   # same value
+#   (same for sin)
+# Layout of rotate_pairs(x):
+#   out[..., 2i]   = -x[..., 2i+1]
+#   out[..., 2i+1] =  x[..., 2i]
+# So the operation is: rotated = x * cos + rotate_pairs(x) * sin, exactly
+# matching `apply_rotary_position_embeddings` in HF's modeling_roformer.py.
 # ---------------------------------------------------------------------------
 
 def _rope_freqs(seq_len: int, head_dim: int, device, dtype=torch.float32,
                 base: float = 10000.0):
-    """Return (cos, sin) of shape [1, 1, seq_len, head_dim], matching
-    HF RoFormer's rotary convention (pair-wise rotation in the head_dim)."""
+    """Return (cos, sin) of shape [1, 1, seq_len, head_dim]. Values at the
+    even and odd index of each (2i, 2i+1) pair are identical -- that's how
+    the interleaved-pair convention is encoded as a single elementwise
+    multiplicand."""
+    assert head_dim % 2 == 0, 'head_dim must be even for RoPE'
     half = head_dim // 2
     inv_freq = 1.0 / (base ** (torch.arange(0, half, device=device).float() / half))
     t = torch.arange(seq_len, device=device).float()
-    freqs = torch.einsum('i,j->ij', t, inv_freq)               # [L, half]
-    emb = torch.cat([freqs, freqs], dim=-1)                     # [L, head_dim]
+    freqs = torch.einsum('i,j->ij', t, inv_freq)                # [L, half]
+    # Interleave: emb[:, 2i] = emb[:, 2i+1] = freqs[:, i]
+    emb = freqs.repeat_interleave(2, dim=-1)                    # [L, head_dim]
     return emb.cos().to(dtype)[None, None], emb.sin().to(dtype)[None, None]
 
 
-def _rotate_half(x):
-    x1, x2 = x.chunk(2, dim=-1)
-    return torch.cat([-x2, x1], dim=-1)
+def _rotate_pairs(x):
+    """Pair-wise 90-degree rotation matching HF RoFormer's
+    `rotate_half_query_layer`: (a, b) -> (-b, a) for each adjacent pair."""
+    # x: [..., head_dim] -> view as [..., head_dim/2, 2], swap, sign-flip,
+    # then flatten back.
+    shape = x.shape
+    x_pairs = x.view(*shape[:-1], -1, 2)
+    x_a = x_pairs[..., 0:1]                                      # [..., half, 1]
+    x_b = x_pairs[..., 1:2]
+    rotated = torch.cat([-x_b, x_a], dim=-1)                    # (-b, a)
+    return rotated.view(*shape)
 
 
 def _apply_rope(q, k, cos, sin):
-    return (q * cos) + (_rotate_half(q) * sin), (k * cos) + (_rotate_half(k) * sin)
+    return q * cos + _rotate_pairs(q) * sin, k * cos + _rotate_pairs(k) * sin
 
 
 # ---------------------------------------------------------------------------
