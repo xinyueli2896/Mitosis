@@ -88,7 +88,10 @@ def main():
     ap.add_argument('--num_test', type=int, default=50)
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--dry_run', action='store_true',
-                    help='Print what would happen; do not touch any files.')
+                    help='Copy the held-out MIDIs to --output_dir and write '
+                         '_heldout_manifest.txt, but do NOT rewrite the tensor '
+                         'pack files. Lets you preview the test set before '
+                         'committing to the trim.')
     ap.add_argument('--no_backup', dest='backup', action='store_false', default=True,
                     help='Skip writing .bak copies of the original pack files.')
     args = ap.parse_args()
@@ -119,18 +122,15 @@ def main():
     keep_idx = [i for i in range(n) if i not in test_set]
     print(f'[pick] held out {len(test_idx)} songs, keeping {len(keep_idx)} for training')
 
-    # Copy raw MIDIs.
+    # Copy raw MIDIs (happens in both real and dry-run modes).
     missing = []
-    if not args.dry_run:
-        os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(args.output_dir, exist_ok=True)
     for i in test_idx:
         rel = manifest_d[i]
         src = os.path.join(args.midi_root, rel)
         dst = os.path.join(args.output_dir, rel)
         if not os.path.exists(src):
             missing.append(rel)
-            continue
-        if args.dry_run:
             continue
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copy2(src, dst)
@@ -139,11 +139,10 @@ def main():
               f'first few: {missing[:3]}')
     print(f'[copy] {len(test_idx) - len(missing)} MIDIs -> {args.output_dir}')
 
-    # Also write a small text listing of the test set's original indices/paths.
-    if not args.dry_run:
-        with open(os.path.join(args.output_dir, '_heldout_manifest.txt'), 'w') as f:
-            for i in test_idx:
-                f.write(f'{i}\t{manifest_d[i]}\n')
+    # Held-out manifest, always.
+    with open(os.path.join(args.output_dir, '_heldout_manifest.txt'), 'w') as f:
+        for i in test_idx:
+            f.write(f'{i}\t{manifest_d[i]}\n')
 
     # Rebuild train tensors.
     rolls_d2, lengths_d2, psr_d2, manifest_d2 = _split(rolls_d, lengths_d, psr_d, manifest_d, keep_idx, test_idx)
@@ -152,7 +151,8 @@ def main():
     print(f'[trim] other rolls {tuple(rolls_o.shape)} -> {tuple(rolls_o2.shape)}')
 
     if args.dry_run:
-        print('[dry_run] not writing anything.')
+        print(f'[dry_run] MIDIs copied to {args.output_dir}; tensor packs left '
+              f'untouched. Re-run without --dry_run to rewrite them.')
         return
 
     _save_pack(args.data_dir, args.prefix_drum, rolls_d2, lengths_d2, psr_d2, manifest_d2, backup=args.backup)
