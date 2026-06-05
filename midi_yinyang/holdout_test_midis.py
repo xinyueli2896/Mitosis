@@ -81,8 +81,15 @@ def main():
                     help='Prefix of the drum-stream pack (compat naming uses "la_melody_cpN_v2").')
     ap.add_argument('--prefix_other', default='la_chord_cp4_v2',
                     help='Prefix of the non-drum pack (compat naming uses "la_chord_cpN_v2").')
-    ap.add_argument('--midi_root', required=True,
-                    help='Root the .txt manifest paths are relative to (same as --midi_root passed to make_la_drum_other.py).')
+    ap.add_argument('--midi_root', default=None,
+                    help='Root the .txt manifest paths are relative to (same as '
+                         '--midi_root passed to make_la_drum_other.py). If '
+                         'omitted, the held-out .mid files are NOT copied -- '
+                         'only the trimmed tensors + a _heldout_manifest.txt '
+                         'listing relpaths are produced. Useful when the '
+                         'tensors live on a cluster but the raw MIDIs do not; '
+                         'rsync the listed paths from whichever machine has '
+                         'them.')
     ap.add_argument('--output_dir', default='input/lamd_test_prompts',
                     help='Where to copy the held-out .mid files.')
     ap.add_argument('--num_test', type=int, default=50)
@@ -122,27 +129,38 @@ def main():
     keep_idx = [i for i in range(n) if i not in test_set]
     print(f'[pick] held out {len(test_idx)} songs, keeping {len(keep_idx)} for training')
 
-    # Copy raw MIDIs (happens in both real and dry-run modes).
-    missing = []
+    # Always materialize the output dir + manifest of held-out songs.
     os.makedirs(args.output_dir, exist_ok=True)
-    for i in test_idx:
-        rel = manifest_d[i]
-        src = os.path.join(args.midi_root, rel)
-        dst = os.path.join(args.output_dir, rel)
-        if not os.path.exists(src):
-            missing.append(rel)
-            continue
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy2(src, dst)
-    if missing:
-        print(f'[warn] {len(missing)} test MIDIs were not found under {args.midi_root}; '
-              f'first few: {missing[:3]}')
-    print(f'[copy] {len(test_idx) - len(missing)} MIDIs -> {args.output_dir}')
-
-    # Held-out manifest, always.
     with open(os.path.join(args.output_dir, '_heldout_manifest.txt'), 'w') as f:
         for i in test_idx:
             f.write(f'{i}\t{manifest_d[i]}\n')
+
+    # Copy raw MIDIs if we have access to them.
+    if args.midi_root is not None:
+        missing = []
+        for i in test_idx:
+            rel = manifest_d[i]
+            src = os.path.join(args.midi_root, rel)
+            dst = os.path.join(args.output_dir, rel)
+            if not os.path.exists(src):
+                missing.append(rel)
+                continue
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+        if missing:
+            print(f'[warn] {len(missing)} test MIDIs were not found under {args.midi_root}; '
+                  f'first few: {missing[:3]}')
+        print(f'[copy] {len(test_idx) - len(missing)} MIDIs -> {args.output_dir}')
+    else:
+        print(f'[skip] --midi_root not given; wrote relpaths to '
+              f'{args.output_dir}/_heldout_manifest.txt. Rsync those paths '
+              f'from wherever the LAMD MIDIs live, e.g.:')
+        print(f'       rsync -av --files-from={args.output_dir}/_heldout_manifest_rel.txt '
+              f'<src>:/path/to/LAMD/MIDIs/ {args.output_dir}/')
+        # rsync --files-from wants one path per line, no index column.
+        with open(os.path.join(args.output_dir, '_heldout_manifest_rel.txt'), 'w') as f:
+            for i in test_idx:
+                f.write(f'{manifest_d[i]}\n')
 
     # Rebuild train tensors.
     rolls_d2, lengths_d2, psr_d2, manifest_d2 = _split(rolls_d, lengths_d, psr_d, manifest_d, keep_idx, test_idx)
