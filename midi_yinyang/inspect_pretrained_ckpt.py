@@ -22,6 +22,12 @@ def main():
                     help='Path to the pretrained .ckpt file.')
     ap.add_argument('--inspect_layer', type=int, default=0,
                     help='Which global layer to dump keys for (default 0).')
+    ap.add_argument('--list_prefix', type=str, default=None,
+                    help='If set, dump all keys starting with this prefix '
+                         "(e.g. 'model.' or 'model.layer.0.'). Overrides "
+                         "the default global_roformer.layer.{N}. dump.")
+    ap.add_argument('--head', type=int, default=80,
+                    help='Truncate the listing to this many lines.')
     args = ap.parse_args()
 
     print(f'[load] {args.ckpt}')
@@ -44,24 +50,51 @@ def main():
     for p, n in sorted(prefixes.items(), key=lambda kv: -kv[1]):
         print(f'  {p:40s}  {n} tensors')
 
-    # Find global layer count
-    layer_ids = sorted({
-        int(m.group(1)) for k in sd
-        for m in [re.match(r'global_roformer\.layer\.(\d+)\.', k)] if m
-    })
-    n_layers = (max(layer_ids) + 1) if layer_ids else 0
-    print(f'\n[layers] global_roformer has {n_layers} layers')
-
-    if n_layers == 0:
-        print('\n[warn] no keys matched global_roformer.layer.N.* -- the regex '
-              'in init_pretrained_into_jointattn.py will not match. Check the '
-              'naming above and tell me what you see.')
+    # If user gave an explicit prefix, dump that instead of the default search.
+    if args.list_prefix is not None:
+        prefix = args.list_prefix
+        print(f'\n[list_prefix] keys starting with {prefix!r}:')
+        count = 0
+        for k in sorted(sd):
+            if k.startswith(prefix):
+                count += 1
+                if count <= args.head:
+                    print(f'  {k:80s}  {tuple(sd[k].shape)}')
+        if count > args.head:
+            print(f'  ... ({count - args.head} more keys omitted; '
+                  f'pass --head {count} to see all)')
+        print(f'[list_prefix] {count} keys matched')
         return
 
+    # Default: search for a layer.N. pattern under any top-level prefix.
+    layer_re = re.compile(r'^([^.]+(?:\.[^.]+)*?)\.layer\.(\d+)\.')
+    by_prefix = {}
+    for k in sd:
+        m = layer_re.match(k)
+        if m:
+            base, idx = m.group(1), int(m.group(2))
+            by_prefix.setdefault(base, set()).add(idx)
+
+    if not by_prefix:
+        print('\n[warn] no keys matched any <prefix>.layer.<N>. pattern. '
+              'Dump all keys with: python inspect_pretrained_ckpt.py --list_prefix model.')
+        return
+
+    print('\n[layer-prefix candidates]')
+    for base, ids in sorted(by_prefix.items(), key=lambda kv: -len(kv[1])):
+        print(f'  {base:40s}  layers 0..{max(ids)}  ({len(ids)} unique)')
+
+    # Use the prefix with the most layers as the canonical global stack.
+    canonical_prefix = max(by_prefix, key=lambda b: len(by_prefix[b]))
+    canonical_layers = max(by_prefix[canonical_prefix]) + 1
+    print(f'\n[canonical] using prefix {canonical_prefix!r} with '
+          f'{canonical_layers} layers as the global stack')
+
     L = args.inspect_layer
-    print(f'\n[keys in layer {L}]')
+    layer_key_prefix = f'{canonical_prefix}.layer.{L}.'
+    print(f'\n[keys in layer {L}] (prefix: {layer_key_prefix})')
     for k in sorted(sd):
-        if f'global_roformer.layer.{L}.' in k:
+        if k.startswith(layer_key_prefix):
             shape = tuple(sd[k].shape)
             print(f'  {k:80s}  {shape}')
 
