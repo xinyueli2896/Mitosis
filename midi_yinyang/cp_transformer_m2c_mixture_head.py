@@ -347,6 +347,17 @@ if __name__ == '__main__':
     parser.add_argument('--acc_loss_weight', type=float, default=3.0,
                         help='Reserved; see --mel_loss_weight.')
     parser.add_argument('--run_tag', type=str, default=None)
+    parser.add_argument('--dump_input_samples', type=int, default=0,
+                        help='If >0, decode this many training samples back '
+                             'to .mid before training starts (and every '
+                             '--dump_every_epochs epochs) for sanity-check '
+                             'listening. Writes to --dump_input_dir.')
+    parser.add_argument('--dump_input_dir', type=str, default='temp/sanity_inputs')
+    parser.add_argument('--dump_every_epochs', type=int, default=None,
+                        help='Re-dump samples this often during training. '
+                             'Default: only once at on_train_start.')
+    parser.add_argument('--dump_max_polyphony', type=int, default=16,
+                        help='Must match the cp{N} of your dataset.')
     args = parser.parse_args()
 
     n_gpus = max(torch.cuda.device_count(), 1)
@@ -385,6 +396,16 @@ if __name__ == '__main__':
         FramedDataset(args.path_to_dataset, TRAIN_LENGTH, args.batch_size, split='val'),
         batch_size=None, num_workers=1, persistent_workers=True,
     )
+    extra_callbacks = []
+    if args.dump_input_samples > 0:
+        from dump_train_samples import DumpInputSamplesCallback
+        extra_callbacks.append(DumpInputSamplesCallback(
+            out_dir=args.dump_input_dir,
+            n_samples=args.dump_input_samples,
+            max_polyphony=args.dump_max_polyphony,
+            every_n_epochs=args.dump_every_epochs,
+        ).as_callback())
+
     checkpoint_callback = L.callbacks.ModelCheckpoint(
         monitor='val_loss', save_top_k=5, save_last=True,
         enable_version_counter=False,
@@ -404,7 +425,7 @@ if __name__ == '__main__':
         precision='bf16-mixed' if torch.cuda.is_available() else 32,
         max_steps=MAX_STEPS,
         accelerator='gpu' if torch.cuda.is_available() else 'cpu',
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback] + extra_callbacks,
         val_check_interval=500,
         limit_val_batches=25,
         check_val_every_n_epoch=None,
