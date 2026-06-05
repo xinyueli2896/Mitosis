@@ -95,13 +95,59 @@ def _inspect(sd, label):
 _PER_LAYER_GLOBAL = re.compile(r'^model\.layer\.(\d+)\.(.+)$')
 _GLOBAL_EMBED_POS = re.compile(r'^model\.embed_positions\.(.+)$')
 
+# When destination has MoE enabled, pretrained dense FFN per layer is
+# replicated into all K experts. Match these specific source keys for
+# routing through the per-expert paths.
+_PER_LAYER_FFN_FC1 = re.compile(r'^model\.layer\.(\d+)\.intermediate\.dense\.(weight|bias)$')
+_PER_LAYER_FFN_FC2 = re.compile(r'^model\.layer\.(\d+)\.output\.dense\.(weight|bias)$')
+_PER_LAYER_OUTPUT_LN = re.compile(r'^model\.layer\.(\d+)\.output\.LayerNorm\.(weight|bias)$')
 
-def _dest_keys_for(src_key, modality, untie_local, num_layers):
+
+def _pretrained_num_layers(state_dict):
+    """Count distinct layer indices in a pretrained CP transformer state dict."""
+    idxs = set()
+    for k in state_dict.keys():
+        m = _PER_LAYER_GLOBAL.match(k)
+        if m:
+            idxs.add(int(m.group(1)))
+    return (max(idxs) + 1) if idxs else 0
+
+
+def _dest_keys_for(src_key, modality, untie_local, num_layers,
+                    moe_num_experts=1):
     """Return list of (dest_key, value_transform) pairs for one source key.
     A single source key can fan out to multiple dest keys (e.g. embed_positions
-    needs to be copied into every per-layer encoder's embed_positions).
+    needs to be copied into every per-layer encoder's embed_positions; with
+    MoE, the dense FFN replicates into all K experts).
     """
-    # ----- Per-layer global -----
+    # ----- MoE: replicate dense FFN into all experts -----
+    if moe_num_experts > 1:
+        m = _PER_LAYER_FFN_FC1.match(src_key)  # intermediate.dense -> per-expert fc1
+        if m:
+            layer_idx = int(m.group(1))
+            wb = m.group(2)
+            return [
+                (f'global_layers_{modality}.{layer_idx}.layer.0.moe_custome'
+                 f'.experts.local_experts.{j}.fc1.{wb}', None)
+                for j in range(moe_num_experts)
+            ]
+        m = _PER_LAYER_FFN_FC2.match(src_key)  # output.dense -> per-expert fc2
+        if m:
+            layer_idx = int(m.group(1))
+            wb = m.group(2)
+            return [
+                (f'global_layers_{modality}.{layer_idx}.layer.0.moe_custome'
+                 f'.experts.local_experts.{j}.fc2.{wb}', None)
+                for j in range(moe_num_experts)
+            ]
+        m = _PER_LAYER_OUTPUT_LN.match(src_key)  # output.LayerNorm -> moe_output.LayerNorm
+        if m:
+            layer_idx = int(m.group(1))
+            wb = m.group(2)
+            return [(f'global_layers_{modality}.{layer_idx}.layer.0'
+                     f'.moe_output.LayerNorm.{wb}', None)]
+
+    # ----- Per-layer global (attention, LN) -----
     m = _PER_LAYER_GLOBAL.match(src_key)
     if m:
         layer_idx = int(m.group(1))
@@ -155,24 +201,47 @@ def _dest_keys_for(src_key, modality, untie_local, num_layers):
 # Build dest
 # ---------------------------------------------------------------------------
 
-def build_dest(model, src_m, src_c, untie_local, warm_start_adapter=True):
+def build_dest(model, src_m, src_c, untie_local, warm_start_adapter=True,
+                router_init_std=0.02):
     dest_template = model.state_dict()
     out = OrderedDict(
         (k, v.clone()) for k, v in dest_template.items()
     )
     counts = {
         'copied_m': 0, 'copied_c': 0,
+        'replicated_to_experts_m': 0, 'replicated_to_experts_c': 0,
         'replicated_embed_positions_m': 0,
         'replicated_embed_positions_c': 0,
+        'router_init': 0,
         'skipped_shared_dup': 0,
         'kept_dst_init': 0,
         'missing_in_dst': [],
     }
     num_layers = model.num_layers
+    moe_K = getattr(model, 'moe_num_experts', 1)
+
+    # ---- Verify pretrained layer count matches destination ----
+    src_m_layers = _pretrained_num_layers(src_m)
+    src_c_layers = _pretrained_num_layers(src_c)
+    if src_m_layers != num_layers:
+        raise SystemExit(
+            f'[mismatch] mel pretrained ckpt has {src_m_layers} layers but '
+            f'destination model (size={[6,12,24,32].index(num_layers) if num_layers in [6,12,24,32] else "?"}) '
+            f'has {num_layers}. Re-instantiate with --size matching the '
+            f'pretrained layer count (size 0=6, 1=12, 2=24, 3=32) so ALL '
+            f'pretrained layers map 1:1 to global_layers_m.'
+        )
+    if src_c_layers != num_layers:
+        raise SystemExit(
+            f'[mismatch] chord pretrained ckpt has {src_c_layers} layers but '
+            f'destination has {num_layers}. See message above.'
+        )
+    print(f'[layer-count] pretrained={src_m_layers} == destination={num_layers}  '
+          f'(all layers will be mapped 1:1)')
 
     # Apply mel ckpt first.
     for src_key, src_val in src_m.items():
-        for dest_key, _ in _dest_keys_for(src_key, 'm', untie_local, num_layers):
+        for dest_key, _ in _dest_keys_for(src_key, 'm', untie_local, num_layers, moe_K):
             if dest_key not in out:
                 counts['missing_in_dst'].append((src_key, dest_key))
                 continue
@@ -184,12 +253,14 @@ def build_dest(model, src_m, src_c, untie_local, warm_start_adapter=True):
             out[dest_key] = src_val.clone()
             if 'embed_positions' in dest_key:
                 counts['replicated_embed_positions_m'] += 1
+            elif 'moe_custome.experts.local_experts.' in dest_key:
+                counts['replicated_to_experts_m'] += 1
             else:
                 counts['copied_m'] += 1
 
     # Apply chord ckpt second.
     for src_key, src_val in src_c.items():
-        for dest_key, _ in _dest_keys_for(src_key, 'c', untie_local, num_layers):
+        for dest_key, _ in _dest_keys_for(src_key, 'c', untie_local, num_layers, moe_K):
             if dest_key not in out:
                 counts['missing_in_dst'].append((src_key, dest_key))
                 continue
@@ -210,8 +281,28 @@ def build_dest(model, src_m, src_c, untie_local, warm_start_adapter=True):
             out[dest_key] = src_val.clone()
             if 'embed_positions' in dest_key:
                 counts['replicated_embed_positions_c'] += 1
+            elif 'moe_custome.experts.local_experts.' in dest_key:
+                counts['replicated_to_experts_c'] += 1
             else:
                 counts['copied_c'] += 1
+
+    # ---- Initialize MoE routers (no pretrained equivalent) ----
+    if moe_K > 1:
+        import torch as _torch
+        for layer_idx in range(num_layers):
+            for mod in (('m',) if not untie_local else ('m', 'c')) + (('c',) if untie_local else ('c',)):
+                # both backbones get routers regardless of untie_local
+                pass
+            for mod in ('m', 'c'):
+                gw_key = (f'global_layers_{mod}.{layer_idx}.layer.0.moe_custome'
+                          f'.RoFormerTopKRouter.gating.weight')
+                gb_key = (f'global_layers_{mod}.{layer_idx}.layer.0.moe_custome'
+                          f'.RoFormerTopKRouter.gating.bias')
+                if gw_key in out:
+                    out[gw_key] = _torch.randn_like(out[gw_key]) * router_init_std
+                    counts['router_init'] += 1
+                if gb_key in out:
+                    out[gb_key] = _torch.zeros_like(out[gb_key])
 
     # ----- Warm-start adapter Q/K/V/O from the backbones' projections -----
     # At init the cross-attention adapter behaves like the backbones' learned
@@ -276,10 +367,10 @@ def build_dest(model, src_m, src_c, untie_local, warm_start_adapter=True):
     # Count "kept dst init": destination keys that no source rule wrote.
     written = set()
     for src_key in src_m.keys():
-        for dk, _ in _dest_keys_for(src_key, 'm', untie_local, num_layers):
+        for dk, _ in _dest_keys_for(src_key, 'm', untie_local, num_layers, moe_K):
             written.add(dk)
     for src_key in src_c.keys():
-        for dk, _ in _dest_keys_for(src_key, 'c', untie_local, num_layers):
+        for dk, _ in _dest_keys_for(src_key, 'c', untie_local, num_layers, moe_K):
             written.add(dk)
     counts['kept_dst_init'] = sum(1 for k in dest_template if k not in written)
 
@@ -303,6 +394,15 @@ def main():
     ap.add_argument('--untie_local', action='store_true', default=False)
     ap.add_argument('--crossattn_num_heads', type=int, default=8)
     ap.add_argument('--gate_init_bias', type=float, default=-10.0)
+    ap.add_argument(
+        '--moe_num_experts', type=int, default=1,
+        help='1 (default) = dense FFN matching the pretrained CP transformer. '
+             '>1 enables MoE; the pretrained dense FFN gets replicated into all '
+             'K experts per backbone (so 2*K copies per pretrained layer at init), '
+             'and the router weights init with small Gaussian.',
+    )
+    ap.add_argument('--moe_topk', type=int, default=2)
+    ap.add_argument('--moe_intermediate_size', type=int, default=None)
     ap.add_argument(
         '--no_warm_start_adapter', action='store_true', default=False,
         help='Skip the warm-start that copies backbones Q/K/V/O into the '
@@ -337,6 +437,9 @@ def main():
         untie_local=args.untie_local,
         crossattn_num_heads=args.crossattn_num_heads,
         gate_init_bias=args.gate_init_bias,
+        moe_num_experts=args.moe_num_experts,
+        moe_topk=args.moe_topk,
+        moe_intermediate_size=args.moe_intermediate_size,
     )
     _inspect(model.state_dict(), 'destination: M2CTwoBackbonesCrossAttn')
 
@@ -352,6 +455,14 @@ def main():
     print('\n=== Mapping report ===')
     print(f'  per-layer global from mel ckpt:   {counts["copied_m"]} per-layer tensors')
     print(f'  per-layer global from chord ckpt: {counts["copied_c"]} per-layer tensors')
+    if args.moe_num_experts > 1:
+        print(f'  dense FFN replicated to MoE experts [m]: '
+              f'{counts["replicated_to_experts_m"]} tensors '
+              f'(pretrained dense -> {args.moe_num_experts} experts per layer)')
+        print(f'  dense FFN replicated to MoE experts [c]: '
+              f'{counts["replicated_to_experts_c"]} tensors')
+        print(f'  MoE routers fresh-initialized:           {counts["router_init"]} '
+              f'(small Gaussian, zero bias)')
     print(f'  embed_positions replicated [m]:   {counts["replicated_embed_positions_m"]}')
     print(f'  embed_positions replicated [c]:   {counts["replicated_embed_positions_c"]}')
     if counts['skipped_shared_dup'] > 0:
@@ -383,6 +494,9 @@ def main():
                 'untie_local': args.untie_local,
                 'crossattn_num_heads': args.crossattn_num_heads,
                 'gate_init_bias': args.gate_init_bias,
+                'moe_num_experts': args.moe_num_experts,
+                'moe_topk': args.moe_topk,
+                'moe_intermediate_size': args.moe_intermediate_size,
                 'init_from_pretrained_m': ckpt_m_path,
                 'init_from_pretrained_c': ckpt_c_path,
                 'variant': 'm2c_two_backbones_crossattn_perlayer',

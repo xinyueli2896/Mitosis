@@ -136,6 +136,9 @@ class M2CTwoBackbonesCrossAttn(L.LightningModule):
         gate_init_bias: float = -10.0,
         max_lr: Optional[float] = None,
         max_position_embeddings: int = 1536,
+        moe_num_experts: int = 1,        # 1 = dense FFN; N>1 = MoE with N experts
+        moe_topk: int = 2,
+        moe_intermediate_size: Optional[int] = None,
     ):
         super().__init__()
         self.hidden_size = [512, 768, 1024, 1280][size]
@@ -148,6 +151,9 @@ class M2CTwoBackbonesCrossAttn(L.LightningModule):
         self.untie_local = untie_local
         self.with_velocity = with_velocity
         self.max_lr = max_lr
+        self.moe_num_experts = moe_num_experts
+        self.moe_topk = moe_topk
+        self.moe_intermediate_size = moe_intermediate_size or self.intermediate_size
 
         from cp_transformer import CPTokenizer
         self.tokenizer = CPTokenizer(with_velocity=with_velocity)
@@ -192,7 +198,11 @@ class M2CTwoBackbonesCrossAttn(L.LightningModule):
         # Single-layer wrappers let us intercept between layers to apply the
         # cross-attention adapter. Pretrained loading copies each pretrained
         # layer i into global_layers_m[i].layer[0] and global_layers_c[i].layer[0].
-        single_layer_global_config = RoFormerConfig(
+        # When moe_num_experts > 1, each layer's dense FFN is replaced by an
+        # MoE block: the init script duplicates the pretrained dense FFN into
+        # all moe_num_experts experts per backbone per layer, so 2 * K copies
+        # per pretrained layer at init.
+        global_config_kwargs = dict(
             hidden_size=self.hidden_size,
             num_hidden_layers=1,                         # ONE layer per wrapper
             num_attention_heads=self.num_attention_heads,
@@ -203,6 +213,16 @@ class M2CTwoBackbonesCrossAttn(L.LightningModule):
             max_position_embeddings=max_position_embeddings,
             is_decoder=True,
         )
+        if moe_num_experts > 1:
+            global_config_kwargs.update(dict(
+                moe=True,
+                num_experts=moe_num_experts,
+                topk=moe_topk,
+                moe_intermediate_size=self.moe_intermediate_size,
+                expert_capacity_factor=1.0,
+                log_moe_stats=True,
+            ))
+        single_layer_global_config = RoFormerConfig(**global_config_kwargs)
         self.global_layers_m = nn.ModuleList([
             RoFormerEncoder(single_layer_global_config)
             for _ in range(self.num_layers)
@@ -522,6 +542,17 @@ if __name__ == '__main__':
     parser.add_argument('--crossattn_num_heads', type=int, default=8)
     parser.add_argument('--gate_init_bias', type=float, default=-10.0)
     parser.add_argument(
+        '--moe_num_experts', type=int, default=1,
+        help='Number of MoE experts per FFN. 1 (default) = dense FFN '
+             '(matches the pretrained CP transformer exactly). >1 enables '
+             'MoE; the init script then replicates the pretrained dense '
+             'FFN into all K experts per layer per backbone (so 2*K copies '
+             'per pretrained layer at init -- all experts identical, router '
+             'noise + training differentiate them).',
+    )
+    parser.add_argument('--moe_topk', type=int, default=2)
+    parser.add_argument('--moe_intermediate_size', type=int, default=None)
+    parser.add_argument(
         '--freeze_backbones', action='store_true', default=False,
         help='Phase 1 finetuning: freeze both pretrained backbones + local '
              'components; train only the cross-attention adapter, gates, '
@@ -547,6 +578,9 @@ if __name__ == '__main__':
         untie_local=args.untie_local,
         crossattn_num_heads=args.crossattn_num_heads,
         gate_init_bias=args.gate_init_bias,
+        moe_num_experts=args.moe_num_experts,
+        moe_topk=args.moe_topk,
+        moe_intermediate_size=args.moe_intermediate_size,
     )
     print(f'Two backbones (untied per modality), size={args.size}, '
           f'hidden={net.hidden_size}, layers={net.num_layers}')
