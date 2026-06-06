@@ -58,25 +58,110 @@ import os
 import re
 from glob import glob
 
+import pretty_midi
 import torch
 
-# Re-use the shared inference plumbing from the m2c_moe inference script:
-# action factories, the unified sampling loop, midi decode, and folder
-# iteration are all model-agnostic (they only call generic methods on
-# `model` like _global_interaction, local_sampling, _encode_frame). The
-# only piece we replace is load_model.
 from cp_transformer_m2c_moe_inference import (
     MODES,
     general_inference,
     make_actions_co,
     make_actions_conditional,
     make_actions_single,
-    decode_m2c_frames,
     _load_prompt_tokens,
     _list_midis,
-    run_folder as _moe_run_folder,
 )
 from cp_transformer_m2c_jointattn import M2CJointAttn
+from preprocess_large_midi_dataset import DURATION_TEMPLATES
+
+
+# ---------------------------------------------------------------------------
+# Multi-program decode (replaces the single-instrument decode_m2c_frames from
+# the m2c_moe inference module).
+#
+# The m2c_moe version hard-codes program=24 for "mel" and program=0 for
+# "chord", losing per-note program information. For LAMD that means the
+# drum stream loses is_drum=True and the non-drum stream loses its
+# instrument variety (bass, piano, lead, strings, etc. all become one
+# Classical Guitar). This version routes each note to a unique instrument
+# keyed by program number, with program=127 -> Instrument(0, is_drum=True).
+# ---------------------------------------------------------------------------
+
+def decode_m2c_frames(mel_frames, chord_frames, save_path, tokenizer,
+                      with_velocity=False, tempo=120.0,
+                      write_mel=True, write_chord=True):
+    midi = pretty_midi.PrettyMIDI(initial_tempo=tempo)
+    time_step_length = 60.0 / tempo / 4
+
+    inst_map = {}
+
+    def get_inst(program):
+        # program 127 = drum (preprocess_large_midi_dataset assigns this for
+        # any is_drum=True instrument). Use a single drum track per file.
+        if program == 127:
+            key = ('drum',)
+            if key not in inst_map:
+                inst_map[key] = pretty_midi.Instrument(
+                    program=0, is_drum=True, name='DRUM',
+                )
+                midi.instruments.append(inst_map[key])
+            return inst_map[key]
+        key = ('inst', program)
+        if key not in inst_map:
+            inst_map[key] = pretty_midi.Instrument(
+                program=program, name=f'PROG{program:03d}',
+            )
+            midi.instruments.append(inst_map[key])
+        return inst_map[key]
+
+    streams = []
+    if write_mel:
+        streams.append(mel_frames)
+    if write_chord:
+        streams.append(chord_frames)
+
+    for frames in streams:
+        if frames is None:
+            continue
+        for t, frame in enumerate(frames):
+            start_time = t * time_step_length
+            content = frame.squeeze(0)
+            for i in range(0, len(content), 2):
+                a_token = int(content[i].item())
+                if a_token == tokenizer.eos_token:
+                    break
+                if a_token == tokenizer.pad_token:
+                    continue
+                if i + 1 >= len(content):
+                    break
+                b_token = int(content[i + 1].item())
+                if b_token == tokenizer.pad_token:
+                    continue
+                if with_velocity:
+                    program = a_token % 128
+                    velocity_bin = a_token // 128
+                    note_velocity = velocity_bin * 8 + 4
+                    pitch_duration = b_token - 16 * 128
+                else:
+                    program = a_token
+                    note_velocity = 100
+                    pitch_duration = b_token - 128
+                pitch = pitch_duration % 128
+                duration = pitch_duration // 128
+                if program < 0 or program >= 128:
+                    continue
+                if pitch < 0 or pitch >= 128:
+                    continue
+                if duration < 0 or duration >= len(DURATION_TEMPLATES):
+                    continue
+                end_time = DURATION_TEMPLATES[duration] * time_step_length + start_time
+                inst = get_inst(program)
+                inst.notes.append(pretty_midi.Note(
+                    velocity=note_velocity, pitch=pitch,
+                    start=start_time, end=end_time,
+                ))
+
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    midi.write(save_path)
 
 
 # ---------------------------------------------------------------------------
