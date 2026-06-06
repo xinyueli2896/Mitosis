@@ -285,7 +285,17 @@ class M2CJointAttnLayer(nn.Module):
 class M2CJointAttn(RoFormerSymbolicTransformer):
     """One-backbone-equivalent two-backbones variant: per-modality Q/K/V/O,
     joint self-attention, shared MoE FFN. Inherits local encoder/decoder,
-    tokenizer, embeddings, preprocess, loss, and sampling from RoFormerSymbolicTransformer."""
+    tokenizer, embeddings, loss, and sampling from RoFormerSymbolicTransformer.
+
+    Overrides preprocess() to PRESERVE the original program in the a-slot
+    token. The parent's preprocess hardcodes a-slot to program 24 (mel) and
+    program 0 (chord) for with_velocity=False, which is fine for POP909
+    (single melody + single chord track) but disastrous for LAMD's
+    multi-instrument drum / non-drum streams: drums get tagged as
+    Classical Guitar and every pitched instrument collapses into Grand
+    Piano. The vocab already covers programs 0..127 (n_normal_tokens =
+    24*128 + 256), so this override only changes which token IDs are
+    emitted, not the embedding size."""
 
     def __init__(self, *args, moe_num_experts=4, moe_topk=2,
                  moe_intermediate_size=None, global_num_layers=None,
@@ -352,6 +362,57 @@ class M2CJointAttn(RoFormerSymbolicTransformer):
         # Re-interleave for downstream local decoder.
         out = torch.stack([m, c], dim=2).reshape(B, 2 * T, H)
         return out, total_aux / max(len(self.global_layers), 1)
+
+    # ------------------------------------------------------------------
+    # Preprocess override (preserve original per-note program in the
+    # a-slot instead of hardcoding 24/0; vocab already supports 0..127).
+    # ------------------------------------------------------------------
+
+    def preprocess(self, x, pitch_shift, tuple_size=4, y=None):
+        B, T, S = x.shape
+        x = x.long().view(B, T, S // tuple_size, tuple_size)
+        x_processed = torch.zeros(
+            B, T, S // tuple_size, 2, dtype=torch.long, device=x.device,
+        )
+        pad_indices = x[:, :, :, 1] == 255
+        eos_indices = x[:, :, :, 0] == 254
+        is_not_drum = x[:, :, :, 0] != 127
+        if self.with_velocity:
+            x_processed[:, :, :, 0] = x[:, :, :, 0] + 128 * (x[:, :, :, 3] // 8)
+            x_processed[:, :, :, 1] = x[:, :, :, 1] + (x[:, :, :, 2] + 16) * 128 + pitch_shift[:, None, None] * is_not_drum
+        else:
+            # Preserve original program (0..127, with 127 == drum).
+            x_processed[:, :, :, 0] = x[:, :, :, 0]
+            x_processed[:, :, :, 1] = x[:, :, :, 1] + (x[:, :, :, 2] + 1) * 128 + pitch_shift[:, None, None] * is_not_drum
+        x_processed[pad_indices] = self.tokenizer.pad_token
+        x_processed[:, :, :, 0][eos_indices] = self.tokenizer.eos_token
+        x_processed[:, :, :, 1][eos_indices] = self.tokenizer.pad_token
+
+        if y is None:
+            return x_processed.view(B, T, (S // tuple_size) * 2)
+
+        By, Ty, Sy = y.shape
+        y = y.long().view(By, Ty, Sy // tuple_size, tuple_size)
+        y_processed = torch.zeros(
+            By, Ty, Sy // tuple_size, 2, dtype=torch.long, device=y.device,
+        )
+        pad_indices_y = y[:, :, :, 1] == 255
+        eos_indices_y = y[:, :, :, 0] == 254
+        is_not_drum_y = y[:, :, :, 0] != 127
+        if self.with_velocity:
+            y_processed[:, :, :, 0] = y[:, :, :, 0] + 128 * (y[:, :, :, 3] // 8)
+            y_processed[:, :, :, 1] = y[:, :, :, 1] + (y[:, :, :, 2] + 16) * 128 + pitch_shift[:, None, None] * is_not_drum_y
+        else:
+            y_processed[:, :, :, 0] = y[:, :, :, 0]
+            y_processed[:, :, :, 1] = y[:, :, :, 1] + (y[:, :, :, 2] + 1) * 128 + pitch_shift[:, None, None] * is_not_drum_y
+        y_processed[pad_indices_y] = self.tokenizer.pad_token
+        y_processed[:, :, :, 0][eos_indices_y] = self.tokenizer.eos_token
+        y_processed[:, :, :, 1][eos_indices_y] = self.tokenizer.pad_token
+
+        return (
+            x_processed.view(B, T, (S // tuple_size) * 2),
+            y_processed.view(By, Ty, (Sy // tuple_size) * 2),
+        )
 
 
 # ---------------------------------------------------------------------------
