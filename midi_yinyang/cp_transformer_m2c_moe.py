@@ -209,8 +209,15 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         moe_intermediate_size: Optional[int] = None,
         global_num_layers: Optional[int] = None,
         global_dropout: float = 0.0,
+        preserve_program: bool = False,
     ):
         super().__init__()
+        # When True, preprocess() keeps the actual per-note program in the
+        # a-slot token instead of hardcoding 24 (mel) / 0 (chord). Needed
+        # for LAMD-style multi-instrument streams; for POP909-style single-
+        # instrument mel + chord the hardcode is harmless. Default False
+        # for backward compat with existing trained ckpts.
+        self.preserve_program = preserve_program
 
         # ------------------------------------------------------------
         # Core sizes
@@ -699,7 +706,10 @@ class RoFormerSymbolicTransformer(L.LightningModule):
             x_processed[:, :, :, 0] = x[:, :, :, 0] + 128 * (x[:, :, :, 3] // 8)  # there are 128 instruments
             x_processed[:, :, :, 1] = x[:, :, :, 1] + (x[:, :, :, 2] + 16) * 128 + pitch_shift[:, None, None] * is_not_drum
         else:
-            x_processed[:, :, :, 0] = 24
+            # POP909 default: hardcode a-slot to 24 (mel) so the model treats
+            # everything as Classical Guitar. LAMD-style multi-instrument
+            # streams want the real program preserved instead.
+            x_processed[:, :, :, 0] = x[:, :, :, 0] if self.preserve_program else 24
             x_processed[:, :, :, 1] = x[:, :, :, 1] + (x[:, :, :, 2] + 1) * 128 + pitch_shift[:, None, None] * is_not_drum
         # x_processed[:, :, :, 0] = 0 # program 不变
         # x_processed[:, :, :, 1] = x[:, :, :, 1] + (x[:, :, :, 2]) * 128 + 2 + pitch_shift[:, None, None] * is_not_drum
@@ -720,7 +730,9 @@ class RoFormerSymbolicTransformer(L.LightningModule):
                 y_processed[:, :, :, 0] = y[:, :, :, 0] + 128 * (y[:, :, :, 3] // 8)  # there are 128 instruments
                 y_processed[:, :, :, 1] = y[:, :, :, 1] + (y[:, :, :, 2] + 16) * 128 + pitch_shift[:, None, None] * is_not_drum_y
             else:
-                y_processed[:, :, :, 0] = 0
+                # POP909 default: hardcode a-slot to 0 (chord). LAMD wants the
+                # real program preserved -- see preserve_program note above.
+                y_processed[:, :, :, 0] = y[:, :, :, 0] if self.preserve_program else 0
                 y_processed[:, :, :, 1] = y[:, :, :, 1] + (y[:, :, :, 2] + 1) * 128 + pitch_shift[:, None, None] * is_not_drum_y
 
             y_processed[pad_indices_y] = self.tokenizer.pad_token
@@ -951,6 +963,12 @@ if __name__ == '__main__':
              "else 6 (mirrors cp_transformer.py's depth schedule). Pass "
              "--global_num_layers 1 to load a legacy single-layer checkpoint.",
     )
+    parser.add_argument(
+        "--preserve_program", action="store_true", default=False,
+        help="Preserve actual per-note program in the a-slot token. Use for "
+             "LAMD-style multi-instrument streams. Default False (POP909-style "
+             "hardcode of program 24 / 0).",
+    )
 
 
     args = parser.parse_args()
@@ -984,6 +1002,7 @@ if __name__ == '__main__':
         moe_topk=args.moe_topk,
         moe_intermediate_size=args.moe_intermediate_size,
         global_num_layers=gnl,
+        preserve_program=args.preserve_program,
     )
     print(f"MoE enabled: {net.global_roformer.config.moe}")
     train_set_loader = DataLoader(FramedDataset(dataset, TRAIN_LENGTH, batch_size, split = 'train'), batch_size=None, num_workers=1, persistent_workers=True)

@@ -248,6 +248,10 @@ if __name__ == '__main__':
                         help='Default: 12 if model_size=large else 6.')
     parser.add_argument('--mel_loss_weight', type=float, default=1.0)
     parser.add_argument('--acc_loss_weight', type=float, default=3.0)
+    parser.add_argument('--preserve_program', action='store_true', default=False,
+                        help='Preserve actual per-note program in the a-slot '
+                             'token. Use for LAMD-style multi-instrument '
+                             'streams. Default False (POP909-style hardcode).')
     args = parser.parse_args()
 
     batch_size = args.batch_size
@@ -275,6 +279,7 @@ if __name__ == '__main__':
         global_num_layers=gnl,
         mel_loss_weight=args.mel_loss_weight,
         acc_loss_weight=args.acc_loss_weight,
+        preserve_program=args.preserve_program,
     )
     print(f'MoE enabled per block: {net.fusion_blocks[0].layer_mel_pass.config.moe}')
     print(f'Global depth: {gnl} fusion blocks '

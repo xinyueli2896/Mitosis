@@ -139,8 +139,14 @@ class M2CTwoBackbonesCrossAttn(L.LightningModule):
         moe_num_experts: int = 1,        # 1 = dense FFN; N>1 = MoE with N experts
         moe_topk: int = 2,
         moe_intermediate_size: Optional[int] = None,
+        preserve_program: bool = False,
     ):
         super().__init__()
+        # Honored by the inherited RoFormerSymbolicTransformer.preprocess
+        # (M2CTwoBackbonesCrossAttn.preprocess delegates to it). False keeps
+        # POP909-style hardcoded a-slot (program 24 / 0); True preserves
+        # the actual program for LAMD-style multi-instrument streams.
+        self.preserve_program = preserve_program
         self.hidden_size = [512, 768, 1024, 1280][size]
         self.num_layers = [6, 12, 24, 32][size]
         self.num_attention_heads = [8, 12, 16, 16][size]
@@ -561,6 +567,10 @@ if __name__ == '__main__':
              'unfreeze everything for joint training.',
     )
     parser.add_argument('--run_tag', type=str, default=None)
+    parser.add_argument('--preserve_program', action='store_true', default=False,
+                        help='Preserve actual per-note program in the a-slot '
+                             'token. Use for LAMD-style multi-instrument '
+                             'streams. Default False (POP909-style hardcode).')
     args = parser.parse_args()
 
     n_gpus = max(torch.cuda.device_count(), 1)
@@ -581,6 +591,7 @@ if __name__ == '__main__':
         moe_num_experts=args.moe_num_experts,
         moe_topk=args.moe_topk,
         moe_intermediate_size=args.moe_intermediate_size,
+        preserve_program=args.preserve_program,
     )
     print(f'Two backbones (untied per modality), size={args.size}, '
           f'hidden={net.hidden_size}, layers={net.num_layers}')

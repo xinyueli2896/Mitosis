@@ -299,7 +299,10 @@ class M2CJointAttn(RoFormerSymbolicTransformer):
 
     def __init__(self, *args, moe_num_experts=4, moe_topk=2,
                  moe_intermediate_size=None, global_num_layers=None,
-                 global_dropout=0.0, **kwargs):
+                 global_dropout=0.0, preserve_program=True, **kwargs):
+        # Default preserve_program=True here: LAMD's multi-instrument streams
+        # are the primary target for this variant. Override to False if you
+        # want the POP909 hardcoded-program behavior.
         super().__init__(
             *args,
             moe_num_experts=moe_num_experts,
@@ -307,6 +310,7 @@ class M2CJointAttn(RoFormerSymbolicTransformer):
             moe_intermediate_size=moe_intermediate_size,
             global_num_layers=global_num_layers,
             global_dropout=global_dropout,
+            preserve_program=preserve_program,
             **kwargs,
         )
         # Drop the inherited single-backbone global stack -- we replace it
@@ -363,57 +367,6 @@ class M2CJointAttn(RoFormerSymbolicTransformer):
         out = torch.stack([m, c], dim=2).reshape(B, 2 * T, H)
         return out, total_aux / max(len(self.global_layers), 1)
 
-    # ------------------------------------------------------------------
-    # Preprocess override (preserve original per-note program in the
-    # a-slot instead of hardcoding 24/0; vocab already supports 0..127).
-    # ------------------------------------------------------------------
-
-    def preprocess(self, x, pitch_shift, tuple_size=4, y=None):
-        B, T, S = x.shape
-        x = x.long().view(B, T, S // tuple_size, tuple_size)
-        x_processed = torch.zeros(
-            B, T, S // tuple_size, 2, dtype=torch.long, device=x.device,
-        )
-        pad_indices = x[:, :, :, 1] == 255
-        eos_indices = x[:, :, :, 0] == 254
-        is_not_drum = x[:, :, :, 0] != 127
-        if self.with_velocity:
-            x_processed[:, :, :, 0] = x[:, :, :, 0] + 128 * (x[:, :, :, 3] // 8)
-            x_processed[:, :, :, 1] = x[:, :, :, 1] + (x[:, :, :, 2] + 16) * 128 + pitch_shift[:, None, None] * is_not_drum
-        else:
-            # Preserve original program (0..127, with 127 == drum).
-            x_processed[:, :, :, 0] = x[:, :, :, 0]
-            x_processed[:, :, :, 1] = x[:, :, :, 1] + (x[:, :, :, 2] + 1) * 128 + pitch_shift[:, None, None] * is_not_drum
-        x_processed[pad_indices] = self.tokenizer.pad_token
-        x_processed[:, :, :, 0][eos_indices] = self.tokenizer.eos_token
-        x_processed[:, :, :, 1][eos_indices] = self.tokenizer.pad_token
-
-        if y is None:
-            return x_processed.view(B, T, (S // tuple_size) * 2)
-
-        By, Ty, Sy = y.shape
-        y = y.long().view(By, Ty, Sy // tuple_size, tuple_size)
-        y_processed = torch.zeros(
-            By, Ty, Sy // tuple_size, 2, dtype=torch.long, device=y.device,
-        )
-        pad_indices_y = y[:, :, :, 1] == 255
-        eos_indices_y = y[:, :, :, 0] == 254
-        is_not_drum_y = y[:, :, :, 0] != 127
-        if self.with_velocity:
-            y_processed[:, :, :, 0] = y[:, :, :, 0] + 128 * (y[:, :, :, 3] // 8)
-            y_processed[:, :, :, 1] = y[:, :, :, 1] + (y[:, :, :, 2] + 16) * 128 + pitch_shift[:, None, None] * is_not_drum_y
-        else:
-            y_processed[:, :, :, 0] = y[:, :, :, 0]
-            y_processed[:, :, :, 1] = y[:, :, :, 1] + (y[:, :, :, 2] + 1) * 128 + pitch_shift[:, None, None] * is_not_drum_y
-        y_processed[pad_indices_y] = self.tokenizer.pad_token
-        y_processed[:, :, :, 0][eos_indices_y] = self.tokenizer.eos_token
-        y_processed[:, :, :, 1][eos_indices_y] = self.tokenizer.pad_token
-
-        return (
-            x_processed.view(B, T, (S // tuple_size) * 2),
-            y_processed.view(By, Ty, (Sy // tuple_size) * 2),
-        )
-
 
 # ---------------------------------------------------------------------------
 # Training entry point
@@ -449,6 +402,15 @@ if __name__ == '__main__':
     parser.add_argument('--mel_loss_weight', type=float, default=1.0)
     parser.add_argument('--acc_loss_weight', type=float, default=3.0)
     parser.add_argument('--run_tag', type=str, default=None)
+    parser.add_argument('--preserve_program', action='store_true', default=True,
+                        help='Preserve actual per-note program in the a-slot '
+                             'token. Default True for M2CJointAttn (LAMD is '
+                             'the primary target). Use --hardcode_program for '
+                             'POP909-style behavior.')
+    parser.add_argument('--hardcode_program', dest='preserve_program',
+                        action='store_false',
+                        help='Hardcode a-slot to program 24 (mel) / 0 (chord). '
+                             'POP909 default of the legacy m2c models.')
     parser.add_argument('--wandb_dir', type=str, default='/tmp/wandb')
     parser.add_argument('--save_top_k', type=int, default=2)
     parser.add_argument('--ckpt_dir', type=str, default=None,
@@ -474,6 +436,7 @@ if __name__ == '__main__':
         global_num_layers=gnl,
         mel_loss_weight=args.mel_loss_weight,
         acc_loss_weight=args.acc_loss_weight,
+        preserve_program=args.preserve_program,
     )
     print(f'Architecture: per-modality Q/K/V/O + joint self-attn + '
           f'shared MoE FFN ({args.moe_num_experts} experts, topk={args.moe_topk})')

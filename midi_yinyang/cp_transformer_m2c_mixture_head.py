@@ -347,6 +347,10 @@ if __name__ == '__main__':
     parser.add_argument('--acc_loss_weight', type=float, default=3.0,
                         help='Reserved; see --mel_loss_weight.')
     parser.add_argument('--run_tag', type=str, default=None)
+    parser.add_argument('--preserve_program', action='store_true', default=False,
+                        help='Preserve actual per-note program in the a-slot '
+                             'token. Use for LAMD-style multi-instrument '
+                             'streams. Default False (POP909-style hardcode).')
     parser.add_argument('--dump_input_samples', type=int, default=0,
                         help='If >0, decode this many training samples back '
                              'to .mid before training starts (and every '
@@ -390,6 +394,7 @@ if __name__ == '__main__':
         mel_loss_weight=args.mel_loss_weight,
         acc_loss_weight=args.acc_loss_weight,
         mixture_K=args.mixture_K,
+        preserve_program=args.preserve_program,
     )
     print(f'Architecture: per-layer fusion (shift-by-2 interleaved) '
           f'+ joint mixture head')
