@@ -82,6 +82,8 @@ class MoERoutingMonitor:
         # MoE FFN. Layer.ffn.* is either SimpleMoEFFN (if use_moe) or a
         # plain Sequential (dense). Only the former has the cached attr.
         scalars = {}
+        drum_rows, nondrum_rows, layer_labels = [], [], []
+        num_experts = None
         for layer_idx, layer in enumerate(pl_module.global_layers):
             ffn = getattr(layer, 'ffn', None)
             probs = getattr(ffn, '_last_routing_probs', None) if ffn is not None else None
@@ -91,6 +93,10 @@ class MoERoutingMonitor:
             drum_probs = probs[:, 0::2, :].mean(dim=(0, 1))          # [E]
             nondrum_probs = probs[:, 1::2, :].mean(dim=(0, 1))       # [E]
             E = drum_probs.size(0)
+            num_experts = E
+            drum_rows.append(drum_probs.float().cpu().numpy())
+            nondrum_rows.append(nondrum_probs.float().cpu().numpy())
+            layer_labels.append(f'L{layer_idx:02d}')
             for e in range(E):
                 scalars[f'routing/L{layer_idx:02d}/drum_e{e}'] = drum_probs[e].item()
                 scalars[f'routing/L{layer_idx:02d}/nondrum_e{e}'] = nondrum_probs[e].item()
@@ -113,6 +119,63 @@ class MoERoutingMonitor:
                         wandb.log(scalars, step=trainer.global_step)
                 except Exception:
                     pass
+
+        # Side-by-side heatmaps: rows = layer, cols = expert, color = prob.
+        # One pane per modality, shared color scale so cells are directly
+        # comparable across drum and non-drum.
+        if drum_rows:
+            self._log_heatmap(
+                trainer, drum_rows, nondrum_rows, layer_labels, num_experts,
+            )
+
+    def _log_heatmap(self, trainer, drum_rows, nondrum_rows, layer_labels,
+                     num_experts):
+        try:
+            import numpy as np
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            import wandb
+        except ImportError:
+            return  # silent skip if either lib is unavailable
+        if wandb.run is None:
+            return
+
+        drum_mat = np.stack(drum_rows, axis=0)          # [gnl, E]
+        nondrum_mat = np.stack(nondrum_rows, axis=0)
+
+        fig, axes = plt.subplots(
+            1, 2, figsize=(2 + num_experts, max(4, len(layer_labels) * 0.4)),
+            sharey=True,
+        )
+        vmin, vmax = 0.0, 1.0
+        for ax, mat, title in (
+            (axes[0], drum_mat, 'drum (mel side)'),
+            (axes[1], nondrum_mat, 'nondrum (chord side)'),
+        ):
+            im = ax.imshow(mat, aspect='auto', vmin=vmin, vmax=vmax, cmap='viridis')
+            ax.set_title(title)
+            ax.set_xlabel('expert')
+            ax.set_xticks(range(num_experts))
+            ax.set_xticklabels([f'e{e}' for e in range(num_experts)])
+            ax.set_yticks(range(len(layer_labels)))
+            ax.set_yticklabels(layer_labels)
+            for i in range(mat.shape[0]):
+                for j in range(mat.shape[1]):
+                    ax.text(j, i, f'{mat[i, j]:.2f}', ha='center', va='center',
+                            color='white' if mat[i, j] < 0.5 else 'black',
+                            fontsize=7)
+        axes[0].set_ylabel('global layer')
+        fig.colorbar(im, ax=axes, label='routing prob', shrink=0.7)
+        fig.suptitle(
+            f'MoE routing  (step {trainer.global_step})',
+            fontsize=10,
+        )
+        wandb.log(
+            {'routing/heatmap': wandb.Image(fig)},
+            step=trainer.global_step,
+        )
+        plt.close(fig)
 
     def as_callback(self):
         return self._cb
