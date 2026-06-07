@@ -648,7 +648,7 @@ class RoFormerSymbolicTransformer(L.LightningModule):
                 print('Sampling', step, '/', max_seq_len)
 
             # Align with training shift: predict frame t from context up to t-2.
-            sos = self.global_sos.view(1, 1, -1).repeat(batch_size, 2, 1)
+            sos = self._assemble_sos(batch_size, h.device, h.dtype)
             h_pad = torch.cat([h, torch.zeros_like(h[:, :2])], dim=1)
             h_in = torch.cat([sos, h_pad[:, :-2]], dim=1)
             # h_out = self._global_interaction(h_in)
@@ -716,7 +716,7 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         h, emb = self.local_encode(x, token_type_ids)
         h = h.view(batch_size, seq_len, -1)
 
-        sos = self.global_sos.view(1, 1, -1).repeat(batch_size, 2, 1)
+        sos = self._assemble_sos(batch_size, h.device, h.dtype)
         h = torch.cat([sos, h[:, :-2]], dim=1)
 
         h_global, aux_loss = self._global_interaction(h)
@@ -724,6 +724,14 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         logits = self.local_decode(h_global, emb)
 
         return logits, aux_loss
+
+    def _assemble_sos(self, batch_size, device, dtype):
+        """Return SOS pair tensor of shape [B, 2, H] for the shift-by-2
+        prepend. Default impl uses the single shared self.global_sos.
+        Subclasses can override to use per-modality SOS (e.g. M2CJointAttn
+        adds learned per-modality residual offsets)."""
+        sos = self.global_sos.view(1, 1, -1).expand(batch_size, 2, -1)
+        return sos.to(device=device, dtype=dtype)
 
 
     def preprocess(

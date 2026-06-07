@@ -343,6 +343,23 @@ class M2CJointAttn(RoFormerSymbolicTransformer):
         # projections alone -- a modality type embedding would shift the input
         # distribution away from one-backbone equivalence at step 0.
 
+        # Learned per-modality residual offsets on the shared SOS. At init
+        # both are zero, so the SOS pair is (global_sos, global_sos) -- same
+        # as the inherited behavior, preserving one-backbone warm-start
+        # equivalence. During training they can specialize.
+        self.sos_offset_m = nn.Parameter(torch.zeros(self.hidden_size))
+        self.sos_offset_c = nn.Parameter(torch.zeros(self.hidden_size))
+
+    # ------------------------------------------------------------------
+    # Per-modality SOS (overrides the base class's shared SOS)
+    # ------------------------------------------------------------------
+
+    def _assemble_sos(self, batch_size, device, dtype):
+        sos_m = (self.global_sos + self.sos_offset_m).view(1, 1, -1)
+        sos_c = (self.global_sos + self.sos_offset_c).view(1, 1, -1)
+        sos = torch.cat([sos_m, sos_c], dim=1).expand(batch_size, -1, -1)
+        return sos.to(device=device, dtype=dtype)
+
     # ------------------------------------------------------------------
     # Override: global interaction is our custom joint-attn stack
     # ------------------------------------------------------------------
