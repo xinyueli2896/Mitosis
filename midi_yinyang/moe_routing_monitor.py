@@ -61,6 +61,10 @@ class MoERoutingMonitor:
         self._cb = _Cb()
 
     def _log_routing(self, trainer, pl_module):
+        # Multi-GPU safety: only rank 0 runs the forward and logs. Otherwise
+        # every rank would duplicate the wandb log and likely race.
+        if trainer.global_rank != 0:
+            return
         x_mel, x_chord, pitch_shift = self._heldout
         device = next(pl_module.parameters()).device
         x_mel = x_mel.to(device)

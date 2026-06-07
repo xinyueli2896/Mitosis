@@ -211,8 +211,22 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         global_dropout: float = 0.0,
         preserve_program: bool = False,
         min_acc_tokens_before_eos: int = 0,
+        max_lr: float = 1e-4,
+        lr_total_steps: Optional[int] = None,
+        lr_pct_start: float = 0.005,
+        aux_loss_weight: float = 0.01,
     ):
         super().__init__()
+        # Optimizer / LR / aux-loss knobs (consumed in configure_optimizers
+        # and loss). Kept as plain attributes so subclasses (M2CJointAttn,
+        # M2CMixtureHead, ...) automatically pick them up via inheritance.
+        self.max_lr = max_lr
+        # If None, configure_optimizers falls back to MAX_STEPS at the
+        # module level so legacy behavior is preserved when this kwarg
+        # isn't passed.
+        self.lr_total_steps = lr_total_steps
+        self.lr_pct_start = lr_pct_start
+        self.aux_loss_weight = aux_loss_weight
         # When True, preprocess() keeps the actual per-note program in the
         # a-slot token instead of hardcoding 24 (mel) / 0 (chord). Needed
         # for LAMD-style multi-instrument streams; for POP909-style single-
@@ -798,7 +812,7 @@ class RoFormerSymbolicTransformer(L.LightningModule):
 
         if isinstance(aux_loss, torch.Tensor):
             aux_loss = aux_loss.mean()
-            total_loss = ce_loss + 0.01 * aux_loss   # 0.01 typical MoE weight
+            total_loss = ce_loss + self.aux_loss_weight * aux_loss
         else:
             aux_loss = ce_loss.new_zeros(())
             total_loss = ce_loss
@@ -825,16 +839,25 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        max_lr = 1e-4
-        optimizer = torch.optim.AdamW(self.parameters(), lr=max_lr)
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=max_lr, total_steps=MAX_STEPS, pct_start=0.005)
+        max_lr = self.max_lr
+        total_steps = self.lr_total_steps if self.lr_total_steps is not None else MAX_STEPS
+        pct_start = self.lr_pct_start
+        # Filter for trainable params so freezing certain modules (e.g.
+        # backbones during phase-1 training of the cross-attn variant)
+        # works without crashing the optimizer.
+        params = [p for p in self.parameters() if p.requires_grad]
+        optimizer = torch.optim.AdamW(params, lr=max_lr)
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer, max_lr=max_lr,
+            total_steps=total_steps, pct_start=pct_start,
+        )
         return {
-        "optimizer": optimizer,
-        "lr_scheduler": {
-            "scheduler": scheduler,
-            "interval": "step"
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+            },
         }
-    }
 
 class FramedDataset(IterableDataset):
 

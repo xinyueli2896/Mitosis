@@ -422,6 +422,24 @@ if __name__ == '__main__':
     parser.add_argument('--save_top_k', type=int, default=2)
     parser.add_argument('--ckpt_dir', type=str, default=None,
                         help="Where to write checkpoints. Default 'ckpt/{model_name}'.")
+    parser.add_argument('--max_lr', type=float, default=1e-4,
+                        help='Peak LR for the OneCycleLR schedule. For '
+                             'warm-started training (the common case), '
+                             '5e-5 is often safer than the default 1e-4.')
+    parser.add_argument('--lr_total_steps', type=int, default=None,
+                        help='Total step budget the OneCycleLR schedule '
+                             'plans for. Default: MAX_STEPS (1M). Set to '
+                             'your actual training budget so the LR '
+                             'finishes cosine-decaying right around when '
+                             'you stop.')
+    parser.add_argument('--gradient_clip_val', type=float, default=1.0,
+                        help='Per-step gradient norm clip. 1.0 is the '
+                             'MoE safety default. Set to 0 to disable.')
+    parser.add_argument('--aux_loss_weight', type=float, default=0.01,
+                        help='Weight on MoE load-balancing aux loss. '
+                             'Lower (e.g. 0) to allow more expert '
+                             'specialization; higher to force more '
+                             'uniformity.')
     parser.add_argument('--moe_monitor_every_n_steps', type=int, default=0,
                         help='If > 0, every N training steps run a forward '
                              'on a cached held-out drum/non-drum batch and '
@@ -451,6 +469,9 @@ if __name__ == '__main__':
         mel_loss_weight=args.mel_loss_weight,
         acc_loss_weight=args.acc_loss_weight,
         preserve_program=args.preserve_program,
+        max_lr=args.max_lr,
+        lr_total_steps=args.lr_total_steps,
+        aux_loss_weight=args.aux_loss_weight,
     )
     print(f'Architecture: per-modality Q/K/V/O + joint self-attn + '
           f'shared MoE FFN ({args.moe_num_experts} experts, topk={args.moe_topk})')
@@ -499,6 +520,7 @@ if __name__ == '__main__':
         val_check_interval=500,
         limit_val_batches=25,
         check_val_every_n_epoch=None,
+        gradient_clip_val=(args.gradient_clip_val if args.gradient_clip_val > 0 else None),
         logger=(
             WandbLogger(
                 name=model_name, project='MusicMOE',
