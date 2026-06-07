@@ -440,6 +440,13 @@ if __name__ == '__main__':
                              'Lower (e.g. 0) to allow more expert '
                              'specialization; higher to force more '
                              'uniformity.')
+    parser.add_argument('--silence_augment_prob', type=float, default=0.0,
+                        help='Per-sample probability of silencing each '
+                             'modality during training. Trains the model '
+                             'to handle mel_only / chord_only inference '
+                             'in-distribution. Try 0.1 (10%% drum-silenced, '
+                             '10%% non-drum-silenced, 80%% normal). '
+                             'Default 0 = co-only training (legacy).')
     parser.add_argument('--moe_monitor_every_n_steps', type=int, default=0,
                         help='If > 0, every N training steps run a forward '
                              'on a cached held-out drum/non-drum batch and '
@@ -472,6 +479,7 @@ if __name__ == '__main__':
         max_lr=args.max_lr,
         lr_total_steps=args.lr_total_steps,
         aux_loss_weight=args.aux_loss_weight,
+        silence_augment_prob=args.silence_augment_prob,
     )
     print(f'Architecture: per-modality Q/K/V/O + joint self-attn + '
           f'shared MoE FFN ({args.moe_num_experts} experts, topk={args.moe_topk})')

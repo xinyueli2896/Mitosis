@@ -215,6 +215,7 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         lr_total_steps: Optional[int] = None,
         lr_pct_start: float = 0.005,
         aux_loss_weight: float = 0.01,
+        silence_augment_prob: float = 0.0,
     ):
         super().__init__()
         # Optimizer / LR / aux-loss knobs (consumed in configure_optimizers
@@ -227,6 +228,13 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         self.lr_total_steps = lr_total_steps
         self.lr_pct_start = lr_pct_start
         self.aux_loss_weight = aux_loss_weight
+        # Per-sample probability of silencing each modality. With prob p the
+        # mel/drum stream is replaced by all-silence tokens; with prob p the
+        # chord/non-drum stream is replaced. With prob 1-2p neither is
+        # silenced (the usual co-generation case). Trains the model to
+        # handle the {mel_only, chord_only} inference modes in-distribution.
+        # 0 disables (legacy behavior).
+        self.silence_augment_prob = silence_augment_prob
         # When True, preprocess() keeps the actual per-note program in the
         # a-slot token instead of hardcoding 24 (mel) / 0 (chord). Needed
         # for LAMD-style multi-instrument streams; for POP909-style single-
@@ -778,6 +786,28 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         x_mel, x_acc = self.preprocess(x_mel, pitch_shift, y=x_acc)
 
         batch_size, seq_len, subseq_len = x_mel.shape
+
+        # Single-stream-silence augmentation. Per sample, with prob p silence
+        # the mel/drum stream; with prob p silence the chord/non-drum stream;
+        # else keep both. Silenced means: a-slot=eos, b-slot=pad, for every
+        # timestep. Trains the model on the {mel_only, chord_only} inference
+        # patterns in-distribution.
+        if self.training and self.silence_augment_prob > 0:
+            p = self.silence_augment_prob
+            rand = torch.rand(batch_size, device=x_mel.device)
+            silence_mel_mask = (rand < p)
+            silence_acc_mask = (rand >= p) & (rand < 2 * p)
+            silence_frame = torch.full(
+                (1, 1, subseq_len), self.tokenizer.pad_token,
+                dtype=x_mel.dtype, device=x_mel.device,
+            )
+            silence_frame[..., 0] = self.tokenizer.eos_token
+            x_mel = torch.where(
+                silence_mel_mask[:, None, None], silence_frame, x_mel,
+            )
+            x_acc = torch.where(
+                silence_acc_mask[:, None, None], silence_frame, x_acc,
+            )
 
         stacked = torch.stack([x_mel, x_acc], dim=2)
         x = stacked.view(batch_size, seq_len * 2, subseq_len)
