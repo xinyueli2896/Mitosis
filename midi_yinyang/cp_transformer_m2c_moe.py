@@ -210,6 +210,7 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         global_num_layers: Optional[int] = None,
         global_dropout: float = 0.0,
         preserve_program: bool = False,
+        min_acc_tokens_before_eos: int = 0,
     ):
         super().__init__()
         # When True, preprocess() keeps the actual per-note program in the
@@ -331,7 +332,14 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         self._last_dump_step = -1
 
         # Prevent chord sampler from ending too early
-        self.min_acc_tokens_before_eos = 64
+        # Prevents the chord/non-drum sampler from emitting EOS in the first
+        # N tokens of a frame. Default 0 = no constraint. Used to be hardcoded
+        # to 64, which was a silent no-op at cp16 (subseq_len <= 64 disables
+        # it) and could surprise you at cp32+ by forcing overlong frames.
+        # Pass a positive int via the model ctor if you want the legacy
+        # behavior; otherwise the model is free to emit EOS as soon as it
+        # learns to.
+        self.min_acc_tokens_before_eos = min_acc_tokens_before_eos
     def _timestep_causal_mask_interleaved(self, L, device, dtype=torch.float32):
         """
         L = 2T interleaved tokens: [m0,c0,m1,c1,...]
