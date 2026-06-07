@@ -167,6 +167,13 @@ def main():
     p.add_argument('--moe-topk', type=int, default=2)
     p.add_argument('--moe-intermediate-size', type=int, default=None)
     p.add_argument('--global-num-layers', type=int, default=None)
+    p.add_argument('--preserve-program', dest='preserve_program',
+                   action='store_true', default=True,
+                   help='Preserve per-note program at inference (default '
+                        'True for M2CJointAttn; must match training).')
+    p.add_argument('--hardcode-program', dest='preserve_program',
+                   action='store_false',
+                   help='Squash program to 24 (mel) / 0 (chord), POP909-style.')
     args = p.parse_args()
 
     mel_files = _list_midis(args.mel_folder)
@@ -187,7 +194,9 @@ def main():
         moe_topk=args.moe_topk,
         moe_intermediate_size=args.moe_intermediate_size,
         global_num_layers=args.global_num_layers,
+        preserve_program=args.preserve_program,
     )
+    print(f'[main] preserve_program={args.preserve_program}')
     model.cuda()
     model.eval()
 

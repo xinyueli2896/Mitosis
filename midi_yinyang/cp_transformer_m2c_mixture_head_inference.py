@@ -157,7 +157,11 @@ def sample_block_given_k(model, h_pred, k_per_batch, modality, temperature,
 
         if is_program_step:
             if not model.with_velocity:
-                if token_type_id == 0:
+                if getattr(model, 'preserve_program', False):
+                    # Full 0..127 program range when the model was trained
+                    # with preserve_program=True (LAMD-style).
+                    valid[:, 0:128] = True
+                elif token_type_id == 0:
                     valid[:, 24] = True
                 elif token_type_id == 1:
                     valid[:, 0] = True

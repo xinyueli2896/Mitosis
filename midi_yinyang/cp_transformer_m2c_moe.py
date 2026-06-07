@@ -433,7 +433,15 @@ class RoFormerSymbolicTransformer(L.LightningModule):
 
             if is_program_step:
                 if not self.with_velocity:
-                    if token_type_id == 0:      # melody
+                    if getattr(self, 'preserve_program', False):
+                        # All 128 programs are valid a-slot tokens (the
+                        # tokenizer's a-slot range is 0..127, padded out to
+                        # 256 by n_normal_tokens but only 0..127 are real
+                        # MIDI programs). Drum side typically samples 127;
+                        # non-drum side samples 0..126. Constraining
+                        # further would re-introduce the squash.
+                        valid[:, 0:128] = True
+                    elif token_type_id == 0:      # melody
                         valid[:, 24] = True
                     elif token_type_id == 1:    # chord
                         valid[:, 0] = True

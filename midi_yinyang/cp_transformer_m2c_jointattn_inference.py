@@ -196,8 +196,15 @@ def _infer_global_num_layers(ckpt_path, ck, model_size):
 
 def load_model(ckpt_path, model_size='large', with_velocity=False,
                moe_num_experts=4, moe_topk=2, moe_intermediate_size=None,
-               global_num_layers=None):
-    """Build M2CJointAttn with the right depth/experts and load weights."""
+               global_num_layers=None, preserve_program=True):
+    """Build M2CJointAttn with the right depth/experts and load weights.
+
+    preserve_program defaults to True (the M2CJointAttn primary use case).
+    This is what enables both preprocess() to keep the actual a-slot program
+    in the input tokens AND local_sampling() to permit the full 0..127
+    program range in generated tokens. Pass False to fall back to the
+    POP909 hardcoded behavior.
+    """
     ck = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     if global_num_layers is None:
         global_num_layers, source = _infer_global_num_layers(ckpt_path, ck, model_size)
@@ -213,6 +220,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         moe_topk=moe_topk,
         moe_intermediate_size=moe_intermediate_size,
         global_num_layers=global_num_layers,
+        preserve_program=preserve_program,
     )
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)
@@ -393,6 +401,16 @@ def main():
                         'auto-detect from checkpoint hyperparameters / '
                         'filename _gnlN_ tag / state_dict layer count / '
                         'size-based fallback (6 or 12).')
+    p.add_argument('--preserve-program', dest='preserve_program',
+                   action='store_true', default=True,
+                   help='Preserve per-note program at inference. Default '
+                        'True for M2CJointAttn -- must match how the ckpt '
+                        'was trained.')
+    p.add_argument('--hardcode-program', dest='preserve_program',
+                   action='store_false',
+                   help='Squash program to 24 (mel) / 0 (chord) like the '
+                        'legacy POP909 path. Only use if the ckpt was '
+                        'trained without --preserve_program.')
     args = p.parse_args()
 
     if args.mel_folder or args.chord_folder:
@@ -407,7 +425,9 @@ def main():
         moe_topk=args.moe_topk,
         moe_intermediate_size=args.moe_intermediate_size,
         global_num_layers=args.global_num_layers,
+        preserve_program=args.preserve_program,
     )
+    print(f'[main] preserve_program={args.preserve_program}')
     model.save_name = os.path.basename(args.ckpt)
     model.cuda()
     model.eval()
