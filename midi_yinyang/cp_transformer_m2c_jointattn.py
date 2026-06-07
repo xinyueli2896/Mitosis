@@ -125,12 +125,19 @@ class SimpleMoEFFN(nn.Module):
         )
 
     def forward(self, x):
-        """x: [B, L, H]. Returns (out, aux_loss)."""
+        """x: [B, L, H]. Returns (out, aux_loss).
+
+        Caches the most recent routing probabilities at self._last_routing_probs
+        with shape [B, L, num_experts] so a diagnostic callback can read them
+        (split by interleaved position parity to compare drum vs non-drum).
+        Detached to avoid graph buildup; replaced every forward."""
         B, L, H = x.shape
         x_flat = x.reshape(-1, H)                                   # [N, H]
         N = x_flat.size(0)
         logits = self.gate(x_flat)                                  # [N, E]
         probs = F.softmax(logits, dim=-1)
+        # Cache for diagnostics. Reshape back to [B, L, E].
+        self._last_routing_probs = probs.detach().view(B, L, self.num_experts)
         top_vals, top_idx = probs.topk(self.topk, dim=-1)           # [N, k]
         top_vals = top_vals / (top_vals.sum(dim=-1, keepdim=True) + 1e-9)
 
@@ -415,6 +422,13 @@ if __name__ == '__main__':
     parser.add_argument('--save_top_k', type=int, default=2)
     parser.add_argument('--ckpt_dir', type=str, default=None,
                         help="Where to write checkpoints. Default 'ckpt/{model_name}'.")
+    parser.add_argument('--moe_monitor_every_n_steps', type=int, default=0,
+                        help='If > 0, every N training steps run a forward '
+                             'on a cached held-out drum/non-drum batch and '
+                             'log per-layer per-modality routing probabilities '
+                             'to wandb. Diagnoses whether MoE experts are '
+                             'specializing per modality (drum vs non-drum).')
+    parser.add_argument('--moe_monitor_n_samples', type=int, default=4)
     args = parser.parse_args()
 
     n_gpus = max(torch.cuda.device_count(), 1)
@@ -466,12 +480,22 @@ if __name__ == '__main__':
     else:
         strategy = 'auto'
 
+    extra_callbacks = []
+    if args.moe_monitor_every_n_steps > 0:
+        from moe_routing_monitor import MoERoutingMonitor
+        extra_callbacks.append(
+            MoERoutingMonitor(
+                every_n_steps=args.moe_monitor_every_n_steps,
+                n_samples=args.moe_monitor_n_samples,
+            ).as_callback()
+        )
+
     trainer = L.Trainer(
         devices=n_gpus,
         precision='bf16-mixed' if torch.cuda.is_available() else 32,
         max_steps=MAX_STEPS,
         accelerator='gpu' if torch.cuda.is_available() else 'cpu',
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback] + extra_callbacks,
         val_check_interval=500,
         limit_val_batches=25,
         check_val_every_n_epoch=None,
