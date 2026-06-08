@@ -67,56 +67,83 @@ def check_train_data_rhythm(data_path):
     if not os.path.exists(data_path):
         print(f'  [skip] file not found')
         return
-    data = torch.load(data_path, map_location='cpu', weights_only=False)
-    print(f'  shape: {tuple(data.shape)}')
-    # Assume max_polyphony*4 cols; first 4 = first note's quad.
-    max_polyphony = data.shape[1] // 4
-    # Sample up to 100k frames for the histogram.
-    n_samples = min(100_000, data.shape[0])
-    rows = data[:n_samples].view(n_samples, max_polyphony, 4)
-
-    has_note = (rows[:, :, 1] != 255).any(dim=-1)             # [n_samples] bool
-    pos_in_bar = torch.arange(n_samples) % 16
-
-    pos_hist = collections.Counter()
-    total = 0
-    for p in range(16):
-        mask = (pos_in_bar == p) & has_note
-        c = int(mask.sum().item())
-        pos_hist[p] = c
-        total += c
-    if total == 0:
-        print('  [warn] no notes in sampled frames; is this the right .pt?')
+    # We need the per-song length tensor to compute position-in-bar relative
+    # to each song's START. Without it, songs whose lengths aren't multiples
+    # of 16 shift their bar-alignment in the concatenated tensor, and the
+    # histogram blurs to uniform across many songs regardless of per-song
+    # rhythmicity. (The earlier version of this script had that bug.)
+    length_path = data_path[:-3] + '.length.pt'
+    if not os.path.exists(length_path):
+        print(f'  [skip] length file {length_path} not found; cannot align to bars.')
         return
-    print(f'  drum-content frames sampled: {total} / {n_samples}')
-    print(f'  drum density by position-in-bar (4/4, 16 subbeats):')
+    data = torch.load(data_path, map_location='cpu', weights_only=False)
+    lengths = torch.load(length_path, map_location='cpu', weights_only=False)
+    print(f'  data shape: {tuple(data.shape)}')
+    print(f'  num songs:  {len(lengths)}')
+
+    max_polyphony = data.shape[1] // 4
+
+    offsets = torch.zeros(len(lengths) + 1, dtype=torch.long)
+    offsets[1:] = torch.cumsum(lengths.to(torch.long), dim=0)
+
+    rng = torch.Generator().manual_seed(0)
+    sample_songs = torch.randperm(len(lengths), generator=rng)[:200].tolist()
+
+    pos_hits = collections.Counter()
+    notes_total = 0
+    sampled_song_frames = 0
+    for song_idx in sample_songs:
+        start = int(offsets[song_idx])
+        end = int(offsets[song_idx + 1])
+        if end <= start:
+            continue
+        rows = data[start:end].view(end - start, max_polyphony, 4)
+        # Number of NOTES at each timestep (slot's pitch is not the pad
+        # sentinel 255 => note is real).
+        notes_per_frame = (rows[:, :, 1] != 255).sum(dim=-1)   # [T] int
+        pos_in_bar = torch.arange(end - start) % 16
+        for p in range(16):
+            mask = (pos_in_bar == p)
+            c = int(notes_per_frame[mask].sum().item())
+            pos_hits[p] += c
+            notes_total += c
+        sampled_song_frames += (end - start)
+
+    if notes_total == 0:
+        print('  [warn] no notes in sampled songs')
+        return
+    print(f'  drum hits across {len(sample_songs)} sampled songs: {notes_total}')
+
+    print(f'\n  drum hit density by position-in-bar (4/4, 16 subbeats):')
     print(f'           beat:  1                   2                   3                   4')
     print(f'        subbeat:  0    1    2    3    4    5    6    7    8    9   10   11   12   13   14   15')
     bars = ''
     for p in range(16):
-        pct = 100 * pos_hist[p] / total
+        pct = 100 * pos_hits[p] / notes_total
         bars += f'  {pct:4.1f}'
     print(f'        density:{bars}')
 
-    # Rhythmic vs diffuse heuristic.
-    downbeats = [pos_hist[0], pos_hist[4], pos_hist[8], pos_hist[12]]
-    offbeats  = [pos_hist[2], pos_hist[6], pos_hist[10], pos_hist[14]]
-    odd_subbeats = [pos_hist[i] for i in [1, 3, 5, 7, 9, 11, 13, 15]]
+    downbeats = [pos_hits[0], pos_hits[4], pos_hits[8], pos_hits[12]]
+    offbeats  = [pos_hits[2], pos_hits[6], pos_hits[10], pos_hits[14]]
+    odd_subbeats = [pos_hits[i] for i in [1, 3, 5, 7, 9, 11, 13, 15]]
     avg_db = sum(downbeats) / 4
     avg_ob = sum(offbeats) / 4
     avg_odd = sum(odd_subbeats) / 8
-    print(f'\n  avg density on downbeats (0,4,8,12):       {100*avg_db/total:.2f}%')
-    print(f'  avg density on backbeats (2,6,10,14):      {100*avg_ob/total:.2f}%')
-    print(f'  avg density on odd subbeats:               {100*avg_odd/total:.2f}%')
+    print(f'\n  avg hit-density on downbeats (0,4,8,12):    {100*avg_db/notes_total:.2f}%')
+    print(f'  avg hit-density on backbeats (2,6,10,14):   {100*avg_ob/notes_total:.2f}%')
+    print(f'  avg hit-density on odd subbeats:            {100*avg_odd/notes_total:.2f}%')
+
+    notes_per_bar = notes_total / max(sampled_song_frames / 16, 1)
+    print(f'\n  avg drum hits per bar (train data):         {notes_per_bar:.2f}')
+    print(f'  (compare with generated MIDI hits-per-bar in section [3])')
+
     if avg_db > 1.5 * avg_odd:
-        print(f'  [verdict] Data is RHYTHMIC. Downbeats are emphasized. '
-              f'If your generated output is arrhythmic, the model is the issue, not the data.')
+        print(f'\n  [verdict] Data is RHYTHMIC. Downbeats are emphasized.')
     elif avg_db > 1.1 * avg_odd:
-        print(f'  [verdict] Data is MILDLY rhythmic. Some pattern present but quantization is loose.')
+        print(f'\n  [verdict] Data is MILDLY rhythmic. Some pattern present.')
     else:
-        print(f'  [verdict] Data is DIFFUSE / ~uniform across subbeats. '
-              f'LAMD has lots of non-quantized hits; model can\'t produce '
-              f'something more rhythmic than what it was trained on.')
+        print(f'\n  [verdict] Data is DIFFUSE / ~uniform across subbeats. '
+              f"Model can't produce something more rhythmic than the data.")
 
 
 def check_generated_midi(midi_path):
@@ -139,24 +166,41 @@ def check_generated_midi(midi_path):
     for inst in midi.instruments:
         if not inst.is_drum:
             continue
-        pitches = [n.pitch for n in inst.notes[:30]]
+        all_pitches = [n.pitch for n in inst.notes]
+        pitches = all_pitches[:30]
         starts = [round(n.start, 3) for n in inst.notes[:30]]
         durations = [round(n.end - n.start, 3) for n in inst.notes[:30]]
         print(f'  drum first 30 pitches:    {pitches}')
         print(f'  drum first 30 starts:     {starts}')
         print(f'  drum first 30 durations:  {durations}')
 
-        # On-grid check (at 120 BPM, subbeat = 0.125 s).
         on_grid = sum(1 for s in starts if abs(round(s / 0.125) - s / 0.125) < 0.01)
         print(f'\n  drum on-grid (sub-beat at 120 BPM): {on_grid}/{len(starts)}')
 
-        # Kit-pitch check.
-        kit_pitches = sum(1 for p in pitches if 35 <= p <= 51)
-        print(f'  drum in standard kit range [35,51]: {kit_pitches}/{len(pitches)}')
+        # Drum kit range covers GM percussion roughly 35..81 (extended kit
+        # includes tambourine=54, claves=75, etc.). Tightening to 35..51 was
+        # too strict for LAMD's broader kit.
+        kit_pitches = sum(1 for p in pitches if 35 <= p <= 81)
+        print(f'  drum in GM kit range [35,81]:       {kit_pitches}/{len(pitches)}')
 
-        # Pitch diversity (rhythmic drums = small set, melodic = large set).
         unique_pitches = len(set(pitches))
         print(f'  unique drum pitches in first 30 notes: {unique_pitches}')
+
+        # Density: hits per bar over the whole song. Compare with train-data
+        # average from section [2].
+        total_bars = midi.get_end_time() / 2.0   # 2 seconds per bar at 120 BPM
+        hits_per_bar = len(all_pitches) / max(total_bars, 1)
+        print(f'  drum hits per bar (generated):      {hits_per_bar:.2f}')
+        unique_all = len(set(all_pitches))
+        print(f'  unique drum pitches (whole song):   {unique_all}')
+
+        if hits_per_bar > 40:
+            print(f'\n  [verdict] Drum is VERY DENSE ({hits_per_bar:.0f}+ hits/bar). '
+                  f'Real drum tracks are 8-20 hits/bar. Likely undertrained EOS '
+                  f'prediction -- model fills every slot up to max_polyphony.')
+        elif hits_per_bar > 25:
+            print(f'\n  [verdict] Drum is BUSY ({hits_per_bar:.0f} hits/bar). '
+                  f'Could be intentional (latin/breakbeat) or undertraining.')
 
         if on_grid < len(starts) * 0.7:
             print(f'  [verdict] Drum hits are OFF GRID. Either model is undertrained '
