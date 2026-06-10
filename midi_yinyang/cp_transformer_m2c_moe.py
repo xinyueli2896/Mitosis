@@ -216,6 +216,7 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         lr_pct_start: float = 0.005,
         aux_loss_weight: float = 0.01,
         silence_augment_prob: float = 0.0,
+        eos_loss_weight: float = 1.0,
     ):
         super().__init__()
         # Optimizer / LR / aux-loss knobs (consumed in configure_optimizers
@@ -228,6 +229,12 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         self.lr_total_steps = lr_total_steps
         self.lr_pct_start = lr_pct_start
         self.aux_loss_weight = aux_loss_weight
+        # EOS up-weighting: 1.0 = legacy uniform behavior; >1 focuses
+        # gradient on "when to emit EOS" within a timestep's note slots,
+        # which is typically the bottleneck for sample polyphony on
+        # CP-tokenized music. Try 3.0 if your generated samples have too
+        # many notes per timestep (model fills up to max_polyphony).
+        self.eos_loss_weight = eos_loss_weight
         # Per-sample probability of silencing each modality. With prob p the
         # mel/drum stream is replaced by all-silence tokens; with prob p the
         # chord/non-drum stream is replaced. With prob 1-2p neither is
@@ -843,10 +850,33 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         ).view(batch_size, seq_len * 2, subseq_len)
 
         non_pad_mask = (targets != self.tokenizer.pad_token).float()
-        weighted_loss = per_token_loss * weights * non_pad_mask
+        is_eos_mask = (targets == self.tokenizer.eos_token).float() * non_pad_mask
+        is_content_mask = non_pad_mask * (1.0 - is_eos_mask)  # real notes only
 
-        normalizer = (weights * non_pad_mask).sum().clamp_min(1.0)
+        # Per-token weight: content tokens at 1.0, EOS at self.eos_loss_weight.
+        # eos_loss_weight=1.0 (default) reproduces the legacy behavior. Set
+        # >1 to focus gradient on EOS prediction (when to stop emitting notes
+        # within a frame), which is the model's typical weak point on CP-
+        # tokenized data with sparse polyphony.
+        token_type_weight = 1.0 + (self.eos_loss_weight - 1.0) * is_eos_mask
+        weighted_loss = per_token_loss * weights * token_type_weight * non_pad_mask
+        normalizer = (weights * token_type_weight * non_pad_mask).sum().clamp_min(1.0)
         ce_loss = weighted_loss.sum() / normalizer
+
+        # Diagnostic breakdown: average loss on content tokens vs EOS tokens.
+        # The 'content' loss is what actually matters for sample quality;
+        # the overall ce_loss is dragged down by trivial EOS/pad predictions
+        # and badly underestimates how good the model really is.
+        content_n = is_content_mask.sum().clamp_min(1.0)
+        eos_n = is_eos_mask.sum().clamp_min(1.0)
+        ce_loss_content = (per_token_loss * is_content_mask).sum() / content_n
+        ce_loss_eos = (per_token_loss * is_eos_mask).sum() / eos_n
+
+        # Stash for training_step / validation_step to log. Detach to avoid
+        # carrying graph state into the logger.
+        self._last_ce_loss = ce_loss.detach()
+        self._last_ce_loss_content = ce_loss_content.detach()
+        self._last_ce_loss_eos = ce_loss_eos.detach()
 
         if isinstance(aux_loss, torch.Tensor):
             aux_loss = aux_loss.mean()
@@ -860,11 +890,14 @@ class RoFormerSymbolicTransformer(L.LightningModule):
     def training_step(self, batch, batch_idx):
         loss, aux_loss = self.loss(*batch)
         self.log('train_loss', loss)
+        # Decompose the loss by token type so wandb shows what actually
+        # drives sample quality. The overall train_loss is dragged down by
+        # trivial pad/EOS predictions; the 'content' loss is the meaningful
+        # signal (real note tokens: program, pitch_duration). EOS loss is
+        # the "when to stop" prediction quality.
+        self.log('train_loss_content', self._last_ce_loss_content)
+        self.log('train_loss_eos', self._last_ce_loss_eos)
         self.log('moe_aux_loss', aux_loss, prog_bar=False, on_step=True, on_epoch=True)
-        # scheduler step
-        # scheduler = self.lr_schedulers()
-        # scheduler.step()
-        # self.log('training/lr', scheduler.get_last_lr()[0])
         lr = self.trainer.optimizers[0].param_groups[0]["lr"]
         self.log("training/lr", lr, prog_bar=True, on_step=True, on_epoch=False)
 
@@ -873,6 +906,8 @@ class RoFormerSymbolicTransformer(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         loss, aux_loss = self.loss(*batch)
         self.log('val_loss', loss)
+        self.log('val_loss_content', self._last_ce_loss_content)
+        self.log('val_loss_eos', self._last_ce_loss_eos)
         self.log('val_moe_aux_loss', aux_loss, prog_bar=False, on_step=False, on_epoch=True)
         return loss
 

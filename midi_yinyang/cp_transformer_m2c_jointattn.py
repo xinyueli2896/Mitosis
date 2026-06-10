@@ -457,6 +457,13 @@ if __name__ == '__main__':
                              'Lower (e.g. 0) to allow more expert '
                              'specialization; higher to force more '
                              'uniformity.')
+    parser.add_argument('--eos_loss_weight', type=float, default=1.0,
+                        help='Up-weight EOS token predictions in the loss. '
+                             '1.0 = legacy uniform weighting. Try 3.0 to '
+                             'focus gradient on "when to stop emitting '
+                             'notes within a frame" -- typically the '
+                             'bottleneck when generated samples have too '
+                             'many notes per timestep.')
     parser.add_argument('--silence_augment_prob', type=float, default=0.0,
                         help='Per-sample probability of silencing each '
                              'modality during training. Trains the model '
@@ -497,6 +504,7 @@ if __name__ == '__main__':
         lr_total_steps=args.lr_total_steps,
         aux_loss_weight=args.aux_loss_weight,
         silence_augment_prob=args.silence_augment_prob,
+        eos_loss_weight=args.eos_loss_weight,
     )
     print(f'Architecture: per-modality Q/K/V/O + joint self-attn + '
           f'shared MoE FFN ({args.moe_num_experts} experts, topk={args.moe_topk})')
