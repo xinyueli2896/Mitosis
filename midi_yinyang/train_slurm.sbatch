@@ -82,8 +82,10 @@ if [[ -z "$MAX_LR" ]]; then
     esac
 fi
 
-# Per-GPU batch_size: 4 keeps the model comfortable at large depth/MoE.
-BATCH_SIZE=4
+# Per-GPU batch_size. 8 fits comfortably on 80GB GPUs for size-large +
+# K=4 MoE. Bump to 12-16 if nvidia-smi has headroom, drop to 4 if OOM.
+# Override with --export=ALL,BATCH_SIZE=12 on the sbatch line.
+BATCH_SIZE="${BATCH_SIZE:-8}"
 
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"

@@ -76,17 +76,25 @@ MASTER_PORT=$((20000 + RANDOM % 10000))
 export MASTER_ADDR MASTER_PORT
 
 # Per-GPU batch_size. Global batch = BATCH_SIZE * TOTAL_GPUS.
-BATCH_SIZE=4
+# Override via --export=ALL,BATCH_SIZE=12 on the sbatch line.
+# Rule of thumb on 80GB GPUs with the size-large model (~310M params,
+# K=4 MoE, gnl=12, cp16 subseq=32, seq=384):
+#   batch=4   -> ~10-15 GB peak per GPU  (very safe)
+#   batch=8   -> ~20-30 GB peak          (recommended default)
+#   batch=16  -> ~50-60 GB peak          (push if you can; watch nvidia-smi)
+BATCH_SIZE="${BATCH_SIZE:-8}"
+GLOBAL_BATCH=$((BATCH_SIZE * TOTAL_GPUS))
 
-# sqrt-scaled LR from a 5e-5 @ 1-GPU baseline. Override with MAX_LR env.
+# sqrt-scaled LR from a 5e-5 @ global-batch-8 baseline. Override with
+# MAX_LR env var.
 if [[ -z "${MAX_LR:-}" ]]; then
-    case "$TOTAL_GPUS" in
-        1) MAX_LR=5e-5 ;;
-        2) MAX_LR=7e-5 ;;
-        4) MAX_LR=1e-4 ;;
-        8) MAX_LR=1.5e-4 ;;
-        16) MAX_LR=2e-4 ;;
-        *) MAX_LR=1e-4 ;;
+    case "$GLOBAL_BATCH" in
+        8)   MAX_LR=5e-5 ;;
+        16)  MAX_LR=7e-5 ;;
+        32)  MAX_LR=1e-4 ;;
+        64)  MAX_LR=1.5e-4 ;;
+        128) MAX_LR=2e-4 ;;
+        *)   MAX_LR=1e-4 ;;
     esac
 fi
 
@@ -96,7 +104,7 @@ echo "Allocated nodes:   $SLURM_JOB_NODELIST"
 echo "Nodes:             $NNODES"
 echo "GPUs/node:         $GPUS_PER_NODE"
 echo "Total GPUs:        $TOTAL_GPUS"
-echo "Per-GPU batch:     $BATCH_SIZE   Global batch: $((BATCH_SIZE * TOTAL_GPUS))"
+echo "Per-GPU batch:     $BATCH_SIZE   Global batch: $GLOBAL_BATCH"
 echo "Effective max_lr:  $MAX_LR"
 echo "MASTER_ADDR:       $MASTER_ADDR"
 echo "MASTER_PORT:       $MASTER_PORT"
