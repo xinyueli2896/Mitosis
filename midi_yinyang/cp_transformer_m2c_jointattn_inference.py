@@ -196,7 +196,8 @@ def _infer_global_num_layers(ckpt_path, ck, model_size):
 
 def load_model(ckpt_path, model_size='large', with_velocity=False,
                moe_num_experts=4, moe_topk=2, moe_intermediate_size=None,
-               global_num_layers=None, preserve_program=True):
+               global_num_layers=None, preserve_program=True,
+               min_acc_tokens_before_eos=0):
     """Build M2CJointAttn with the right depth/experts and load weights.
 
     preserve_program defaults to True (the M2CJointAttn primary use case).
@@ -221,6 +222,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         moe_intermediate_size=moe_intermediate_size,
         global_num_layers=global_num_layers,
         preserve_program=preserve_program,
+        min_acc_tokens_before_eos=min_acc_tokens_before_eos,
     )
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)
@@ -411,6 +413,14 @@ def main():
                    help='Squash program to 24 (mel) / 0 (chord) like the '
                         'legacy POP909 path. Only use if the ckpt was '
                         'trained without --preserve_program.')
+    p.add_argument('--min-chord-tokens-before-eos', dest='min_acc_tokens_before_eos',
+                   type=int, default=0,
+                   help='Force the chord/non-drum side to emit at least N '
+                        'tokens within each frame before EOS is allowed. '
+                        'Rescue knob for ckpts trained with too-aggressive '
+                        'EOS up-weighting that collapse to silence on the '
+                        'non-drum stream. Try 2 (= forces at least 1 full '
+                        'note: program + pitch_duration) or 4.')
     args = p.parse_args()
 
     if args.mel_folder or args.chord_folder:
@@ -426,8 +436,10 @@ def main():
         moe_intermediate_size=args.moe_intermediate_size,
         global_num_layers=args.global_num_layers,
         preserve_program=args.preserve_program,
+        min_acc_tokens_before_eos=args.min_acc_tokens_before_eos,
     )
-    print(f'[main] preserve_program={args.preserve_program}')
+    print(f'[main] preserve_program={args.preserve_program}  '
+          f'min_chord_tokens_before_eos={args.min_acc_tokens_before_eos}')
     model.save_name = os.path.basename(args.ckpt)
     model.cuda()
     model.eval()

@@ -174,6 +174,11 @@ def main():
     p.add_argument('--hardcode-program', dest='preserve_program',
                    action='store_false',
                    help='Squash program to 24 (mel) / 0 (chord), POP909-style.')
+    p.add_argument('--min-chord-tokens-before-eos', dest='min_acc_tokens_before_eos',
+                   type=int, default=0,
+                   help='Force chord/non-drum to emit at least N tokens '
+                        'before EOS within each frame. Rescue knob for '
+                        'EOS-collapsed ckpts. Try 2 (>=1 full note) or 4.')
     args = p.parse_args()
 
     mel_files = _list_midis(args.mel_folder)
@@ -195,8 +200,10 @@ def main():
         moe_intermediate_size=args.moe_intermediate_size,
         global_num_layers=args.global_num_layers,
         preserve_program=args.preserve_program,
+        min_acc_tokens_before_eos=args.min_acc_tokens_before_eos,
     )
-    print(f'[main] preserve_program={args.preserve_program}')
+    print(f'[main] preserve_program={args.preserve_program}  '
+          f'min_chord_tokens_before_eos={args.min_acc_tokens_before_eos}')
     model.cuda()
     model.eval()
 
