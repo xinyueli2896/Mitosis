@@ -41,7 +41,8 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:2
-#SBATCH -p gpu
+#SBATCH -p cscc-gpu-p
+#SBATCH -q cscc-gpu-qos
 #SBATCH --time=12:00:00
 
 # --- environment ---------------------------------------------------------

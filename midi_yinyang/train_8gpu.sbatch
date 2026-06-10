@@ -1,5 +1,11 @@
 #!/bin/bash
-# SLURM batch script: 8-GPU training of M2CJointAttn on the cscc-gpu cluster.
+# SLURM batch script: 8-GPU training of M2CJointAttn.
+#
+# *** WARNING: the cscc-gpu-p partition limits any account to 4 GPUs total,
+#     so requesting 8 here will be REJECTED by SLURM. This file is kept as
+#     a template for clusters with looser limits. For the current CSCC
+#     cluster use train_slurm.sbatch with --gres=gpu:4 (single-node) or
+#     train_multinode.sbatch (2 nodes x 2 GPUs).
 #
 # Two modes:
 #   (a) Train from a fresh warm-start init (default):
@@ -35,7 +41,8 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=160G
 #SBATCH --gres=gpu:8
-#SBATCH -p gpu
+#SBATCH -p cscc-gpu-p
+#SBATCH -q cscc-gpu-qos
 #SBATCH --time=12:00:00
 
 # --- environment ---------------------------------------------------------
