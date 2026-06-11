@@ -129,6 +129,10 @@ echo "================================================================"
 
 # --- step 2: training ---------------------------------------------------
 export MASTER_PORT=$((20000 + RANDOM % 10000))
+# Allocator anti-fragmentation. intra-cross-attn does 2 SDPA passes per
+# block, so attention activations can fragment the heap more than usual.
+# Cheap to enable; helps avoid spurious OOMs near the memory ceiling.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # Loss weights (mel/acc/eos) all default to 1.0 in the training script,
 # i.e. unweighted CE -- val_loss is comparable across runs.
