@@ -183,14 +183,30 @@ def fill_with_neg_inf(t):
     return t.float().fill_(float("-inf")).type_as(t)
 
 
-def _robust_load(path):
-    """Attempt to load tensors with weights_only, fallback to standard load on failure."""
+def _robust_load(path, mmap=False):
+    """Attempt to load tensors with weights_only, fallback to standard load on failure.
+
+    Pass mmap=True for large data tensors that should be shared across DDP
+    ranks via the OS page cache. mmap'd tensors are file-backed and
+    read-only; their pages are demand-loaded by the kernel and shared
+    between all processes that mmap the same file. With N DDP ranks per
+    node, this drops aggregate RAM usage from N x file_size to ~1 x
+    file_size for the mmap'd region.
+
+    mmap requires torch.load with weights_only=True AND the new zipfile
+    serialization (default for torch >= 1.6), so we don't try the
+    weights_only=False fallback when mmap is requested -- caller is
+    expected to use mmap only on plain tensor files (data, lengths,
+    pitch_shift_range), not on Lightning ckpts.
+    """
     with open(path, 'rb') as f:
         prefix = f.read(64)
     if prefix.startswith(b'version https://git-lfs.github.com/spec/v1'):
         raise RuntimeError(
             f"File {path} appears to be a Git LFS pointer. Fetch actual data via `git lfs pull`."
         )
+    if mmap:
+        return torch.load(path, weights_only=True, mmap=True)
     try:
         return torch.load(path, weights_only=True)
     except (pickle.UnpicklingError, RuntimeError, AttributeError, EOFError):
@@ -985,8 +1001,12 @@ class FramedDataset(IterableDataset):
         print('Metadata for dataset', file_path, 'loaded. Number of valid songs:', self.valid_song_count)
 
     def __iter__(self):
-        data = _robust_load(self.file_path)        # chord stream
-        data_c = _robust_load(self.mel_path)       # melody stream (yes, named data_c)
+        # mmap=True so all DDP ranks on the same node share one OS-page-cache
+        # copy of these multi-GB tensors instead of each rank loading a full
+        # copy into private RAM. With 3 ranks, this drops aggregate data RAM
+        # from ~3 x file_size to ~1 x file_size for the data streams.
+        data = _robust_load(self.file_path, mmap=True)        # chord stream
+        data_c = _robust_load(self.mel_path, mmap=True)       # melody stream (yes, named data_c)
         pitch_shift_range = _robust_load(self.file_path[:-3] + '.pitch_shift_range.pt').reshape(-1, 2)
         pitch_shift_range[pitch_shift_range[:, 0] < -5, 0] = -5
         pitch_shift_range[pitch_shift_range[:, 1] > 6, 1] = 6
