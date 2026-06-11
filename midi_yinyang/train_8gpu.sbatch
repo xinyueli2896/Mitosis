@@ -40,10 +40,14 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=160G
-#SBATCH --gres=gpu:8
+#SBATCH --gres=gpu:4
 #SBATCH -p cscc-gpu-p
 #SBATCH -q cscc-gpu-qos
 #SBATCH --time=12:00:00
+# Filename is "train_8gpu" but the cscc-gpu-p partition caps any account
+# at 4 GPUs, so the directive above is gpu:4 not gpu:8. Use this script
+# as a single-node 4-GPU launcher, OR prefer train_slurm.sbatch which
+# handles 1..4 GPUs flexibly.
 
 # --- environment ---------------------------------------------------------
 set -euo pipefail

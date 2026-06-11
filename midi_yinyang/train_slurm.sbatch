@@ -38,10 +38,12 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=160G
-#SBATCH --gres=gpu:8
+#SBATCH --gres=gpu:4
 #SBATCH -p cscc-gpu-p
 #SBATCH -q cscc-gpu-qos
 #SBATCH --time=12:00:00
+# Note: cscc-gpu-p caps any account at 4 GPUs total. Lower this with
+# --gres=gpu:N (N <= 4) on the sbatch command line if needed.
 
 # --- environment ---------------------------------------------------------
 set -euo pipefail
