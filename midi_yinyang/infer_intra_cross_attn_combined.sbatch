@@ -48,7 +48,7 @@ set -euo pipefail
 source ~/.bashrc
 
 CONDA_ENV=mitosis
-REPO_DIR=/l/users/xinyue.li/Mitosis
+REPO_DIR=/home/xinyue.li/Mitosis
 
 if [[ -z "${CKPT:-}" ]]; then
     echo "ERROR: CKPT not set. Pass via --export=ALL,CKPT=path/to/ckpt"

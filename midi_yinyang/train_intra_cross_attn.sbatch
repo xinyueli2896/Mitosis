@@ -40,7 +40,7 @@ set -euo pipefail
 source ~/.bashrc
 
 CONDA_ENV=mitosis
-REPO_DIR=/l/users/xinyue.li/Mitosis
+REPO_DIR=/home/xinyue.li/Mitosis
 
 PRETRAINED=ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt
 INIT_CKPT=ckpt/m2c_intra_cross_attn_init/m2c_intra_cross_attn_init.ckpt
