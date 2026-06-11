@@ -29,7 +29,11 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
-#SBATCH --mem=160G
+# Each DDP rank loads both mod_a and mod_b tensors into RAM
+# independently. With 117k songs in la_nondrum_cp16_v2.pt, each
+# tensor can be ~10 GB; 3 ranks * 2 streams = ~60 GB just for data,
+# plus model + activations. 160G was tight; 256G is comfortable.
+#SBATCH --mem=256G
 #SBATCH --gres=gpu:4
 #SBATCH -p cscc-gpu-p
 #SBATCH -q cscc-gpu-qos
