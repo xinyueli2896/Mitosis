@@ -1,0 +1,155 @@
+#!/bin/bash
+# SLURM batch script: multi-GPU training of M2CIntraCrossAttn on cscc-gpu.
+# Mirrors train_slurm.sbatch but targets the intra-cross-attn variant
+# (per-modality Q/K/V/O + two-pass intra/cross attention + per-block gates +
+# shared MoE FFN). ~15-25% slower per step than jointattn due to the second
+# SDPA per block; matched LR/aux/silence-aug defaults.
+#
+# Knobs (all optional):
+#   --gres=gpu:N            how many GPUs to allocate (1..4).
+#   --export=ALL,CKPT=...   if set, skip init + resume from that ckpt.
+#   --export=ALL,MAX_LR=..  override the LR (else autoscale by NGPUS).
+#   --export=ALL,BATCH_SIZE=12 per-GPU batch size (default 8).
+#   --export=ALL,GATE_INIT_BIAS=-4  raise if gates stay pinned at init.
+#
+# Examples:
+#   sbatch midi_yinyang/train_intra_cross_attn.sbatch
+#   sbatch --gres=gpu:2 midi_yinyang/train_intra_cross_attn.sbatch
+#   sbatch --export=ALL,CKPT=ckpt/<run>/last.ckpt midi_yinyang/train_intra_cross_attn.sbatch
+
+#SBATCH --job-name=mitosis_intra_cross_attn
+#SBATCH --output=/home/xinyue.li/logs/%x_%j.out
+#SBATCH --error=/home/xinyue.li/logs/%x_%j.err
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=160G
+#SBATCH --gres=gpu:4
+#SBATCH -p cscc-gpu-p
+#SBATCH -q cscc-gpu-qos
+#SBATCH --time=12:00:00
+
+# --- environment ---------------------------------------------------------
+set -euo pipefail
+source ~/.bashrc
+
+CONDA_ENV=mitosis
+REPO_DIR=/l/users/xinyue.li/Mitosis
+
+PRETRAINED=ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt
+INIT_CKPT=ckpt/m2c_intra_cross_attn_init/m2c_intra_cross_attn_init.ckpt
+
+CKPT="${CKPT:-}"
+MAX_LR="${MAX_LR:-}"
+BATCH_SIZE="${BATCH_SIZE:-8}"
+GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
+
+conda activate "$CONDA_ENV"
+cd "$REPO_DIR/midi_yinyang"
+
+mkdir -p /home/xinyue.li/logs
+
+# --- detect GPU count --------------------------------------------------
+NGPUS="${SLURM_GPUS_ON_NODE:-}"
+if [[ -z "$NGPUS" && -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+    NGPUS=$(echo "$CUDA_VISIBLE_DEVICES" | tr ',' '\n' | grep -c .)
+fi
+NGPUS="${NGPUS:-1}"
+
+# sqrt-scaled LR by NGPUS (base 5e-5 @ 1 GPU). Override via MAX_LR=...
+if [[ -z "$MAX_LR" ]]; then
+    case "$NGPUS" in
+        1) MAX_LR=5e-5 ;;
+        2) MAX_LR=7e-5 ;;
+        4) MAX_LR=1e-4 ;;
+        8) MAX_LR=1.5e-4 ;;
+        *) MAX_LR=1e-4 ;;
+    esac
+fi
+
+echo "================================================================"
+echo "Job $SLURM_JOB_ID  node=$(hostname)"
+echo "Variant: m2c_intra_cross_attn  (per-block gated intra+cross attn)"
+echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
+echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS"
+if [[ -n "$CKPT" ]]; then
+    echo "Mode: RESUME from CKPT=$CKPT (skip init)"
+else
+    echo "Mode: FRESH (init from PRETRAINED=$PRETRAINED -> INIT_CKPT=$INIT_CKPT)"
+fi
+echo "----------------------------------------------------------------"
+nvidia-smi
+echo "================================================================"
+
+# --- step 1: warm-start init (only when no CKPT given) -----------------
+if [[ -z "$CKPT" ]]; then
+    if [[ -f "$INIT_CKPT" ]]; then
+        echo "[init] $INIT_CKPT already exists; skipping warm-start step."
+    else
+        if [[ ! -f "$PRETRAINED" ]]; then
+            echo "[init] ERROR: pretrained ckpt not found at $PRETRAINED"
+            exit 1
+        fi
+        echo "[init] running init_pretrained_into_intra_cross_attn.py"
+        python init_pretrained_into_intra_cross_attn.py \
+            --pretrained "$PRETRAINED" \
+            --output     "$INIT_CKPT" \
+            --model_size large --global_num_layers 12 \
+            --moe_num_experts 4 --moe_topk 2 \
+            --gate_init_bias "$GATE_INIT_BIAS"
+        echo "[init] done -> $INIT_CKPT"
+    fi
+    TRAIN_CKPT="$INIT_CKPT"
+else
+    if [[ ! -f "$CKPT" ]]; then
+        echo "[resume] ERROR: CKPT not found at $CKPT"
+        exit 1
+    fi
+    TRAIN_CKPT="$CKPT"
+fi
+echo "================================================================"
+echo "[train] --checkpoint_path = $TRAIN_CKPT"
+echo "================================================================"
+
+# --- step 2: training ---------------------------------------------------
+export MASTER_PORT=$((20000 + RANDOM % 10000))
+
+if [[ "$NGPUS" -le 1 ]]; then
+    python cp_transformer_m2c_intra_cross_attn.py \
+        --batch_size "$BATCH_SIZE" \
+        --model_size large \
+        --path_to_dataset data/la_chord_cp16_v2.pt \
+        --moe_num_experts 4 --moe_topk 2 \
+        --acc_loss_weight 1.0 \
+        --max_lr "$MAX_LR" \
+        --lr_total_steps 50000 \
+        --gradient_clip_val 1.0 \
+        --aux_loss_weight 0.01 \
+        --silence_augment_prob 0.1 \
+        --eos_loss_weight 1.0 \
+        --moe_monitor_every_n_steps 500 \
+        --gate_init_bias "$GATE_INIT_BIAS" \
+        --checkpoint_path "$TRAIN_CKPT" \
+        --wandb
+else
+    torchrun --standalone --nnodes=1 --nproc_per_node="$NGPUS" \
+        cp_transformer_m2c_intra_cross_attn.py \
+        --batch_size "$BATCH_SIZE" \
+        --model_size large \
+        --path_to_dataset data/la_chord_cp16_v2.pt \
+        --moe_num_experts 4 --moe_topk 2 \
+        --acc_loss_weight 1.0 \
+        --max_lr "$MAX_LR" \
+        --lr_total_steps 50000 \
+        --gradient_clip_val 1.0 \
+        --aux_loss_weight 0.01 \
+        --silence_augment_prob 0.1 \
+        --eos_loss_weight 1.0 \
+        --moe_monitor_every_n_steps 500 \
+        --gate_init_bias "$GATE_INIT_BIAS" \
+        --checkpoint_path "$TRAIN_CKPT" \
+        --wandb
+fi
+
+echo "================================================================"
+echo "Job $SLURM_JOB_ID finished at $(date)"
