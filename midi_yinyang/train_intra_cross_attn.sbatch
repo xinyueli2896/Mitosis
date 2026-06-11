@@ -47,7 +47,12 @@ INIT_CKPT=ckpt/m2c_intra_cross_attn_init/m2c_intra_cross_attn_init.ckpt
 
 CKPT="${CKPT:-}"
 MAX_LR="${MAX_LR:-}"
-BATCH_SIZE="${BATCH_SIZE:-8}"
+# Default per-GPU batch size 4. intra-cross-attn's two SDPA passes per
+# block roughly double attention activation memory vs jointattn, so 8
+# OOMs on 40GB A100s with the size-large + 12-layer config. Override
+# via --export=ALL,BATCH_SIZE=2 if you still OOM, or BATCH_SIZE=6 to
+# push if you have memory headroom.
+BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
 # Task config: melchord (mod_a=mel, mod_b=chord) or drumnondrum
 # (mod_a=drum, mod_b=nondrum). Dataset paths and display labels are
