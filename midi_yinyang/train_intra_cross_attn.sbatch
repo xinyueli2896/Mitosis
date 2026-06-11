@@ -13,6 +13,9 @@
 #   --export=ALL,MAX_LR=..  override the LR (else autoscale by NGPUS).
 #   --export=ALL,BATCH_SIZE=12 per-GPU batch size (default 8).
 #   --export=ALL,GATE_INIT_BIAS=-4  raise if gates stay pinned at init.
+#   --export=ALL,DUMP_SAMPLES_DIR=path  dump first training batch as .mid
+#                           into this dir for sanity-check listening.
+#                           Default: temp/train_samples_<JOBID>.
 #
 # Examples:
 #   sbatch midi_yinyang/train_intra_cross_attn.sbatch
@@ -51,6 +54,10 @@ GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
 # resolved from tasks.py based on this name. Override with
 # --export=ALL,TASK=melchord on the sbatch line.
 TASK="${TASK:-drumnondrum}"
+# Optional: dump the first training batch as .mid files into this dir at
+# train start. Useful for sanity-check listening before letting training
+# run for hours. Default empty = off.
+DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_${SLURM_JOB_ID}}"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -136,6 +143,7 @@ if [[ "$NGPUS" -le 1 ]]; then
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --moe_monitor_every_n_steps 500 \
+        --dump_samples_dir "$DUMP_SAMPLES_DIR" \
         --gate_init_bias "$GATE_INIT_BIAS" \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
@@ -151,6 +159,7 @@ else
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --moe_monitor_every_n_steps 500 \
+        --dump_samples_dir "$DUMP_SAMPLES_DIR" \
         --gate_init_bias "$GATE_INIT_BIAS" \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb

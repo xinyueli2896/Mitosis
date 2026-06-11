@@ -386,6 +386,20 @@ if __name__ == '__main__':
     parser.add_argument('--silence_augment_prob', type=float, default=0.0)
     parser.add_argument('--moe_monitor_every_n_steps', type=int, default=0)
     parser.add_argument('--moe_monitor_n_samples', type=int, default=4)
+    parser.add_argument('--dump_samples_dir', type=str, default=None,
+                        help='If set, write the first training batch as '
+                             '.mid files into this directory at start of '
+                             'training (sanity-check listening). Per-sample '
+                             'mod_a, mod_b, and combined files are emitted.')
+    parser.add_argument('--dump_samples_n', type=int, default=4,
+                        help='How many samples from the first batch to dump.')
+    parser.add_argument('--dump_samples_every_n_epochs', type=int, default=None,
+                        help='If set, also re-dump the first batch of every '
+                             'Nth epoch (uses a different filename tag per '
+                             'epoch).')
+    parser.add_argument('--max_polyphony', type=int, default=16,
+                        help='Polyphony cap used by the dump callback. '
+                             'Match your preprocess setting (typically 16).')
     parser.add_argument('--gate_init_bias', type=float, default=-10.0,
                         help='Init bias for per-block cross-stream gates. '
                              '-10 -> sigmoid(bias) ~ 4.5e-5, near-off at '
@@ -484,6 +498,18 @@ if __name__ == '__main__':
                 n_samples=args.moe_monitor_n_samples,
             ).as_callback()
         )
+    if args.dump_samples_dir is not None:
+        from dump_train_samples import DumpInputSamplesCallback
+        extra_callbacks.append(
+            DumpInputSamplesCallback(
+                out_dir=args.dump_samples_dir,
+                n_samples=args.dump_samples_n,
+                max_polyphony=args.max_polyphony,
+                every_n_epochs=args.dump_samples_every_n_epochs,
+            ).as_callback()
+        )
+        print(f'[dump] training-sample dumps will be written to '
+              f'{args.dump_samples_dir}')
 
     trainer = L.Trainer(
         devices=n_gpus,
