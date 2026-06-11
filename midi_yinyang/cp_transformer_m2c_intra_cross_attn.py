@@ -276,6 +276,16 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
         self.sos_offset_m = nn.Parameter(torch.zeros(self.hidden_size))
         self.sos_offset_c = nn.Parameter(torch.zeros(self.hidden_size))
 
+        # Modality information is already carried by the per-modality
+        # Q/K/V/O projections (and, through them, into the MoE router's
+        # input statistics). The inherited binary token_type_embedding
+        # is redundant for this variant. Zero it and freeze so it stays
+        # a no-op additive bias without requiring changes to the parent's
+        # local_encode call signature.
+        with torch.no_grad():
+            self.token_type_embeddings.weight.zero_()
+        self.token_type_embeddings.weight.requires_grad = False
+
     def _assemble_sos(self, batch_size, device, dtype):
         sos_m = (self.global_sos + self.sos_offset_m).view(1, 1, -1)
         sos_c = (self.global_sos + self.sos_offset_c).view(1, 1, -1)
@@ -335,8 +345,12 @@ if __name__ == '__main__':
     parser.add_argument('--moe_intermediate_size', type=int, default=None)
     parser.add_argument('--global_num_layers', type=int, default=None,
                         help='Default: 12 if large else 6.')
+    # Loss weighting is intentionally off by default (all weights = 1.0).
+    # Flags retained for parent-class compatibility; override only if you
+    # have a specific reason. Note: setting any of these != 1.0 makes
+    # val_loss incomparable across runs with different weights.
     parser.add_argument('--mel_loss_weight', type=float, default=1.0)
-    parser.add_argument('--acc_loss_weight', type=float, default=3.0)
+    parser.add_argument('--acc_loss_weight', type=float, default=1.0)
     parser.add_argument('--run_tag', type=str, default=None)
     parser.add_argument('--preserve_program', action='store_true', default=True)
     parser.add_argument('--hardcode_program', dest='preserve_program',

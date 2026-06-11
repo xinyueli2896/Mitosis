@@ -114,19 +114,19 @@ echo "================================================================"
 # --- step 2: training ---------------------------------------------------
 export MASTER_PORT=$((20000 + RANDOM % 10000))
 
+# Loss weights (mel/acc/eos) all default to 1.0 in the training script,
+# i.e. unweighted CE -- val_loss is comparable across runs.
 if [[ "$NGPUS" -le 1 ]]; then
     python cp_transformer_m2c_intra_cross_attn.py \
         --batch_size "$BATCH_SIZE" \
         --model_size large \
         --path_to_dataset data/la_chord_cp16_v2.pt \
         --moe_num_experts 4 --moe_topk 2 \
-        --acc_loss_weight 1.0 \
         --max_lr "$MAX_LR" \
         --lr_total_steps 50000 \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --silence_augment_prob 0.1 \
-        --eos_loss_weight 1.0 \
         --moe_monitor_every_n_steps 500 \
         --gate_init_bias "$GATE_INIT_BIAS" \
         --checkpoint_path "$TRAIN_CKPT" \
@@ -138,13 +138,11 @@ else
         --model_size large \
         --path_to_dataset data/la_chord_cp16_v2.pt \
         --moe_num_experts 4 --moe_topk 2 \
-        --acc_loss_weight 1.0 \
         --max_lr "$MAX_LR" \
         --lr_total_steps 50000 \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --silence_augment_prob 0.1 \
-        --eos_loss_weight 1.0 \
         --moe_monitor_every_n_steps 500 \
         --gate_init_bias "$GATE_INIT_BIAS" \
         --checkpoint_path "$TRAIN_CKPT" \
