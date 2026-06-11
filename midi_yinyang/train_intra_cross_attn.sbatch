@@ -29,11 +29,13 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
-# Each DDP rank loads both mod_a and mod_b tensors into RAM
-# independently. With 117k songs in la_nondrum_cp16_v2.pt, each
-# tensor can be ~10 GB; 3 ranks * 2 streams = ~60 GB just for data,
-# plus model + activations. 160G was tight; 256G is comfortable.
-#SBATCH --mem=256G
+# Node max is 256 GB but SLURM/kernel reserve ~16 GB, so 256G is
+# rejected with "Memory specification can not be satisfied". 240G is
+# safely under the cap. With mmap'd data tensors (see FramedDataset
+# _robust_load mmap=True path), aggregate RAM is dominated by model
+# state + activations rather than data duplication, so 240G is more
+# than enough now.
+#SBATCH --mem=240G
 #SBATCH --gres=gpu:4
 #SBATCH -p cscc-gpu-p
 #SBATCH -q cscc-gpu-qos
