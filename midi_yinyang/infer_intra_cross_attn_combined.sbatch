@@ -97,7 +97,7 @@ echo "MIN_CHORD_TOKENS_BEFORE_EOS=$MIN_CHORD_TOKENS_BEFORE_EOS"
 echo "MODES=$MODES"
 if [[ -n "${MAX_SONGS:-}" ]]; then echo "MAX_SONGS=$MAX_SONGS"; fi
 echo "----------------------------------------------------------------"
-nvidia-smi | head -n 20
+nvidia-smi | head -n 20 || true
 echo "================================================================"
 
 EXTRA_ARGS=()

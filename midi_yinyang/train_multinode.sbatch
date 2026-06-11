@@ -115,7 +115,7 @@ else
     echo "Mode: FRESH (init from PRETRAINED=$PRETRAINED, write INIT_CKPT=$INIT_CKPT)"
 fi
 echo "----------------------------------------------------------------"
-nvidia-smi
+nvidia-smi || true
 echo "================================================================"
 
 # --- step 1: warm-start init (runs ONCE on the master node) ------------

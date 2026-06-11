@@ -79,7 +79,7 @@ else
 fi
 echo "Visible GPUs: $CUDA_VISIBLE_DEVICES"
 echo "----------------------------------------------------------------"
-nvidia-smi
+nvidia-smi || true
 echo "================================================================"
 
 # --- step 1: warm-start init (only in mode a) --------------------------
