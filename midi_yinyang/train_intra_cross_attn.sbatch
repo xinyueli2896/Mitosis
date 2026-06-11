@@ -126,7 +126,6 @@ if [[ "$NGPUS" -le 1 ]]; then
         --lr_total_steps 50000 \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
-        --silence_augment_prob 0.1 \
         --moe_monitor_every_n_steps 500 \
         --gate_init_bias "$GATE_INIT_BIAS" \
         --checkpoint_path "$TRAIN_CKPT" \
@@ -142,7 +141,6 @@ else
         --lr_total_steps 50000 \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
-        --silence_augment_prob 0.1 \
         --moe_monitor_every_n_steps 500 \
         --gate_init_bias "$GATE_INIT_BIAS" \
         --checkpoint_path "$TRAIN_CKPT" \

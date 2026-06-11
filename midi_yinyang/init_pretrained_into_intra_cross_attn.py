@@ -37,7 +37,7 @@ import torch
 
 from cp_transformer_m2c_intra_cross_attn import M2CIntraCrossAttn
 from init_pretrained_into_jointattn import (
-    _count_pretrained_layers, _map_global_key,
+    _count_pretrained_layers, _map_global_key, assert_vocab_matches,
 )
 
 
@@ -85,6 +85,7 @@ def main():
         gate_init_bias=args.gate_init_bias,
     )
     target_sd = net.state_dict()
+    assert_vocab_matches(sd_src, target_sd)
 
     # 1. Pass-through: local encoder/decoder, embeds, etc.
     n_passthru = 0

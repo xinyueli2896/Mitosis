@@ -256,6 +256,12 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
         # Drop the inherited single-backbone global stack; we replace it
         # with our custom intra/cross-attn stack below.
         del self.global_roformer
+        # Drop the inherited top-level gate_m/gate_c. They were used by the
+        # parent's _global_interaction (two RoFormer passes + sigmoid gate);
+        # this variant has its own per-block gates inside
+        # M2CIntraCrossAttnLayer, so the top-level ones are dead weight.
+        del self.gate_m
+        del self.gate_c
 
         ffn_inter = moe_intermediate_size or self.intermediate_size
         self.global_layers = nn.ModuleList([
@@ -407,14 +413,25 @@ if __name__ == '__main__':
           f'({args.moe_num_experts} experts, topk={args.moe_topk})')
     print(f'Global depth: {gnl} layers   gate_init_bias: {args.gate_init_bias}')
 
-    train_set_loader = DataLoader(
-        FramedDataset(args.path_to_dataset, TRAIN_LENGTH, args.batch_size, split='train'),
-        batch_size=None, num_workers=0,
-    )
-    val_set_loader = DataLoader(
-        FramedDataset(args.path_to_dataset, TRAIN_LENGTH, args.batch_size, split='val'),
-        batch_size=None, num_workers=0,
-    )
+    train_set = FramedDataset(args.path_to_dataset, TRAIN_LENGTH,
+                              args.batch_size, split='train')
+    val_set = FramedDataset(args.path_to_dataset, TRAIN_LENGTH,
+                            args.batch_size, split='val')
+    train_set_loader = DataLoader(train_set, batch_size=None, num_workers=0)
+    val_set_loader = DataLoader(val_set, batch_size=None, num_workers=0)
+
+    # Log implied epoch count so it's obvious whether --lr_total_steps is
+    # over/under-shooting the actual training duration. steps_per_epoch is
+    # global (across all ranks) -- IterableDataset doesn't shard, so each
+    # rank sees the full pool and global step rate is the per-rank rate.
+    global_batch = args.batch_size * n_gpus
+    steps_per_epoch = max(1, train_set.valid_song_count // global_batch)
+    if args.lr_total_steps is not None:
+        implied_epochs = args.lr_total_steps / max(1, steps_per_epoch)
+        print(f'[lr] valid_train_songs={train_set.valid_song_count}  '
+              f'global_batch={global_batch}  steps_per_epoch={steps_per_epoch}  '
+              f'lr_total_steps={args.lr_total_steps}  '
+              f'implied_epochs={implied_epochs:.2f}')
 
     ckpt_dir = args.ckpt_dir or f'ckpt/{model_name}'
     checkpoint_callback = L.callbacks.ModelCheckpoint(

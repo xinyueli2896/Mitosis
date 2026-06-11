@@ -323,6 +323,10 @@ class M2CJointAttn(RoFormerSymbolicTransformer):
         # Drop the inherited single-backbone global stack -- we replace it
         # with our custom joint-attn stack below.
         del self.global_roformer
+        # Drop the inherited top-level gate_m/gate_c (used by the parent's
+        # _global_interaction, dead in jointattn).
+        del self.gate_m
+        del self.gate_c
 
         ffn_inter = moe_intermediate_size or self.intermediate_size
         self.global_layers = nn.ModuleList([

@@ -70,6 +70,30 @@ def _count_pretrained_layers(sd):
     return max(layer_ids) + 1 if layer_ids else 0
 
 
+def assert_vocab_matches(sd_src, target_sd):
+    """Hard-error if the pretrained ckpt's local_embedding row count does
+    not match the target's. Without this check, the passthrough copy
+    silently SKIPS the mismatched tensor and leaves the random init in
+    place -- a subtle corruption that surfaces hours later as garbage
+    generations. Caller passes sd_src (pretrained state dict) and
+    target_sd (fresh model state dict)."""
+    key = 'local_embedding.weight'
+    if key not in sd_src:
+        raise SystemExit(f'pretrained ckpt missing {key!r}; aborting init.')
+    if key not in target_sd:
+        raise SystemExit(f'target model missing {key!r}; aborting init.')
+    src_vocab = sd_src[key].shape[0]
+    tgt_vocab = target_sd[key].shape[0]
+    if src_vocab != tgt_vocab:
+        raise SystemExit(
+            f'vocab size mismatch: pretrained has {src_vocab} rows in '
+            f'{key}, target has {tgt_vocab}. Refusing to silently skip '
+            'the copy. Match the tokenizer (--with_velocity, etc.) or '
+            'pick a matching pretrained ckpt.'
+        )
+    print(f'[ok] vocab match: {src_vocab} rows in {key}.')
+
+
 def _map_global_key(src_key, src_val, moe_num_experts):
     """Return list of (target_key, transformed_tensor_or_None) pairs. None
     means: copy src_val directly. Returns [] if the key has no target.
@@ -190,6 +214,7 @@ def main():
         global_num_layers=gnl,
     )
     target_sd = net.state_dict()
+    assert_vocab_matches(sd_src, target_sd)
 
     # 1. Pass-through copy: anything that already matches by key gets copied.
     #    This covers local_encoder/local_decoder/local_embedding/
