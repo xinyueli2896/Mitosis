@@ -7,6 +7,8 @@
 #
 # Knobs (all optional):
 #   --gres=gpu:N            how many GPUs to allocate (1..4).
+#   --export=ALL,TASK=...   task name: drumnondrum (default) or melchord.
+#                           Resolves mod_a/mod_b dataset paths + labels.
 #   --export=ALL,CKPT=...   if set, skip init + resume from that ckpt.
 #   --export=ALL,MAX_LR=..  override the LR (else autoscale by NGPUS).
 #   --export=ALL,BATCH_SIZE=12 per-GPU batch size (default 8).
@@ -14,6 +16,7 @@
 #
 # Examples:
 #   sbatch midi_yinyang/train_intra_cross_attn.sbatch
+#   sbatch --export=ALL,TASK=melchord midi_yinyang/train_intra_cross_attn.sbatch
 #   sbatch --gres=gpu:2 midi_yinyang/train_intra_cross_attn.sbatch
 #   sbatch --export=ALL,CKPT=ckpt/<run>/last.ckpt midi_yinyang/train_intra_cross_attn.sbatch
 
@@ -43,6 +46,11 @@ CKPT="${CKPT:-}"
 MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
+# Task config: melchord (mod_a=mel, mod_b=chord) or drumnondrum
+# (mod_a=drum, mod_b=nondrum). Dataset paths and display labels are
+# resolved from tasks.py based on this name. Override with
+# --export=ALL,TASK=melchord on the sbatch line.
+TASK="${TASK:-drumnondrum}"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -70,6 +78,7 @@ fi
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
 echo "Variant: m2c_intra_cross_attn  (per-block gated intra+cross attn)"
+echo "Task:    $TASK"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS"
 if [[ -n "$CKPT" ]]; then
@@ -118,9 +127,9 @@ export MASTER_PORT=$((20000 + RANDOM % 10000))
 # i.e. unweighted CE -- val_loss is comparable across runs.
 if [[ "$NGPUS" -le 1 ]]; then
     python cp_transformer_m2c_intra_cross_attn.py \
+        --task "$TASK" \
         --batch_size "$BATCH_SIZE" \
         --model_size large \
-        --path_to_dataset data/la_chord_cp16_v2.pt \
         --moe_num_experts 4 --moe_topk 2 \
         --max_lr "$MAX_LR" \
         --lr_total_steps 50000 \
@@ -133,9 +142,9 @@ if [[ "$NGPUS" -le 1 ]]; then
 else
     torchrun --standalone --nnodes=1 --nproc_per_node="$NGPUS" \
         cp_transformer_m2c_intra_cross_attn.py \
+        --task "$TASK" \
         --batch_size "$BATCH_SIZE" \
         --model_size large \
-        --path_to_dataset data/la_chord_cp16_v2.pt \
         --moe_num_experts 4 --moe_topk 2 \
         --max_lr "$MAX_LR" \
         --lr_total_steps 50000 \

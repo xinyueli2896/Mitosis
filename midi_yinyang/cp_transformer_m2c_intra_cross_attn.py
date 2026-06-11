@@ -48,6 +48,7 @@ from cp_transformer_m2c_moe import (
 from cp_transformer_m2c_jointattn import (
     _rope_freqs, _apply_rope, SimpleMoEFFN,
 )
+from tasks import get_task, TASKS
 
 
 # ---------------------------------------------------------------------------
@@ -339,10 +340,23 @@ if __name__ == '__main__':
         description='Train M2CIntraCrossAttn (per-modality Q/K/V/O + '
                     'intra/cross-attn split + per-block gates + shared MoE FFN).',
     )
+    parser.add_argument('--task', type=str, required=True,
+                        choices=sorted(TASKS),
+                        help='Which two-stream task to train on. Resolves '
+                             'mod_a/mod_b dataset paths, default programs, '
+                             'and user-facing display labels from tasks.py. '
+                             'melchord: mod_a=mel, mod_b=chord. drumnondrum: '
+                             'mod_a=drum, mod_b=nondrum.')
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--model_size', type=str, default='small',
                         choices=['small', 'large'])
-    parser.add_argument('--path_to_dataset', type=str)
+    parser.add_argument('--path_to_dataset', type=str, default=None,
+                        help='OPTIONAL override of the mod_b path resolved '
+                             'from --task. mod_a path will still be resolved '
+                             'from the task config unless --mod_a_path is '
+                             'also passed.')
+    parser.add_argument('--mod_a_path', type=str, default=None,
+                        help='OPTIONAL override of the mod_a path.')
     parser.add_argument('--model_name', type=str, default=None)
     parser.add_argument('--checkpoint_path', type=str, default=None)
     parser.add_argument('--wandb', action='store_true', default=False)
@@ -386,10 +400,21 @@ if __name__ == '__main__':
     if gnl is None:
         gnl = 12 if args.model_size == 'large' else 6
 
+    task = get_task(args.task)
+    mod_a_path = args.mod_a_path if args.mod_a_path is not None else task.mod_a_path
+    mod_b_path = args.path_to_dataset if args.path_to_dataset is not None else task.mod_b_path
+
     tag = f'_{args.run_tag}' if args.run_tag else ''
     default_name = (f"m2c_intra_cross_attn_v1.0_{args.model_size}_"
-                    f"gnl{gnl}{tag}_batch_{args.batch_size * n_gpus}_schedule")
+                    f"gnl{gnl}_{task.name}{tag}_"
+                    f"batch_{args.batch_size * n_gpus}_schedule")
     model_name = args.model_name if args.model_name is not None else default_name
+
+    print(f'[task] {task.name}  '
+          f'mod_a={task.mod_a_label} (program {task.mod_a_default_program}, '
+          f'{mod_a_path})  '
+          f'mod_b={task.mod_b_label} (program {task.mod_b_default_program}, '
+          f'{mod_b_path})')
 
     net = M2CIntraCrossAttn(
         large=(args.model_size == 'large'),
@@ -413,10 +438,12 @@ if __name__ == '__main__':
           f'({args.moe_num_experts} experts, topk={args.moe_topk})')
     print(f'Global depth: {gnl} layers   gate_init_bias: {args.gate_init_bias}')
 
-    train_set = FramedDataset(args.path_to_dataset, TRAIN_LENGTH,
-                              args.batch_size, split='train')
-    val_set = FramedDataset(args.path_to_dataset, TRAIN_LENGTH,
-                            args.batch_size, split='val')
+    train_set = FramedDataset(mod_b_path, TRAIN_LENGTH,
+                              args.batch_size, split='train',
+                              mel_path=mod_a_path)
+    val_set = FramedDataset(mod_b_path, TRAIN_LENGTH,
+                            args.batch_size, split='val',
+                            mel_path=mod_a_path)
     train_set_loader = DataLoader(train_set, batch_size=None, num_workers=0)
     val_set_loader = DataLoader(val_set, batch_size=None, num_workers=0)
 
@@ -477,6 +504,11 @@ if __name__ == '__main__':
                     'model_size': args.model_size,
                     'train_length': TRAIN_LENGTH,
                     'variant': 'm2c_intra_cross_attn',
+                    'task': task.name,
+                    'mod_a_label': task.mod_a_label,
+                    'mod_b_label': task.mod_b_label,
+                    'mod_a_path': mod_a_path,
+                    'mod_b_path': mod_b_path,
                     'global_num_layers': gnl,
                     'moe_num_experts': args.moe_num_experts,
                     'moe_topk': args.moe_topk,

@@ -941,9 +941,17 @@ class FramedDataset(IterableDataset):
         batch_size,
         split='all',
         split_ratio=10,
+        mel_path=None,
     ):
         self.file_path = file_path
-        self.mel_path = file_path.replace('chord', 'melody')
+        # mel_path override (passed when the task config knows both paths
+        # explicitly, e.g. drumnondrum where the legacy 'chord' -> 'melody'
+        # string replacement does not apply). Default None preserves the
+        # legacy melchord behaviour.
+        self.mel_path = (
+            mel_path if mel_path is not None
+            else file_path.replace('chord', 'melody')
+        )
         # Per-song lengths for both streams. Chord and melody can differ in
         # length per song (e.g. chord_midi.txt segments may extend slightly
         # past the melody track's last note), so we use min() per song as
