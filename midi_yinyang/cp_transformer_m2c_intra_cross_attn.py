@@ -514,7 +514,7 @@ if __name__ == '__main__':
     trainer = L.Trainer(
         devices=n_gpus,
         precision='bf16-mixed' if torch.cuda.is_available() else 32,
-        max_steps=MAX_STEPS,
+        max_steps=(args.lr_total_steps if args.lr_total_steps is not None else MAX_STEPS),
         accelerator='gpu' if torch.cuda.is_available() else 'cpu',
         callbacks=[checkpoint_callback] + extra_callbacks,
         val_check_interval=500,
