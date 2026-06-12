@@ -19,9 +19,9 @@
 #   OUTPUT_DIR     where (song, mode) midis get written.
 #                  Default: temp/intra_cross_attn_combined_<JOBID>.
 #   MAX_SONGS      cap the number of songs processed. Default: unset (all).
-#   PROMPT_LENGTH  default 100.
+#   PROMPT_LENGTH  default 64.
 #   GEN_LENGTH     default 384.
-#   TEMPERATURE    default 1.0.
+#   TEMPERATURE    default 0.9.
 #   MAX_POLYPHONY  default 16 (must match training preprocess).
 #   MIN_CHORD_TOKENS_BEFORE_EOS  rescue knob for EOS-collapsed ckpts. 0=off.
 #   MODES          space-separated subset of modes; default: all five.
@@ -54,7 +54,7 @@ REPO_DIR=/home/xinyue.li/Mitosis
 # --export=NONE,CKPT=... on the sbatch line. Hardcoded default lets
 # `sbatch infer_intra_cross_attn_combined.sbatch` Just Work even when
 # the cscc SLURM env-retrieval prolog flakes on --export=ALL/NONE.
-CKPT="${CKPT:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/last.ckpt}"
+CKPT="${CKPT:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule.epoch=00.val_loss=0.34391.ckpt}"
 
 if [[ -z "${CKPT:-}" ]]; then
     echo "ERROR: CKPT not set. Pass via --export=ALL,CKPT=path/to/ckpt"
@@ -78,9 +78,9 @@ case "$TASK" in
 esac
 
 OUTPUT_DIR="${OUTPUT_DIR:-temp/intra_cross_attn_combined_${SLURM_JOB_ID}}"
-PROMPT_LENGTH="${PROMPT_LENGTH:-100}"
+PROMPT_LENGTH="${PROMPT_LENGTH:-64}"
 GEN_LENGTH="${GEN_LENGTH:-384}"
-TEMPERATURE="${TEMPERATURE:-1.0}"
+TEMPERATURE="${TEMPERATURE:-0.9}"
 MAX_POLYPHONY="${MAX_POLYPHONY:-16}"
 MIN_CHORD_TOKENS_BEFORE_EOS="${MIN_CHORD_TOKENS_BEFORE_EOS:-0}"
 MODES="${MODES:-co mel2chord chord2mel mel_only chord_only}"
