@@ -50,6 +50,12 @@ source ~/.bashrc
 CONDA_ENV=mitosis
 REPO_DIR=/home/xinyue.li/Mitosis
 
+# Default ckpt path -- override by editing here or via
+# --export=NONE,CKPT=... on the sbatch line. Hardcoded default lets
+# `sbatch infer_intra_cross_attn_combined.sbatch` Just Work even when
+# the cscc SLURM env-retrieval prolog flakes on --export=ALL/NONE.
+CKPT="${CKPT:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/last.ckpt}"
+
 if [[ -z "${CKPT:-}" ]]; then
     echo "ERROR: CKPT not set. Pass via --export=ALL,CKPT=path/to/ckpt"
     exit 1
