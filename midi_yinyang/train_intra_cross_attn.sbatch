@@ -165,6 +165,7 @@ if [[ "$NGPUS" -le 1 ]]; then
         --moe_monitor_every_n_steps 500 \
         --dump_samples_dir "$DUMP_SAMPLES_DIR" \
         --gate_init_bias "$GATE_INIT_BIAS" \
+        --fresh_schedule \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
 else
@@ -181,6 +182,7 @@ else
         --moe_monitor_every_n_steps 500 \
         --dump_samples_dir "$DUMP_SAMPLES_DIR" \
         --gate_init_bias "$GATE_INIT_BIAS" \
+        --fresh_schedule \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
 fi

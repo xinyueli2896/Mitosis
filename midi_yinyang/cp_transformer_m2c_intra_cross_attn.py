@@ -407,6 +407,14 @@ if __name__ == '__main__':
                              'equivalence). Raise to -4 (sigmoid ~ 0.018) '
                              'if you observe gates pinned at init through '
                              'LR warmup.')
+    parser.add_argument('--fresh_schedule', action='store_true', default=False,
+                        help='When resuming from a Lightning ckpt, load '
+                             'ONLY the model weights and start a fresh '
+                             'OneCycleLR schedule + fresh optimizer state. '
+                             'Use this when --lr_total_steps differs from '
+                             'the saved ckpt -- otherwise PyTorch overwrites '
+                             'the new schedule with the old one and you get '
+                             '"Tried to step N times" or LR stuck at zero.')
     args = parser.parse_args()
 
     n_gpus = max(torch.cuda.device_count(), 1)
@@ -554,12 +562,18 @@ if __name__ == '__main__':
             isinstance(loaded, dict)
             and 'pytorch-lightning_version' in loaded
         )
-        if has_lightning_meta:
+        if has_lightning_meta and not args.fresh_schedule:
             print(f'[resume] full Lightning ckpt at {args.checkpoint_path}')
             ckpt_path_for_resume = args.checkpoint_path
         else:
-            print(f'[init] bare warm-start ckpt at {args.checkpoint_path}; '
-                   'loading state_dict only (no Lightning metadata).')
+            if has_lightning_meta and args.fresh_schedule:
+                print(f'[fresh-schedule] Lightning ckpt at {args.checkpoint_path}; '
+                       'loading model weights only (skipping optimizer + '
+                       'scheduler state) so the new OneCycleLR with '
+                       f'lr_total_steps={args.lr_total_steps} is used.')
+            else:
+                print(f'[init] bare warm-start ckpt at {args.checkpoint_path}; '
+                       'loading state_dict only (no Lightning metadata).')
             sd = loaded['state_dict'] if isinstance(loaded, dict) and 'state_dict' in loaded else loaded
             missing, unexpected = net.load_state_dict(sd, strict=False)
             if missing:
