@@ -56,7 +56,7 @@ INIT_CKPT=ckpt/m2c_intra_cross_attn_init/m2c_intra_cross_attn_init.ckpt
 # ckpt -- optimizer state, LR scheduler step, global_step all restored.
 # Leave empty to do a fresh warm-start from INIT_CKPT instead.
 # Override at submit time via --export=ALL,CKPT=path/to/other.ckpt.
-CKPT="${CKPT:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule.epoch=00.val_loss=0.34391.ckpt}"
+CKPT="${CKPT:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/last.ckpt}"
 MAX_LR="${MAX_LR:-}"
 # Default per-GPU batch size 4. intra-cross-attn's two SDPA passes per
 # block roughly double attention activation memory vs jointattn, so 8
