@@ -159,7 +159,7 @@ if [[ "$NGPUS" -le 1 ]]; then
         --model_size large \
         --moe_num_experts 4 --moe_topk 2 \
         --max_lr "$MAX_LR" \
-        --lr_total_steps 50000 \
+        --lr_total_steps 200000 \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --moe_monitor_every_n_steps 500 \
@@ -175,7 +175,7 @@ else
         --model_size large \
         --moe_num_experts 4 --moe_topk 2 \
         --max_lr "$MAX_LR" \
-        --lr_total_steps 50000 \
+        --lr_total_steps 200000 \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --moe_monitor_every_n_steps 500 \
