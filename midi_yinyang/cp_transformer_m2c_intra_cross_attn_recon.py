@@ -85,7 +85,7 @@ class M2CIntraCrossAttnRecon(M2CIntraCrossAttn):
         # expose logits / targets externally and we'd otherwise have to
         # forward twice.
 
-        x_mel, x_acc = self.preprocess(x_mel, x_acc, batch_pitch_shift)
+        x_mel, x_acc = self.preprocess(x_mel, batch_pitch_shift, y=x_acc)
         batch_size, seq_len, subseq_len = x_mel.shape
 
         # Silence augmentation (unchanged from parent).
