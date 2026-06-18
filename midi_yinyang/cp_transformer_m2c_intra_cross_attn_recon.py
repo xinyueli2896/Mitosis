@@ -146,10 +146,13 @@ class M2CIntraCrossAttnRecon(M2CIntraCrossAttn):
 
         # ------------------------------------------------------------------
         # NEW: token-level L2 reconstruction on drum (mel-slot) tokens.
-        # logits shape: [B, 2T, S, V]. Drum positions = even (0::2).
+        # The transformer flattens (2T, S) into a single sequence dim, so
+        # logits comes back as [B, 2T*S, V]. Fold it to [B, 2T, S, V] before
+        # picking the drum (even-frame) rows.
         # ------------------------------------------------------------------
-        # Slice drum-only views.
-        drum_logits = logits[:, 0::2, :, :]                 # [B, T, S, V]
+        V = self.tokenizer.n_tokens
+        logits_4d = logits.view(batch_size, seq_len * 2, subseq_len, V)
+        drum_logits = logits_4d[:, 0::2, :, :]               # [B, T, S, V]
         drum_targets = targets[:, 0::2, :]                   # [B, T, S]
         drum_non_pad = (drum_targets != self.tokenizer.pad_token).float()
 
