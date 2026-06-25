@@ -10,10 +10,14 @@ what's currently runnable end-to-end. For the conceptual framing
 | # | Class | Conceptual role | Train | Infer |
 |---|---|---|---|---|
 | 2 | `M2CIntraCrossAttn` (DuetAttn) | base / reference | ✅ trained, ckpt on cluster | ✅ |
-| 3 | `M2CIntraCrossAttnRecon` | loss-shape ablation on top of #2 (originally framed as loss-side conditioning baseline, but the Brier MSE term is redundant with CE on the same logits — does not actually condition on drum) | ✅ trained, ckpt on cluster | ✅ (shares #2's script) |
+| 3 | `M2CDuetRehearsal` | conditioning baseline — drum-prefix rehearsal + joint interleaved AR suffix | ⏳ not yet trained | ❌ not implemented |
 | 4 | `M2CDuetBlockAttn` (DuetAttn-Block) | the fair-looking fix | 🟡 in progress (12k+ steps as of last check) | ✅ Option B implemented (untested) |
-| 5 | `M2CDuetPrefix` | conditioning baseline (arch-side) | ⏳ not yet trained | ❌ not implemented |
-| 6 | `M2CDuetRehearsal` (proposed, not implemented) | true loss/architecture conditioning baseline: full-drum bidirectional prefix + interleaved AR suffix | ⏳ — | ❌ — |
+| 5 | `M2CDuetPrefix` | conditioning baseline — one-way drum→nondrum | ⏳ not yet trained | ❌ not implemented |
+
+The previous occupant of slot #3 (`M2CIntraCrossAttnRecon`) has been
+retired and its code files deleted. Existing ckpts from that variant
+remain valid as a standalone loss-shape ablation but no longer have a
+slot in the lineup.
 
 Retired: `M2CJointAttn` (variant #1) — superseded by DuetAttn. File
 remains for shared imports.
@@ -43,32 +47,51 @@ modalities on the interleaved sequence.
 sbatch --export=ALL,CKPT=<path> midi_yinyang/infer_intra_cross_attn_combined.sbatch
 ```
 
-## Variant #3 — `M2CIntraCrossAttnRecon` (loss-shape ablation; not a true conditioning baseline)
+## Variant #3 — `M2CDuetRehearsal`
 
-Architecturally identical to #2 (same model class layout, same
-parameters), but with an extra **Brier-style MSE term on the drum
-logits** added to the loss.
+The genuine "rehearsal" design. Drum stream is prepended as a
+bidirectional prefix to the global stack input; standard DuetAttn-style
+shifted interleaved AR runs on the suffix with full visibility into the
+prefix.
 
-**Originally framed as**: a loss-side conditioning baseline — the
-extra drum supervision was meant to behave like a "rehearsal" where
-the model gets stronger drum priors.
+**Files**:
+- `cp_transformer_m2c_duet_rehearsal.py` — model + training script. New
+  attention masks; per-modality Q/K/V/O routing reused from DuetAttn;
+  per-modality cross gate (bias = −10 at init).
+- `init_pretrained_into_duet_rehearsal.py` — warm-start.
+- `train_duet_rehearsal.sbatch` — SLURM launcher.
 
-**Actual behaviour (discovered post-implementation)**: the Brier MSE
-term operates on the *same* drum logits that CE already supervises
-and uses the *same* causal past as conditioning. Both terms push
-`softmax(drum_logits)` toward `one_hot(drum_target)` with different
-gradient shapes. They don't introduce any new information flow — the
-model never sees drum context it didn't already have under plain CE.
+**Sequence layout (length 3T)**:
+```
+[ drum_0, …, drum_{T-1},   sos_m, sos_c, drum_0, nondrum_0, …, drum_{T-2}, nondrum_{T-2} ]
+  └─── drum prefix (T) ─┘  └─────────── shifted interleaved suffix (2T) ────────────┘
+  bidirectional within     standard DuetAttn AR; sees all prefix + causal-within-suffix
+  invisible to nothing in suffix
+```
 
-A genuine rehearsal-style conditioning baseline requires the drum
-stream to be **architecturally** visible as a prefix when nondrum
-is predicted (see proposed #6). #3 doesn't do this. So:
+**Loss**: standard CE on the 2T suffix. Drum-side CE collapses fast
+because the model can copy drum_k from the prefix to the matching suffix
+slot — that's expected and acceptable. The useful gradient signal is on
+the nondrum CE, where each nondrum_k now sees the **entire** drum stream
+via the prefix (not just past drum), plus standard causal past.
 
-- **As a loss-shape ablation** (does the Brier gradient profile do
-  anything different from CE alone?): valid, runnable.
-- **As a "conditioning baseline"**: hollow — the conditioning never
-  actually happens. The architecture-side conditioning role in the
-  lineup belongs to #5 (DuetPrefix) alone, until #6 is built.
+Diagnostic logging splits CE into drum-side vs nondrum-side
+(`train_ce_loss_drum`, `train_ce_loss_nondrum`) so the collapse pattern
+is observable.
+
+**Training status**: not started yet. Run via:
+```bash
+sbatch midi_yinyang/train_duet_rehearsal.sbatch
+```
+
+**Inference**: not implemented. Needs a custom loop maintaining a prefix
+buffer of committed drum frames separately from the suffix's standard
+shift-trick buffer. Deferred to outstanding work.
+
+**Replaces**: the retired `M2CIntraCrossAttnRecon`. The recon variant's
+loss-shape ablation (Brier MSE on drum logits, redundant with CE) didn't
+implement actual conditioning — see the "design discussion" thread in
+git history. The new #3 implements the rehearsal idea architecturally.
 
 **Files**:
 - `cp_transformer_m2c_intra_cross_attn_recon.py` — model (subclasses #2's class, overrides `loss()`).
@@ -179,14 +202,14 @@ Variant #5 not included yet (no inference script).
 
 | Item | Priority | Notes |
 |---|---|---|
-| Train #5 (M2CDuetPrefix) | high | Architecture-side conditioning baseline. With #3 reclassified as a loss-shape ablation, #5 is currently the *only* genuine conditioning baseline in the lineup. |
+| Train #3 (M2CDuetRehearsal) | high | New rehearsal-style conditioning baseline. |
+| Train #5 (M2CDuetPrefix) | high | One-way conditioning baseline. |
+| Write inference for #3 | medium | Needs a custom loop maintaining a prefix buffer + suffix buffer per step. Adapt from the duet_block inference template. |
 | Write inference for #5 | medium | Single-direction (drum→nondrum); can adapt the jointattn inference machinery. |
-| Build #6 (M2CDuetRehearsal) | medium | True loss/architecture conditioning baseline: full-drum bidirectional prefix (T positions) + interleaved AR suffix (2T positions). Total seq = 3T. CE on the interleaved suffix. Distinguishes from #5 by keeping joint generation on the suffix instead of one-way; from #3 by making the drum context actually visible. |
 | Fix #4's off-by-one query mask + retrain | medium | `<` → `≤` in strict-past-frame check; may improve Option B sample quality materially. |
 | Add Option A (AR clean-stream) inference for #4 | low | Useful as a baseline against Option B. ~50 lines. |
 | Stage 3 of #4 (proper denoising inference) | low | Multi-step denoise within a frame (currently 1-pass). |
 | Refactor shared helpers out of jointattn into a common module | low | Lets us actually retire `cp_transformer_m2c_jointattn.py`. |
-| Decide what to do with #3's existing ckpts | low | Retain for the loss-shape ablation experiment; don't include in the "conditioning baselines vs symmetry fix" comparison. |
 
 ## Compute footprint per variant (large config, 12 layers)
 

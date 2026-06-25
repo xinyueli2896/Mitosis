@@ -1,20 +1,20 @@
-"""Warm-start an M2CIntraCrossAttnRecon from the pretrained CP-transformer.
+"""Warm-start an M2CDuetRehearsal from the pretrained single-stream CP-transformer.
 
-Architecture is identical to M2CIntraCrossAttn (the recon variant only
-adds an extra loss term, no new parameters), so the per-layer remap is
-the same. Reuses init_pretrained_into_jointattn helpers.
+Same per-layer remap as DuetAttn / DuetBlock / DuetPrefix:
+per-modality Q/K/V/O projections initialized from the single-stream
+projection (both mod-a and mod-b copies start identical and diverge
+during training); MoE experts replicated from the dense FFN; per-block
+cross gates baked in by the constructor with bias = -10.
 
-Note on the variant's role: this is a LOSS-SHAPE ABLATION, not a true
-conditioning baseline. The Brier-style MSE term added in the loss
-operates on the same drum logits CE already supervises and uses the
-same causal past as conditioning -- the model never sees drum context
-it doesn't have under plain NTP. See VARIANTS.md and the
-cp_transformer_m2c_intra_cross_attn_recon.py module docstring.
+Note: not exact warm-start equivalence with the pretrained model
+because the drum prefix changes the attention key/value distribution
+even with the cross gate silent. The model will need a brief
+adaptation phase before it leverages the prefix usefully.
 
 Run:
-    python init_pretrained_into_intra_cross_attn_recon.py \\
+    python init_pretrained_into_duet_rehearsal.py \\
         --pretrained ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt \\
-        --output     ckpt/m2c_intra_cross_attn_recon_init/m2c_intra_cross_attn_recon_init.ckpt \\
+        --output     ckpt/m2c_duet_rehearsal_init/m2c_duet_rehearsal_init.ckpt \\
         --model_size large --global_num_layers 12 \\
         --moe_num_experts 4 --moe_topk 2
 """
@@ -24,7 +24,7 @@ import os
 
 import torch
 
-from cp_transformer_m2c_intra_cross_attn_recon import M2CIntraCrossAttnRecon
+from cp_transformer_m2c_duet_rehearsal import M2CDuetRehearsal
 from init_pretrained_into_jointattn import (
     _count_pretrained_layers, _map_global_key, assert_vocab_matches,
 )
@@ -40,10 +40,6 @@ def main():
     ap.add_argument('--moe_topk', type=int, default=2)
     ap.add_argument('--moe_intermediate_size', type=int, default=None)
     ap.add_argument('--gate_init_bias', type=float, default=-10.0)
-    ap.add_argument('--recon_weight', type=float, default=1.0,
-                    help='Stored on the model for downstream consistency; '
-                         'the training CLI flag also sets this so this is '
-                         'mostly cosmetic during init.')
     args = ap.parse_args()
 
     gnl = args.global_num_layers
@@ -62,11 +58,10 @@ def main():
         )
     print(f'[ok] pretrained has {n_pre} global layers, matches target.')
 
-    print(f'[build] M2CIntraCrossAttnRecon(size={args.model_size}, gnl={gnl}, '
+    print(f'[build] M2CDuetRehearsal(size={args.model_size}, gnl={gnl}, '
           f'K={args.moe_num_experts}, topk={args.moe_topk}, '
-          f'gate_init_bias={args.gate_init_bias}, '
-          f'recon_weight={args.recon_weight})')
-    net = M2CIntraCrossAttnRecon(
+          f'gate_init_bias={args.gate_init_bias})')
+    net = M2CDuetRehearsal(
         large=(args.model_size == 'large'),
         with_velocity=False,
         moe_num_experts=args.moe_num_experts,
@@ -74,7 +69,6 @@ def main():
         moe_intermediate_size=args.moe_intermediate_size,
         global_num_layers=gnl,
         gate_init_bias=args.gate_init_bias,
-        recon_weight=args.recon_weight,
     )
     target_sd = net.state_dict()
     assert_vocab_matches(sd_src, target_sd)
@@ -101,7 +95,7 @@ def main():
             n_global += 1
     print(f'[init] global-stack copies: {n_global}')
 
-    fresh = M2CIntraCrossAttnRecon(
+    fresh = M2CDuetRehearsal(
         large=(args.model_size == 'large'),
         with_velocity=False,
         moe_num_experts=args.moe_num_experts,
@@ -109,7 +103,6 @@ def main():
         moe_intermediate_size=args.moe_intermediate_size,
         global_num_layers=gnl,
         gate_init_bias=args.gate_init_bias,
-        recon_weight=args.recon_weight,
     ).state_dict()
     still_default = []
     for k in target_sd:
@@ -124,12 +117,11 @@ def main():
         print(f'[warn] {len(unexpected_default)} non-gate global params left '
               f'at fresh init (first few: {unexpected_default[:5]})')
     else:
-        print(f'[ok] only gate_m/gate_c are at fresh init '
+        print(f'[ok] only gate params left at fresh init '
               f'({len(still_default)} keys, expected for warm-start)')
 
     g0 = torch.sigmoid(torch.tensor(args.gate_init_bias)).item()
-    print(f'[sanity] sigmoid(gate.bias) = sigmoid({args.gate_init_bias}) '
-          f'= {g0:.2e}')
+    print(f'[sanity] sigmoid(gate.bias) = sigmoid({args.gate_init_bias}) = {g0:.2e}')
 
     net.load_state_dict(target_sd, strict=False)
     out_dir = os.path.dirname(args.output)

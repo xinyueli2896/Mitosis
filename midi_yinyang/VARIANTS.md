@@ -16,7 +16,7 @@ For the task `drumnondrum`: mod_a = drum, mod_b = nondrum.
 | # | Class | File | Sequence layout | Attention | Loss | Direction |
 |---|---|---|---|---|---|---|
 | 2 | `M2CIntraCrossAttn` | `cp_transformer_m2c_intra_cross_attn.py` | interleaved `[a_0, b_0, a_1, b_1, …]` | 2 SDPA passes, both causal | CE on every token | symmetric |
-| 3 | `M2CIntraCrossAttnRecon` | `cp_transformer_m2c_intra_cross_attn_recon.py` | same as #2 | same as #2 | CE + Brier-MSE on drum logits | symmetric |
+| 3 | `M2CDuetRehearsal` | `cp_transformer_m2c_duet_rehearsal.py` | drum prefix `[drum_0..drum_{T-1}]` + standard DuetAttn shifted interleaved suffix (length 3T total) | 2 SDPA passes; prefix bidirectional within, suffix sees all prefix + causal within suffix | CE on entire 2T suffix (drum-side CE collapses fast; useful signal in nondrum CE) | symmetric joint, drum-conditioned |
 | 4 | `M2CDuetBlockAttn` | `cp_transformer_m2c_duet_block.py` | interleaved + 2 appended query slots | 3 SDPA passes (intra / cross-strict-past / frame-bidirectional) | AR-CE + query-CE | symmetric |
 | 5 | `M2CDuetPrefix` | `cp_transformer_m2c_duet_prefix.py` | `[drum_0, …, drum_{T-1}, sos_n, nondrum_0, …, nondrum_{T-2}]` | 2 SDPA passes; drum-drum bidirectional, nondrum-nondrum causal, nondrum→drum cross | CE on nondrum positions only | one-way drum→nondrum |
 
@@ -32,35 +32,44 @@ from it.
 The reference architecture. Symmetric joint AR over both modalities on
 the interleaved sequence. Everything else is measured against this.
 
-### DuetAttn-Recon (#3) — loss-shape ablation (not a true conditioning baseline)
+### DuetRehearsal (#3) — conditioning baseline, joint generation with drum-rehearsal prefix
 
-Originally framed as a loss-side conditioning baseline: same architecture
-as DuetAttn (#2), **adds a Brier-style MSE term on the drum logits** on
-top of CE. The intent was that the extra drum supervision would behave
-like a "rehearsal" — the model trains as if it had drum context.
+The genuine "rehearsal" design that the retired
+M2CIntraCrossAttnRecon was originally trying (and failing) to
+implement via loss alone. Architecturally:
 
-**Caveat (discovered post-implementation)**: the Brier MSE term operates
-on the *same* drum logits that CE already supervises and uses the *same*
-causal past as conditioning. Mathematically, the two terms just push the
-softmax toward the one-hot target with different gradient shapes — they
-don't introduce any new information flow. A true rehearsal-style
-conditioning would require the drum stream to be **architecturally
-visible** as context (full drum prefix bidirectional, then nondrum
-predicted with that context available), not just better-supervised.
+- **Drum prefix** (T positions): the entire drum stream prepended to
+  the global stack input, bidirectional within itself.
+- **Interleaved suffix** (2T positions): standard DuetAttn-style
+  shifted causal AR sequence (drum, nondrum interleaved), with full
+  visibility into the prefix.
+- **Total sequence length**: 3T.
 
-So #3 is best understood as a **loss-shape ablation** on top of #2 (does
-the Brier gradient profile do anything CE doesn't?), **not** as a
-distinct conditioning baseline. Variant #5 (DuetPrefix) is the
-architecture-side conditioning baseline that the original framing of #3
-was trying to be a loss-side counterpart to — but the counterpart was
-never realized in the loss alone, because conditioning can't be
-implemented purely by changing the loss on a model that already
-sees the same context.
+Loss is standard CE on the entire 2T suffix (drum-side and
+nondrum-side). The drum-side CE collapses fast — the model can
+trivially copy `drum_k` from the prefix to its corresponding suffix
+slot — but that's fine: the useful signal lives in the **nondrum CE**,
+where each `nondrum_k` prediction now sees the **entire drum stream**
+(past and future) via the prefix, plus causal nondrum past, plus the
+suffix's drum past (which itself is conditioned on the prefix).
 
-If a true loss-side conditioning baseline is wanted, see the "future
-work" note in `IMPLEMENTATION_REPORT.md` about a hypothetical
-M2CDuetRehearsal (#6) that prepends the entire drum stream as a
-bidirectional prefix and then runs interleaved AR on the suffix.
+Why this is different from #5 DuetPrefix: #5 is **one-way drum→nondrum**
+(only nondrum is predicted; drum is pure conditioning). #3 keeps
+**symmetric joint generation** in the suffix — both modalities are
+predicted, sharing the same architecture as #2 — while making drum
+available as a forward-visible prefix. So #3 sits between #2 (no
+rehearsal) and #5 (one-way only): joint AR like #2, with drum
+conditioning like #5.
+
+Architecture: 2 SDPA passes per block (intra + cross), per-modality
+Q/K/V/O, per-modality cross gate (bias = −10 at init), shared MoE FFN —
+same machinery as #2; only the mask shape and input layout differ.
+
+Warm-start: per-modality projections from the single-stream
+pretrained backbone. Not exact equivalence with #2 (the prefix
+changes the key/value distribution even with cross gate silent), but
+close — the model needs a brief adaptation phase before it leverages
+the prefix usefully.
 
 ### DuetPrefix (#5) — conditioning baseline, architecture-side
 
@@ -69,13 +78,12 @@ nondrum block reads via full cross attention. Conditioning enters
 through the **architecture itself** (mask shape), not the loss. One-way
 drum→nondrum by construction.
 
-**Note**: as discussed above, #3 does not actually function as a
-conditioning baseline (the Brier MSE acts on the same predictions CE
-already supervises, with the same context). The architecture-side
-conditioning baseline #5 is what currently stands for "conditioning"
-in the lineup. A new variant #6 (DuetRehearsal) would be the
-genuine loss-side / hybrid conditioning baseline; see
-`IMPLEMENTATION_REPORT.md`.
+#3 (DuetRehearsal) and #5 (DuetPrefix) together form the
+**conditioning-baseline pair**. #3 keeps symmetric joint generation
+(same target structure as #2) while making drum visible as a
+rehearsal prefix; #5 commits to one-way drum→nondrum entirely. #4 is
+the symmetric same-instant fix that the lineup is testing against
+both.
 
 ### DuetAttn-Block (#4) — the fair-looking fix
 
@@ -103,11 +111,13 @@ The variants bracket the question:
 The four-way comparison reads as:
 
 - **#2 vs #4**: does fixing the asymmetry help at all?
-- **#5 vs #4**: is the symmetry fix doing something the
-  architecture-side conditioning baseline can't reach?
-- **#3 vs #2**: pure ablation — does the Brier MSE gradient profile
-  on drum logits do anything CE doesn't? (Loss-shape only; not a
-  conditioning test.)
+- **#3 vs #4**: is the symmetry fix doing something the rehearsal-style
+  conditioning baseline (joint generation + drum-prefix context) can't
+  reach?
+- **#5 vs #4**: is the symmetry fix doing something the one-way
+  conditioning baseline can't reach?
+- **#3 vs #5**: secondary — which conditioning baseline is stronger,
+  joint-with-prefix or one-way-prefix?
 
 If #4 cleanly beats both #3 and #5 while matching or beating #2, the
 "symmetry fix without hard conditioning" framing is doing real work and

@@ -1,16 +1,18 @@
 #!/bin/bash
-# SLURM batch script: combined inference on RWC prompts for variants #2, #3, #4.
+# SLURM batch script: combined inference on RWC prompts for variants #2 and #4.
 #   #2 M2CIntraCrossAttn (DuetAttn base)
-#   #3 M2CIntraCrossAttnRecon (loss-side conditioning baseline)
 #   #4 M2CDuetBlockAttn (fair-looking fix, Option B query-slot decoding)
 #
-# Single-GPU, runs the three inferences sequentially in one job.
+# #3 M2CDuetRehearsal and #5 M2CDuetPrefix are not yet supported here
+# (their inference scripts haven't been written). Add them when the
+# corresponding *_combined.py wrappers exist.
+#
+# Single-GPU, runs the inferences sequentially in one job.
 #
 # Required env (override on the sbatch line via --export=ALL,KEY=val):
-#   CKPT_BASE      ckpt path for #2 (M2CIntraCrossAttn).         optional, default below.
-#   CKPT_RECON     ckpt path for #3 (M2CIntraCrossAttnRecon).    optional, default below.
-#   CKPT_BLOCK     ckpt path for #4 (M2CDuetBlockAttn).          optional, default below.
-#   SKIP_BASE / SKIP_RECON / SKIP_BLOCK   set to 1 to skip a variant.
+#   CKPT_BASE      ckpt path for #2 (M2CIntraCrossAttn).    optional, default below.
+#   CKPT_BLOCK     ckpt path for #4 (M2CDuetBlockAttn).     optional, default below.
+#   SKIP_BASE / SKIP_BLOCK   set to 1 to skip a variant.
 #
 # Common optional env:
 #   MEL_FOLDER     drum prompts.  default: input/rwc_test_prompts_split/drum
@@ -49,11 +51,13 @@ CONDA_ENV=mitosis
 REPO_DIR=/home/xinyue.li/Mitosis
 
 CKPT_BASE="${CKPT_BASE:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/last.ckpt}"
-CKPT_RECON="${CKPT_RECON:-ckpt/m2c_intra_cross_attn_recon_v1.0_large_gnl12_drumnondrum_batch_16_schedule/last.ckpt}"
 CKPT_BLOCK="${CKPT_BLOCK:-ckpt/m2c_duet_block_v1.0_large_gnl12_drumnondrum_batch_16_schedule/last.ckpt}"
 
+# Note: #3 M2CDuetRehearsal (was the retired #3 M2CIntraCrossAttnRecon)
+# and #5 M2CDuetPrefix do not have inference scripts yet -- skipped
+# from this unified launcher until those are written.
+
 SKIP_BASE="${SKIP_BASE:-0}"
-SKIP_RECON="${SKIP_RECON:-0}"
 SKIP_BLOCK="${SKIP_BLOCK:-0}"
 
 MEL_FOLDER="${MEL_FOLDER:-input/rwc_test_prompts_split/drum}"
@@ -74,7 +78,8 @@ mkdir -p /home/xinyue.li/logs
 
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
-echo "RWC inference for variants #2, #3, #4"
+echo "RWC inference for variants #2 (DuetAttn) and #4 (DuetBlock)"
+echo "  -- #3 DuetRehearsal and #5 DuetPrefix not yet supported here."
 echo "MEL_FOLDER (drum)    = $MEL_FOLDER"
 echo "CHORD_FOLDER(nondrum)= $CHORD_FOLDER"
 echo "OUTPUT_ROOT          = $OUTPUT_ROOT"
@@ -82,7 +87,7 @@ echo "PROMPT_LENGTH=$PROMPT_LENGTH  GEN_LENGTH=$GEN_LENGTH  TEMPERATURE=$TEMPERA
 echo "MAX_POLYPHONY=$MAX_POLYPHONY  MIN_CHORD_TOKENS_BEFORE_EOS=$MIN_CHORD_TOKENS_BEFORE_EOS"
 echo "MODES=$MODES"
 if [[ -n "${MAX_SONGS:-}" ]]; then echo "MAX_SONGS=$MAX_SONGS"; fi
-echo "Skips: SKIP_BASE=$SKIP_BASE SKIP_RECON=$SKIP_RECON SKIP_BLOCK=$SKIP_BLOCK"
+echo "Skips: SKIP_BASE=$SKIP_BASE SKIP_BLOCK=$SKIP_BLOCK"
 echo "----------------------------------------------------------------"
 nvidia-smi | head -n 20 || true
 echo "================================================================"
@@ -135,16 +140,7 @@ else
     echo "[intra_cross_attn] skipped (SKIP_BASE=1)"
 fi
 
-# #3 M2CIntraCrossAttnRecon -- same script as #2, recon ckpts load directly.
-if [[ "$SKIP_RECON" != "1" ]]; then
-    run_one_variant \
-        "intra_cross_attn_recon" \
-        "cp_transformer_m2c_intra_cross_attn_combined.py" \
-        "$CKPT_RECON" \
-        "intra_cross_attn_recon"
-else
-    echo "[intra_cross_attn_recon] skipped (SKIP_RECON=1)"
-fi
+# #3 M2CDuetRehearsal -- inference script not yet implemented.
 
 # #4 M2CDuetBlockAttn -- Option B inference (query-slot decoding).
 if [[ "$SKIP_BLOCK" != "1" ]]; then

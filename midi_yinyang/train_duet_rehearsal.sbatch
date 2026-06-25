@@ -1,15 +1,8 @@
 #!/bin/bash
-# SLURM batch script: multi-GPU training of M2CIntraCrossAttnRecon on
-# cscc-gpu. Same architecture as intra-cross-attn but with an extra
-# Brier-style MSE term on drum logits added on top of CE.
-#
-# Role in the lineup: LOSS-SHAPE ABLATION (not a conditioning baseline).
-# The MSE term acts on the same logits CE acts on with the same causal
-# past -- it does NOT introduce drum-as-condition for nondrum generation.
-# See midi_yinyang/VARIANTS.md and the recon model's module docstring
-# for the full framing. The architectural conditioning baseline is
-# variant #5 (M2CDuetPrefix); a true loss/architecture conditioning
-# baseline is the proposed #6 (M2CDuetRehearsal).
+# SLURM batch script: multi-GPU training of M2CDuetRehearsal on cscc-gpu.
+# Drum-prefix rehearsal context (T positions, bidirectional) + standard
+# DuetAttn-style interleaved AR suffix (2T positions). Total seq length
+# 3T = 1.5x DuetAttn's 2T, so VRAM is tighter -- BATCH_SIZE default 4.
 #
 # Knobs (all optional):
 #   --gres=gpu:N            how many GPUs to allocate (1..4).
@@ -17,15 +10,10 @@
 #   --export=ALL,CKPT=...   if set, skip init + resume from that ckpt.
 #   --export=ALL,MAX_LR=..  override LR (else autoscale by NGPUS).
 #   --export=ALL,BATCH_SIZE=..  per-GPU batch size (default 4).
-#   --export=ALL,GATE_INIT_BIAS=-4   raise if gates stay at init.
-#   --export=ALL,RECON_WEIGHT=2.0    bump drum reconstruction weight.
+#   --export=ALL,GATE_INIT_BIAS=-4  raise if gates stay at init.
 #   --export=ALL,DUMP_SAMPLES_DIR=path  dump first batch to .mid.
-#
-# Examples:
-#   sbatch midi_yinyang/train_intra_cross_attn_recon.sbatch
-#   sbatch --export=ALL,RECON_WEIGHT=0.5 midi_yinyang/train_intra_cross_attn_recon.sbatch
 
-#SBATCH --job-name=mitosis_intra_cross_attn_recon
+#SBATCH --job-name=mitosis_duet_rehearsal
 #SBATCH --output=/home/xinyue.li/logs/%x_%j.out
 #SBATCH --error=/home/xinyue.li/logs/%x_%j.err
 #SBATCH --nodes=1
@@ -44,22 +32,20 @@ CONDA_ENV=mitosis
 REPO_DIR=/home/xinyue.li/Mitosis
 
 PRETRAINED=ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt
-INIT_CKPT=ckpt/m2c_intra_cross_attn_recon_init/m2c_intra_cross_attn_recon_init.ckpt
+INIT_CKPT=ckpt/m2c_duet_rehearsal_init/m2c_duet_rehearsal_init.ckpt
 
 CKPT="${CKPT:-}"
 MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
-RECON_WEIGHT="${RECON_WEIGHT:-1.0}"
 TASK="${TASK:-drumnondrum}"
-DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_recon_${SLURM_JOB_ID}}"
+DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_rehearsal_${SLURM_JOB_ID}}"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
 
 mkdir -p /home/xinyue.li/logs
 
-# --- detect GPU count --------------------------------------------------
 NGPUS="${SLURM_GPUS_ON_NODE:-}"
 if [[ -z "$NGPUS" && -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
     NGPUS=$(echo "$CUDA_VISIBLE_DEVICES" | tr ',' '\n' | grep -c .)
@@ -78,10 +64,10 @@ fi
 
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
-echo "Variant: m2c_intra_cross_attn_recon  (intra-cross-attn + drum MSE)"
+echo "Variant: m2c_duet_rehearsal  (drum-prefix + interleaved AR suffix)"
 echo "Task:    $TASK"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
-echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS   recon_weight: $RECON_WEIGHT"
+echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS"
 if [[ -n "$CKPT" ]]; then
     echo "Mode: RESUME from CKPT=$CKPT (skip init)"
 else
@@ -91,7 +77,6 @@ echo "----------------------------------------------------------------"
 nvidia-smi || true
 echo "================================================================"
 
-# --- step 1: warm-start init -----------------------------------------
 if [[ -z "$CKPT" ]]; then
     if [[ -f "$INIT_CKPT" ]]; then
         echo "[init] $INIT_CKPT already exists; skipping warm-start step."
@@ -100,14 +85,13 @@ if [[ -z "$CKPT" ]]; then
             echo "[init] ERROR: pretrained ckpt not found at $PRETRAINED"
             exit 1
         fi
-        echo "[init] running init_pretrained_into_intra_cross_attn_recon.py"
-        python init_pretrained_into_intra_cross_attn_recon.py \
+        echo "[init] running init_pretrained_into_duet_rehearsal.py"
+        python init_pretrained_into_duet_rehearsal.py \
             --pretrained "$PRETRAINED" \
             --output     "$INIT_CKPT" \
             --model_size large --global_num_layers 12 \
             --moe_num_experts 4 --moe_topk 2 \
-            --gate_init_bias "$GATE_INIT_BIAS" \
-            --recon_weight "$RECON_WEIGHT"
+            --gate_init_bias "$GATE_INIT_BIAS"
         echo "[init] done -> $INIT_CKPT"
     fi
     TRAIN_CKPT="$INIT_CKPT"
@@ -122,12 +106,11 @@ echo "================================================================"
 echo "[train] --checkpoint_path = $TRAIN_CKPT"
 echo "================================================================"
 
-# --- step 2: training -------------------------------------------------
 export MASTER_PORT=$((20000 + RANDOM % 10000))
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 if [[ "$NGPUS" -le 1 ]]; then
-    python cp_transformer_m2c_intra_cross_attn_recon.py \
+    python cp_transformer_m2c_duet_rehearsal.py \
         --task "$TASK" \
         --batch_size "$BATCH_SIZE" \
         --model_size large \
@@ -139,12 +122,11 @@ if [[ "$NGPUS" -le 1 ]]; then
         --moe_monitor_every_n_steps 500 \
         --dump_samples_dir "$DUMP_SAMPLES_DIR" \
         --gate_init_bias "$GATE_INIT_BIAS" \
-        --recon_weight "$RECON_WEIGHT" \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
 else
     torchrun --standalone --nnodes=1 --nproc_per_node="$NGPUS" \
-        cp_transformer_m2c_intra_cross_attn_recon.py \
+        cp_transformer_m2c_duet_rehearsal.py \
         --task "$TASK" \
         --batch_size "$BATCH_SIZE" \
         --model_size large \
@@ -156,7 +138,6 @@ else
         --moe_monitor_every_n_steps 500 \
         --dump_samples_dir "$DUMP_SAMPLES_DIR" \
         --gate_init_bias "$GATE_INIT_BIAS" \
-        --recon_weight "$RECON_WEIGHT" \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
 fi
