@@ -32,12 +32,35 @@ from it.
 The reference architecture. Symmetric joint AR over both modalities on
 the interleaved sequence. Everything else is measured against this.
 
-### DuetAttn-Recon (#3) — conditioning baseline, loss-side
+### DuetAttn-Recon (#3) — loss-shape ablation (not a true conditioning baseline)
 
-Same architecture as #2; **adds a Brier-style MSE term on the drum
-logits** on top of CE. Conditioning enters through the **loss
-landscape** — the model is encouraged to treat drum as conditionally
-salient — but the attention pattern is unchanged from the base.
+Originally framed as a loss-side conditioning baseline: same architecture
+as DuetAttn (#2), **adds a Brier-style MSE term on the drum logits** on
+top of CE. The intent was that the extra drum supervision would behave
+like a "rehearsal" — the model trains as if it had drum context.
+
+**Caveat (discovered post-implementation)**: the Brier MSE term operates
+on the *same* drum logits that CE already supervises and uses the *same*
+causal past as conditioning. Mathematically, the two terms just push the
+softmax toward the one-hot target with different gradient shapes — they
+don't introduce any new information flow. A true rehearsal-style
+conditioning would require the drum stream to be **architecturally
+visible** as context (full drum prefix bidirectional, then nondrum
+predicted with that context available), not just better-supervised.
+
+So #3 is best understood as a **loss-shape ablation** on top of #2 (does
+the Brier gradient profile do anything CE doesn't?), **not** as a
+distinct conditioning baseline. Variant #5 (DuetPrefix) is the
+architecture-side conditioning baseline that the original framing of #3
+was trying to be a loss-side counterpart to — but the counterpart was
+never realized in the loss alone, because conditioning can't be
+implemented purely by changing the loss on a model that already
+sees the same context.
+
+If a true loss-side conditioning baseline is wanted, see the "future
+work" note in `IMPLEMENTATION_REPORT.md` about a hypothetical
+M2CDuetRehearsal (#6) that prepends the entire drum stream as a
+bidirectional prefix and then runs interleaved AR on the suffix.
 
 ### DuetPrefix (#5) — conditioning baseline, architecture-side
 
@@ -46,9 +69,13 @@ nondrum block reads via full cross attention. Conditioning enters
 through the **architecture itself** (mask shape), not the loss. One-way
 drum→nondrum by construction.
 
-Together, #3 and #5 bracket the conditioning question from two ends.
-#3 leaves the architecture alone and biases the loss; #5 commits the
-architecture and leaves the loss unbiased.
+**Note**: as discussed above, #3 does not actually function as a
+conditioning baseline (the Brier MSE acts on the same predictions CE
+already supervises, with the same context). The architecture-side
+conditioning baseline #5 is what currently stands for "conditioning"
+in the lineup. A new variant #6 (DuetRehearsal) would be the
+genuine loss-side / hybrid conditioning baseline; see
+`IMPLEMENTATION_REPORT.md`.
 
 ### DuetAttn-Block (#4) — the fair-looking fix
 
@@ -76,12 +103,11 @@ The variants bracket the question:
 The four-way comparison reads as:
 
 - **#2 vs #4**: does fixing the asymmetry help at all?
-- **#3 vs #4**: is the symmetry fix doing something the loss-side
-  conditioning baseline can't reach?
 - **#5 vs #4**: is the symmetry fix doing something the
   architecture-side conditioning baseline can't reach?
-- **#3 vs #5**: secondary — which conditioning baseline is stronger,
-  loss-bias or hard-prefix?
+- **#3 vs #2**: pure ablation — does the Brier MSE gradient profile
+  on drum logits do anything CE doesn't? (Loss-shape only; not a
+  conditioning test.)
 
 If #4 cleanly beats both #3 and #5 while matching or beating #2, the
 "symmetry fix without hard conditioning" framing is doing real work and
