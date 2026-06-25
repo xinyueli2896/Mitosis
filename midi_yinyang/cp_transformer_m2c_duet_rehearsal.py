@@ -302,7 +302,7 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
     def __init__(self, *args, moe_num_experts=4, moe_topk=2,
                  moe_intermediate_size=None, global_num_layers=None,
                  global_dropout=0.0, preserve_program=True,
-                 gate_init_bias=-10.0, **kwargs):
+                 gate_init_bias=-10.0, recon_weight=1.0, **kwargs):
         super().__init__(
             *args,
             moe_num_experts=moe_num_experts,
@@ -313,6 +313,14 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
             preserve_program=preserve_program,
             **kwargs,
         )
+        # Weight on the Brier-style drum reconstruction loss
+        # ||softmax(drum_logits) - one_hot(drum_target)||^2. With the
+        # rehearsal prefix giving full drum visibility this term is
+        # closely related to CE on drum (both push softmax -> one-hot),
+        # but it provides an explicit "match the drum I just saw in
+        # the prefix" gradient that's useful as the explicit rehearsal
+        # supervision and as a logged quantity for analysis.
+        self.recon_weight = float(recon_weight)
         del self.global_roformer
         del self.gate_m
         del self.gate_c
@@ -454,18 +462,42 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         ce_loss_drum = (per_token * w_drum * non_pad).sum() / drum_n
         ce_loss_nondrum = (per_token * w_nondrum * non_pad).sum() / nondrum_n
 
+        # ----- Brier-style MSE recon loss on drum (suffix-drum slots) -----
+        # ||softmax(drum_logits) - one_hot(drum_target)||^2 averaged over
+        # non-PAD drum slots. This is the explicit "match the drum you
+        # just saw in the prefix" supervision. With the prefix giving
+        # full drum visibility, this term should drop quickly alongside
+        # CE_drum; tracked as a separate signal for ablation analysis.
+        V = self.tokenizer.n_tokens
+        drum_logits = logits[:, 0::2]                 # [B, T_full, S, V]
+        drum_targets = x[:, 0::2]                      # [B, T_full, S]
+        drum_non_pad = (drum_targets != self.tokenizer.pad_token).float()
+        drum_probs = F.softmax(drum_logits, dim=-1)
+        safe_targets = drum_targets.clamp(min=0, max=V - 1)
+        one_hot = F.one_hot(safe_targets, num_classes=V).float()
+        mse_per_slot = ((drum_probs - one_hot) ** 2).sum(dim=-1)   # [B, T_full, S]
+        recon_loss = (
+            (mse_per_slot * drum_non_pad).sum()
+            / drum_non_pad.sum().clamp_min(1.0)
+        )
+
         self._last_ce_loss = ce_loss.detach()
         self._last_ce_loss_content = ce_loss_content.detach()
         self._last_ce_loss_eos = ce_loss_eos.detach()
         self._last_ce_loss_drum = ce_loss_drum.detach()
         self._last_ce_loss_nondrum = ce_loss_nondrum.detach()
+        self._last_recon_loss = recon_loss.detach()
 
         if isinstance(aux_loss, torch.Tensor):
             aux_loss = aux_loss.mean()
         else:
             aux_loss = ce_loss.new_zeros(())
 
-        total_loss = ce_loss + self.aux_loss_weight * aux_loss
+        total_loss = (
+            ce_loss
+            + self.recon_weight * recon_loss
+            + self.aux_loss_weight * aux_loss
+        )
         return total_loss, aux_loss
 
     def training_step(self, batch, batch_idx):
@@ -476,6 +508,7 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         self.log('train_ce_loss_eos', self._last_ce_loss_eos)
         self.log('train_ce_loss_drum', self._last_ce_loss_drum)
         self.log('train_ce_loss_nondrum', self._last_ce_loss_nondrum)
+        self.log('train_recon_loss', self._last_recon_loss)
         self.log('train_moe_aux_loss', aux_loss.detach())
         return loss
 
@@ -487,6 +520,7 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         self.log('val_ce_loss_eos', self._last_ce_loss_eos)
         self.log('val_ce_loss_drum', self._last_ce_loss_drum)
         self.log('val_ce_loss_nondrum', self._last_ce_loss_nondrum)
+        self.log('val_recon_loss', self._last_recon_loss)
         self.log('val_moe_aux_loss', aux_loss.detach())
         return loss
 
@@ -542,6 +576,11 @@ if __name__ == '__main__':
     parser.add_argument('--dump_samples_every_n_epochs', type=int, default=None)
     parser.add_argument('--max_polyphony', type=int, default=16)
     parser.add_argument('--gate_init_bias', type=float, default=-10.0)
+    parser.add_argument('--recon_weight', type=float, default=1.0,
+                        help='Weight on the Brier-style MSE drum '
+                             'reconstruction loss applied to suffix-drum '
+                             'logits. Total loss = CE + recon_weight * '
+                             'MSE_drum + aux_loss_weight * aux.')
     parser.add_argument('--fresh_schedule', action='store_true', default=False)
     args = parser.parse_args()
 
@@ -578,11 +617,13 @@ if __name__ == '__main__':
         silence_augment_prob=args.silence_augment_prob,
         eos_loss_weight=args.eos_loss_weight,
         gate_init_bias=args.gate_init_bias,
+        recon_weight=args.recon_weight,
     )
     print(f'Architecture: M2CDuetRehearsal  drum-prefix (T pos, bidirectional) + '
           f'interleaved AR suffix (2T pos) + per-mod Q/K/V/O + cross gate + shared MoE FFN '
           f'({args.moe_num_experts}E, topk={args.moe_topk})')
-    print(f'Global depth: {gnl}   gate_init_bias: {args.gate_init_bias}')
+    print(f'Global depth: {gnl}   gate_init_bias: {args.gate_init_bias}   '
+          f'recon_weight: {args.recon_weight}')
 
     train_set = FramedDataset(mod_b_path, TRAIN_LENGTH,
                               args.batch_size, split='train',
@@ -666,6 +707,7 @@ if __name__ == '__main__':
                     'moe_num_experts': args.moe_num_experts,
                     'moe_topk': args.moe_topk,
                     'gate_init_bias': args.gate_init_bias,
+                    'recon_weight': args.recon_weight,
                     'run_tag': args.run_tag,
                 },
             ) if args.wandb else TensorBoardLogger('tb_logs', name=model_name)

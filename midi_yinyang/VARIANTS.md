@@ -16,7 +16,7 @@ For the task `drumnondrum`: mod_a = drum, mod_b = nondrum.
 | # | Class | File | Sequence layout | Attention | Loss | Direction |
 |---|---|---|---|---|---|---|
 | 2 | `M2CIntraCrossAttn` | `cp_transformer_m2c_intra_cross_attn.py` | interleaved `[a_0, b_0, a_1, b_1, …]` | 2 SDPA passes, both causal | CE on every token | symmetric |
-| 3 | `M2CDuetRehearsal` | `cp_transformer_m2c_duet_rehearsal.py` | drum prefix `[drum_0..drum_{T-1}]` + standard DuetAttn shifted interleaved suffix (length 3T total) | 2 SDPA passes; prefix bidirectional within, suffix sees all prefix + causal within suffix | CE on entire 2T suffix (drum-side CE collapses fast; useful signal in nondrum CE) | symmetric joint, drum-conditioned |
+| 3 | `M2CDuetRehearsal` | `cp_transformer_m2c_duet_rehearsal.py` | drum prefix `[drum_0..drum_{T-1}]` + standard DuetAttn shifted interleaved suffix (length 3T total) | 2 SDPA passes; prefix bidirectional within, suffix sees all prefix + causal within suffix | CE on entire 2T suffix + Brier-MSE recon on drum logits (drum-side both collapse fast; useful signal in nondrum CE) | symmetric joint, drum-conditioned |
 | 4 | `M2CDuetBlockAttn` | `cp_transformer_m2c_duet_block.py` | interleaved + 2 appended query slots | 3 SDPA passes (intra / cross-strict-past / frame-bidirectional) | AR-CE + query-CE | symmetric |
 | 5 | `M2CDuetPrefix` | `cp_transformer_m2c_duet_prefix.py` | `[drum_0, …, drum_{T-1}, sos_n, nondrum_0, …, nondrum_{T-2}]` | 2 SDPA passes; drum-drum bidirectional, nondrum-nondrum causal, nondrum→drum cross | CE on nondrum positions only | one-way drum→nondrum |
 
@@ -45,13 +45,19 @@ implement via loss alone. Architecturally:
   visibility into the prefix.
 - **Total sequence length**: 3T.
 
-Loss is standard CE on the entire 2T suffix (drum-side and
-nondrum-side). The drum-side CE collapses fast — the model can
-trivially copy `drum_k` from the prefix to its corresponding suffix
-slot — but that's fine: the useful signal lives in the **nondrum CE**,
-where each `nondrum_k` prediction now sees the **entire drum stream**
-(past and future) via the prefix, plus causal nondrum past, plus the
-suffix's drum past (which itself is conditioned on the prefix).
+Loss is standard CE on the entire 2T suffix plus a **Brier-style MSE
+recon term on drum logits** (`||softmax(drum_logits) −
+one_hot(drum_target)||²` over non-pad suffix-drum slots), controlled
+by `recon_weight` (default 1.0). With the prefix giving full drum
+visibility, both the drum-side CE and the recon term collapse fast —
+the model can trivially copy `drum_k` from the prefix to its
+corresponding suffix slot. That's fine: the recon term provides the
+explicit "match the drum you just saw in rehearsal" gradient that
+the original recon variant was trying to capture, and the useful
+signal for ablation lives in the **nondrum CE**, where each
+`nondrum_k` prediction now sees the **entire drum stream** (past and
+future) via the prefix, plus causal nondrum past, plus the suffix's
+drum past (which itself is conditioned on the prefix).
 
 Why this is different from #5 DuetPrefix: #5 is **one-way drum→nondrum**
 (only nondrum is predicted; drum is pure conditioning). #3 keeps

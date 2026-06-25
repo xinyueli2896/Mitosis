@@ -11,6 +11,7 @@
 #   --export=ALL,MAX_LR=..  override LR (else autoscale by NGPUS).
 #   --export=ALL,BATCH_SIZE=..  per-GPU batch size (default 4).
 #   --export=ALL,GATE_INIT_BIAS=-4  raise if gates stay at init.
+#   --export=ALL,RECON_WEIGHT=0.5   tune Brier-MSE drum recon weight.
 #   --export=ALL,DUMP_SAMPLES_DIR=path  dump first batch to .mid.
 
 #SBATCH --job-name=mitosis_duet_rehearsal
@@ -38,6 +39,7 @@ CKPT="${CKPT:-}"
 MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
+RECON_WEIGHT="${RECON_WEIGHT:-1.0}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_rehearsal_${SLURM_JOB_ID}}"
 
@@ -67,7 +69,7 @@ echo "Job $SLURM_JOB_ID  node=$(hostname)"
 echo "Variant: m2c_duet_rehearsal  (drum-prefix + interleaved AR suffix)"
 echo "Task:    $TASK"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
-echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS"
+echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS   recon_weight: $RECON_WEIGHT"
 if [[ -n "$CKPT" ]]; then
     echo "Mode: RESUME from CKPT=$CKPT (skip init)"
 else
@@ -91,7 +93,8 @@ if [[ -z "$CKPT" ]]; then
             --output     "$INIT_CKPT" \
             --model_size large --global_num_layers 12 \
             --moe_num_experts 4 --moe_topk 2 \
-            --gate_init_bias "$GATE_INIT_BIAS"
+            --gate_init_bias "$GATE_INIT_BIAS" \
+            --recon_weight "$RECON_WEIGHT"
         echo "[init] done -> $INIT_CKPT"
     fi
     TRAIN_CKPT="$INIT_CKPT"
@@ -122,6 +125,7 @@ if [[ "$NGPUS" -le 1 ]]; then
         --moe_monitor_every_n_steps 500 \
         --dump_samples_dir "$DUMP_SAMPLES_DIR" \
         --gate_init_bias "$GATE_INIT_BIAS" \
+        --recon_weight "$RECON_WEIGHT" \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
 else
@@ -138,6 +142,7 @@ else
         --moe_monitor_every_n_steps 500 \
         --dump_samples_dir "$DUMP_SAMPLES_DIR" \
         --gate_init_bias "$GATE_INIT_BIAS" \
+        --recon_weight "$RECON_WEIGHT" \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
 fi

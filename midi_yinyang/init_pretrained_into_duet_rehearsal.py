@@ -40,6 +40,9 @@ def main():
     ap.add_argument('--moe_topk', type=int, default=2)
     ap.add_argument('--moe_intermediate_size', type=int, default=None)
     ap.add_argument('--gate_init_bias', type=float, default=-10.0)
+    ap.add_argument('--recon_weight', type=float, default=1.0,
+                    help='Stored on the model for downstream consistency; '
+                         'the training CLI flag also sets this.')
     args = ap.parse_args()
 
     gnl = args.global_num_layers
@@ -60,7 +63,8 @@ def main():
 
     print(f'[build] M2CDuetRehearsal(size={args.model_size}, gnl={gnl}, '
           f'K={args.moe_num_experts}, topk={args.moe_topk}, '
-          f'gate_init_bias={args.gate_init_bias})')
+          f'gate_init_bias={args.gate_init_bias}, '
+          f'recon_weight={args.recon_weight})')
     net = M2CDuetRehearsal(
         large=(args.model_size == 'large'),
         with_velocity=False,
@@ -69,6 +73,7 @@ def main():
         moe_intermediate_size=args.moe_intermediate_size,
         global_num_layers=gnl,
         gate_init_bias=args.gate_init_bias,
+        recon_weight=args.recon_weight,
     )
     target_sd = net.state_dict()
     assert_vocab_matches(sd_src, target_sd)
@@ -103,6 +108,7 @@ def main():
         moe_intermediate_size=args.moe_intermediate_size,
         global_num_layers=gnl,
         gate_init_bias=args.gate_init_bias,
+        recon_weight=args.recon_weight,
     ).state_dict()
     still_default = []
     for k in target_sd:

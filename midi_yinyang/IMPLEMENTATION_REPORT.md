@@ -69,15 +69,23 @@ prefix.
   invisible to nothing in suffix
 ```
 
-**Loss**: standard CE on the 2T suffix. Drum-side CE collapses fast
-because the model can copy drum_k from the prefix to the matching suffix
-slot — that's expected and acceptable. The useful gradient signal is on
-the nondrum CE, where each nondrum_k now sees the **entire** drum stream
-via the prefix (not just past drum), plus standard causal past.
+**Loss**:
+```
+L_total = CE_suffix + recon_weight · MSE_drum + lambda_aux · L_moe_aux
+```
+where `MSE_drum = mean ||softmax(drum_logits) − one_hot(drum_target)||²`
+over non-pad suffix-drum slots. Default `recon_weight = 1.0`.
+
+Drum-side CE and MSE_drum both collapse fast because the model can copy
+`drum_k` from the prefix to the matching suffix slot — that's expected
+and is the explicit supervision pinning the rehearsal copy. The useful
+gradient signal for the experimental story is on **nondrum-side CE**,
+where each nondrum_k now sees the **entire** drum stream via the prefix
+(not just past drum), plus standard causal past.
 
 Diagnostic logging splits CE into drum-side vs nondrum-side
-(`train_ce_loss_drum`, `train_ce_loss_nondrum`) so the collapse pattern
-is observable.
+(`train_ce_loss_drum`, `train_ce_loss_nondrum`) and logs the recon term
+separately (`train_recon_loss`), so the collapse pattern is observable.
 
 **Training status**: not started yet. Run via:
 ```bash
