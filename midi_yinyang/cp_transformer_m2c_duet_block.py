@@ -757,7 +757,16 @@ if __name__ == '__main__':
     if n_gpus > 1:
         import pytorch_lightning.strategies as strategies
         import datetime
-        strategy = strategies.DDPStrategy(timeout=datetime.timedelta(hours=2))
+        # find_unused_parameters=True is required because the appended
+        # query slots + MoE router routing can leave some params with no
+        # gradient on a given step (e.g. an expert not selected this batch,
+        # or a gate whose contribution flows entirely through the silent
+        # zero of g*u_cross at init). The autograd-graph scan is a small
+        # per-step overhead but necessary for DDP correctness here.
+        strategy = strategies.DDPStrategy(
+            timeout=datetime.timedelta(hours=2),
+            find_unused_parameters=True,
+        )
     else:
         strategy = 'auto'
 
