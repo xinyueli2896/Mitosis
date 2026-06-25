@@ -1,37 +1,44 @@
-"""M2CIntraCrossAttnRecon — intra/cross-attn with an extra token-level
-L2 reconstruction loss on the mod_a (drum) stream.
+"""M2CIntraCrossAttnRecon — intra/cross-attn + Brier-style MSE on drum logits.
 
-Architecture identical to M2CIntraCrossAttn. Only the loss differs:
+Role in the lineup: **loss-shape ablation on top of DuetAttn (#2)**, NOT
+a true conditioning baseline. See VARIANTS.md / IMPLEMENTATION_REPORT.md
+for the full framing. Short version:
 
     L_total = CE_drum + CE_nondrum + lambda_recon * MSE_drum
-
-where MSE_drum is the Brier-style reconstruction loss
 
     MSE_drum = mean_{b,t,s, non-PAD} || softmax(drum_logits_{b,t,s})
                                        - one_hot(drum_target_{b,t,s}) ||_2^2
 
-Both losses use the SAME drum logits the model already produces under
-standard autoregressive teacher forcing — the forward pass is unchanged.
-The "peek" the user described is in the supervision target: at every
-step the loss has access to the ground-truth drum_t (just like CE does),
-but the L2 term drills the predicted drum distribution to lie close to
-the one-hot target on top of CE's classification gradient.
+The MSE_drum term operates on the **same** drum logits CE already
+supervises and conditions on the **same** causal past CE conditions on.
+Both terms push softmax(drum_logits) toward one_hot(drum_target) -- CE
+via -log(p_target), Brier MSE via squared error. Different gradient
+profiles, same task, same context.
 
-Causal constraint preserved: at any forward pass, drum hidden state at
-position 2t-2 only sees drum/nondrum at positions <= 2t-2 (the interleaved
-shift-by-2 causal mask). The MSE term is computed on those causally-
-produced predictions vs. the ground-truth target at the same step.
+Originally framed (incorrectly) as a "rehearsal-style conditioning
+baseline" where the model would learn to use drum context better. That
+framing was wrong: the model never sees drum context it didn't already
+have under plain NTP, because the loss change doesn't change the
+information available to the forward pass. To get true rehearsal-style
+conditioning, the drum stream needs to be **architecturally** visible
+as a prefix when nondrum is predicted -- see the proposed
+M2CDuetRehearsal (#6) or the implemented M2CDuetPrefix (#5).
 
-Inference: forward / sampling code is unchanged. Use the existing
-cp_transformer_m2c_intra_cross_attn_inference.py + _combined.py with a
-ckpt trained by this script. Practical effect on inference: drum
-predictions are sharper / more deterministic, more "memorized" of the
-training-set drum patterns. Tune --temperature higher (1.0-1.3) if you
-want diversity back.
+What this variant still answers:
+  * Does the Brier-MSE gradient profile on drum logits do anything CE
+    alone doesn't? (Loss-shape only ablation against #2.)
 
-ckpt-incompatible with standard m2c_intra_cross_attn (training
-trajectory differs); use the warm-start init from
-init_pretrained_into_intra_cross_attn_recon.py to start.
+What this variant does NOT answer:
+  * Anything about drum-as-condition for nondrum generation.
+
+Architecture identical to M2CIntraCrossAttn; forward pass unchanged.
+Inference uses the existing cp_transformer_m2c_intra_cross_attn_*.py
+scripts with a ckpt trained here (state-dict-compatible with #2).
+
+ckpt-incompatible with standard m2c_intra_cross_attn ONLY in the sense
+that training trajectory differs (and the recon_weight attribute is on
+the module); use the warm-start init from
+init_pretrained_into_intra_cross_attn_recon.py to start a fresh run.
 """
 
 from __future__ import annotations
@@ -53,16 +60,27 @@ class M2CIntraCrossAttnRecon(M2CIntraCrossAttn):
     """Same architecture as M2CIntraCrossAttn, plus a Brier-style MSE
     reconstruction loss on drum (mod_a) tokens added inside loss().
 
+    LOSS-SHAPE ABLATION, NOT A CONDITIONING BASELINE. The MSE term acts
+    on the same logits CE acts on, using the same context, with a
+    different gradient profile. See module docstring for the full
+    framing.
+
     The MSE term:
       softmax(drum_logits) -- the model's predicted drum distribution
       one_hot(drum_target) -- the actual drum token at that position
       || softmax(...) - one_hot(...) ||_2^2  summed over vocab, averaged
                                               over non-PAD slots.
 
-    Together with CE_drum, the drum head is pushed to produce both
-    high-entropy soft predictions (CE) and sharp peaky predictions
-    (MSE-against-one-hot). Net effect: drum head commits harder to its
-    top-1 token.
+    Net effect on training: the drum head receives a sharper gradient
+    near the correct token (Brier MSE has a wider zero-gradient region
+    far from the target than CE, so the gradient near 0 confidence is
+    smaller relative to CE), which may bias the head toward harder
+    commitments on its top-1.
+
+    Empirical question this variant answers: does that gradient-profile
+    bias change drum prediction quality vs CE alone? It does NOT answer
+    "is the model better at using drum-as-condition" -- the model never
+    sees drum-as-condition under this variant.
     """
 
     def __init__(self, *args, recon_weight=1.0, **kwargs):

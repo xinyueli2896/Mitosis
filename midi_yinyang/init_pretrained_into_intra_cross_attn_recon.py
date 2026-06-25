@@ -4,6 +4,13 @@ Architecture is identical to M2CIntraCrossAttn (the recon variant only
 adds an extra loss term, no new parameters), so the per-layer remap is
 the same. Reuses init_pretrained_into_jointattn helpers.
 
+Note on the variant's role: this is a LOSS-SHAPE ABLATION, not a true
+conditioning baseline. The Brier-style MSE term added in the loss
+operates on the same drum logits CE already supervises and uses the
+same causal past as conditioning -- the model never sees drum context
+it doesn't have under plain NTP. See VARIANTS.md and the
+cp_transformer_m2c_intra_cross_attn_recon.py module docstring.
+
 Run:
     python init_pretrained_into_intra_cross_attn_recon.py \\
         --pretrained ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt \\

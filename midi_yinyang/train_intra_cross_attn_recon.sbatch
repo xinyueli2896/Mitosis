@@ -1,7 +1,15 @@
 #!/bin/bash
 # SLURM batch script: multi-GPU training of M2CIntraCrossAttnRecon on
 # cscc-gpu. Same architecture as intra-cross-attn but with an extra
-# token-level L2 drum reconstruction loss added on top of CE.
+# Brier-style MSE term on drum logits added on top of CE.
+#
+# Role in the lineup: LOSS-SHAPE ABLATION (not a conditioning baseline).
+# The MSE term acts on the same logits CE acts on with the same causal
+# past -- it does NOT introduce drum-as-condition for nondrum generation.
+# See midi_yinyang/VARIANTS.md and the recon model's module docstring
+# for the full framing. The architectural conditioning baseline is
+# variant #5 (M2CDuetPrefix); a true loss/architecture conditioning
+# baseline is the proposed #6 (M2CDuetRehearsal).
 #
 # Knobs (all optional):
 #   --gres=gpu:N            how many GPUs to allocate (1..4).
