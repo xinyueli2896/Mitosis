@@ -28,10 +28,8 @@ if _MOE_ROOT not in _sys.path:
 
 
 if __name__ == '__main__':
-    # Patch the jointattn inference module FIRST -- the combined module
-    # imports run_one/run_folder from it, and run_one calls
-    # general_inference at module scope of jointattn_inference. We need
-    # the patched symbols visible there before the combined main starts.
+    # Patch jointattn_inference's symbols first (run_one/run_folder use
+    # general_inference via that module's namespace).
     import cp_transformer_m2c_jointattn_inference as _ja_inf
     from cp_transformer_m2c_duet_block_inference import (
         load_model as _db_load_model,
@@ -40,7 +38,20 @@ if __name__ == '__main__':
     _ja_inf.load_model = _db_load_model
     _ja_inf.general_inference = _db_general_inference
 
-    # Then dispatch via jointattn_combined's CLI/main.
+    # ALSO patch jointattn_combined's own symbols. It imports
+    # `general_inference` directly from cp_transformer_m2c_moe_inference
+    # (not from jointattn_inference), so its module-scope reference must
+    # be patched separately, otherwise its main() calls the original
+    # general_inference -> model._global_interaction -> the parent's
+    # global_roformer access -> AttributeError because we deleted
+    # global_roformer in M2CDuetBlockAttn.__init__.
     import cp_transformer_m2c_jointattn_combined as _ja_comb
     _ja_comb.load_model = _db_load_model
+    _ja_comb.general_inference = _db_general_inference
+
+    # Belt-and-suspenders: also patch the source module so any other
+    # importer that hasn't been considered picks up the new version.
+    import cp_transformer_m2c_moe_inference as _moe_inf
+    _moe_inf.general_inference = _db_general_inference
+
     _ja_comb.main()
