@@ -100,8 +100,9 @@ sbatch midi_yinyang/train_duet_rehearsal.sbatch
 sbatch --export=ALL,RECON_WEIGHT=0.5 midi_yinyang/train_duet_rehearsal.sbatch
 sbatch --export=ALL,RECON_WEIGHT=0.0 midi_yinyang/train_duet_rehearsal.sbatch  # pure CE
 
-# Inference: not yet implemented. TODO -- needs a custom loop maintaining a
-# prefix buffer + suffix shift-trick buffer.
+# Inference (drum -> nondrum only; the natural use case for this variant)
+sbatch --export=ALL,CKPT=ckpt/<run>/last.ckpt \
+       midi_yinyang/infer_duet_rehearsal.sbatch
 ```
 
 #### **C.2 `M2CDuetPrefix`** — one-way drum → nondrum (prefix-LM)
@@ -115,8 +116,9 @@ construction.
 # Train
 sbatch midi_yinyang/train_duet_prefix.sbatch
 
-# Inference: not yet implemented. TODO -- single-direction (drum→nondrum)
-# can adapt the jointattn inference machinery.
+# Inference (drum -> nondrum only; this variant only supports that direction)
+sbatch --export=ALL,CKPT=ckpt/<run>/last.ckpt \
+       midi_yinyang/infer_duet_prefix.sbatch
 ```
 
 ---
@@ -139,13 +141,13 @@ sbatch --export=ALL,MAX_LR=5e-5,BATCH_SIZE=2 midi_yinyang/train_<variant>.sbatch
 
 ### Variant compatibility for inference
 
-| Variant | Inference script | State-dict compatible with |
-|---|---|---|
-| A.1 DuetAttn | `infer_intra_cross_attn_combined.sbatch` | — |
-| A.2 DuetBlock | `infer_all_rwc.sbatch` (Option B query-slot decode) | — |
-| B.1 Anticipatory | TODO (state-dict-compat with A.1; just needs same shift applied) | A.1 |
-| C.1 Rehearsal | TODO | — |
-| C.2 Prefix | TODO | — |
+| Variant | Inference script | Modes supported | State-dict compatible with |
+|---|---|---|---|
+| A.1 DuetAttn | `infer_intra_cross_attn_combined.sbatch` | co, mel2chord, chord2mel, mel_only, chord_only | — |
+| A.2 DuetBlock | `infer_all_rwc.sbatch` (Option B query-slot decode) | same 5 modes | — |
+| B.1 Anticipatory | TODO (state-dict-compat with A.1; just needs same shift applied) | — | A.1 |
+| C.1 Rehearsal | `infer_duet_rehearsal.sbatch` | **drum → nondrum only** | — |
+| C.2 Prefix | `infer_duet_prefix.sbatch` | **drum → nondrum only** | — |
 
 ---
 
