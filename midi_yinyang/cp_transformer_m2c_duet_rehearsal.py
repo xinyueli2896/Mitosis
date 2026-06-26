@@ -240,10 +240,10 @@ class M2CDuetRehearsalLayer(nn.Module):
         k = _scatter(k_m, k_c)
         v = _scatter(v_m, v_c)
 
-        # RoPE on Q, K.
-        cos_t = cos[:, :, :L]
-        sin_t = sin[:, :, :L]
-        q, k = _apply_rope(q, k, cos_t, sin_t)
+        # RoPE on Q, K. The caller pre-built cos/sin with per-position
+        # local indexing (prefix 0..T-1, suffix 0..2T-1), shape
+        # [1, 1, L, head_dim], so no further slicing here.
+        q, k = _apply_rope(q, k, cos, sin)
 
         # Two SDPA passes.
         mask_intra, mask_cross = self._build_masks(T, q.device)
@@ -357,11 +357,28 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         return sos.to(device=device, dtype=dtype)
 
     def _run_global_stack(self, h_full, T):
-        """h_full: [B, 3T, H] prefix + shifted suffix. Returns (h_global, aux)."""
+        """h_full: [B, 3T, H] prefix + shifted suffix. Returns (h_global, aux).
+
+        RoPE is applied SEGMENT-WISE: prefix positions [0, T) get rotations
+        0..T-1; suffix positions [T, 3T) get rotations 0..2T-1. This
+        preserves the pretrained backbone's RoPE phase on the suffix
+        (where it runs standard DuetAttn AR) and gives the prefix its
+        own self-consistent 0-indexed RoPE so the model can learn
+        prefix-internal relative-time structure independently of the
+        suffix's RoPE phase.
+        """
         B, L, H = h_full.shape
         assert L == 3 * T
         head_dim = H // self.num_attention_heads
-        cos, sin = _rope_freqs(L, head_dim, device=h_full.device, dtype=h_full.dtype)
+        # Base RoPE table for up to 2T positions (max length of any segment).
+        cos_base, sin_base = _rope_freqs(
+            2 * T, head_dim, device=h_full.device, dtype=h_full.dtype,
+        )
+        # Build per-position local index: prefix -> pos; suffix -> pos - T.
+        positions = torch.arange(L, device=h_full.device)
+        local_pos = torch.where(positions < T, positions, positions - T)
+        cos = cos_base[:, :, local_pos]   # [1, 1, L, head_dim]
+        sin = sin_base[:, :, local_pos]
         total_aux = torch.zeros((), device=h_full.device, dtype=h_full.dtype)
         for layer in self.global_layers:
             h_full, aux = layer(h_full, T, cos, sin)
