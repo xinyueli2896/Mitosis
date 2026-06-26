@@ -30,10 +30,17 @@ if _MOE_ROOT not in _sys.path:
 if __name__ == '__main__':
     # Patch jointattn_inference's symbols first (run_one/run_folder use
     # general_inference via that module's namespace).
+    #
+    # Default to OPTION A (AR clean-stream readout). The query slots
+    # (Option B) are typically under-trained -- they receive ~T_full x
+    # less gradient density than the AR clean stream during training,
+    # so at inference they produce near-degenerate predictions. To
+    # specifically test Option B (e.g., to compare or after heavy
+    # query-loss-upweighted training), swap the import below.
     import cp_transformer_m2c_jointattn_inference as _ja_inf
     from cp_transformer_m2c_duet_block_inference import (
         load_model as _db_load_model,
-        general_inference_duet_block as _db_general_inference,
+        general_inference_duet_block_option_a as _db_general_inference,
     )
     _ja_inf.load_model = _db_load_model
     _ja_inf.general_inference = _db_general_inference
