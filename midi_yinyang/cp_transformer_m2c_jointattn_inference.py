@@ -86,6 +86,27 @@ from preprocess_large_midi_dataset import DURATION_TEMPLATES
 # keyed by program number, with program=127 -> Instrument(0, is_drum=True).
 # ---------------------------------------------------------------------------
 
+def _get_input_tempo(midi_path, default=120.0):
+    """Read the initial tempo from a prompt MIDI file. Falls back to
+    `default` if the file has no tempo events or can't be parsed.
+
+    Used so generated output plays at the SAME tempo as the input prompt
+    -- otherwise the prompt and the generated continuation drift relative
+    to each other on playback, even though the underlying token grid is
+    correctly aligned to 16th notes."""
+    if midi_path is None:
+        return float(default)
+    try:
+        midi = pretty_midi.PrettyMIDI(midi_path)
+        _, tempos = midi.get_tempo_changes()
+        if len(tempos) > 0:
+            return float(tempos[0])
+    except Exception as e:
+        print(f'[tempo] warn: could not read tempo from {midi_path}: {e!r}; '
+              f'falling back to {default}')
+    return float(default)
+
+
 def decode_m2c_frames(mel_frames, chord_frames, save_path, tokenizer,
                       with_velocity=False, tempo=120.0,
                       write_mel=True, write_chord=True):
@@ -319,6 +340,17 @@ def run_one(model, mode, mel_path, chord_path, args, out_subdir):
         chord_action_fn=chord_action,
     )
 
+    # Pick the source-of-truth MIDI for tempo (and implicitly the beat
+    # grid, since frames are quantized to 16th notes at this tempo). For
+    # modes where mel is the prompt/condition prefer mel_path; for the
+    # chord-driven modes prefer chord_path. Fall back to either if one
+    # is missing.
+    tempo_source = mel_path if mel_path is not None else chord_path
+    if mode in ('chord2mel', 'chord_only'):
+        tempo_source = chord_path if chord_path is not None else mel_path
+    output_tempo = _get_input_tempo(tempo_source, default=120.0)
+    print(f'[tempo] mode={mode} source={tempo_source} -> tempo={output_tempo:.2f} BPM')
+
     save_name = getattr(model, 'save_name', 'm2c_jointattn_run')
     out_dir = os.path.join(f'temp/{save_name}', out_subdir, mode)
     write_mel = mode != 'chord_only'
@@ -334,6 +366,7 @@ def run_one(model, mode, mel_path, chord_path, args, out_subdir):
             ),
             tokenizer=tokenizer,
             with_velocity=model.with_velocity,
+            tempo=output_tempo,
             write_mel=write_mel,
             write_chord=write_chord,
         )
