@@ -39,6 +39,7 @@ from cp_transformer_m2c_intra_cross_attn import M2CIntraCrossAttn
 from cp_transformer_m2c_jointattn_inference import (  # noqa: F401
     decode_m2c_frames,
     _infer_global_num_layers,
+    resolve_best_ckpt,
     run_one,
     run_folder,
 )
@@ -51,6 +52,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
     """Build M2CIntraCrossAttn with the right depth/experts and load
     weights. `gate_init_bias` only matters for fresh-init -- when loading
     a trained ckpt, the saved gate weights override the init bias."""
+    ckpt_path = resolve_best_ckpt(ckpt_path)
     ck = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     if global_num_layers is None:
         global_num_layers, source = _infer_global_num_layers(

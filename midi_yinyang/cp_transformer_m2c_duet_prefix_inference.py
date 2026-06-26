@@ -42,6 +42,7 @@ from cp_transformer_m2c_jointattn_inference import (
     _infer_global_num_layers,
     _get_input_tempo,
     decode_m2c_frames,
+    resolve_best_ckpt,
 )
 from cp_transformer_m2c_moe_inference import _load_prompt_tokens
 
@@ -50,6 +51,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
                moe_num_experts=4, moe_topk=2, moe_intermediate_size=None,
                global_num_layers=None, preserve_program=True,
                min_acc_tokens_before_eos=0, gate_init_bias=-10.0):
+    ckpt_path = resolve_best_ckpt(ckpt_path)
     ck = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     if global_num_layers is None:
         global_num_layers, source = _infer_global_num_layers(
