@@ -25,7 +25,7 @@ For `--task drumnondrum`: mod_a = drum, mod_b = nondrum.
 Both modalities are predicted from each other's past. The standard
 joint-generation setting.
 
-#### **#2 `M2CIntraCrossAttn`** (a.k.a. **DuetAttn**) — base / reference
+#### **A.1 `M2CIntraCrossAttn`** (a.k.a. **DuetAttn**) — base / reference
 
 Interleaved `[drum_t, nondrum_t, ...]` with strict causal attention; two
 SDPA passes per block (intra: same-modality; cross: other-modality).
@@ -39,7 +39,7 @@ sbatch --export=ALL,CKPT=ckpt/<run>/last.ckpt \
        midi_yinyang/infer_intra_cross_attn_combined.sbatch
 ```
 
-#### **#4 `M2CDuetBlockAttn`** — fair-looking fix (symmetric same-instant coupling)
+#### **A.2 `M2CDuetBlockAttn`** — fair-looking fix (symmetric same-instant coupling)
 
 DuetAttn + appended next-frame **query slots** with bidirectional
 within-frame attention. Three SDPA passes per block (intra / cross-strict /
@@ -58,7 +58,7 @@ sbatch --export=ALL,CKPT=ckpt/<run>/last.ckpt \
 
 ### Group B — Look-ahead co-generation
 
-#### **#6 `M2CDuetAnticipatory`** — drum shifted ahead by k frames
+#### **B.1 `M2CDuetAnticipatory`** — drum shifted ahead by k frames
 
 Same DuetAttn architecture; drum stream is reindexed in the interleaved
 input so that position `2t` contains `drum_{t+k}` (default `k = 16` ≈
@@ -85,7 +85,7 @@ sbatch --export=ALL,ANTICIPATION_FRAMES=32 midi_yinyang/train_duet_anticipatory.
 Drum is treated as a (rehearsal / prefix) condition; the model is biased
 toward "given drum, generate nondrum."
 
-#### **#3 `M2CDuetRehearsal`** — drum prefix + interleaved AR suffix
+#### **C.1 `M2CDuetRehearsal`** — drum prefix + interleaved AR suffix
 
 Sequence (length 3T): `[drum_0..drum_{T-1}]` (bidirectional within) +
 standard DuetAttn-shifted interleaved suffix. Suffix runs joint AR with
@@ -104,7 +104,7 @@ sbatch --export=ALL,RECON_WEIGHT=0.0 midi_yinyang/train_duet_rehearsal.sbatch  #
 # prefix buffer + suffix shift-trick buffer.
 ```
 
-#### **#5 `M2CDuetPrefix`** — one-way drum → nondrum (prefix-LM)
+#### **C.2 `M2CDuetPrefix`** — one-way drum → nondrum (prefix-LM)
 
 Sequence: `[drum_0..drum_{T-1}, sos_n, nondrum_0..nondrum_{T-2}]`. Drum
 block bidirectional within itself; nondrum block strict causal + reads
@@ -141,11 +141,11 @@ sbatch --export=ALL,MAX_LR=5e-5,BATCH_SIZE=2 midi_yinyang/train_<variant>.sbatch
 
 | Variant | Inference script | State-dict compatible with |
 |---|---|---|
-| #2 DuetAttn | `infer_intra_cross_attn_combined.sbatch` | — |
-| #4 DuetBlock | `infer_all_rwc.sbatch` (Option B query-slot decode) | — |
-| #6 Anticipatory | TODO (state-dict-compat with #2; just needs same shift applied) | #2 |
-| #3 Rehearsal | TODO | — |
-| #5 Prefix | TODO | — |
+| A.1 DuetAttn | `infer_intra_cross_attn_combined.sbatch` | — |
+| A.2 DuetBlock | `infer_all_rwc.sbatch` (Option B query-slot decode) | — |
+| B.1 Anticipatory | TODO (state-dict-compat with A.1; just needs same shift applied) | A.1 |
+| C.1 Rehearsal | TODO | — |
+| C.2 Prefix | TODO | — |
 
 ---
 
