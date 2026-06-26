@@ -13,6 +13,7 @@ what's currently runnable end-to-end. For the conceptual framing
 | 3 | `M2CDuetRehearsal` | conditioning baseline — drum-prefix rehearsal + joint interleaved AR suffix | ⏳ not yet trained | ❌ not implemented |
 | 4 | `M2CDuetBlockAttn` (DuetAttn-Block) | the fair-looking fix | 🟡 in progress (12k+ steps as of last check) | ✅ Option B implemented (untested) |
 | 5 | `M2CDuetPrefix` | conditioning baseline — one-way drum→nondrum | ⏳ not yet trained | ❌ not implemented |
+| 6 | `M2CDuetAnticipatory` | anticipatory conditioning baseline — drum stream shifted ahead by k frames in the interleaved input (DuetAttn architecture, data-side reindex) | ⏳ not yet trained | uses #2's inference (state-dict-compatible) with the same shift applied internally |
 
 The previous occupant of slot #3 (`M2CIntraCrossAttnRecon`) has been
 retired and its code files deleted. Existing ckpts from that variant

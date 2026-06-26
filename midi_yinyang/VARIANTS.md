@@ -19,6 +19,7 @@ For the task `drumnondrum`: mod_a = drum, mod_b = nondrum.
 | 3 | `M2CDuetRehearsal` | `cp_transformer_m2c_duet_rehearsal.py` | drum prefix `[drum_0..drum_{T-1}]` + standard DuetAttn shifted interleaved suffix (length 3T total) | 2 SDPA passes; prefix bidirectional within, suffix sees all prefix + causal within suffix | CE on entire 2T suffix + Brier-MSE recon on drum logits (drum-side both collapse fast; useful signal in nondrum CE) | symmetric joint, drum-conditioned |
 | 4 | `M2CDuetBlockAttn` | `cp_transformer_m2c_duet_block.py` | interleaved + 2 appended query slots | 3 SDPA passes (intra / cross-strict-past / frame-bidirectional) | AR-CE + query-CE | symmetric |
 | 5 | `M2CDuetPrefix` | `cp_transformer_m2c_duet_prefix.py` | `[drum_0, …, drum_{T-1}, sos_n, nondrum_0, …, nondrum_{T-2}]` | 2 SDPA passes; drum-drum bidirectional, nondrum-nondrum causal, nondrum→drum cross | CE on nondrum positions only | one-way drum→nondrum |
+| 6 | `M2CDuetAnticipatory` | `cp_transformer_m2c_duet_anticipatory.py` | interleaved with drum shifted ahead by k frames: `[drum_k, nondrum_0, drum_{k+1}, nondrum_1, …]` | same as #2 (architecture identical to DuetAttn) | standard CE | symmetric joint, drum-anticipated |
 
 Variant #1 (`M2CJointAttn`) is conceptually retired — superseded by
 DuetAttn — but its file stays in the repo because newer variants
