@@ -4,6 +4,152 @@ Codebase for training and inferring joint per-modality CP-transformer
 generative models on POP909 (melody+chord), LAMD (drum+other), and a
 roadmap to audio+symbolic.
 
+---
+
+## Active model variants (current focus)
+
+Five active variants in three conceptual groups. See `VARIANTS.md` for the
+full framing and `IMPLEMENTATION_REPORT.md` for status per variant. The
+older "Models — what each one is" section further down covers legacy
+variants kept for reference.
+
+All variants share: CP tokenization, single-stream pretrained backbone
+warm-start, per-modality Q/K/V/O projections, RoPE inside attention,
+shared MoE FFN (4 experts, top-2). They differ in **sequence layout**,
+**attention mask**, and **loss**.
+
+For `--task drumnondrum`: mod_a = drum, mod_b = nondrum.
+
+### Group A — Co-generation (symmetric joint AR)
+
+Both modalities are predicted from each other's past. The standard
+joint-generation setting.
+
+#### **#2 `M2CIntraCrossAttn`** (a.k.a. **DuetAttn**) — base / reference
+
+Interleaved `[drum_t, nondrum_t, ...]` with strict causal attention; two
+SDPA passes per block (intra: same-modality; cross: other-modality).
+
+```bash
+# Train
+sbatch midi_yinyang/train_intra_cross_attn.sbatch
+
+# Inference (5 modes: co, mel2chord, chord2mel, mel_only, chord_only)
+sbatch --export=ALL,CKPT=ckpt/<run>/last.ckpt \
+       midi_yinyang/infer_intra_cross_attn_combined.sbatch
+```
+
+#### **#4 `M2CDuetBlockAttn`** — fair-looking fix (symmetric same-instant coupling)
+
+DuetAttn + appended next-frame **query slots** with bidirectional
+within-frame attention. Three SDPA passes per block (intra / cross-strict /
+frame-bidirectional) + two gates per modality.
+
+```bash
+# Train
+sbatch midi_yinyang/train_duet_block.sbatch
+
+# Inference (Option B: query-slot decoding)
+sbatch --export=ALL,CKPT=ckpt/<run>/last.ckpt \
+       midi_yinyang/infer_all_rwc.sbatch          # runs #2 and #4 on RWC prompts
+```
+
+---
+
+### Group B — Look-ahead co-generation
+
+#### **#6 `M2CDuetAnticipatory`** — drum shifted ahead by k frames
+
+Same DuetAttn architecture; drum stream is reindexed in the interleaved
+input so that position `2t` contains `drum_{t+k}` (default `k = 16` ≈
+1 bar). Nondrum predictions get `k` frames of **future drum context**
+under standard causal AR.
+
+```bash
+# Train (default lookahead = 16 frames; override with ANTICIPATION_FRAMES)
+sbatch midi_yinyang/train_duet_anticipatory.sbatch
+
+# Tune lookahead:
+sbatch --export=ALL,ANTICIPATION_FRAMES=8  midi_yinyang/train_duet_anticipatory.sbatch
+sbatch --export=ALL,ANTICIPATION_FRAMES=32 midi_yinyang/train_duet_anticipatory.sbatch
+
+# Inference: not yet wired through the helper sbatch (state-dict-compatible
+# with #2, but the inference loop needs the same shift applied internally
+# to interpret outputs correctly). TODO.
+```
+
+---
+
+### Group C — Conditional generation
+
+Drum is treated as a (rehearsal / prefix) condition; the model is biased
+toward "given drum, generate nondrum."
+
+#### **#3 `M2CDuetRehearsal`** — drum prefix + interleaved AR suffix
+
+Sequence (length 3T): `[drum_0..drum_{T-1}]` (bidirectional within) +
+standard DuetAttn-shifted interleaved suffix. Suffix runs joint AR with
+full visibility into the drum prefix. Loss = CE on suffix + Brier-MSE
+recon term on suffix-drum logits.
+
+```bash
+# Train (default recon_weight = 1.0)
+sbatch midi_yinyang/train_duet_rehearsal.sbatch
+
+# Tune recon weight:
+sbatch --export=ALL,RECON_WEIGHT=0.5 midi_yinyang/train_duet_rehearsal.sbatch
+sbatch --export=ALL,RECON_WEIGHT=0.0 midi_yinyang/train_duet_rehearsal.sbatch  # pure CE
+
+# Inference: not yet implemented. TODO -- needs a custom loop maintaining a
+# prefix buffer + suffix shift-trick buffer.
+```
+
+#### **#5 `M2CDuetPrefix`** — one-way drum → nondrum (prefix-LM)
+
+Sequence: `[drum_0..drum_{T-1}, sos_n, nondrum_0..nondrum_{T-2}]`. Drum
+block bidirectional within itself; nondrum block strict causal + reads
+all drum. Loss = CE on nondrum positions only. One-way drum→nondrum by
+construction.
+
+```bash
+# Train
+sbatch midi_yinyang/train_duet_prefix.sbatch
+
+# Inference: not yet implemented. TODO -- single-direction (drum→nondrum)
+# can adapt the jointattn inference machinery.
+```
+
+---
+
+### Common overrides for all training sbatches
+
+```bash
+# Use 2 GPUs instead of 4
+sbatch --gres=gpu:2 midi_yinyang/train_<variant>.sbatch
+
+# Switch task (melchord = POP909 mel/chord)
+sbatch --export=ALL,TASK=melchord midi_yinyang/train_<variant>.sbatch
+
+# Resume from a ckpt
+sbatch --export=ALL,CKPT=ckpt/<run>/last.ckpt midi_yinyang/train_<variant>.sbatch
+
+# Override LR / batch size
+sbatch --export=ALL,MAX_LR=5e-5,BATCH_SIZE=2 midi_yinyang/train_<variant>.sbatch
+```
+
+### Variant compatibility for inference
+
+| Variant | Inference script | State-dict compatible with |
+|---|---|---|
+| #2 DuetAttn | `infer_intra_cross_attn_combined.sbatch` | — |
+| #4 DuetBlock | `infer_all_rwc.sbatch` (Option B query-slot decode) | — |
+| #6 Anticipatory | TODO (state-dict-compat with #2; just needs same shift applied) | #2 |
+| #3 Rehearsal | TODO | — |
+| #5 Prefix | TODO | — |
+
+---
+
+
 ## Repository layout
 
 ```
