@@ -485,8 +485,12 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         # just saw in the prefix" supervision. With the prefix giving
         # full drum visibility, this term should drop quickly alongside
         # CE_drum; tracked as a separate signal for ablation analysis.
+        # local_decode returns logits with the batch and frame dims
+        # collapsed, so reshape to [B, 2T_full, S, V] before slicing
+        # the drum (even-frame) rows.
         V = self.tokenizer.n_tokens
-        drum_logits = logits[:, 0::2]                 # [B, T_full, S, V]
+        logits_4d = logits.view(batch_size, full_seq_len, subseq_len, V)
+        drum_logits = logits_4d[:, 0::2]               # [B, T_full, S, V]
         drum_targets = x[:, 0::2]                      # [B, T_full, S]
         drum_non_pad = (drum_targets != self.tokenizer.pad_token).float()
         drum_probs = F.softmax(drum_logits, dim=-1)
