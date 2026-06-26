@@ -15,7 +15,7 @@ Single-GPU. Example:
         --drum-folder input/rwc_test_prompts_split/drum \\
         --output-dir temp/duet_rehearsal_rwc \\
         --gen-length 384 --prompt-length 64 \\
-        --temperature 0.9 --max-polyphony 16 --model-size large
+        --temperature 1.0 --max-polyphony 16 --model-size large
 
 If --nondrum-folder is given and a matching basename exists, its first
 --prompt-length frames are used as a nondrum prompt. After that, nondrum
@@ -266,7 +266,7 @@ def main():
     p.add_argument('--prompt-length', type=int, default=64,
                    help='Number of nondrum prompt frames to teacher-force '
                         'before sampling kicks in (only used if --nondrum-folder).')
-    p.add_argument('--temperature', type=float, default=0.9)
+    p.add_argument('--temperature', type=float, default=1.0)
     p.add_argument('--max-polyphony', type=int, default=16)
     p.add_argument('--model-size', type=str, default='large',
                    choices=['small', 'large'])

@@ -16,7 +16,7 @@ Run from midi_yinyang/:
         --chord-folder input/rwc_test_prompts_split/nondrum \\
         --output-dir temp/m2c_duet_block_rwc \\
         --prompt-length 64 --gen-length 384 \\
-        --temperature 0.9 --max-polyphony 16 --model-size large
+        --temperature 1.0 --max-polyphony 16 --model-size large
 """
 
 import os as _os

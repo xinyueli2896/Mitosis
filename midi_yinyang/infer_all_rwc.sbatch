@@ -28,7 +28,7 @@
 #   MAX_SONGS      cap songs per variant. default: unset (all).
 #   PROMPT_LENGTH  default 64.
 #   GEN_LENGTH     default 384.
-#   TEMPERATURE    default 0.9.
+#   TEMPERATURE    default 1.0.
 #   MAX_POLYPHONY  default 16.
 #   MIN_CHORD_TOKENS_BEFORE_EOS  rescue knob for EOS-collapsed ckpts. default 0.
 #   MODES          space-separated subset for A.1/A.2; default: all five.
@@ -72,7 +72,7 @@ CHORD_FOLDER="${CHORD_FOLDER:-input/rwc_test_prompts_split/nondrum}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-temp/rwc_infer_${SLURM_JOB_ID}}"
 PROMPT_LENGTH="${PROMPT_LENGTH:-64}"
 GEN_LENGTH="${GEN_LENGTH:-384}"
-TEMPERATURE="${TEMPERATURE:-0.9}"
+TEMPERATURE="${TEMPERATURE:-1.0}"
 MAX_POLYPHONY="${MAX_POLYPHONY:-16}"
 MIN_CHORD_TOKENS_BEFORE_EOS="${MIN_CHORD_TOKENS_BEFORE_EOS:-0}"
 MODES="${MODES:-co mel2chord chord2mel mel_only chord_only}"

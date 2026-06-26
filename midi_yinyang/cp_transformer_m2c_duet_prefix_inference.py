@@ -21,7 +21,7 @@ Single-GPU. Example:
         --drum-folder input/rwc_test_prompts_split/drum \\
         --output-dir temp/duet_prefix_rwc \\
         --gen-length 384 --prompt-length 64 \\
-        --temperature 0.9 --max-polyphony 16 --model-size large
+        --temperature 1.0 --max-polyphony 16 --model-size large
 """
 
 import os as _os
@@ -249,7 +249,7 @@ def main():
     p.add_argument('--output-dir', required=True)
     p.add_argument('--gen-length', type=int, default=384)
     p.add_argument('--prompt-length', type=int, default=64)
-    p.add_argument('--temperature', type=float, default=0.9)
+    p.add_argument('--temperature', type=float, default=1.0)
     p.add_argument('--max-polyphony', type=int, default=16)
     p.add_argument('--model-size', type=str, default='large',
                    choices=['small', 'large'])
