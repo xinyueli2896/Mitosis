@@ -1,13 +1,11 @@
 #!/bin/bash
 # SLURM batch script: combined inference on RWC prompts for variants
-# A.1 (DuetAttn), A.2 (DuetBlock), and C.1 (DuetRehearsal).
+# A.1 (DuetAttn), A.2 (DuetBlock), C.1 (DuetRehearsal), and C.2 (DuetPrefix).
 #
 #   A.1  M2CIntraCrossAttn  -- 5 modes (co, mel2chord, chord2mel, mel_only, chord_only)
-#   A.2  M2CDuetBlockAttn   -- 5 modes via Option B query-slot decoding
-#   C.1  M2CDuetRehearsal   -- drum -> nondrum only (the conditional-generation variant)
-#
-# C.2 M2CDuetPrefix is also drum->nondrum-only but uses a different
-# architecture; run separately via infer_duet_prefix.sbatch if needed.
+#   A.2  M2CDuetBlockAttn   -- 5 modes via Option A AR-clean-stream decoding
+#   C.1  M2CDuetRehearsal   -- drum -> nondrum only (conditional-generation variant)
+#   C.2  M2CDuetPrefix      -- drum -> nondrum only (prefix-LM conditional variant)
 #
 # Single-GPU, runs the inferences sequentially in one job.
 #
@@ -15,11 +13,13 @@
 #   CKPT_BASE       ckpt for A.1 (M2CIntraCrossAttn).      default below.
 #   CKPT_BLOCK      ckpt for A.2 (M2CDuetBlockAttn).       default below.
 #   CKPT_REHEARSAL  ckpt for C.1 (M2CDuetRehearsal).       default below.
+#   CKPT_PREFIX     ckpt for C.2 (M2CDuetPrefix).          default below.
 #   CKPT_* may be either a specific .ckpt file or a directory; if a
 #   directory, the inference script auto-selects the val_loss-tagged
 #   ckpt with the smallest val_loss (falling back to last.ckpt).
 #
-#   SKIP_BASE / SKIP_BLOCK / SKIP_REHEARSAL   set to 1 to skip a variant.
+#   SKIP_BASE / SKIP_BLOCK / SKIP_REHEARSAL / SKIP_PREFIX
+#       set to 1 to skip a variant.
 #
 # Common optional env:
 #   MEL_FOLDER     drum prompts.    default: input/rwc_test_prompts_split/drum
@@ -39,6 +39,7 @@
 #       intra_cross_attn/<song>/<mode>.mid     (A.1, 5 modes)
 #       duet_block/<song>/<mode>.mid           (A.2, 5 modes)
 #       duet_rehearsal/<song>/drum2nondrum_temp<T>.mid   (C.1)
+#       duet_prefix/<song>/drum2nondrum_temp<T>.mid      (C.2)
 
 #SBATCH --job-name=mitosis_infer_rwc_all
 #SBATCH --output=/home/xinyue.li/logs/%x_%j.out
@@ -64,10 +65,12 @@ REPO_DIR=/home/xinyue.li/Mitosis
 CKPT_BASE="${CKPT_BASE:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
 CKPT_BLOCK="${CKPT_BLOCK:-ckpt/m2c_duet_block_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
 CKPT_REHEARSAL="${CKPT_REHEARSAL:-ckpt/m2c_duet_rehearsal_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
+CKPT_PREFIX="${CKPT_PREFIX:-ckpt/m2c_duet_prefix_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
 
 SKIP_BASE="${SKIP_BASE:-0}"
 SKIP_BLOCK="${SKIP_BLOCK:-0}"
 SKIP_REHEARSAL="${SKIP_REHEARSAL:-0}"
+SKIP_PREFIX="${SKIP_PREFIX:-0}"
 
 MEL_FOLDER="${MEL_FOLDER:-input/rwc_test_prompts_split/drum}"
 CHORD_FOLDER="${CHORD_FOLDER:-input/rwc_test_prompts_split/nondrum}"
@@ -95,7 +98,7 @@ echo "PROMPT_LENGTH=$PROMPT_LENGTH  GEN_LENGTH=$GEN_LENGTH  TEMPERATURE=$TEMPERA
 echo "MAX_POLYPHONY=$MAX_POLYPHONY  MIN_CHORD_TOKENS_BEFORE_EOS=$MIN_CHORD_TOKENS_BEFORE_EOS"
 echo "MODES=$MODES"
 if [[ -n "${MAX_SONGS:-}" ]]; then echo "MAX_SONGS=$MAX_SONGS"; fi
-echo "Skips: SKIP_BASE=$SKIP_BASE SKIP_BLOCK=$SKIP_BLOCK SKIP_REHEARSAL=$SKIP_REHEARSAL"
+echo "Skips: SKIP_BASE=$SKIP_BASE SKIP_BLOCK=$SKIP_BLOCK SKIP_REHEARSAL=$SKIP_REHEARSAL SKIP_PREFIX=$SKIP_PREFIX"
 echo "----------------------------------------------------------------"
 nvidia-smi | head -n 20 || true
 echo "================================================================"
@@ -138,11 +141,12 @@ run_one_variant() {
     echo "[$label] done."
 }
 
-run_rehearsal_variant() {
-    # drum->nondrum-only CLI: C.1 (duet_rehearsal).
+run_drum2nondrum_variant() {
+    # drum->nondrum-only CLI shared by C.1 (duet_rehearsal) and C.2 (duet_prefix).
     local label="$1"
-    local ckpt="$2"
-    local out_subdir="$3"
+    local script="$2"
+    local ckpt="$3"
+    local out_subdir="$4"
 
     if [[ ! -e "$ckpt" ]]; then
         echo "[$label] ERROR: ckpt path $ckpt not found (file or dir); skipping."
@@ -153,7 +157,7 @@ run_rehearsal_variant() {
     echo "[$label] ckpt=$ckpt"
     echo "[$label] output=$out_dir"
     echo "================================================================"
-    python cp_transformer_m2c_duet_rehearsal_inference.py \
+    python "$script" \
         --ckpt "$ckpt" \
         --drum-folder "$MEL_FOLDER" \
         --nondrum-folder "$CHORD_FOLDER" \
@@ -193,12 +197,24 @@ fi
 
 # C.1 M2CDuetRehearsal -- drum -> nondrum only.
 if [[ "$SKIP_REHEARSAL" != "1" ]]; then
-    run_rehearsal_variant \
+    run_drum2nondrum_variant \
         "duet_rehearsal" \
+        "cp_transformer_m2c_duet_rehearsal_inference.py" \
         "$CKPT_REHEARSAL" \
         "duet_rehearsal"
 else
     echo "[duet_rehearsal] skipped (SKIP_REHEARSAL=1)"
+fi
+
+# C.2 M2CDuetPrefix -- drum -> nondrum only (prefix-LM architecture).
+if [[ "$SKIP_PREFIX" != "1" ]]; then
+    run_drum2nondrum_variant \
+        "duet_prefix" \
+        "cp_transformer_m2c_duet_prefix_inference.py" \
+        "$CKPT_PREFIX" \
+        "duet_prefix"
+else
+    echo "[duet_prefix] skipped (SKIP_PREFIX=1)"
 fi
 
 echo "================================================================"
