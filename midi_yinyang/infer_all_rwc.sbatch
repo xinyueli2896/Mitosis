@@ -58,9 +58,12 @@ source ~/.bashrc
 CONDA_ENV=mitosis
 REPO_DIR=/home/xinyue.li/Mitosis
 
-CKPT_BASE="${CKPT_BASE:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/last.ckpt}"
-CKPT_BLOCK="${CKPT_BLOCK:-ckpt/m2c_duet_block_v1.0_large_gnl12_drumnondrum_batch_16_schedule/last.ckpt}"
-CKPT_REHEARSAL="${CKPT_REHEARSAL:-ckpt/m2c_duet_rehearsal_v1.0_large_gnl12_drumnondrum_batch_16_schedule/last.ckpt}"
+# Default to the run DIRECTORY; resolve_best_ckpt in the Python loaders
+# automatically scans for *.val_loss=*.ckpt and picks the smallest val_loss,
+# falling back to last.ckpt if no val_loss-tagged ckpts exist.
+CKPT_BASE="${CKPT_BASE:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
+CKPT_BLOCK="${CKPT_BLOCK:-ckpt/m2c_duet_block_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
+CKPT_REHEARSAL="${CKPT_REHEARSAL:-ckpt/m2c_duet_rehearsal_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
 
 SKIP_BASE="${SKIP_BASE:-0}"
 SKIP_BLOCK="${SKIP_BLOCK:-0}"

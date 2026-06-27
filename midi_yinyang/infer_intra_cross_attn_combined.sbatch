@@ -54,7 +54,11 @@ REPO_DIR=/home/xinyue.li/Mitosis
 # --export=NONE,CKPT=... on the sbatch line. Hardcoded default lets
 # `sbatch infer_intra_cross_attn_combined.sbatch` Just Work even when
 # the cscc SLURM env-retrieval prolog flakes on --export=ALL/NONE.
-CKPT="${CKPT:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule.epoch=00.val_loss=0.34391.ckpt}"
+#
+# Point at the run DIRECTORY; resolve_best_ckpt in the Python loader
+# scans for *.val_loss=*.ckpt and picks the smallest val_loss,
+# falling back to last.ckpt if no val_loss-tagged ckpts exist.
+CKPT="${CKPT:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
 
 if [[ -z "${CKPT:-}" ]]; then
     echo "ERROR: CKPT not set. Pass via --export=ALL,CKPT=path/to/ckpt"
