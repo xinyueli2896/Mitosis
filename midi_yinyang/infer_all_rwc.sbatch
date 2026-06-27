@@ -1,24 +1,30 @@
 #!/bin/bash
 # SLURM batch script: combined inference on RWC prompts for variants
-# A.1 (DuetAttn), A.2 (DuetBlock), C.1 (DuetRehearsal), and C.2 (DuetPrefix).
+# A.1 (DuetAttn), A.3 (DuetBlockDiffusion), C.1 (DuetRehearsal), and
+# C.2 (DuetPrefix).
 #
-#   A.1  M2CIntraCrossAttn  -- 5 modes (co, mel2chord, chord2mel, mel_only, chord_only)
-#   A.2  M2CDuetBlockAttn   -- 5 modes via Option A AR-clean-stream decoding
-#   C.1  M2CDuetRehearsal   -- drum -> nondrum only (conditional-generation variant)
-#   C.2  M2CDuetPrefix      -- drum -> nondrum only (prefix-LM conditional variant)
+#   A.1  M2CIntraCrossAttn       -- 5 modes (co, mel2chord, chord2mel, mel_only, chord_only)
+#   A.3  M2CDuetBlockDiffusion   -- 5 modes via parallel-diffusion refinement at the query slots
+#                                   (supersedes A.2 M2CDuetBlockAttn; A.2's query slots were
+#                                   trained only in the fully-masked regime and collapsed at
+#                                   inference. A.3 trains across all noise levels and runs
+#                                   K+1 refinement passes per frame for mutual within-frame
+#                                   conditioning.)
+#   C.1  M2CDuetRehearsal        -- drum -> nondrum only (conditional-generation variant)
+#   C.2  M2CDuetPrefix           -- drum -> nondrum only (prefix-LM conditional variant)
 #
 # Single-GPU, runs the inferences sequentially in one job.
 #
 # Required env (override on the sbatch line via --export=ALL,KEY=val):
-#   CKPT_BASE       ckpt for A.1 (M2CIntraCrossAttn).      default below.
-#   CKPT_BLOCK      ckpt for A.2 (M2CDuetBlockAttn).       default below.
-#   CKPT_REHEARSAL  ckpt for C.1 (M2CDuetRehearsal).       default below.
-#   CKPT_PREFIX     ckpt for C.2 (M2CDuetPrefix).          default below.
+#   CKPT_BASE        ckpt for A.1 (M2CIntraCrossAttn).         default below.
+#   CKPT_DIFFUSION   ckpt for A.3 (M2CDuetBlockDiffusion).     default below.
+#   CKPT_REHEARSAL   ckpt for C.1 (M2CDuetRehearsal).          default below.
+#   CKPT_PREFIX      ckpt for C.2 (M2CDuetPrefix).             default below.
 #   CKPT_* may be either a specific .ckpt file or a directory; if a
 #   directory, the inference script auto-selects the val_loss-tagged
 #   ckpt with the smallest val_loss (falling back to last.ckpt).
 #
-#   SKIP_BASE / SKIP_BLOCK / SKIP_REHEARSAL / SKIP_PREFIX
+#   SKIP_BASE / SKIP_DIFFUSION / SKIP_REHEARSAL / SKIP_PREFIX
 #       set to 1 to skip a variant.
 #
 # Common optional env:
@@ -63,12 +69,12 @@ REPO_DIR=/home/xinyue.li/Mitosis
 # automatically scans for *.val_loss=*.ckpt and picks the smallest val_loss,
 # falling back to last.ckpt if no val_loss-tagged ckpts exist.
 CKPT_BASE="${CKPT_BASE:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
-CKPT_BLOCK="${CKPT_BLOCK:-ckpt/m2c_duet_block_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
+CKPT_DIFFUSION="${CKPT_DIFFUSION:-ckpt/m2c_duet_block_diffusion_v1.0_large_gnl12_K4_drumnondrum_batch_16_schedule/}"
 CKPT_REHEARSAL="${CKPT_REHEARSAL:-ckpt/m2c_duet_rehearsal_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
 CKPT_PREFIX="${CKPT_PREFIX:-ckpt/m2c_duet_prefix_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
 
 SKIP_BASE="${SKIP_BASE:-0}"
-SKIP_BLOCK="${SKIP_BLOCK:-0}"
+SKIP_DIFFUSION="${SKIP_DIFFUSION:-0}"
 SKIP_REHEARSAL="${SKIP_REHEARSAL:-0}"
 SKIP_PREFIX="${SKIP_PREFIX:-0}"
 
@@ -90,7 +96,7 @@ mkdir -p /home/xinyue.li/logs
 
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
-echo "RWC inference for variants A.1 (DuetAttn), A.2 (DuetBlock), C.1 (DuetRehearsal)"
+echo "RWC inference for variants A.1 (DuetAttn), A.3 (DuetBlockDiffusion), C.1 (DuetRehearsal), C.2 (DuetPrefix)"
 echo "MEL_FOLDER (drum)    = $MEL_FOLDER"
 echo "CHORD_FOLDER(nondrum)= $CHORD_FOLDER"
 echo "OUTPUT_ROOT          = $OUTPUT_ROOT"
@@ -98,7 +104,7 @@ echo "PROMPT_LENGTH=$PROMPT_LENGTH  GEN_LENGTH=$GEN_LENGTH  TEMPERATURE=$TEMPERA
 echo "MAX_POLYPHONY=$MAX_POLYPHONY  MIN_CHORD_TOKENS_BEFORE_EOS=$MIN_CHORD_TOKENS_BEFORE_EOS"
 echo "MODES=$MODES"
 if [[ -n "${MAX_SONGS:-}" ]]; then echo "MAX_SONGS=$MAX_SONGS"; fi
-echo "Skips: SKIP_BASE=$SKIP_BASE SKIP_BLOCK=$SKIP_BLOCK SKIP_REHEARSAL=$SKIP_REHEARSAL SKIP_PREFIX=$SKIP_PREFIX"
+echo "Skips: SKIP_BASE=$SKIP_BASE SKIP_DIFFUSION=$SKIP_DIFFUSION SKIP_REHEARSAL=$SKIP_REHEARSAL SKIP_PREFIX=$SKIP_PREFIX"
 echo "----------------------------------------------------------------"
 nvidia-smi | head -n 20 || true
 echo "================================================================"
@@ -184,15 +190,18 @@ else
     echo "[intra_cross_attn] skipped (SKIP_BASE=1)"
 fi
 
-# A.2 M2CDuetBlockAttn -- Option B inference (query-slot decoding).
-if [[ "$SKIP_BLOCK" != "1" ]]; then
+# A.3 M2CDuetBlockDiffusion -- parallel-diffusion refinement at the query slots.
+# Supersedes A.2 (whose query slots were trained only in the fully-masked
+# regime and collapsed at inference). The combined script runs K+1
+# refinement passes per generated frame.
+if [[ "$SKIP_DIFFUSION" != "1" ]]; then
     run_one_variant \
-        "duet_block" \
-        "cp_transformer_m2c_duet_block_combined.py" \
-        "$CKPT_BLOCK" \
-        "duet_block"
+        "duet_block_diffusion" \
+        "cp_transformer_m2c_duet_block_diffusion_combined.py" \
+        "$CKPT_DIFFUSION" \
+        "duet_block_diffusion"
 else
-    echo "[duet_block] skipped (SKIP_BLOCK=1)"
+    echo "[duet_block_diffusion] skipped (SKIP_DIFFUSION=1)"
 fi
 
 # C.1 M2CDuetRehearsal -- drum -> nondrum only.

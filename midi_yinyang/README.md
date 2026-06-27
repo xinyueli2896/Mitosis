@@ -39,19 +39,42 @@ sbatch --export=ALL,CKPT=ckpt/<run>/last.ckpt \
        midi_yinyang/infer_intra_cross_attn_combined.sbatch
 ```
 
-#### **A.2 `M2CDuetBlockAttn`** — fair-looking fix (symmetric same-instant coupling)
+#### **A.3 `M2CDuetBlockDiffusion`** — block diffusion at the query slots (supersedes A.2)
 
-DuetAttn + appended next-frame **query slots** with bidirectional
-within-frame attention. Three SDPA passes per block (intra / cross-strict /
-frame-bidirectional) + two gates per modality.
+Same architecture as A.2 (DuetAttn + appended next-frame **query slots** +
+3 SDPA passes + 2 gates per modality), but the two query slots are trained
+to recover their target frame from arbitrary noise levels, not just the
+fully-masked regime A.2 was stuck in. Per item per slot we sample a noise
+level `k ∈ {0..K}` independently: with prob `k/K` the slot is fed the mask
+embedding; else it is fed the ground-truth frame embedding. A learned
+k-embedding is added to each slot so the model knows where it sits in the
+denoising trajectory.
+
+Independent `(k_m, k_c)` sampling covers both inference schedules on the
+same ckpt — **parallel diffusion** (`k_m == k_c` per refinement round) and
+**MaskGIT-style** commit-then-condition. Default at inference is parallel
+diffusion: K+1 refinement passes per frame, with each round's estimates
+fed back as the next round's slot inputs. This approximates "equalize by
+adding" within a frame via parallel-Gibbs iteration, recovering the
+mutual within-frame conditioning that the single-pass A.2 inference could
+not provide.
+
+Why this replaces A.2: A.2's query slots only ever saw `k_m = k_c = K`
+during training, so at inference they collapsed to near-EOS/silence; the
+RWC outputs degenerated after the prompt window. A.3 fixes this at the
+objective level rather than at decode time.
 
 ```bash
-# Train
-sbatch midi_yinyang/train_duet_block.sbatch
+# Train (warm-starts from the base CP-transformer pretrained ckpt;
+#        K = 4 noise bins by default)
+sbatch midi_yinyang/train_duet_block_diffusion.sbatch
 
-# Inference (Option B: query-slot decoding)
-sbatch --export=ALL,CKPT=ckpt/<run>/last.ckpt \
-       midi_yinyang/infer_all_rwc.sbatch          # runs #2 and #4 on RWC prompts
+# Tune K:
+sbatch --export=ALL,DIFFUSION_K=8 midi_yinyang/train_duet_block_diffusion.sbatch
+
+# Inference (parallel-diffusion refinement; same 5 modes as A.1)
+sbatch --export=ALL,CKPT_DIFFUSION=ckpt/<run>/ \
+       midi_yinyang/infer_all_rwc.sbatch
 ```
 
 ---
@@ -144,7 +167,7 @@ sbatch --export=ALL,MAX_LR=5e-5,BATCH_SIZE=2 midi_yinyang/train_<variant>.sbatch
 | Variant | Inference script | Modes supported | State-dict compatible with |
 |---|---|---|---|
 | A.1 DuetAttn | `infer_intra_cross_attn_combined.sbatch` | co, mel2chord, chord2mel, mel_only, chord_only | — |
-| A.2 DuetBlock | `infer_all_rwc.sbatch` (Option B query-slot decode) | same 5 modes | — |
+| A.3 DuetBlockDiffusion | `infer_all_rwc.sbatch` (parallel-diffusion refinement) | same 5 modes | — |
 | B.1 Anticipatory | TODO (state-dict-compat with A.1; just needs same shift applied) | — | A.1 |
 | C.1 Rehearsal | `infer_duet_rehearsal.sbatch` | **drum → nondrum only** | — |
 | C.2 Prefix | `infer_duet_prefix.sbatch` | **drum → nondrum only** | — |
