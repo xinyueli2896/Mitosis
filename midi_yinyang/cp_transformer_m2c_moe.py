@@ -948,6 +948,59 @@ class RoFormerSymbolicTransformer(L.LightningModule):
             },
         }
 
+    def on_load_checkpoint(self, checkpoint):
+        """Make OneCycleLR survive resumes that bump --lr_total_steps.
+
+        PyTorch's _LRScheduler.state_dict() saves EVERY instance attribute
+        (except `optimizer`), including the precomputed schedule shape:
+        `total_steps`, the phase boundary table (`_schedule_phases` /
+        `_annealing_phases` / `_phases` depending on torch version), the
+        per-group `max_lrs`, and momentum bounds. On resume, load_state_dict
+        does `self.__dict__.update(state_dict)`, which OVERWRITES the
+        freshly-constructed scheduler's values -- so even though
+        configure_optimizers built a OneCycleLR with total_steps = 100000,
+        after load it reverts to total_steps = 50000 with last_epoch = 50000.
+        The very next .step() then either raises ValueError (last_epoch >=
+        total_steps) or silently caps LR at the end-of-cycle minimum, which
+        looks from outside like "training stops at 50000."
+
+        Fix: strip the schedule-shape keys from the saved scheduler state
+        BEFORE Lightning loads it. We keep `last_epoch`, `_step_count`,
+        and `_last_lr` -- those reflect where we are in training, which we
+        want preserved. The new schedule shape constructed in
+        configure_optimizers (with the bumped total_steps) survives.
+
+        Effect on LR: at resume, the optimizer continues with its loaded
+        momentum buffers, and the scheduler treats `last_epoch` as a
+        position inside the NEW (extended) total_steps. So if you resume
+        at step 50000 with total_steps bumped to 100000, the LR jumps from
+        ~end-of-original-cycle to ~middle-of-extended-cycle. That's the
+        intended behaviour: it gives the next 50k steps a meaningful
+        learning rate. If you wanted the LR to keep going down past the
+        end of the original schedule, use --fresh_schedule instead.
+        """
+        schedule_shape_keys = (
+            'total_steps',
+            '_schedule_phases',     # torch >= 1.13ish
+            '_annealing_phases',
+            '_phases',              # older naming
+            'max_lrs',
+            'min_lrs',
+            'max_momentums',
+            'base_momentums',
+            'cycle_momentum',
+            'anneal_func',
+            'three_phase',
+        )
+        for sched_state in checkpoint.get('lr_schedulers', []) or []:
+            if not isinstance(sched_state, dict):
+                continue
+            for k in schedule_shape_keys:
+                sched_state.pop(k, None)
+        # Defer to parent (LightningModule.on_load_checkpoint is a no-op,
+        # but call it for forward-compat with future Lightning versions).
+        super().on_load_checkpoint(checkpoint)
+
 class FramedDataset(IterableDataset):
 
     def __init__(
