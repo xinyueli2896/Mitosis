@@ -7,12 +7,19 @@
 # handle every combination of (k_m, k_c), so at inference either parallel
 # diffusion or MaskGIT-style iterative refinement is valid.
 #
-# WARM-START
-#   By default this initialises from the base single-stream CP-transformer
-#   pretrained ckpt via init_pretrained_into_duet_block_diffusion.py
-#   (same pattern as A.1 / A.2 / C.1 / C.2). The init copies the
-#   pretrained Q/K/V/O into the per-modality slots and zero-inits the
-#   A.3-specific extras (mask_m_emb, mask_c_emb, k_emb_m, k_emb_c, gates).
+# WARM-START AND AUTO-RESUME
+#   Three-tier startup logic (run again with no flags to keep training):
+#
+#   1. If CKPT is explicitly set, full Lightning resume from that ckpt.
+#   2. Else if the default run directory already contains last.ckpt
+#      (i.e. a prior run of this same sbatch), AUTO-RESUME from it.
+#      LR_TOTAL_STEPS auto-bumps to (ckpt's global_step + 50000) so the
+#      OneCycle schedule extends and the next run does another ~50k steps.
+#   3. Else cold-start: init from the base single-stream CP-transformer
+#      pretrained ckpt via init_pretrained_into_duet_block_diffusion.py
+#      (same pattern as A.1 / A.2 / C.1 / C.2). The init copies the
+#      pretrained Q/K/V/O into the per-modality slots and zero-inits the
+#      A.3-specific extras (mask_m_emb, mask_c_emb, k_emb_m, k_emb_c, gates).
 #
 #   We deliberately do NOT warm-start from an A.2 ckpt: A.2 was trained
 #   only in the fully-masked regime, and warm-starting from it would
@@ -20,23 +27,21 @@
 #   place. The neutral pretrained init lets the diffusion objective
 #   train the query-slot pathway across the full noise spectrum.
 #
-#   To resume an in-progress diffusion run, pass CKPT=path/to/last.ckpt.
-#
 # Knobs (all optional):
 #   --gres=gpu:N            how many GPUs to allocate (1..4).
 #   --export=ALL,TASK=...   drumnondrum (default) or melchord.
-#   --export=ALL,CKPT=...   if set, skip init + full Lightning resume from
-#                           that ckpt. PRESERVES optimizer momentum and
-#                           scheduler state. To continue past the original
-#                           50k cap, also set LR_TOTAL_STEPS to the new
-#                           TOTAL (e.g. 100000 for another 50k steps).
+#   --export=ALL,CKPT=...   explicit override for the resume ckpt. If
+#                           unset, the script auto-detects the run's
+#                           last.ckpt. Full Lightning resume preserves
+#                           optimizer momentum and scheduler state.
 #   --export=ALL,LR_TOTAL_STEPS=N    total steps the OneCycle schedule
-#                           spans. Default 50000. When continuing, set
-#                           this LARGER than the prior run's value --
-#                           Lightning re-creates the scheduler with the
-#                           new total_steps and loads the old last_epoch
-#                           on top, so the LR keeps annealing smoothly
-#                           instead of restarting.
+#                           spans. Default: 50000 for a cold start,
+#                           (prior_step + 50000) on auto-resume. When
+#                           continuing manually, set this LARGER than the
+#                           prior run's value -- Lightning re-creates the
+#                           scheduler with the new total_steps and loads
+#                           the old last_epoch on top, so the LR keeps
+#                           annealing smoothly instead of restarting.
 #   --export=ALL,DIFFUSION_K=8       number of noise-level bins (default 4).
 #   --export=ALL,FRESH_SCHEDULE=1    opt-in: load weights only, drop
 #                           optimizer + scheduler + step counter, run a
@@ -82,7 +87,9 @@ INIT_CKPT="ckpt/m2c_duet_block_diffusion_init_K${DIFFUSION_K}/m2c_duet_block_dif
 
 CKPT="${CKPT:-}"
 FRESH_SCHEDULE="${FRESH_SCHEDULE:-0}"
-LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-50000}"
+# Empty default; resolved below to 50000 on cold start or to
+# (prior_step + 50000) on auto-resume.
+LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-}"
 MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
@@ -112,6 +119,36 @@ if [[ -z "$MAX_LR" ]]; then
     esac
 fi
 
+# --- auto-detect prior run -------------------------------------------
+# The run directory mirrors the python script's default model_name. If
+# the user didn't pass CKPT explicitly and last.ckpt exists there from a
+# prior submission, auto-resume.
+GLOBAL_BATCH=$((BATCH_SIZE * NGPUS))
+RUN_DIR="ckpt/m2c_duet_block_diffusion_v1.0_large_gnl12_K${DIFFUSION_K}_${TASK}_batch_${GLOBAL_BATCH}_schedule"
+if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
+    CKPT="$RUN_DIR/last.ckpt"
+    echo "[auto-resume] found $CKPT  (run dir: $RUN_DIR)"
+fi
+
+# --- resolve LR_TOTAL_STEPS ------------------------------------------
+# Cold start -> 50000.
+# Resume (CKPT set) and no explicit LR_TOTAL_STEPS -> read the ckpt's
+#   global_step and bump by 50000 so we run another ~50k steps under
+#   an extended OneCycle.
+if [[ -z "$LR_TOTAL_STEPS" ]]; then
+    if [[ -n "$CKPT" && "$FRESH_SCHEDULE" != "1" ]]; then
+        LR_TOTAL_STEPS=$(python -c "
+import torch
+ck = torch.load('$CKPT', map_location='cpu', weights_only=False)
+step = ck.get('global_step', 0) if isinstance(ck, dict) else 0
+print(step + 50000)
+")
+        echo "[auto-resume] LR_TOTAL_STEPS = $LR_TOTAL_STEPS (ckpt global_step + 50000)"
+    else
+        LR_TOTAL_STEPS=50000
+    fi
+fi
+
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
 echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K"
@@ -125,9 +162,9 @@ if [[ -n "$CKPT" ]]; then
         echo "Mode: RESUME (full Lightning resume from CKPT=$CKPT)"
     fi
 else
-    echo "Mode: FRESH (init from PRETRAINED -> INIT_CKPT=$INIT_CKPT)"
+    echo "Mode: COLD START (init from PRETRAINED -> INIT_CKPT=$INIT_CKPT)"
 fi
-echo "LR_TOTAL_STEPS=$LR_TOTAL_STEPS"
+echo "LR_TOTAL_STEPS=$LR_TOTAL_STEPS   RUN_DIR=$RUN_DIR"
 echo "----------------------------------------------------------------"
 nvidia-smi || true
 echo "================================================================"
