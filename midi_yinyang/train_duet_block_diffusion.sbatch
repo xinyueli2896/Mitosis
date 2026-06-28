@@ -25,8 +25,25 @@
 # Knobs (all optional):
 #   --gres=gpu:N            how many GPUs to allocate (1..4).
 #   --export=ALL,TASK=...   drumnondrum (default) or melchord.
-#   --export=ALL,CKPT=...   if set, skip init + resume from that ckpt.
+#   --export=ALL,CKPT=...   if set, skip init + full Lightning resume from
+#                           that ckpt. PRESERVES optimizer momentum and
+#                           scheduler state. To continue past the original
+#                           50k cap, also set LR_TOTAL_STEPS to the new
+#                           TOTAL (e.g. 100000 for another 50k steps).
+#   --export=ALL,LR_TOTAL_STEPS=N    total steps the OneCycle schedule
+#                           spans. Default 50000. When continuing, set
+#                           this LARGER than the prior run's value --
+#                           Lightning re-creates the scheduler with the
+#                           new total_steps and loads the old last_epoch
+#                           on top, so the LR keeps annealing smoothly
+#                           instead of restarting.
 #   --export=ALL,DIFFUSION_K=8       number of noise-level bins (default 4).
+#   --export=ALL,FRESH_SCHEDULE=1    opt-in: load weights only, drop
+#                           optimizer + scheduler + step counter, run a
+#                           brand-new OneCycle from step 0. NOT the
+#                           default -- only use if you want to change K,
+#                           query_loss_weight, or other things that the
+#                           optimizer state has baked in assumptions about.
 #   --export=ALL,MAX_LR=...          override LR (else autoscale by NGPUS).
 #   --export=ALL,BATCH_SIZE=...      per-GPU batch size (default 4).
 #   --export=ALL,GATE_INIT_BIAS=-4   raise if gates stay at init.
@@ -64,6 +81,8 @@ DIFFUSION_K="${DIFFUSION_K:-4}"
 INIT_CKPT="ckpt/m2c_duet_block_diffusion_init_K${DIFFUSION_K}/m2c_duet_block_diffusion_init_K${DIFFUSION_K}.ckpt"
 
 CKPT="${CKPT:-}"
+FRESH_SCHEDULE="${FRESH_SCHEDULE:-0}"
+LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-50000}"
 MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
@@ -100,10 +119,15 @@ echo "Task:    $TASK"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS   query_loss_weight: $QUERY_LOSS_WEIGHT"
 if [[ -n "$CKPT" ]]; then
-    echo "Mode: RESUME from CKPT=$CKPT (skip init)"
+    if [[ "$FRESH_SCHEDULE" == "1" ]]; then
+        echo "Mode: CONTINUE (load weights from CKPT=$CKPT, fresh LR schedule)"
+    else
+        echo "Mode: RESUME (full Lightning resume from CKPT=$CKPT)"
+    fi
 else
     echo "Mode: FRESH (init from PRETRAINED -> INIT_CKPT=$INIT_CKPT)"
 fi
+echo "LR_TOTAL_STEPS=$LR_TOTAL_STEPS"
 echo "----------------------------------------------------------------"
 nvidia-smi || true
 echo "================================================================"
@@ -144,41 +168,38 @@ echo "================================================================"
 export MASTER_PORT=$((20000 + RANDOM % 10000))
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+EXTRA_TRAIN_ARGS=()
+if [[ "$FRESH_SCHEDULE" == "1" ]]; then
+    EXTRA_TRAIN_ARGS+=(--fresh_schedule)
+fi
+
+COMMON_ARGS=(
+    --task "$TASK"
+    --batch_size "$BATCH_SIZE"
+    --model_size large
+    --moe_num_experts 4 --moe_topk 2
+    --max_lr "$MAX_LR"
+    --lr_total_steps "$LR_TOTAL_STEPS"
+    --gradient_clip_val 1.0
+    --aux_loss_weight 0.01
+    --moe_monitor_every_n_steps 500
+    --dump_samples_dir "$DUMP_SAMPLES_DIR"
+    --gate_init_bias "$GATE_INIT_BIAS"
+    --query_loss_weight "$QUERY_LOSS_WEIGHT"
+    --diffusion_K "$DIFFUSION_K"
+    --checkpoint_path "$TRAIN_CKPT"
+    --wandb
+)
+
 if [[ "$NGPUS" -le 1 ]]; then
     python cp_transformer_m2c_duet_block_diffusion.py \
-        --task "$TASK" \
-        --batch_size "$BATCH_SIZE" \
-        --model_size large \
-        --moe_num_experts 4 --moe_topk 2 \
-        --max_lr "$MAX_LR" \
-        --lr_total_steps 50000 \
-        --gradient_clip_val 1.0 \
-        --aux_loss_weight 0.01 \
-        --moe_monitor_every_n_steps 500 \
-        --dump_samples_dir "$DUMP_SAMPLES_DIR" \
-        --gate_init_bias "$GATE_INIT_BIAS" \
-        --query_loss_weight "$QUERY_LOSS_WEIGHT" \
-        --diffusion_K "$DIFFUSION_K" \
-        --checkpoint_path "$TRAIN_CKPT" \
-        --wandb
+        "${COMMON_ARGS[@]}" \
+        "${EXTRA_TRAIN_ARGS[@]}"
 else
     torchrun --standalone --nnodes=1 --nproc_per_node="$NGPUS" \
         cp_transformer_m2c_duet_block_diffusion.py \
-        --task "$TASK" \
-        --batch_size "$BATCH_SIZE" \
-        --model_size large \
-        --moe_num_experts 4 --moe_topk 2 \
-        --max_lr "$MAX_LR" \
-        --lr_total_steps 50000 \
-        --gradient_clip_val 1.0 \
-        --aux_loss_weight 0.01 \
-        --moe_monitor_every_n_steps 500 \
-        --dump_samples_dir "$DUMP_SAMPLES_DIR" \
-        --gate_init_bias "$GATE_INIT_BIAS" \
-        --query_loss_weight "$QUERY_LOSS_WEIGHT" \
-        --diffusion_K "$DIFFUSION_K" \
-        --checkpoint_path "$TRAIN_CKPT" \
-        --wandb
+        "${COMMON_ARGS[@]}" \
+        "${EXTRA_TRAIN_ARGS[@]}"
 fi
 
 echo "================================================================"
