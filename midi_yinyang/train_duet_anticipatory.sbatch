@@ -1,21 +1,40 @@
 #!/bin/bash
-# SLURM batch script: multi-GPU training of M2CDuetAnticipatory on cscc-gpu.
-# DuetAttn architecture; the only difference vs #2 is the input-side
-# reindexing: drum is shifted ahead of nondrum by ANTICIPATION_FRAMES
-# frames in the interleaved sequence.
+# SLURM batch script: multi-GPU training of M2CDuetAnticipatory (B.1).
+# DuetAttn architecture; the only difference is the input-side reindexing
+# -- drum is shifted ahead of nondrum by ANTICIPATION_FRAMES frames in
+# the interleaved sequence.
+#
+# WARM-START AND AUTO-RESUME
+#   Three-tier startup logic (run again with no flags to keep training):
+#
+#   1. If CKPT is explicitly set, full Lightning resume from that ckpt.
+#      (Can also be set to a regular DuetAttn A.1 ckpt -- state dict is
+#      identical, so the architecture loads cleanly and you start from a
+#      trained model.)
+#   2. Else if the default run directory already contains last.ckpt
+#      (i.e. a prior run of this same sbatch), AUTO-RESUME from it.
+#      LR_TOTAL_STEPS auto-bumps to (ckpt's global_step + 50000) so the
+#      OneCycle schedule extends and the next run does another ~50k steps.
+#   3. Else cold-start: init from the base single-stream CP-transformer
+#      pretrained ckpt via init_pretrained_into_intra_cross_attn.py
+#      (B.1 reuses A.1's init -- state-dict-identical).
 #
 # Knobs (all optional):
 #   --gres=gpu:N            how many GPUs to allocate (1..4).
 #   --export=ALL,TASK=...   drumnondrum (default) or melchord.
-#   --export=ALL,CKPT=...   if set, skip init + resume from that ckpt.
-#                           Can also be set to a regular DuetAttn #2 ckpt --
-#                           state dict is identical, so the architecture
-#                           loads cleanly and you start from a trained model.
+#   --export=ALL,CKPT=...   explicit override for the resume ckpt. If
+#                           unset, the script auto-detects the run's
+#                           last.ckpt.
+#   --export=ALL,LR_TOTAL_STEPS=N    total steps the OneCycle schedule
+#                           spans. Default: 50000 for a cold start,
+#                           (prior_step + 50000) on auto-resume.
+#   --export=ALL,ANTICIPATION_FRAMES=16  drum lookahead in frames.
+#                                        Default 16 (= 1 bar at 16th-note resolution).
+#   --export=ALL,FRESH_SCHEDULE=1    opt-in: load weights only, drop
+#                           optimizer + scheduler + step counter.
 #   --export=ALL,MAX_LR=..  override LR (else autoscale by NGPUS).
 #   --export=ALL,BATCH_SIZE=..  per-GPU batch size (default 4).
 #   --export=ALL,GATE_INIT_BIAS=-4  raise if gates stay at init.
-#   --export=ALL,ANTICIPATION_FRAMES=16  drum lookahead in frames.
-#                                        Default 16 (= 1 bar at 16th-note resolution).
 #   --export=ALL,DUMP_SAMPLES_DIR=path  dump first batch to .mid.
 
 #SBATCH --job-name=mitosis_duet_anticipatory
@@ -36,12 +55,16 @@ source ~/.bashrc
 CONDA_ENV=mitosis
 REPO_DIR=/home/xinyue.li/Mitosis
 
-# Reuse the DuetAttn (#2) init ckpt -- state dict is identical, only the
+# Reuse the A.1 init ckpt -- state dict is identical, only the
 # loss-time data reindexing differs.
 PRETRAINED=ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt
 INIT_CKPT=ckpt/m2c_intra_cross_attn_init/m2c_intra_cross_attn_init.ckpt
 
 CKPT="${CKPT:-}"
+FRESH_SCHEDULE="${FRESH_SCHEDULE:-0}"
+# Empty default; resolved below to 50000 on cold start or to
+# (prior_step + 50000) on auto-resume.
+LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-}"
 MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
@@ -70,17 +93,48 @@ if [[ -z "$MAX_LR" ]]; then
     esac
 fi
 
+# --- auto-detect prior run -------------------------------------------
+# The run directory mirrors the python script's default model_name. If
+# the user didn't pass CKPT explicitly and last.ckpt exists there from a
+# prior submission, auto-resume.
+GLOBAL_BATCH=$((BATCH_SIZE * NGPUS))
+RUN_DIR="ckpt/m2c_duet_anticipatory_v1.0_large_gnl12_${TASK}_k${ANTICIPATION_FRAMES}_batch_${GLOBAL_BATCH}_schedule"
+if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
+    CKPT="$RUN_DIR/last.ckpt"
+    echo "[auto-resume] found $CKPT  (run dir: $RUN_DIR)"
+fi
+
+# --- resolve LR_TOTAL_STEPS ------------------------------------------
+if [[ -z "$LR_TOTAL_STEPS" ]]; then
+    if [[ -n "$CKPT" && "$FRESH_SCHEDULE" != "1" ]]; then
+        LR_TOTAL_STEPS=$(python -c "
+import torch
+ck = torch.load('$CKPT', map_location='cpu', weights_only=False)
+step = ck.get('global_step', 0) if isinstance(ck, dict) else 0
+print(step + 50000)
+")
+        echo "[auto-resume] LR_TOTAL_STEPS = $LR_TOTAL_STEPS (ckpt global_step + 50000)"
+    else
+        LR_TOTAL_STEPS=50000
+    fi
+fi
+
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
-echo "Variant: m2c_duet_anticipatory  (DuetAttn arch + drum +k frame shift)"
+echo "Variant: m2c_duet_anticipatory (B.1)  k=$ANTICIPATION_FRAMES"
 echo "Task:    $TASK"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
-echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS   anticipation_frames: $ANTICIPATION_FRAMES"
+echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS"
 if [[ -n "$CKPT" ]]; then
-    echo "Mode: RESUME from CKPT=$CKPT (skip init)"
+    if [[ "$FRESH_SCHEDULE" == "1" ]]; then
+        echo "Mode: CONTINUE (load weights from CKPT=$CKPT, fresh LR schedule)"
+    else
+        echo "Mode: RESUME (full Lightning resume from CKPT=$CKPT)"
+    fi
 else
-    echo "Mode: FRESH (init from PRETRAINED -> INIT_CKPT=$INIT_CKPT, reusing #2's init)"
+    echo "Mode: COLD START (init from PRETRAINED -> INIT_CKPT=$INIT_CKPT, reusing A.1's init)"
 fi
+echo "LR_TOTAL_STEPS=$LR_TOTAL_STEPS   RUN_DIR=$RUN_DIR"
 echo "----------------------------------------------------------------"
 nvidia-smi || true
 echo "================================================================"
@@ -93,7 +147,7 @@ if [[ -z "$CKPT" ]]; then
             echo "[init] ERROR: pretrained ckpt not found at $PRETRAINED"
             exit 1
         fi
-        echo "[init] running init_pretrained_into_intra_cross_attn.py (shared #2 init)"
+        echo "[init] running init_pretrained_into_intra_cross_attn.py (shared A.1 init)"
         python init_pretrained_into_intra_cross_attn.py \
             --pretrained "$PRETRAINED" \
             --output     "$INIT_CKPT" \
@@ -117,39 +171,37 @@ echo "================================================================"
 export MASTER_PORT=$((20000 + RANDOM % 10000))
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+EXTRA_TRAIN_ARGS=()
+if [[ "$FRESH_SCHEDULE" == "1" ]]; then
+    EXTRA_TRAIN_ARGS+=(--fresh_schedule)
+fi
+
+COMMON_ARGS=(
+    --task "$TASK"
+    --batch_size "$BATCH_SIZE"
+    --model_size large
+    --moe_num_experts 4 --moe_topk 2
+    --max_lr "$MAX_LR"
+    --lr_total_steps "$LR_TOTAL_STEPS"
+    --gradient_clip_val 1.0
+    --aux_loss_weight 0.01
+    --moe_monitor_every_n_steps 500
+    --dump_samples_dir "$DUMP_SAMPLES_DIR"
+    --gate_init_bias "$GATE_INIT_BIAS"
+    --anticipation_frames "$ANTICIPATION_FRAMES"
+    --checkpoint_path "$TRAIN_CKPT"
+    --wandb
+)
+
 if [[ "$NGPUS" -le 1 ]]; then
     python cp_transformer_m2c_duet_anticipatory.py \
-        --task "$TASK" \
-        --batch_size "$BATCH_SIZE" \
-        --model_size large \
-        --moe_num_experts 4 --moe_topk 2 \
-        --max_lr "$MAX_LR" \
-        --lr_total_steps 50000 \
-        --gradient_clip_val 1.0 \
-        --aux_loss_weight 0.01 \
-        --moe_monitor_every_n_steps 500 \
-        --dump_samples_dir "$DUMP_SAMPLES_DIR" \
-        --gate_init_bias "$GATE_INIT_BIAS" \
-        --anticipation_frames "$ANTICIPATION_FRAMES" \
-        --checkpoint_path "$TRAIN_CKPT" \
-        --wandb
+        "${COMMON_ARGS[@]}" \
+        "${EXTRA_TRAIN_ARGS[@]}"
 else
     torchrun --standalone --nnodes=1 --nproc_per_node="$NGPUS" \
         cp_transformer_m2c_duet_anticipatory.py \
-        --task "$TASK" \
-        --batch_size "$BATCH_SIZE" \
-        --model_size large \
-        --moe_num_experts 4 --moe_topk 2 \
-        --max_lr "$MAX_LR" \
-        --lr_total_steps 50000 \
-        --gradient_clip_val 1.0 \
-        --aux_loss_weight 0.01 \
-        --moe_monitor_every_n_steps 500 \
-        --dump_samples_dir "$DUMP_SAMPLES_DIR" \
-        --gate_init_bias "$GATE_INIT_BIAS" \
-        --anticipation_frames "$ANTICIPATION_FRAMES" \
-        --checkpoint_path "$TRAIN_CKPT" \
-        --wandb
+        "${COMMON_ARGS[@]}" \
+        "${EXTRA_TRAIN_ARGS[@]}"
 fi
 
 echo "================================================================"
