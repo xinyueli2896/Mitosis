@@ -152,7 +152,7 @@ def _build_slot(model, mode, prev_est_h, action_frame_h, r, K, slot_idx):
 
 def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                                   mel_action_fn, chord_action_fn,
-                                  K_refine=None):
+                                  K_refine=None, seed_from_ar=True):
     """Parallel-diffusion AR decoding loop.
 
     For each step t in 0..gen_length-1, determines per-modality actions
@@ -160,6 +160,19 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     runs K+1 refinement rounds at the query slots and commits the final
     estimate. For 'given' / 'silence', uses the action's frame directly
     and holds the corresponding slot constant across rounds.
+
+    seed_from_ar (default True): in the FIRST round (r = K, query slots
+    masked), read the initial drafts from the AR clean-stream positions
+    (h_global[clean_len-2] / [clean_len-1], the shifted next-frame heads)
+    instead of the query-slot outputs. Rationale: the query slots' mask
+    only reaches committed content up to frame t-2 and, at round K, the
+    partner slot is empty -- making the blind slot outputs the
+    worst-informed predictions in the whole process. The AR heads see one
+    more frame of committed history (through frame t-1 of both streams,
+    incl. the frame pass), so they produce a strictly better-informed
+    blind draft at zero extra cost (same forward). Total forward count is
+    unchanged (K+1); only which positions are decoded in round one
+    differs. Rounds r < K read the query slots as usual.
 
     Returns (mel_frames, chord_frames), each a list of [B, subseq_len].
     """
@@ -230,8 +243,18 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
 
                 h_in = torch.cat([h_clean, slot_m, slot_c], dim=1)
                 h_global, _ = model._run_global_stack(h_in, T_query=T_query)
-                h_m_pred = h_global[:, -2]
-                h_c_pred = h_global[:, -1]
+                if r == K and seed_from_ar:
+                    # Round-one seed: decode the AR clean-stream heads.
+                    # Under the shift, clean position 2t predicts m_t and
+                    # 2t+1 predicts c_t -- i.e. the last two clean
+                    # positions. Better-informed than the blind masked
+                    # slots (see docstring).
+                    clean_len = h_clean.shape[1]
+                    h_m_pred = h_global[:, clean_len - 2]
+                    h_c_pred = h_global[:, clean_len - 1]
+                else:
+                    h_m_pred = h_global[:, -2]
+                    h_c_pred = h_global[:, -1]
 
                 if m_sampling:
                     m_tokens_r = model.local_sampling(
