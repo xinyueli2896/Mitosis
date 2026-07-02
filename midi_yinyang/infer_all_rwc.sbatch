@@ -13,7 +13,12 @@
 #   C.1  M2CDuetRehearsal        -- drum -> nondrum only (conditional-generation variant)
 #   C.2  M2CDuetPrefix           -- drum -> nondrum only (prefix-LM conditional variant)
 #
-# Single-GPU, runs the inferences sequentially in one job.
+# Two GPUs, two parallel lanes:
+#   GPU 0: A.1 then A.3   (the 5-mode co-generation variants)
+#   GPU 1: C.1 then C.2   (the drum->nondrum conditional variants)
+# Both lanes run concurrently; the job ends when the slower lane finishes.
+# Lane logs are written to <OUTPUT_ROOT>/lane_A.log and lane_C.log (and
+# echoed into the main job log at the end).
 #
 # Required env (override on the sbatch line via --export=ALL,KEY=val):
 #   CKPT_BASE        ckpt for A.1 (M2CIntraCrossAttn).         default below.
@@ -54,7 +59,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH -p cscc-gpu-p
 #SBATCH -q cscc-gpu-qos
 #SBATCH --time=08:00:00
@@ -179,53 +184,86 @@ run_drum2nondrum_variant() {
     echo "[$label] done."
 }
 
-# A.1 M2CIntraCrossAttn
-if [[ "$SKIP_BASE" != "1" ]]; then
-    run_one_variant \
-        "intra_cross_attn" \
-        "cp_transformer_m2c_intra_cross_attn_combined.py" \
-        "$CKPT_BASE" \
-        "intra_cross_attn"
-else
-    echo "[intra_cross_attn] skipped (SKIP_BASE=1)"
-fi
+# --- two parallel lanes, one GPU each ---------------------------------
+# Lane A (GPU 0): the 5-mode co-generation variants, sequentially.
+lane_A() {
+    # A.1 M2CIntraCrossAttn
+    if [[ "$SKIP_BASE" != "1" ]]; then
+        run_one_variant \
+            "intra_cross_attn" \
+            "cp_transformer_m2c_intra_cross_attn_combined.py" \
+            "$CKPT_BASE" \
+            "intra_cross_attn"
+    else
+        echo "[intra_cross_attn] skipped (SKIP_BASE=1)"
+    fi
 
-# A.3 M2CDuetBlockDiffusion -- parallel-diffusion refinement at the query slots.
-# Supersedes A.2 (whose query slots were trained only in the fully-masked
-# regime and collapsed at inference). The combined script runs K+1
-# refinement passes per generated frame.
-if [[ "$SKIP_DIFFUSION" != "1" ]]; then
-    run_one_variant \
-        "duet_block_diffusion" \
-        "cp_transformer_m2c_duet_block_diffusion_combined.py" \
-        "$CKPT_DIFFUSION" \
-        "duet_block_diffusion"
-else
-    echo "[duet_block_diffusion] skipped (SKIP_DIFFUSION=1)"
-fi
+    # A.3 M2CDuetBlockDiffusion -- parallel-diffusion refinement at the
+    # query slots. Supersedes A.2 (whose query slots were trained only in
+    # the fully-masked regime and collapsed at inference). The combined
+    # script runs K+1 refinement passes per generated frame.
+    if [[ "$SKIP_DIFFUSION" != "1" ]]; then
+        run_one_variant \
+            "duet_block_diffusion" \
+            "cp_transformer_m2c_duet_block_diffusion_combined.py" \
+            "$CKPT_DIFFUSION" \
+            "duet_block_diffusion"
+    else
+        echo "[duet_block_diffusion] skipped (SKIP_DIFFUSION=1)"
+    fi
+}
 
-# C.1 M2CDuetRehearsal -- drum -> nondrum only.
-if [[ "$SKIP_REHEARSAL" != "1" ]]; then
-    run_drum2nondrum_variant \
-        "duet_rehearsal" \
-        "cp_transformer_m2c_duet_rehearsal_inference.py" \
-        "$CKPT_REHEARSAL" \
-        "duet_rehearsal"
-else
-    echo "[duet_rehearsal] skipped (SKIP_REHEARSAL=1)"
-fi
+# Lane C (GPU 1): the drum->nondrum conditional variants, sequentially.
+lane_C() {
+    # C.1 M2CDuetRehearsal -- drum -> nondrum only.
+    if [[ "$SKIP_REHEARSAL" != "1" ]]; then
+        run_drum2nondrum_variant \
+            "duet_rehearsal" \
+            "cp_transformer_m2c_duet_rehearsal_inference.py" \
+            "$CKPT_REHEARSAL" \
+            "duet_rehearsal"
+    else
+        echo "[duet_rehearsal] skipped (SKIP_REHEARSAL=1)"
+    fi
 
-# C.2 M2CDuetPrefix -- drum -> nondrum only (prefix-LM architecture).
-if [[ "$SKIP_PREFIX" != "1" ]]; then
-    run_drum2nondrum_variant \
-        "duet_prefix" \
-        "cp_transformer_m2c_duet_prefix_inference.py" \
-        "$CKPT_PREFIX" \
-        "duet_prefix"
-else
-    echo "[duet_prefix] skipped (SKIP_PREFIX=1)"
-fi
+    # C.2 M2CDuetPrefix -- drum -> nondrum only (prefix-LM architecture).
+    if [[ "$SKIP_PREFIX" != "1" ]]; then
+        run_drum2nondrum_variant \
+            "duet_prefix" \
+            "cp_transformer_m2c_duet_prefix_inference.py" \
+            "$CKPT_PREFIX" \
+            "duet_prefix"
+    else
+        echo "[duet_prefix] skipped (SKIP_PREFIX=1)"
+    fi
+}
+
+mkdir -p "$OUTPUT_ROOT"
+LOG_A="$OUTPUT_ROOT/lane_A.log"
+LOG_C="$OUTPUT_ROOT/lane_C.log"
+
+# CUDA_VISIBLE_DEVICES indices are relative to the job's 2-GPU allocation.
+echo "[lanes] launching lane A (A.1, A.3) on GPU 0 -> $LOG_A"
+echo "[lanes] launching lane C (C.1, C.2) on GPU 1 -> $LOG_C"
+( export CUDA_VISIBLE_DEVICES=0; lane_A ) >"$LOG_A" 2>&1 &
+PID_A=$!
+( export CUDA_VISIBLE_DEVICES=1; lane_C ) >"$LOG_C" 2>&1 &
+PID_C=$!
+
+# Wait for both; don't let set -e kill the script before both finish.
+RC_A=0; RC_C=0
+wait "$PID_A" || RC_A=$?
+wait "$PID_C" || RC_C=$?
 
 echo "================================================================"
+echo "----- lane A log (A.1, A.3) -----"
+cat "$LOG_A" || true
+echo "----- lane C log (C.1, C.2) -----"
+cat "$LOG_C" || true
+echo "================================================================"
+echo "Lane exit codes: A=$RC_A  C=$RC_C"
 echo "Job $SLURM_JOB_ID finished at $(date)"
 echo "Outputs under $OUTPUT_ROOT"
+if [[ "$RC_A" -ne 0 || "$RC_C" -ne 0 ]]; then
+    exit 1
+fi
