@@ -111,7 +111,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
     return net
 
 
-def _build_slot(model, mode, prev_est_h, action_frame_h, r, K, slot_idx):
+def _build_slot(model, mode, prev_est_h, action_frame_h, r, K, slot_idx, B):
     """Construct a query slot input at refinement round r.
 
     Args:
@@ -123,10 +123,10 @@ def _build_slot(model, mode, prev_est_h, action_frame_h, r, K, slot_idx):
         r: current refinement round in [0, K].
         K: total noise bins.
         slot_idx: 0 for mod-a (mel/drum), 1 for mod-b (chord/nondrum).
+        B: batch size. Must be passed explicitly -- at round K for a
+            sampling modality BOTH prev_est_h and action_frame_h are None
+            (mask emb only), so it cannot be inferred from the tensors.
     """
-    H = model.hidden_size
-    B = (prev_est_h.shape[0] if prev_est_h is not None
-         else action_frame_h.shape[0])
     device = next(model.parameters()).device
     dtype = next(model.parameters()).dtype
 
@@ -231,14 +231,14 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                     mode=('sample' if m_sampling else 'committed'),
                     prev_est_h=prev_m_h,
                     action_frame_h=m_action_h,
-                    r=r, K=K, slot_idx=0,
+                    r=r, K=K, slot_idx=0, B=B,
                 )
                 slot_c = _build_slot(
                     model,
                     mode=('sample' if c_sampling else 'committed'),
                     prev_est_h=prev_c_h,
                     action_frame_h=c_action_h,
-                    r=r, K=K, slot_idx=1,
+                    r=r, K=K, slot_idx=1, B=B,
                 )
 
                 h_in = torch.cat([h_clean, slot_m, slot_c], dim=1)
