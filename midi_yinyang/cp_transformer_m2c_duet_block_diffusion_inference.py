@@ -152,7 +152,8 @@ def _build_slot(model, mode, prev_est_h, action_frame_h, r, K, slot_idx, B):
 
 def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                                   mel_action_fn, chord_action_fn,
-                                  K_refine=None, seed_from_ar=True):
+                                  K_refine=None, seed_from_ar=True,
+                                  final_temperature=None):
     """Parallel-diffusion AR decoding loop.
 
     For each step t in 0..gen_length-1, determines per-modality actions
@@ -183,9 +184,17 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     denoisers / exposure gap on self-generated slot content) are what
     destroys the output, not the backbone.
 
+    final_temperature: sampling temperature at the LAST (committed)
+    round, with linear annealing from `temperature` at round K. Default
+    None -> same as `temperature` (no annealing, backwards compatible).
+    Recommended ~0.7 when refinement outputs sound chaotic: early rounds
+    keep exploration, the committed round takes the denoiser's
+    high-confidence mode instead of a fresh temperature-1 sample.
+
     Env overrides (read per call, so sbatch --export works):
       A3_REFINE_STEPS   int, same as K_refine.
       A3_SEED_FROM_AR   '0' disables the AR seed.
+      A3_FINAL_TEMP     float, same as final_temperature.
 
     Returns (mel_frames, chord_frames), each a list of [B, subseq_len].
     """
@@ -201,6 +210,12 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     if _os.environ.get('A3_SEED_FROM_AR') == '0':
         seed_from_ar = False
         print('[gen] A3_SEED_FROM_AR=0 (env override)')
+    env_ft = _os.environ.get('A3_FINAL_TEMP')
+    if final_temperature is None and env_ft is not None:
+        final_temperature = float(env_ft)
+        print(f'[gen] A3_FINAL_TEMP={final_temperature} (env override)')
+    if final_temperature is None:
+        final_temperature = temperature
 
     K = K_refine if K_refine is not None else model.diffusion_K
     assert K >= 0
@@ -281,17 +296,29 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                     h_m_pred = h_global[:, -2]
                     h_c_pred = h_global[:, -1]
 
+                # Temperature annealing across rounds: exploration early,
+                # near-greedy at the committed round. Linear interpolation
+                # from `temperature` at r=K down to final_temperature at
+                # r=0. With final_temperature == temperature (default,
+                # backwards compatible) this is a no-op.
+                if K > 0:
+                    frac = r / K
+                else:
+                    frac = 1.0
+                temp_r = final_temperature + (temperature - final_temperature) * frac
+                temp_r = max(temp_r, 1e-4)
+
                 if m_sampling:
                     m_tokens_r = model.local_sampling(
                         h_m_pred, max_subseq_len=subseq_len,
-                        temperature=temperature, token_type_id=0,
+                        temperature=temp_r, token_type_id=0,
                     )
                     last_m_tokens = m_tokens_r
                     prev_m_h = model._encode_frame(m_tokens_r, 0).to(dtype=dtype)
                 if c_sampling:
                     c_tokens_r = model.local_sampling(
                         h_c_pred, max_subseq_len=subseq_len,
-                        temperature=temperature, token_type_id=1,
+                        temperature=temp_r, token_type_id=1,
                     )
                     last_c_tokens = c_tokens_r
                     prev_c_h = model._encode_frame(c_tokens_r, 1).to(dtype=dtype)
