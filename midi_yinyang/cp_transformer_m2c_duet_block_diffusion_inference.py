@@ -174,6 +174,19 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     unchanged (K+1); only which positions are decoded in round one
     differs. Rounds r < K read the query slots as usual.
 
+    K_refine: number of refinement rounds. None -> model.diffusion_K.
+    K_refine=0 with seed_from_ar means: ONE forward, commit the AR-head
+    drafts directly, never decode the slots -- i.e. A.1-style decoding
+    on the A.3 checkpoint. This is the bisect knob for diagnosing
+    slot-pathway collapse: if K_refine=0 sounds fine but K_refine=K goes
+    silent after the prompt, the refinement rounds (under-trained slot
+    denoisers / exposure gap on self-generated slot content) are what
+    destroys the output, not the backbone.
+
+    Env overrides (read per call, so sbatch --export works):
+      A3_REFINE_STEPS   int, same as K_refine.
+      A3_SEED_FROM_AR   '0' disables the AR seed.
+
     Returns (mel_frames, chord_frames), each a list of [B, subseq_len].
     """
     tokenizer = model.tokenizer
@@ -181,8 +194,20 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     dtype = next(model.parameters()).dtype
     H = model.hidden_size
 
+    env_k = _os.environ.get('A3_REFINE_STEPS')
+    if K_refine is None and env_k is not None:
+        K_refine = int(env_k)
+        print(f'[gen] A3_REFINE_STEPS={K_refine} (env override)')
+    if _os.environ.get('A3_SEED_FROM_AR') == '0':
+        seed_from_ar = False
+        print('[gen] A3_SEED_FROM_AR=0 (env override)')
+
     K = K_refine if K_refine is not None else model.diffusion_K
-    assert K >= 1
+    assert K >= 0
+    assert K >= 1 or seed_from_ar, (
+        'K_refine=0 requires seed_from_ar (there is no slot estimate to '
+        'commit otherwise)'
+    )
 
     h_buffer = torch.zeros(B, 0, H, device=device, dtype=dtype)
     mel_frames = []

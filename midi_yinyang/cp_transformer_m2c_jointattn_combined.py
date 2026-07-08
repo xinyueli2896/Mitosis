@@ -54,6 +54,7 @@ from cp_transformer_m2c_moe_inference import (
 from cp_transformer_m2c_jointattn_inference import (
     load_model,
     decode_m2c_frames,
+    _get_input_tempo,
 )
 
 
@@ -227,11 +228,19 @@ def main():
                 write_mel = mode != 'chord_only'
                 write_chord = mode != 'mel_only'
                 save_path = os.path.join(song_dir, f'{mode}.mid')
+                # Preserve the prompt's tempo (beat grid) in the output.
+                # Source picked per mode: chord-driven modes read the
+                # chord prompt's tempo, everything else the mel prompt's.
+                tempo_source = mel_path if mel_path else chord_path
+                if mode in ('chord2mel', 'chord_only'):
+                    tempo_source = chord_path if chord_path else mel_path
+                output_tempo = _get_input_tempo(tempo_source, default=120.0)
                 decode_m2c_frames(
                     mel_frames, chord_frames,
                     save_path=save_path,
                     tokenizer=model.tokenizer,
                     with_velocity=model.with_velocity,
+                    tempo=output_tempo,
                     write_mel=write_mel,
                     write_chord=write_chord,
                 )
