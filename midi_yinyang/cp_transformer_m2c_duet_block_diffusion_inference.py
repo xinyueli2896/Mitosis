@@ -45,6 +45,7 @@ if _MOE_ROOT not in _sys.path:
 import torch
 
 from cp_transformer_m2c_duet_block_diffusion import M2CDuetBlockDiffusion
+from cp_transformer_m2c_moe import TRAIN_LENGTH
 from cp_transformer_m2c_jointattn_inference import (  # noqa: F401
     decode_m2c_frames,
     _infer_global_num_layers,
@@ -257,7 +258,35 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
             # Build the clean prefix once per step.
             sos = model._assemble_sos(B, device, dtype)
             h_clean = torch.cat([sos, h_buffer], dim=1)   # [B, 2+2t, H]
+            clean_committed_len = h_clean.shape[1]
             T_query = max(t, 1)   # parent's convention; T_query>=1 keeps masks non-empty
+
+            # --- RoPE-phase alignment with training -------------------
+            # At training the clean stream is ALWAYS full length
+            # (2*TRAIN_LENGTH positions), so the two query slots always
+            # sit at rotary phase 2*TRAIN_LENGTH{, +1} regardless of
+            # T_query. Appending the slots directly after 2+2t committed
+            # positions puts them at a phase the slot pathway has NEVER
+            # been trained at (relative distances to visible keys are
+            # disjoint from training's for small t), which degrades slot
+            # predictions into sparse/EOS-biased garbage. Fix: zero-pad
+            # the clean stream out to the training length before
+            # appending the slots. The pad rows are inert: slot rows
+            # cannot attend them (pred-frame >= T_query is masked),
+            # committed rows cannot (causal), and we never read pad
+            # outputs. Env A3_PAD_FRAMES overrides the pad target
+            # (frames per modality); '0' disables padding entirely.
+            env_pad = _os.environ.get('A3_PAD_FRAMES')
+            pad_frames_target = (int(env_pad) if env_pad is not None
+                                 else TRAIN_LENGTH)
+            target_clean_len = max(2 * pad_frames_target,
+                                    clean_committed_len)
+            if target_clean_len > clean_committed_len:
+                pad = torch.zeros(B, target_clean_len - clean_committed_len,
+                                   H, device=device, dtype=dtype)
+                h_clean_padded = torch.cat([h_clean, pad], dim=1)
+            else:
+                h_clean_padded = h_clean
 
             # Track previous-round estimates as encoded embeddings.
             prev_m_h = None
@@ -281,7 +310,7 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                     r=r, K=K, slot_idx=1, B=B,
                 )
 
-                h_in = torch.cat([h_clean, slot_m, slot_c], dim=1)
+                h_in = torch.cat([h_clean_padded, slot_m, slot_c], dim=1)
                 h_global, _ = model._run_global_stack(h_in, T_query=T_query)
                 if r == K and seed_from_ar:
                     # Round-one seed: decode the AR clean-stream heads.
