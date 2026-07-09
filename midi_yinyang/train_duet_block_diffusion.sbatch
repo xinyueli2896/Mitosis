@@ -93,7 +93,11 @@ LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-}"
 MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
-QUERY_LOSS_WEIGHT="${QUERY_LOSS_WEIGHT:-1.0}"
+# v1.1 default 2.0: the query pathway gets ~T_full x fewer supervised
+# positions than the AR stream; upweighting rebalances. Watch
+# val_ar_loss for regression; drop back toward 1.0 if it degrades.
+QUERY_LOSS_WEIGHT="${QUERY_LOSS_WEIGHT:-2.0}"
+SELF_COND_PROB="${SELF_COND_PROB:-0.5}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_block_diffusion_${SLURM_JOB_ID}}"
 
@@ -124,7 +128,7 @@ fi
 # the user didn't pass CKPT explicitly and last.ckpt exists there from a
 # prior submission, auto-resume.
 GLOBAL_BATCH=$((BATCH_SIZE * NGPUS))
-RUN_DIR="ckpt/m2c_duet_block_diffusion_v1.0_large_gnl12_K${DIFFUSION_K}_${TASK}_batch_${GLOBAL_BATCH}_schedule"
+RUN_DIR="ckpt/m2c_duet_block_diffusion_v1.1_large_gnl12_K${DIFFUSION_K}_${TASK}_batch_${GLOBAL_BATCH}_schedule"
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
     CKPT="$RUN_DIR/last.ckpt"
     echo "[auto-resume] found $CKPT  (run dir: $RUN_DIR)"
@@ -223,6 +227,7 @@ COMMON_ARGS=(
     --dump_samples_dir "$DUMP_SAMPLES_DIR"
     --gate_init_bias "$GATE_INIT_BIAS"
     --query_loss_weight "$QUERY_LOSS_WEIGHT"
+    --self_cond_prob "$SELF_COND_PROB"
     --diffusion_K "$DIFFUSION_K"
     --checkpoint_path "$TRAIN_CKPT"
     --wandb

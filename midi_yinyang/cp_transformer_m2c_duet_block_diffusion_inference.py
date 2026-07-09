@@ -75,6 +75,20 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         ck['state_dict'].keys() if isinstance(ck, dict) and 'state_dict' in ck
         else ck.keys() if isinstance(ck, dict) else []
     )
+    # Scheme detection: v1.1 ckpts carry the slot_rope_aligned_flag
+    # buffer (value 1 for the aligned scheme, 0 for a --legacy_slot_rope
+    # ablation run); v1.0 ckpts lack the key entirely. Legacy-scheme
+    # ckpts trained the slots at constant end-of-sequence phase, so
+    # inference must zero-pad the clean stream (the decode loop reads
+    # model.slot_rope_aligned).
+    _sd = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
+    _flag_key = next(
+        (k for k in state_dict_keys if k.endswith('slot_rope_aligned_flag')),
+        None,
+    )
+    slot_rope_aligned = bool(_sd[_flag_key].item()) if _flag_key else False
+    print(f'[load_model] slot_rope_aligned={slot_rope_aligned} '
+          f'({"v1.1 aligned scheme" if slot_rope_aligned else "legacy v1.0 -> decode-time padding"})')
     if diffusion_K is None:
         for key, name in (('k_emb_m.weight', 'k_emb_m'),
                           ('k_emb_c.weight', 'k_emb_c')):
@@ -100,6 +114,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         min_acc_tokens_before_eos=min_acc_tokens_before_eos,
         gate_init_bias=gate_init_bias,
         diffusion_K=diffusion_K,
+        slot_rope_aligned=slot_rope_aligned,
     )
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)
@@ -277,8 +292,15 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
             # outputs. Env A3_PAD_FRAMES overrides the pad target
             # (frames per modality); '0' disables padding entirely.
             env_pad = _os.environ.get('A3_PAD_FRAMES')
-            pad_frames_target = (int(env_pad) if env_pad is not None
-                                 else TRAIN_LENGTH)
+            if env_pad is not None:
+                pad_frames_target = int(env_pad)
+            elif getattr(model, 'slot_rope_aligned', False):
+                # v1.1 aligned scheme: the slots are rotary-indexed at
+                # 2*T_query+2/+3 inside _run_global_stack, so their
+                # phase already matches training at any t. No padding.
+                pad_frames_target = 0
+            else:
+                pad_frames_target = TRAIN_LENGTH
             target_clean_len = max(2 * pad_frames_target,
                                     clean_committed_len)
             if target_clean_len > clean_committed_len:

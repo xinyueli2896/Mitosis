@@ -54,6 +54,7 @@ from cp_transformer_m2c_moe import (
     RoFormerSymbolicTransformer, FramedDataset, TRAIN_LENGTH, MAX_STEPS,
 )
 from cp_transformer_m2c_duet_block import M2CDuetBlockAttn
+from cp_transformer_m2c_jointattn import _rope_freqs
 from tasks import get_task, TASKS
 
 
@@ -65,7 +66,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
     shape are inherited unchanged.
     """
 
-    def __init__(self, *args, diffusion_K=4, **kwargs):
+    def __init__(self, *args, diffusion_K=4, slot_rope_aligned=True,
+                 self_cond_prob=0.5, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # Per-modality noise-level (timestep) embeddings, indexed by
@@ -77,10 +79,72 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             self.k_emb_m.weight.zero_()
             self.k_emb_c.weight.zero_()
 
+        # --- v1.1 training-scheme flags -------------------------------
+        # slot_rope_aligned: apply RoPE to the two query slots at rotary
+        # index 2*T_query+2 / 2*T_query+3 -- the phase they naturally
+        # occupy at inference (right after the committed pairs of frame
+        # T_query) -- instead of their physical end-of-sequence position
+        # 2*T_full{, +1}. v1.0 ckpts trained the slots at a CONSTANT
+        # phase ~2*T_full, which mismatches inference for every t <
+        # T_full and required a zero-padding workaround at decode time.
+        # Stored as a buffer so the scheme travels inside the ckpt and
+        # inference can auto-detect it (legacy ckpts lack the key).
+        self.register_buffer(
+            'slot_rope_aligned_flag',
+            torch.tensor(1 if slot_rope_aligned else 0, dtype=torch.long),
+        )
+        # self_cond_prob: per-item probability that an UNMASKED slot is
+        # fed the model's own (no-grad) prediction of the target frame
+        # instead of the ground-truth embedding. Closes the exposure gap
+        # between training (gt-or-mask) and inference (self-samples fed
+        # back across refinement rounds).
+        self.self_cond_prob = float(self_cond_prob)
+
+    @property
+    def slot_rope_aligned(self):
+        return bool(self.slot_rope_aligned_flag.item())
+
+    def _run_global_stack(self, h, T_query):
+        """Override: slot-aligned RoPE indexing (v1.1 scheme).
+
+        Clean positions keep rotary index == physical index (0..L-3);
+        the two slots get index 2*T_query+2 and 2*T_query+3, matching
+        where inference naturally places them after the committed pairs
+        of frame T_query. Legacy scheme (v1.0 ckpts) falls through to
+        the parent implementation (contiguous 0..L-1).
+
+        Note the slots' rotary index may coincide with clean positions
+        2*T_query+2/+3 (which hold frame T_query+1's content at training
+        time). Duplicate rotary phases are benign: attention stays
+        well-defined, the slots never attend those rows (frame >=
+        T_query is masked for slot queries), and clean rows never attend
+        the slots.
+        """
+        if not self.slot_rope_aligned:
+            return super()._run_global_stack(h, T_query)
+        B, L, H = h.shape
+        clean_len = L - 2
+        head_dim = H // self.num_attention_heads
+        max_pos = max(L, 2 * int(T_query) + 4)
+        cos_b, sin_b = _rope_freqs(max_pos, head_dim,
+                                    device=h.device, dtype=h.dtype)
+        positions = torch.arange(L, device=h.device)
+        positions[clean_len] = 2 * int(T_query) + 2
+        positions[clean_len + 1] = 2 * int(T_query) + 3
+        cos = cos_b[:, :, positions]
+        sin = sin_b[:, :, positions]
+        total_aux = torch.zeros((), device=h.device, dtype=h.dtype)
+        for layer in self.global_layers:
+            h, aux = layer(h, T_query, cos, sin, clean_len)
+            total_aux = total_aux + aux
+        return h, total_aux / max(len(self.global_layers), 1)
+
     # ------------------------------------------------------------------
     # forward: same as parent except the query-slot inputs.
     # ------------------------------------------------------------------
-    def forward(self, x, T_query=None, k_m=None, k_c=None):
+    def forward(self, x, T_query=None, k_m=None, k_c=None,
+                sc_mask_m=None, sc_emb_m=None,
+                sc_mask_c=None, sc_emb_c=None):
         """x: [B, 2*T_full, subseq_len] interleaved ground-truth sequence.
 
         T_query (int, optional): frame the query slots predict.
@@ -88,6 +152,13 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             k = K (default): the slot is masked (parent behaviour).
             k = 0: the slot is the ground-truth frame embedding.
             0 < k < K: per-item Bernoulli mask with prob k/K.
+        sc_mask_m / sc_emb_m (optional): self-conditioning override for
+            the m slot. sc_mask_m: BoolTensor[B]; sc_emb_m: [B, 1, H].
+            Items where the mask is True use sc_emb (a model-generated
+            frame embedding) instead of the ground-truth embedding as
+            the slot's unmasked content. Only affects the Bernoulli
+            "content" branch; masked items still get mask_*_emb.
+            Same for the c slot.
 
         Returns the same triple as parent: (ar_logits, query_logits, aux_loss).
         """
@@ -126,9 +197,17 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         h_clean = torch.cat([sos, h[:, :-2]], dim=1)   # [B, 2T_full, H]
 
         # --- query-slot construction (the new part) ---
-        # Ground-truth frame embeddings at T_query.
+        # Ground-truth frame embeddings at T_query, with optional
+        # self-conditioning override (model-generated frame embeddings
+        # replacing gt for the flagged items).
         gt_m = h[:, 2 * T_query:2 * T_query + 1]       # [B, 1, H]
         gt_c = h[:, 2 * T_query + 1:2 * T_query + 2]   # [B, 1, H]
+        if sc_mask_m is not None:
+            gt_m = torch.where(sc_mask_m.view(batch_size, 1, 1),
+                                sc_emb_m.to(dtype=gt_m.dtype), gt_m)
+        if sc_mask_c is not None:
+            gt_c = torch.where(sc_mask_c.view(batch_size, 1, 1),
+                                sc_emb_c.to(dtype=gt_c.dtype), gt_c)
         mask_m_expand = self.mask_m_emb.view(1, 1, -1).expand(batch_size, 1, -1)
         mask_c_expand = self.mask_c_emb.view(1, 1, -1).expand(batch_size, 1, -1)
 
@@ -229,8 +308,45 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             k_m = torch.full((batch_size,), K, device=x.device, dtype=torch.long)
             k_c = torch.full((batch_size,), K, device=x.device, dtype=torch.long)
 
+        # --- self-conditioning (exposure-gap closing) -----------------
+        # At inference the slots carry the model's own previous-round
+        # samples, never ground truth. Train for that regime: with prob
+        # self_cond_prob per item per slot, replace the slot's unmasked
+        # content with the model's OWN prediction of the target frame,
+        # produced by a no-grad forward at fully-masked slots (round-one
+        # conditions). Token choice is the teacher-forced argmax of the
+        # query logits -- a cheap approximation of true AR sampling that
+        # still yields a realistic "plausible but imperfect" frame
+        # embedding. No gradient flows through the override content.
+        sc_mask_m = sc_emb_m = sc_mask_c = sc_emb_c = None
+        self._last_selfcond_frac = torch.zeros((), device=x.device)
+        if self.training and self.self_cond_prob > 0:
+            sc_mask_m = torch.rand(batch_size, device=x.device) < self.self_cond_prob
+            sc_mask_c = torch.rand(batch_size, device=x.device) < self.self_cond_prob
+            if bool(sc_mask_m.any()) or bool(sc_mask_c.any()):
+                with torch.no_grad():
+                    k_full = torch.full((batch_size,), K, device=x.device,
+                                         dtype=torch.long)
+                    _, q_logits_sc, _ = self.forward(
+                        x, T_query=T_query, k_m=k_full, k_c=k_full,
+                    )
+                    V = self.tokenizer.n_tokens
+                    toks = q_logits_sc.view(
+                        batch_size, 2, subseq_len, V,
+                    ).argmax(dim=-1)                       # [B, 2, S]
+                    sc_emb_m = self._encode_frame(toks[:, 0], 0)  # [B, 1, H]
+                    sc_emb_c = self._encode_frame(toks[:, 1], 1)
+                self._last_selfcond_frac = (
+                    (sc_mask_m.float().sum() + sc_mask_c.float().sum())
+                    / (2 * batch_size)
+                ).detach()
+            else:
+                sc_mask_m = sc_mask_c = None
+
         ar_logits, query_logits, aux_loss = self.forward(
             x, T_query=T_query, k_m=k_m, k_c=k_c,
+            sc_mask_m=sc_mask_m, sc_emb_m=sc_emb_m,
+            sc_mask_c=sc_mask_c, sc_emb_c=sc_emb_c,
         )
         targets_ar = x
         targets_query = torch.stack([
@@ -318,6 +434,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.log('train_T_query', float(self._last_T_query))
         self.log('train_mean_k_m', self._last_mean_k_m)
         self.log('train_mean_k_c', self._last_mean_k_c)
+        self.log('train_selfcond_frac', self._last_selfcond_frac)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -398,6 +515,18 @@ if __name__ == '__main__':
                              'the number of refinement steps you can run. '
                              'Larger K = finer schedule, larger embedding '
                              'table, more train-time noise diversity.')
+    parser.add_argument('--self_cond_prob', type=float, default=0.5,
+                        help='Per-item, per-slot probability that an '
+                             'unmasked query slot is fed the model\'s own '
+                             '(no-grad, teacher-forced-argmax) prediction '
+                             'instead of the ground-truth embedding. '
+                             'Closes the train/inference exposure gap. '
+                             '0 disables (v1.0 behaviour). Costs one extra '
+                             'no-grad forward per step when active.')
+    parser.add_argument('--legacy_slot_rope', action='store_true', default=False,
+                        help='Train with the v1.0 slot RoPE scheme (slots '
+                             'at constant end-of-sequence phase) instead '
+                             'of the v1.1 aligned scheme. Ablation only.')
     parser.add_argument('--fresh_schedule', action='store_true', default=False)
     args = parser.parse_args()
 
@@ -411,7 +540,8 @@ if __name__ == '__main__':
     mod_b_path = args.path_to_dataset if args.path_to_dataset is not None else task.mod_b_path
 
     tag = f'_{args.run_tag}' if args.run_tag else ''
-    default_name = (f"m2c_duet_block_diffusion_v1.0_{args.model_size}_"
+    scheme_version = 'v1.0' if args.legacy_slot_rope else 'v1.1'
+    default_name = (f"m2c_duet_block_diffusion_{scheme_version}_{args.model_size}_"
                     f"gnl{gnl}_K{args.diffusion_K}_{task.name}{tag}_"
                     f"batch_{args.batch_size * n_gpus}_schedule")
     model_name = args.model_name if args.model_name is not None else default_name
@@ -436,7 +566,11 @@ if __name__ == '__main__':
         gate_init_bias=args.gate_init_bias,
         query_loss_weight=args.query_loss_weight,
         diffusion_K=args.diffusion_K,
+        slot_rope_aligned=(not args.legacy_slot_rope),
+        self_cond_prob=args.self_cond_prob,
     )
+    print(f'[scheme] slot_rope_aligned={not args.legacy_slot_rope}  '
+          f'self_cond_prob={args.self_cond_prob}')
     print(f'Architecture: M2CDuetBlockDiffusion (A.3)  K={args.diffusion_K}  '
           f'3-pass (intra/cross/frame) + 2 gates + query slots with per-item '
           f'noise levels + k-embedding')
@@ -527,6 +661,8 @@ if __name__ == '__main__':
                     'gate_init_bias': args.gate_init_bias,
                     'query_loss_weight': args.query_loss_weight,
                     'diffusion_K': args.diffusion_K,
+                    'slot_rope_aligned': not args.legacy_slot_rope,
+                    'self_cond_prob': args.self_cond_prob,
                     'run_tag': args.run_tag,
                 },
             ) if args.wandb else TensorBoardLogger('tb_logs', name=model_name)
