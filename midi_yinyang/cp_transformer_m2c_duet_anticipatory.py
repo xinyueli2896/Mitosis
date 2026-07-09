@@ -83,11 +83,20 @@ class M2CDuetAnticipatory(M2CIntraCrossAttn):
         trailing slots that fall off the end."""
         result = super().preprocess(x, pitch_shift, tuple_size=tuple_size, y=y)
         # Parent returns either x_proc (y=None) or (x_proc, y_proc).
+        #
+        # ONLY apply the anticipatory shift in the PAIRED case (training
+        # batches, where x is guaranteed to be the mod-a/drum stream of
+        # an interleaved pair). Single-stream calls (y=None) come from
+        # generic tokenization -- e.g. _load_prompt_tokens at inference,
+        # which loads DRUM and NONDRUM prompt files through this same
+        # method. Shifting those corrupted every inference load: the
+        # nondrum prompt lost its first k frames (heard as "the
+        # beginning of the piece is missing") and the drum condition
+        # was shifted TWICE (load-time + decode-loop), feeding
+        # drum_{t+2k} instead of drum_{t+k}.
         if y is None:
-            x_proc = result
-            y_proc = None
-        else:
-            x_proc, y_proc = result
+            return result
+        x_proc, y_proc = result
 
         k = self.anticipation_frames
         if k > 0:
