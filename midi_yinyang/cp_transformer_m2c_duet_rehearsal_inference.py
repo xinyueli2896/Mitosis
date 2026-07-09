@@ -43,6 +43,7 @@ from cp_transformer_m2c_jointattn_inference import (
     resolve_best_ckpt,
 )
 from cp_transformer_m2c_moe_inference import _load_prompt_tokens
+from cp_transformer_m2c_moe import TRAIN_LENGTH
 
 
 def load_model(ckpt_path, model_size='large', with_velocity=False,
@@ -206,6 +207,20 @@ def run_folder(model, args):
         try:
             drum_tokens = _load_prompt_tokens(model, drum_path,
                                                args.max_polyphony)
+            # Cap the drum CONDITION at gen_length. Without this, a
+            # full-song drum file sets T = its full frame count -- far
+            # beyond the trained T (TRAIN_LENGTH), pushing RoPE phases
+            # and attention spans way out of the training distribution
+            # and making each decode step O((k*T)^2) for whole-song T.
+            # gen_length is already capped at T elsewhere; capping the
+            # condition too keeps the sequence at trained geometry.
+            if drum_tokens.shape[1] > args.gen_length:
+                print(f'  [cap] drum condition {drum_tokens.shape[1]} '
+                      f'-> {args.gen_length} frames')
+                drum_tokens = drum_tokens[:, :args.gen_length]
+            if args.gen_length > TRAIN_LENGTH:
+                print(f'  [warn] gen_length {args.gen_length} > trained '
+                      f'length {TRAIN_LENGTH}; geometry extrapolation.')
             nondrum_prompt_tokens = None
             if nondrum_path is not None and args.prompt_length > 0:
                 nondrum_prompt_tokens = _load_prompt_tokens(
