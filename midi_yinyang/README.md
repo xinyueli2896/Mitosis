@@ -96,9 +96,9 @@ sbatch midi_yinyang/train_duet_anticipatory.sbatch
 sbatch --export=ALL,ANTICIPATION_FRAMES=8  midi_yinyang/train_duet_anticipatory.sbatch
 sbatch --export=ALL,ANTICIPATION_FRAMES=32 midi_yinyang/train_duet_anticipatory.sbatch
 
-# Inference: not yet wired through the helper sbatch (state-dict-compatible
-# with #2, but the inference loop needs the same shift applied internally
-# to interpret outputs correctly). TODO.
+# Inference (drum -> nondrum with k-frame lookahead; k auto-detected
+# from the ckpt path, override with ANTICIPATION_FRAMES):
+sbatch --export=ALL,CKPT=ckpt/<run>/ midi_yinyang/infer_duet_anticipatory.sbatch
 ```
 
 ---
@@ -168,7 +168,7 @@ sbatch --export=ALL,MAX_LR=5e-5,BATCH_SIZE=2 midi_yinyang/train_<variant>.sbatch
 |---|---|---|---|
 | A.1 DuetAttn | `infer_intra_cross_attn_combined.sbatch` | co, mel2chord, chord2mel, mel_only, chord_only | — |
 | A.3 DuetBlockDiffusion | `infer_all_rwc.sbatch` (parallel-diffusion refinement) | same 5 modes | — |
-| B.1 Anticipatory | TODO (state-dict-compat with A.1; just needs same shift applied) | — | A.1 |
+| B.1 Anticipatory | `infer_duet_anticipatory.sbatch` | **drum → nondrum only** (k-frame lookahead) | A.1 |
 | C.1 Rehearsal | `infer_duet_rehearsal.sbatch` | **drum → nondrum only** | — |
 | C.2 Prefix | `infer_duet_prefix.sbatch` | **drum → nondrum only** | — |
 
