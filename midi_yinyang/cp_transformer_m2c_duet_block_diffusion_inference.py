@@ -230,6 +230,10 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     if final_temperature is None and env_ft is not None:
         final_temperature = float(env_ft)
         print(f'[gen] A3_FINAL_TEMP={final_temperature} (env override)')
+    env_tp = _os.environ.get('A3_TOP_P')
+    if env_tp is not None:
+        model.sampling_top_p = float(env_tp)
+        print(f'[gen] A3_TOP_P={model.sampling_top_p} (nucleus sampling)')
     if final_temperature is None:
         final_temperature = temperature
 

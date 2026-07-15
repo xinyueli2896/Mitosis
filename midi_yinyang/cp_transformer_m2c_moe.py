@@ -520,6 +520,26 @@ class RoFormerSymbolicTransformer(L.LightningModule):
             if temperature == 0:
                 y_next = logits.argmax(dim=-1, keepdim=True)
             else:
+                # Optional nucleus (top-p) filtering. Off unless the
+                # attribute is set (e.g. by an inference wrapper via
+                # A3_TOP_P); keeps only the smallest set of tokens whose
+                # cumulative probability exceeds top_p, cutting the long
+                # tail of low-probability junk that plain temperature
+                # sampling occasionally commits.
+                top_p = getattr(self, 'sampling_top_p', None)
+                if top_p is not None and 0.0 < top_p < 1.0:
+                    sorted_logits, sorted_idx = torch.sort(
+                        logits, descending=True, dim=-1)
+                    sorted_probs = F.softmax(sorted_logits / temperature,
+                                              dim=-1)
+                    cum = sorted_probs.cumsum(dim=-1)
+                    # Drop tokens whose cumulative mass BEFORE them already
+                    # exceeds top_p (always keeps the top-1 token).
+                    drop = (cum - sorted_probs) > top_p
+                    sorted_logits = sorted_logits.masked_fill(
+                        drop, float('-inf'))
+                    logits = torch.full_like(logits, float('-inf')).scatter(
+                        -1, sorted_idx, sorted_logits)
                 probs = F.softmax(logits / temperature, dim=-1)
                 probs_sum = probs.sum(dim=-1, keepdim=True)
                 fallback = probs_sum.squeeze(-1) == 0
