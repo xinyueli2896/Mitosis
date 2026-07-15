@@ -234,8 +234,19 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     if env_tp is not None:
         model.sampling_top_p = float(env_tp)
         print(f'[gen] A3_TOP_P={model.sampling_top_p} (nucleus sampling)')
+    # A3_DRAFT_TEMP: temperature for all NON-final rounds (r > 0),
+    # overriding the linear anneal. Lets you invert the schedule --
+    # sharp, stable drafts (e.g. 0.7) with a diverse final commit
+    # (final_temperature 0.9-1.0) -- which fights repetition: the
+    # committed token stream keeps entropy while the scaffold the
+    # rounds condition on stays clean.
     if final_temperature is None:
         final_temperature = temperature
+    env_dt = _os.environ.get('A3_DRAFT_TEMP')
+    draft_temperature = float(env_dt) if env_dt is not None else None
+    if draft_temperature is not None:
+        print(f'[gen] A3_DRAFT_TEMP={draft_temperature} (piecewise schedule: '
+              f'drafts@{draft_temperature}, commit@{final_temperature})')
 
     K = K_refine if K_refine is not None else model.diffusion_K
     assert K >= 0
@@ -356,11 +367,16 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                 # from `temperature` at r=K down to final_temperature at
                 # r=0. With final_temperature == temperature (default,
                 # backwards compatible) this is a no-op.
-                if K > 0:
-                    frac = r / K
+                if draft_temperature is not None:
+                    # Piecewise: every draft round at draft_temperature,
+                    # only the committed round at final_temperature.
+                    temp_r = final_temperature if r == 0 else draft_temperature
                 else:
-                    frac = 1.0
-                temp_r = final_temperature + (temperature - final_temperature) * frac
+                    if K > 0:
+                        frac = r / K
+                    else:
+                        frac = 1.0
+                    temp_r = final_temperature + (temperature - final_temperature) * frac
                 temp_r = max(temp_r, 1e-4)
 
                 if m_sampling:
