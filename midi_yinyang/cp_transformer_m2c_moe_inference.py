@@ -190,6 +190,20 @@ def make_actions_single(prompt, prompt_modality, prompt_length):
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
+def build_inference_sos(model, B, device, dtype):
+    """SOS pair for the decode context. Prefer the model's own
+    _assemble_sos -- variants like M2CIntraCrossAttn add learned
+    per-modality offsets (global_sos + sos_offset_m/c) at TRAINING time,
+    so decoding with the raw shared global_sos conditions every
+    generation on sos vectors the model never saw. Fall back to the raw
+    global_sos only for models that predate _assemble_sos."""
+    fn = getattr(model, '_assemble_sos', None)
+    if fn is not None:
+        return fn(B, device, dtype)
+    return model.global_sos.view(1, 1, -1).expand(B, 2, -1).to(
+        device=device, dtype=dtype)
+
+
 def general_inference(model, gen_length, B, subseq_len, temperature,
                       mel_action_fn, chord_action_fn):
     """Run gen_length timesteps; at each step decide per-modality whether to
@@ -218,7 +232,8 @@ def general_inference(model, gen_length, B, subseq_len, temperature,
             # Build the shift-by-2 input: prepend the SOS pair to the buffer
             # of t past (mel, chord) block summaries. h_in length = 2 + 2t;
             # output positions 2t and 2t+1 predict m_t and c_t.
-            sos = model.global_sos.view(1, 1, -1).expand(B, 2, H)
+            sos = build_inference_sos(model, B, h_buffer.device,
+                                       h_buffer.dtype)
             h_in = torch.cat([sos, h_buffer], dim=1)
             h_out, _ = model._global_interaction(h_in)
             h_m_pred = h_out[:, -2]
