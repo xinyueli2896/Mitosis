@@ -74,7 +74,11 @@ REPO_DIR=/home/xinyue.li/Mitosis
 # automatically scans for *.val_loss=*.ckpt and picks the smallest val_loss,
 # falling back to last.ckpt if no val_loss-tagged ckpts exist.
 CKPT_BASE="${CKPT_BASE:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
-CKPT_DIFFUSION="${CKPT_DIFFUSION:-ckpt/m2c_duet_block_diffusion_v1.0_large_gnl12_K4_drumnondrum_batch_16_schedule/}"
+_A3_V11="ckpt/m2c_duet_block_diffusion_v1.1_large_gnl12_K4_drumnondrum_batch_16_schedule"
+_A3_V10="ckpt/m2c_duet_block_diffusion_v1.0_large_gnl12_K4_drumnondrum_batch_16_schedule"
+if [[ -z "${CKPT_DIFFUSION:-}" ]]; then
+    if [[ -d "$_A3_V11" ]]; then CKPT_DIFFUSION="$_A3_V11/"; else CKPT_DIFFUSION="$_A3_V10/"; fi
+fi
 CKPT_REHEARSAL="${CKPT_REHEARSAL:-ckpt/m2c_duet_rehearsal_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
 CKPT_PREFIX="${CKPT_PREFIX:-ckpt/m2c_duet_prefix_v1.0_large_gnl12_drumnondrum_batch_16_schedule/}"
 

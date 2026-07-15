@@ -47,8 +47,15 @@ source ~/.bashrc
 CONDA_ENV=mitosis
 REPO_DIR=/home/xinyue.li/Mitosis
 
-# Directory default: resolve_best_ckpt picks the smallest-val_loss ckpt.
-CKPT="${CKPT:-ckpt/m2c_duet_block_diffusion_v1.0_large_gnl12_K4_drumnondrum_batch_16_schedule/}"
+# Prefer the v1.1 (aligned slot-RoPE + self-conditioning) run when it
+# exists; fall back to the legacy v1.0 run (decoded with the padding
+# rescue, auto-detected from the ckpt).
+_V11_DIR="ckpt/m2c_duet_block_diffusion_v1.1_large_gnl12_K4_drumnondrum_batch_16_schedule"
+_V10_DIR="ckpt/m2c_duet_block_diffusion_v1.0_large_gnl12_K4_drumnondrum_batch_16_schedule"
+if [[ -z "${CKPT:-}" ]]; then
+    if [[ -d "$_V11_DIR" ]]; then CKPT="$_V11_DIR/"; else CKPT="$_V10_DIR/"; fi
+    echo "[ckpt-default] using $CKPT"
+fi
 
 MEL_FOLDER="${MEL_FOLDER:-input/rwc_test_prompts_split/drum}"
 CHORD_FOLDER="${CHORD_FOLDER:-input/rwc_test_prompts_split/nondrum}"
