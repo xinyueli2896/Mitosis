@@ -94,6 +94,11 @@ MAX_POLYPHONY="${MAX_POLYPHONY:-16}"
 MIN_CHORD_TOKENS_BEFORE_EOS="${MIN_CHORD_TOKENS_BEFORE_EOS:-0}"
 MODES="${MODES:-co mel2chord chord2mel mel_only chord_only}"
 
+# A.3 decode-schedule defaults (only the diffusion lane reads A3_*).
+export A3_REFINE_STEPS="${A3_REFINE_STEPS:-1}"
+export A3_FINAL_TEMP="${A3_FINAL_TEMP:-0.9}"
+export A3_TOP_P="${A3_TOP_P:-0.95}"
+
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
 

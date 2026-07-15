@@ -60,6 +60,13 @@ MAX_POLYPHONY="${MAX_POLYPHONY:-16}"
 MIN_CHORD_TOKENS_BEFORE_EOS="${MIN_CHORD_TOKENS_BEFORE_EOS:-0}"
 MODES="${MODES:-co mel2chord chord2mel mel_only chord_only}"
 
+# Decode-schedule defaults (listening-test winner on the 98k v1.1 ckpt:
+# one refinement round, commit annealed to 0.9, 0.95 nucleus). Override
+# any of these on the sbatch line; A3_REFINE_STEPS=0 gives pure AR decode.
+export A3_REFINE_STEPS="${A3_REFINE_STEPS:-1}"
+export A3_FINAL_TEMP="${A3_FINAL_TEMP:-0.9}"
+export A3_TOP_P="${A3_TOP_P:-0.95}"
+
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
 
@@ -80,6 +87,7 @@ echo "OUTPUT_DIR           = $OUTPUT_DIR"
 echo "PROMPT_LENGTH=$PROMPT_LENGTH  GEN_LENGTH=$GEN_LENGTH  TEMPERATURE=$TEMPERATURE"
 echo "MAX_POLYPHONY=$MAX_POLYPHONY  MIN_CHORD_TOKENS_BEFORE_EOS=$MIN_CHORD_TOKENS_BEFORE_EOS"
 echo "MODES=$MODES"
+echo "A3_REFINE_STEPS=$A3_REFINE_STEPS  A3_FINAL_TEMP=$A3_FINAL_TEMP  A3_TOP_P=$A3_TOP_P"
 if [[ -n "${MAX_SONGS:-}" ]]; then echo "MAX_SONGS=$MAX_SONGS"; fi
 echo "----------------------------------------------------------------"
 nvidia-smi | head -n 20 || true
