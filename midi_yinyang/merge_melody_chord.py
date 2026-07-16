@@ -36,12 +36,27 @@ def _rename_track(track, name):
     return out
 
 
+def _force_track_program(track, program):
+    out = mido.MidiTrack()
+    had_pc = False
+    for msg in track:
+        if msg.type == "program_change":
+            out.append(msg.copy(program=program))
+            had_pc = True
+        else:
+            out.append(msg.copy())
+    if not had_pc:
+        out.insert(0, mido.Message("program_change", program=program, time=0))
+    return out
+
+
 def _note_tracks(mid):
     return [t for t in mid.tracks
             if any(m.type == "note_on" and m.velocity > 0 for m in t)]
 
 
-def merge_pair(mel_path, chord_path, out_path):
+def merge_pair(mel_path, chord_path, out_path,
+               mel_program=None, chord_program=None):
     mel = mido.MidiFile(mel_path)
     cho = mido.MidiFile(chord_path)
     if mel.ticks_per_beat != cho.ticks_per_beat:
@@ -60,9 +75,15 @@ def merge_pair(mel_path, chord_path, out_path):
     out = mido.MidiFile(ticks_per_beat=mel.ticks_per_beat)
     out.tracks.append(mel.tracks[0])   # tempo/meta grid
     for t in mel_notes:
-        out.tracks.append(_rename_track(t, "MELODY"))
+        t = _rename_track(t, "MELODY")
+        if mel_program is not None:
+            t = _force_track_program(t, mel_program)
+        out.tracks.append(t)
     for t in cho_notes:
-        out.tracks.append(_rename_track(t, "CHORD"))
+        t = _rename_track(t, "CHORD")
+        if chord_program is not None:
+            t = _force_track_program(t, chord_program)
+        out.tracks.append(t)
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     out.save(out_path)
@@ -76,6 +97,14 @@ def main():
                         help="folder of chord midis (same filenames)")
     parser.add_argument("--dst", required=True)
     parser.add_argument("--ids", nargs="*", default=None)
+    parser.add_argument("--mel-program", type=int, default=None,
+                        help="force the MELODY tracks' midi program")
+    parser.add_argument("--chord-program", type=int, default=None,
+                        help="force the CHORD tracks' midi program. Set a "
+                             "program distinct from the melody's (e.g. 48) "
+                             "when the combined files feed the single-stream "
+                             "CP transformer, so the tokenizer keeps the "
+                             "streams apart.")
     args = parser.parse_args()
 
     mel_files = {os.path.basename(p): p
@@ -102,7 +131,9 @@ def main():
     for n in names:
         try:
             merge_pair(mel_files[n], cho_files[n],
-                       os.path.join(args.dst, n))
+                       os.path.join(args.dst, n),
+                       mel_program=args.mel_program,
+                       chord_program=args.chord_program)
         except Exception as e:
             failed.append((n, repr(e)))
     print(f"Done. {len(names) - len(failed)} merged, {len(failed)} failed.")

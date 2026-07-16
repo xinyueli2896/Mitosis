@@ -332,6 +332,26 @@ def create_pop909_chord(max_polyphony=4):
     )
 
 
+def create_pop909_melchord_combined(max_polyphony=16):
+    # Merged melody+chord midis (merge_melody_chord.py) for finetuning the
+    # single-stream CP transformer. max_polyphony=16 matches the pretrained
+    # ckpt's data (la_cp16); actual content peaks at ~5 notes/frame, the
+    # rest of the slots hold EOS/pad exactly as in the LA data. IMPORTANT:
+    # build the folder with --chord-program 48 (or another program distinct
+    # from the melody's) -- the single-stream tokenizer separates streams by
+    # program only, and same-program streams fuse irreversibly.
+    folder = os.environ.get('POP909_COMBINED_PATH',
+                            'POP909-Dataset/POP909-melody-chord-tagged')
+    create_npy_dataset_from_midi(
+        folder,
+        max_polyphony,
+        f'pop909_melchord_cp{max_polyphony}_v2',
+        ins_ids='all',
+        scan_subfolders=False,
+        filter=False,
+    )
+
+
 if __name__ == '__main__':
     import sys
     arg = sys.argv[1] if len(sys.argv) > 1 else None
@@ -339,5 +359,7 @@ if __name__ == '__main__':
         create_pop909_melody()
     elif arg == 'pop909_chord':
         create_pop909_chord()
+    elif arg == 'pop909_melchord':
+        create_pop909_melchord_combined()
     else:
         create_rwc_cp()
