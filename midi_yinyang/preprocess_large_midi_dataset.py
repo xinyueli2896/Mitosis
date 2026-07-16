@@ -342,10 +342,12 @@ def create_pop909_melchord_combined(max_polyphony=16):
     # program only, and same-program streams fuse irreversibly.
     folder = os.environ.get('POP909_COMBINED_PATH',
                             'POP909-Dataset/POP909-melody-chord-tagged')
+    dataset_name = os.environ.get('POP909_MELCHORD_DATASET',
+                                  f'pop909_melchord_cp{max_polyphony}_v2')
     create_npy_dataset_from_midi(
         folder,
         max_polyphony,
-        f'pop909_melchord_cp{max_polyphony}_v2',
+        dataset_name,
         ins_ids='all',
         scan_subfolders=False,
         filter=False,
