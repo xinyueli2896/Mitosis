@@ -88,6 +88,22 @@ def _shift_track(track, tick_shift):
     return out
 
 
+def _set_track_program(track, program):
+    """Copy a MidiTrack with all program_change events forced to
+    `program` (one inserted at tick 0 if the track had none)."""
+    out = mido.MidiTrack()
+    had_pc = False
+    for msg in track:
+        if msg.type == "program_change":
+            out.append(msg.copy(program=program))
+            had_pc = True
+        else:
+            out.append(msg.copy())
+    if not had_pc:
+        out.insert(0, mido.Message("program_change", program=program, time=0))
+    return out
+
+
 def _first_note_tick(track):
     at = 0
     for msg in track:
@@ -112,7 +128,7 @@ def _retime_track(track, cut_ticks):
 
 def combine_melody_chord(aligned_midi_path, chord_txt_path, out_path,
                          beat_txt_path=None, score=False, bpm=None,
-                         trim=False):
+                         trim=False, mel_program=None, chord_program=None):
     src = mido.MidiFile(aligned_midi_path)
     ppq = src.ticks_per_beat
 
@@ -123,6 +139,13 @@ def combine_melody_chord(aligned_midi_path, chord_txt_path, out_path,
             f"no melody track in {aligned_midi_path} "
             f"(tracks: {[t.name for t in src.tracks]})"
         )
+    if mel_program is not None:
+        melody_tracks = [_set_track_program(t, mel_program)
+                         for t in melody_tracks]
+
+    def finish_chord(track):
+        return (_set_track_program(track, chord_program)
+                if chord_program is not None else track)
 
     out = mido.MidiFile(ticks_per_beat=ppq)
 
@@ -130,8 +153,8 @@ def combine_melody_chord(aligned_midi_path, chord_txt_path, out_path,
         # Dataset grid: identical to every other aligned/melody/chord midi.
         out.tracks.append(src.tracks[0])          # tempo/meta track
         out.tracks.extend(melody_tracks)          # MELODY
-        out.tracks.append(build_chord_track(src.tracks[0], ppq,
-                                            chord_txt_path))
+        out.tracks.append(finish_chord(
+            build_chord_track(src.tracks[0], ppq, chord_txt_path)))
     else:
         beat_times, meter, d0 = read_beats(beat_txt_path)
         sec_to_beat = sec_to_beat_fn(beat_times)
@@ -201,7 +224,7 @@ def combine_melody_chord(aligned_midi_path, chord_txt_path, out_path,
                                                 velocity=0, time=delta))
             prev_tick = tick
         chord_track.append(mido.MetaMessage("end_of_track", time=0))
-        note_tracks.append(chord_track)
+        note_tracks.append(finish_chord(chord_track))
 
         if trim:
             # Cut leading silence in whole bars so downbeats stay on
@@ -239,6 +262,16 @@ def main():
     parser.add_argument("--trim", action="store_true", default=False,
                         help="--score mode: cut leading silence (whole "
                              "bars only, so downbeats stay on barlines).")
+    parser.add_argument("--mel-program", type=int, default=None,
+                        help="Force the MELODY track's midi program. Give "
+                             "melody and chord DISTINCT programs when the "
+                             "file feeds the single-stream CP transformer, "
+                             "so the tokenizer keeps the streams apart and "
+                             "generated output decodes into separate "
+                             "tracks (e.g. --mel-program 0 "
+                             "--chord-program 48).")
+    parser.add_argument("--chord-program", type=int, default=None,
+                        help="Force the CHORD track's midi program.")
     args = parser.parse_args()
 
     midi_paths = sorted(glob(os.path.join(args.aligned, "*.mid")))
@@ -265,7 +298,9 @@ def main():
         try:
             combine_melody_chord(midi_path, chord_txt, out_path,
                                  beat_txt_path=beat_txt, score=args.score,
-                                 bpm=args.bpm, trim=args.trim)
+                                 bpm=args.bpm, trim=args.trim,
+                                 mel_program=args.mel_program,
+                                 chord_program=args.chord_program)
             print(f"  {sid} -> {out_path}")
         except Exception as e:
             failed.append((sid, repr(e)))
