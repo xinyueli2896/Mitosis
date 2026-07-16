@@ -89,7 +89,7 @@ def _shift_track(track, tick_shift):
 
 
 def combine_melody_chord(aligned_midi_path, chord_txt_path, out_path,
-                         beat_txt_path=None, score=False):
+                         beat_txt_path=None, score=False, bpm=None):
     src = mido.MidiFile(aligned_midi_path)
     ppq = src.ticks_per_beat
 
@@ -122,13 +122,17 @@ def combine_melody_chord(aligned_midi_path, chord_txt_path, out_path,
         def beat_to_tick(b):
             return max(0, int(round((b + P + meter) * ppq)))
 
-        # Constant tempo = the song's average beat duration.
-        avg_beat = (beat_times[-1] - beat_times[0]) / max(len(beat_times) - 1, 1)
+        # Constant tempo: --bpm if given, else the song's average.
+        if bpm is not None:
+            beat_sec = 60.0 / bpm
+        else:
+            beat_sec = ((beat_times[-1] - beat_times[0])
+                        / max(len(beat_times) - 1, 1))
         meta = mido.MidiTrack()
         meta.append(mido.MetaMessage("time_signature", numerator=meter,
                                      denominator=4, time=0))
         meta.append(mido.MetaMessage("set_tempo",
-                                     tempo=int(round(avg_beat * 1e6)), time=0))
+                                     tempo=int(round(beat_sec * 1e6)), time=0))
         meta.append(mido.MetaMessage("end_of_track", time=0))
         out.tracks.append(meta)
 
@@ -191,6 +195,9 @@ def main():
                              "time signature, downbeats on barlines "
                              "(needs <src>/<id>/beat_midi.txt). Not for "
                              "tokenization.")
+    parser.add_argument("--bpm", type=float, default=None,
+                        help="Constant tempo for --score mode (e.g. 120). "
+                             "Default: the song's average tempo.")
     args = parser.parse_args()
 
     midi_paths = sorted(glob(os.path.join(args.aligned, "*.mid")))
@@ -216,7 +223,8 @@ def main():
             continue
         try:
             combine_melody_chord(midi_path, chord_txt, out_path,
-                                 beat_txt_path=beat_txt, score=args.score)
+                                 beat_txt_path=beat_txt, score=args.score,
+                                 bpm=args.bpm)
             print(f"  {sid} -> {out_path}")
         except Exception as e:
             failed.append((sid, repr(e)))

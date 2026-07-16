@@ -15,6 +15,8 @@
 #                (per-beat tempo, audio-aligned) used by the tokenizer.
 #                Score-mode files are for ears/DAWs only -- never mix
 #                them into the tokenization folders.
+#   BPM          constant tempo for SCORE=1 (e.g. 120). Empty = the
+#                song's average tempo.
 #
 # Examples:
 #   # just 001-005 (rebuilding the lost ones):
@@ -45,6 +47,7 @@ POP909_RAW="${POP909_RAW:-/home/xinyue.li/POP909-Dataset/POP909}"
 DST_DIR="${DST_DIR:-/home/xinyue.li/POP909-Dataset/POP909-melody-chord}"
 IDS="${IDS:-}"
 SCORE="${SCORE:-0}"
+BPM="${BPM:-}"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -56,7 +59,7 @@ echo "ALIGNED_DIR = $ALIGNED_DIR"
 echo "POP909_RAW  = $POP909_RAW"
 echo "DST_DIR     = $DST_DIR"
 echo "IDS         = ${IDS:-<all songs>}"
-echo "SCORE       = $SCORE"
+echo "SCORE       = $SCORE   BPM = ${BPM:-<song average>}"
 echo "================================================================"
 
 EXTRA_ARGS=()
@@ -65,6 +68,9 @@ if [[ -n "$IDS" ]]; then
 fi
 if [[ "$SCORE" == "1" ]]; then
     EXTRA_ARGS+=(--score)
+fi
+if [[ -n "$BPM" ]]; then
+    EXTRA_ARGS+=(--bpm "$BPM")
 fi
 
 python combine_pop909_melody_chord.py \
