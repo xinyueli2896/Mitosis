@@ -247,6 +247,19 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     if draft_temperature is not None:
         print(f'[gen] A3_DRAFT_TEMP={draft_temperature} (piecewise schedule: '
               f'drafts@{draft_temperature}, commit@{final_temperature})')
+    # A3_ADAPTIVE=1: skip refinement rounds on frames where either
+    # stream's seed-round frame is SILENT. Refinement's value is mutual
+    # negotiation between two active voices; with one voice silent there
+    # is nothing to negotiate and extra rounds only inject drift
+    # (listening tests: K=4 > K=0 when drums are present, K=4 <= K=0 on
+    # no-drum prompts). Silence = frame whose first token is EOS.
+    adaptive = _os.environ.get('A3_ADAPTIVE') == '1'
+    if adaptive:
+        print('[gen] A3_ADAPTIVE=1 (skip refinement on silent-frame steps)')
+
+    def _is_silent(tokens):
+        return tokens is not None and bool(
+            (tokens[:, 0] == tokenizer.eos_token).all())
 
     K = K_refine if K_refine is not None else model.diffusion_K
     assert K >= 0
@@ -393,6 +406,15 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                     )
                     last_c_tokens = c_tokens_r
                     prev_c_h = model._encode_frame(c_tokens_r, 1).to(dtype=dtype)
+
+                # Adaptive early-exit: after the seed round, if either
+                # stream's current frame (sampled draft or given action)
+                # is silent, commit the seed and skip the refinement.
+                if adaptive and r == K:
+                    m_probe = last_m_tokens if m_sampling else m_tokens
+                    c_probe = last_c_tokens if c_sampling else c_tokens
+                    if _is_silent(m_probe) or _is_silent(c_probe):
+                        break
 
             if m_sampling:
                 m_tokens = last_m_tokens
