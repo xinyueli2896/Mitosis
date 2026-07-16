@@ -22,11 +22,16 @@
 #
 # Env knobs (override via --export=ALL,KEY=val):
 #   POP909_RAW    raw dataset root (folders <id>/ with midi+beat+chord txt).
-#                 default: POP909-Dataset/POP909
-#   ALIGNED_DIR   default: POP909-Dataset/POP909-aligned
-#   MELODY_DIR    default: POP909-Dataset/POP909-melody
-#   CHORD_DIR     default: POP909-Dataset/POP909-chord
+#                 Only needed when melody/chord midis must be (re)built.
+#                 default: /home/xinyue.li/POP909-Dataset/POP909
+#   ALIGNED_DIR   default: /home/xinyue.li/POP909-Dataset/POP909-aligned
+#   MELODY_DIR    default: /home/xinyue.li/POP909-Dataset/POP909-melody
+#   CHORD_DIR     default: /home/xinyue.li/POP909-Dataset/POP909-chord
 #   FORCE=1       re-run stages whose output already exists.
+#
+# When MELODY_DIR and CHORD_DIR are already populated (e.g. downloaded from
+# HF: c0smic1atte/909_aligned), stages 1-3 are skipped entirely and only
+# tokenization + the pairing check run.
 #
 # After this finishes, train A.3 on melody/chord with:
 #   sbatch --export=ALL,TASK=melchord midi_yinyang/train_duet_block_diffusion.sbatch
@@ -48,10 +53,10 @@ source ~/.bashrc
 CONDA_ENV=mitosis
 REPO_DIR=/home/xinyue.li/Mitosis
 
-POP909_RAW="${POP909_RAW:-POP909-Dataset/POP909}"
-ALIGNED_DIR="${ALIGNED_DIR:-POP909-Dataset/POP909-aligned}"
-MELODY_DIR="${MELODY_DIR:-POP909-Dataset/POP909-melody}"
-CHORD_DIR="${CHORD_DIR:-POP909-Dataset/POP909-chord}"
+POP909_RAW="${POP909_RAW:-/home/xinyue.li/POP909-Dataset/POP909}"
+ALIGNED_DIR="${ALIGNED_DIR:-/home/xinyue.li/POP909-Dataset/POP909-aligned}"
+MELODY_DIR="${MELODY_DIR:-/home/xinyue.li/POP909-Dataset/POP909-melody}"
+CHORD_DIR="${CHORD_DIR:-/home/xinyue.li/POP909-Dataset/POP909-chord}"
 FORCE="${FORCE:-0}"
 
 conda activate "$CONDA_ENV"
@@ -68,8 +73,18 @@ echo "MELODY_DIR  = $MELODY_DIR   ($(count_mid "$MELODY_DIR") midis)"
 echo "CHORD_DIR   = $CHORD_DIR    ($(count_mid "$CHORD_DIR") midis)"
 echo "================================================================"
 
+# Which build stages are actually needed? Melody/chord folders that are
+# already populated (e.g. downloaded pre-built) skip their stage; the
+# align stage only runs if some downstream stage still needs it.
+NEED_MELODY=1
+NEED_CHORD=1
+if [[ "$FORCE" != "1" && "$(count_mid "$MELODY_DIR")" -gt 0 ]]; then NEED_MELODY=0; fi
+if [[ "$FORCE" != "1" && "$(count_mid "$CHORD_DIR")" -gt 0 ]]; then NEED_CHORD=0; fi
+
 # --- 1. align ---------------------------------------------------------
-if [[ "$FORCE" != "1" && "$(count_mid "$ALIGNED_DIR")" -gt 0 ]]; then
+if [[ "$NEED_MELODY" == "0" && "$NEED_CHORD" == "0" ]]; then
+    echo "[align] melody and chord folders already populated; align not needed."
+elif [[ "$FORCE" != "1" && "$(count_mid "$ALIGNED_DIR")" -gt 0 ]]; then
     echo "[align] $ALIGNED_DIR already populated; skipping (FORCE=1 to redo)."
 else
     if [[ ! -d "$POP909_RAW" ]]; then
@@ -80,14 +95,14 @@ else
 fi
 
 # --- 2. melody --------------------------------------------------------
-if [[ "$FORCE" != "1" && "$(count_mid "$MELODY_DIR")" -gt 0 ]]; then
+if [[ "$NEED_MELODY" == "0" ]]; then
     echo "[melody] $MELODY_DIR already populated; skipping."
 else
     python extract_pop909_melody.py --src "$ALIGNED_DIR" --dst "$MELODY_DIR"
 fi
 
 # --- 3. chord ---------------------------------------------------------
-if [[ "$FORCE" != "1" && "$(count_mid "$CHORD_DIR")" -gt 0 ]]; then
+if [[ "$NEED_CHORD" == "0" ]]; then
     echo "[chord] $CHORD_DIR already populated; skipping."
 else
     if [[ ! -d "$POP909_RAW" ]]; then
@@ -115,14 +130,27 @@ print(f'[midi-pairing] OK: {len(mel)} songs present in both folders.')
 EOF
 
 # --- 4. tokenize ------------------------------------------------------
-# settings.py has relative POP909_MELODY_PATH/POP909_CHORD_PATH; export the
-# actual dirs via env override supported below (fall back to symlinks when
-# the dirs differ from the defaults in settings.py).
-if [[ "$MELODY_DIR" != "POP909-Dataset/POP909-melody" || "$CHORD_DIR" != "POP909-Dataset/POP909-chord" ]]; then
-    mkdir -p POP909-Dataset
-    [[ -e POP909-Dataset/POP909-melody ]] || ln -s "$(readlink -f "$MELODY_DIR")" POP909-Dataset/POP909-melody
-    [[ -e POP909-Dataset/POP909-chord  ]] || ln -s "$(readlink -f "$CHORD_DIR")"  POP909-Dataset/POP909-chord
-fi
+# settings.py hardcodes the repo-relative POP909_MELODY_PATH/POP909_CHORD_PATH
+# ('POP909-Dataset/POP909-melody' etc.), so symlink those locations at the
+# actual data dirs. Refresh stale symlinks; refuse to shadow a real directory.
+link_data_dir() {
+    local link="$1" target="$2"
+    target="$(readlink -f "$target")"
+    if [[ -e "$link" && ! -L "$link" ]]; then
+        if [[ "$(readlink -f "$link")" != "$target" ]]; then
+            echo "ERROR: $link exists as a real directory but tokenization"
+            echo "       must read $target. Move it aside or set the *_DIR"
+            echo "       env knobs to point at it instead."
+            exit 1
+        fi
+        return   # already the right actual directory
+    fi
+    ln -sfn "$target" "$link"
+    echo "[tokenize] $link -> $target"
+}
+mkdir -p POP909-Dataset
+link_data_dir POP909-Dataset/POP909-melody "$MELODY_DIR"
+link_data_dir POP909-Dataset/POP909-chord  "$CHORD_DIR"
 
 if [[ "$FORCE" != "1" && -f data/pop909_melody_cp4_v2.pt ]]; then
     echo "[tokenize] data/pop909_melody_cp4_v2.pt exists; skipping melody."
