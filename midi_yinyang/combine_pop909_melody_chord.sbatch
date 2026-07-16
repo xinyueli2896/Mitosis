@@ -10,6 +10,11 @@
 #                default: /home/xinyue.li/POP909-Dataset/POP909
 #   DST_DIR      default: /home/xinyue.li/POP909-Dataset/POP909-melody-chord
 #   IDS          space-separated song ids; empty = all songs.
+#   SCORE=1      DAW/listening view: constant tempo, time signature,
+#                downbeats on barlines. Default 0 = the dataset grid
+#                (per-beat tempo, audio-aligned) used by the tokenizer.
+#                Score-mode files are for ears/DAWs only -- never mix
+#                them into the tokenization folders.
 #
 # Examples:
 #   # just 001-005 (rebuilding the lost ones):
@@ -39,6 +44,7 @@ ALIGNED_DIR="${ALIGNED_DIR:-/home/xinyue.li/POP909-Dataset/POP909-aligned}"
 POP909_RAW="${POP909_RAW:-/home/xinyue.li/POP909-Dataset/POP909}"
 DST_DIR="${DST_DIR:-/home/xinyue.li/POP909-Dataset/POP909-melody-chord}"
 IDS="${IDS:-}"
+SCORE="${SCORE:-0}"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -50,11 +56,15 @@ echo "ALIGNED_DIR = $ALIGNED_DIR"
 echo "POP909_RAW  = $POP909_RAW"
 echo "DST_DIR     = $DST_DIR"
 echo "IDS         = ${IDS:-<all songs>}"
+echo "SCORE       = $SCORE"
 echo "================================================================"
 
 EXTRA_ARGS=()
 if [[ -n "$IDS" ]]; then
-    EXTRA_ARGS=(--ids $IDS)
+    EXTRA_ARGS+=(--ids $IDS)
+fi
+if [[ "$SCORE" == "1" ]]; then
+    EXTRA_ARGS+=(--score)
 fi
 
 python combine_pop909_melody_chord.py \
