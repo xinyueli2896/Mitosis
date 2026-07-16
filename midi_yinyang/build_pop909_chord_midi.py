@@ -143,13 +143,9 @@ def build_time_to_tick(tempo_track, ppq):
     return time_to_tick
 
 
-def build_chord_midi(aligned_midi_path, chord_txt_path, out_path):
-    src = mido.MidiFile(aligned_midi_path)
-    ppq = src.ticks_per_beat
-    time_to_tick = build_time_to_tick(src.tracks[0], ppq)
-
-    out = mido.MidiFile(ticks_per_beat=ppq)
-    out.tracks.append(src.tracks[0])  # share the same tempo schedule
+def build_chord_track(tempo_track, ppq, chord_txt_path):
+    """Render chord_midi.txt as a CHORD MidiTrack on the given tempo grid."""
+    time_to_tick = build_time_to_tick(tempo_track, ppq)
 
     chord_track = mido.MidiTrack()
     chord_track.append(mido.MetaMessage("track_name", name="CHORD", time=0))
@@ -185,7 +181,16 @@ def build_chord_midi(aligned_midi_path, chord_txt_path, out_path):
         prev_tick = tick
 
     chord_track.append(mido.MetaMessage("end_of_track", time=0))
-    out.tracks.append(chord_track)
+    return chord_track
+
+
+def build_chord_midi(aligned_midi_path, chord_txt_path, out_path):
+    src = mido.MidiFile(aligned_midi_path)
+    ppq = src.ticks_per_beat
+
+    out = mido.MidiFile(ticks_per_beat=ppq)
+    out.tracks.append(src.tracks[0])  # share the same tempo schedule
+    out.tracks.append(build_chord_track(src.tracks[0], ppq, chord_txt_path))
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     out.save(out_path)
