@@ -17,6 +17,8 @@
 #                them into the tokenization folders.
 #   BPM          constant tempo for SCORE=1 (e.g. 120). Empty = the
 #                song's average tempo.
+#   TRIM=1       SCORE=1 only: cut leading silence (whole bars, so
+#                downbeats stay on barlines).
 #
 # Examples:
 #   # just 001-005 (rebuilding the lost ones):
@@ -48,6 +50,7 @@ DST_DIR="${DST_DIR:-/home/xinyue.li/POP909-Dataset/POP909-melody-chord}"
 IDS="${IDS:-}"
 SCORE="${SCORE:-0}"
 BPM="${BPM:-}"
+TRIM="${TRIM:-0}"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -59,7 +62,7 @@ echo "ALIGNED_DIR = $ALIGNED_DIR"
 echo "POP909_RAW  = $POP909_RAW"
 echo "DST_DIR     = $DST_DIR"
 echo "IDS         = ${IDS:-<all songs>}"
-echo "SCORE       = $SCORE   BPM = ${BPM:-<song average>}"
+echo "SCORE       = $SCORE   BPM = ${BPM:-<song average>}   TRIM = $TRIM"
 echo "================================================================"
 
 EXTRA_ARGS=()
@@ -71,6 +74,9 @@ if [[ "$SCORE" == "1" ]]; then
 fi
 if [[ -n "$BPM" ]]; then
     EXTRA_ARGS+=(--bpm "$BPM")
+fi
+if [[ "$TRIM" == "1" ]]; then
+    EXTRA_ARGS+=(--trim)
 fi
 
 python combine_pop909_melody_chord.py \

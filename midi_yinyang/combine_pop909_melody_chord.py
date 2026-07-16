@@ -88,8 +88,31 @@ def _shift_track(track, tick_shift):
     return out
 
 
+def _first_note_tick(track):
+    at = 0
+    for msg in track:
+        at += msg.time
+        if msg.type == "note_on" and msg.velocity > 0:
+            return at
+    return None
+
+
+def _retime_track(track, cut_ticks):
+    """Copy a MidiTrack with absolute ticks moved earlier by cut_ticks
+    (clamped at 0; only tick-0 metas can precede the cut by construction)."""
+    out = mido.MidiTrack()
+    at = prev = 0
+    for msg in track:
+        at += msg.time
+        new_at = max(0, at - cut_ticks)
+        out.append(msg.copy(time=new_at - prev))
+        prev = new_at
+    return out
+
+
 def combine_melody_chord(aligned_midi_path, chord_txt_path, out_path,
-                         beat_txt_path=None, score=False, bpm=None):
+                         beat_txt_path=None, score=False, bpm=None,
+                         trim=False):
     src = mido.MidiFile(aligned_midi_path)
     ppq = src.ticks_per_beat
 
@@ -139,8 +162,8 @@ def combine_melody_chord(aligned_midi_path, chord_txt_path, out_path,
         # MELODY: aligned ticks are already beat-linear (beat i at tick
         # (i+1)*ppq), so the score grid is a constant shift of
         # (P + meter - 1) * ppq ticks -- expressive in-beat timing kept.
-        for t in melody_tracks:
-            out.tracks.append(_shift_track(t, (P + meter - 1) * ppq))
+        note_tracks = [_shift_track(t, (P + meter - 1) * ppq)
+                       for t in melody_tracks]
 
         # CHORD: render chord_midi.txt (audio seconds) straight onto the
         # score grid via the beat map.
@@ -178,7 +201,22 @@ def combine_melody_chord(aligned_midi_path, chord_txt_path, out_path,
                                                 velocity=0, time=delta))
             prev_tick = tick
         chord_track.append(mido.MetaMessage("end_of_track", time=0))
-        out.tracks.append(chord_track)
+        note_tracks.append(chord_track)
+
+        if trim:
+            # Cut leading silence in whole bars so downbeats stay on
+            # barlines. The cut point is the first note in EITHER stream.
+            firsts = [t for t in (_first_note_tick(tr) for tr in note_tracks)
+                      if t is not None]
+            if firsts:
+                bar = meter * ppq
+                cut = (min(firsts) // bar) * bar
+                if cut > 0:
+                    note_tracks = [_retime_track(tr, cut)
+                                   for tr in note_tracks]
+                    print(f"    trimmed {cut // bar} leading empty bar(s)")
+
+        out.tracks.extend(note_tracks)
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     out.save(out_path)
@@ -198,6 +236,9 @@ def main():
     parser.add_argument("--bpm", type=float, default=None,
                         help="Constant tempo for --score mode (e.g. 120). "
                              "Default: the song's average tempo.")
+    parser.add_argument("--trim", action="store_true", default=False,
+                        help="--score mode: cut leading silence (whole "
+                             "bars only, so downbeats stay on barlines).")
     args = parser.parse_args()
 
     midi_paths = sorted(glob(os.path.join(args.aligned, "*.mid")))
@@ -224,7 +265,7 @@ def main():
         try:
             combine_melody_chord(midi_path, chord_txt, out_path,
                                  beat_txt_path=beat_txt, score=args.score,
-                                 bpm=args.bpm)
+                                 bpm=args.bpm, trim=args.trim)
             print(f"  {sid} -> {out_path}")
         except Exception as e:
             failed.append((sid, repr(e)))
