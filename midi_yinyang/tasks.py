@@ -42,8 +42,13 @@ TASKS = {
         name='melchord',
         mod_a_label='mel',
         mod_b_label='chord',
-        mod_a_path='data/la_melody_cp16_v2.pt',
-        mod_b_path='data/la_chord_cp16_v2.pt',
+        # POP909: melody track extracted by extract_pop909_melody.py, chord
+        # track rendered from chord_midi.txt by build_pop909_chord_midi.py,
+        # both tokenized at max_polyphony=4 (melody is monophonic; chords are
+        # rendered as exactly 4 voices). See preprocess_pop909.sbatch for the
+        # end-to-end pipeline.
+        mod_a_path='data/pop909_melody_cp4_v2.pt',
+        mod_b_path='data/pop909_chord_cp4_v2.pt',
         mod_a_default_program=24,
         mod_b_default_program=0,
     ),

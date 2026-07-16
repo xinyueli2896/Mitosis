@@ -100,6 +100,14 @@ QUERY_LOSS_WEIGHT="${QUERY_LOSS_WEIGHT:-2.0}"
 SELF_COND_PROB="${SELF_COND_PROB:-0.5}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_block_diffusion_${SLURM_JOB_ID}}"
+# Data polyphony per stream (drives the sample-dump reshape, not the model):
+# drumnondrum data is cp16, POP909 melchord data is cp4.
+if [[ -z "${MAX_POLYPHONY:-}" ]]; then
+    case "$TASK" in
+        melchord) MAX_POLYPHONY=4 ;;
+        *)        MAX_POLYPHONY=16 ;;
+    esac
+fi
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -156,7 +164,7 @@ fi
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
 echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K"
-echo "Task:    $TASK"
+echo "Task:    $TASK   (data max_polyphony: $MAX_POLYPHONY)"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS   query_loss_weight: $QUERY_LOSS_WEIGHT"
 if [[ -n "$CKPT" ]]; then
@@ -226,6 +234,7 @@ COMMON_ARGS=(
     --moe_monitor_every_n_steps 500
     --dump_samples_dir "$DUMP_SAMPLES_DIR"
     --gate_init_bias "$GATE_INIT_BIAS"
+    --max_polyphony "$MAX_POLYPHONY"
     --query_loss_weight "$QUERY_LOSS_WEIGHT"
     --self_cond_prob "$SELF_COND_PROB"
     --diffusion_K "$DIFFUSION_K"
