@@ -75,22 +75,48 @@ def decompress(model, byte_arr):
     x = x.cuda()
     return model.preprocess(x, pitch_shift=torch.zeros(1, dtype=torch.int8).cuda())[:2]
 
-def continuation(model, midi_path, prompt_length=100, generation_length=384, temperature=1.0, n_samples=1):
-    x = decompress(model, preprocess_midi(midi_path, 16)[0])
+
+def get_input_tempo(midi_path, default=120.0):
+    """First tempo of the prompt midi, so outputs render at the same speed."""
+    try:
+        pm = pretty_midi.PrettyMIDI(midi_path)
+        _, tempi = pm.get_tempo_changes()
+        if len(tempi) > 0 and tempi[0] > 0:
+            return float(tempi[0])
+    except Exception as e:
+        print(f'[tempo] failed to read {midi_path}: {e!r}')
+    return default
+
+
+def continuation(model, midi_path, prompt_length=100, generation_length=384,
+                 temperature=1.0, n_samples=1, tempo=120.0):
+    # filter=False: the LA-quantization heuristic is for noisy scraped data;
+    # it can reject curated inputs (RWC, POP909) by returning None.
+    out = preprocess_midi(midi_path, 16, filter=False)
+    if out is None:
+        print(f'  [skip] preprocess_midi failed for {midi_path}')
+        return
+    x = decompress(model, out[0])
     print(x.shape)
+    if x.shape[1] < prompt_length:
+        print(f'  [skip] only {x.shape[1]} frames < prompt_length {prompt_length}')
+        return
     x = x[:, :prompt_length]
     decode_output([x[:, i, :] for i in range(x.shape[1])],
-                  f'temp/{model.save_name}/{os.path.basename(midi_path)}_prompt.mid')
+                  f'temp/{model.save_name}/{os.path.basename(midi_path)}_prompt.mid',
+                  tempo=tempo)
     with torch.no_grad():
         x = x.repeat(n_samples, 1, 1)
         output = model.global_sampling(x, temperature=temperature, max_seq_len=generation_length)
     for i in range(n_samples):
         output_i = [output[j][i:i + 1, :] for j in range(len(output))]
-        decode_output(output_i, f'temp/{model.save_name}/{os.path.basename(midi_path)}_temp{temperature}_continuation_{i}.mid')
+        decode_output(output_i,
+                      f'temp/{model.save_name}/{os.path.basename(midi_path)}_temp{temperature}_continuation_{i}.mid',
+                      tempo=tempo)
 
 
 def inference_perplexity(midi_files, max_polyphony=16, seq_length=384):
-    model = RoFormerSymbolicTransformer.load_from_checkpoint('ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch=00.fin.ckpt')
+    model = RoFormerSymbolicTransformer.load_from_checkpoint('ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt')
     model.cuda()
     model.eval()
     # Collect the files, convert to tensor
@@ -106,15 +132,47 @@ def inference_perplexity(midi_files, max_polyphony=16, seq_length=384):
         perplexity_mean, perplexity_std = model.inference_perplexity(x)
     return perplexity_mean, perplexity_std
 
+
 if __name__ == '__main__':
-    import sys
-    if len(sys.argv) < 2:
-        print('Usage: python cp_transformer_inference.py <model_path>')
-        exit(1)
-    model_path = sys.argv[1]
-    model = RoFormerSymbolicTransformer.load_from_checkpoint(model_path)
-    model.save_name = os.path.basename(model_path)
+    import argparse
+    from glob import glob
+
+    p = argparse.ArgumentParser(
+        description='Single-stream continuation on a folder of prompt midis '
+                    '(merged stream, program token = stream identity).')
+    p.add_argument('--ckpt', default='ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt')
+    p.add_argument('--midi-folder', required=True,
+                   help='folder of prompt midis (searched recursively)')
+    p.add_argument('--prompt-length', type=int, default=64,
+                   help='prompt frames; 64 = 4 bars at 16 frames/bar')
+    p.add_argument('--gen-length', type=int, default=384,
+                   help='TOTAL frames incl. prompt (matches the m2c scripts)')
+    p.add_argument('--temperature', type=float, default=1.0)
+    p.add_argument('--n-samples', type=int, default=2)
+    p.add_argument('--max-songs', type=int, default=None)
+    p.add_argument('--save-name', default=None,
+                   help='output subdir under temp/; default: ckpt basename')
+    args = p.parse_args()
+
+    model = RoFormerSymbolicTransformer.load_from_checkpoint(args.ckpt)
+    model.save_name = args.save_name or os.path.basename(args.ckpt)
     model.cuda()
     model.eval()
-    continuation(model, 'input/ashover1.mid', temperature=1.0, generation_length=384, n_samples=2, prompt_length=75)
-    # continuation(model, 'input/RM-P005.SMF_SYNC.MID', temperature=1.0, generation_length=384, n_samples=2)
+
+    files = sorted(
+        glob(os.path.join(args.midi_folder, '**', '*.mid'), recursive=True)
+        + glob(os.path.join(args.midi_folder, '**', '*.MID'), recursive=True))
+    if args.max_songs is not None:
+        files = files[:args.max_songs]
+    print(f'{len(files)} prompt MIDIs in {args.midi_folder}')
+    for i, f in enumerate(files):
+        print(f'=== [{i + 1}/{len(files)}] {f}')
+        try:
+            continuation(model, f,
+                         prompt_length=args.prompt_length,
+                         generation_length=args.gen_length,
+                         temperature=args.temperature,
+                         n_samples=args.n_samples,
+                         tempo=get_input_tempo(f))
+        except Exception as e:
+            print(f'  failed: {e!r}')
