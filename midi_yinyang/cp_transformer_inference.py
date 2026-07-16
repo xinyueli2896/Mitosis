@@ -88,11 +88,92 @@ def get_input_tempo(midi_path, default=120.0):
     return default
 
 
+# ---------------------------------------------------------------------------
+# Track-name -> program tagging.
+#
+# The CP tokenizer identifies streams ONLY by program; midi track identity is
+# discarded. When a prompt has melody and chord on the SAME program but on
+# tracks named "MELODY"/"CHORD", we can still keep the streams separate:
+# make a temp copy for tokenization with the CHORD track's program forced to
+# a spare tag program, generate, then map the tag back to the original
+# program in the written outputs. Result: identical sound, but melody and
+# chord end up as separate tracks in the output midis.
+# ---------------------------------------------------------------------------
+
+CHORD_TAG_PROGRAM = 48   # spare program used only inside tokenization
+
+
+def _force_track_program(track, program):
+    import mido
+    out = mido.MidiTrack()
+    had_pc = False
+    for msg in track:
+        if msg.type == 'program_change':
+            out.append(msg.copy(program=program))
+            had_pc = True
+        else:
+            out.append(msg.copy())
+    if not had_pc:
+        out.insert(0, mido.Message('program_change', program=program, time=0))
+    return out
+
+
+def tag_chord_track(midi_path, tmp_dir, tag_program=CHORD_TAG_PROGRAM):
+    """If midi_path has a track named 'chord', write a temp copy with that
+    track's program forced to tag_program (for tokenization only).
+
+    Returns (path_to_tokenize, restore_map). restore_map maps the tag
+    program back to the chord track's original program for the OUTPUT
+    midis ({} when no tagging happened)."""
+    import mido
+    mid = mido.MidiFile(midi_path)
+    chord_idx = [i for i, t in enumerate(mid.tracks)
+                 if (t.name or '').strip().lower() == 'chord']
+    if not chord_idx:
+        return midi_path, {}
+    orig_prog = 0
+    for i in chord_idx:
+        for msg in mid.tracks[i]:
+            if msg.type == 'program_change':
+                orig_prog = msg.program
+                break
+    if orig_prog == tag_program:
+        return midi_path, {}   # already distinct enough; nothing to do
+    out = mido.MidiFile(ticks_per_beat=mid.ticks_per_beat)
+    for i, t in enumerate(mid.tracks):
+        out.tracks.append(_force_track_program(t, tag_program)
+                          if i in chord_idx else t)
+    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_path = os.path.join(tmp_dir, os.path.basename(midi_path))
+    out.save(tmp_path)
+    print(f'  [tag] CHORD track: program {orig_prog} -> {tag_program} '
+          f'(tokenization only; outputs restored to {orig_prog})')
+    return tmp_path, {tag_program: orig_prog}
+
+
+def _decode_and_save(frames, save_path, tempo, restore_map):
+    """decode_output + map tag programs back, keeping tracks separate."""
+    midi = decode_output(frames, save_path=None, tempo=tempo)
+    if restore_map:
+        for inst in midi.instruments:
+            if not inst.is_drum and inst.program in restore_map:
+                inst.program = restore_map[inst.program]
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    midi.write(save_path)
+
+
 def continuation(model, midi_path, prompt_length=100, generation_length=384,
-                 temperature=1.0, n_samples=1, tempo=120.0):
+                 temperature=1.0, n_samples=1, tempo=120.0,
+                 split_named_tracks=True):
+    name = os.path.basename(midi_path)
+    restore_map = {}
+    tokenize_path = midi_path
+    if split_named_tracks:
+        tokenize_path, restore_map = tag_chord_track(
+            midi_path, f'temp/{model.save_name}/_tagged')
     # filter=False: the LA-quantization heuristic is for noisy scraped data;
     # it can reject curated inputs (RWC, POP909) by returning None.
-    out = preprocess_midi(midi_path, 16, filter=False)
+    out = preprocess_midi(tokenize_path, 16, filter=False)
     if out is None:
         print(f'  [skip] preprocess_midi failed for {midi_path}')
         return
@@ -102,17 +183,17 @@ def continuation(model, midi_path, prompt_length=100, generation_length=384,
         print(f'  [skip] only {x.shape[1]} frames < prompt_length {prompt_length}')
         return
     x = x[:, :prompt_length]
-    decode_output([x[:, i, :] for i in range(x.shape[1])],
-                  f'temp/{model.save_name}/{os.path.basename(midi_path)}_prompt.mid',
-                  tempo=tempo)
+    _decode_and_save([x[:, i, :] for i in range(x.shape[1])],
+                     f'temp/{model.save_name}/{name}_prompt.mid',
+                     tempo, restore_map)
     with torch.no_grad():
         x = x.repeat(n_samples, 1, 1)
         output = model.global_sampling(x, temperature=temperature, max_seq_len=generation_length)
     for i in range(n_samples):
         output_i = [output[j][i:i + 1, :] for j in range(len(output))]
-        decode_output(output_i,
-                      f'temp/{model.save_name}/{os.path.basename(midi_path)}_temp{temperature}_continuation_{i}.mid',
-                      tempo=tempo)
+        _decode_and_save(output_i,
+                         f'temp/{model.save_name}/{name}_temp{temperature}_continuation_{i}.mid',
+                         tempo, restore_map)
 
 
 def inference_perplexity(midi_files, max_polyphony=16, seq_length=384):
@@ -152,6 +233,11 @@ if __name__ == '__main__':
     p.add_argument('--max-songs', type=int, default=None)
     p.add_argument('--save-name', default=None,
                    help='output subdir under temp/; default: ckpt basename')
+    p.add_argument('--no-split-tracks', action='store_true', default=False,
+                   help='disable the MELODY/CHORD track-name separation '
+                        '(by default a track named CHORD is program-tagged '
+                        'during tokenization so the two streams stay on '
+                        'separate tracks in the outputs, then restored)')
     args = p.parse_args()
 
     model = RoFormerSymbolicTransformer.load_from_checkpoint(args.ckpt)
@@ -173,6 +259,7 @@ if __name__ == '__main__':
                          generation_length=args.gen_length,
                          temperature=args.temperature,
                          n_samples=args.n_samples,
-                         tempo=get_input_tempo(f))
+                         tempo=get_input_tempo(f),
+                         split_named_tracks=not args.no_split_tracks)
         except Exception as e:
             print(f'  failed: {e!r}')
