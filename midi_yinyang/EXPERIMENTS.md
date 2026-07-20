@@ -49,30 +49,46 @@ system's tuned decode schedule says otherwise (§4).
 
 ---
 
-## 2. Systems inventory
+## 2. Model nomenclature
 
-Trained / available:
+All experiments refer to systems by the identifiers below. The
+identifier is used verbatim in result tables, output directories, and
+the write-up; no other aliases are permitted.
 
-| id | system | task coverage | ckpt |
-|---|---|---|---|
-| S0 | single-stream pretrained (v0.42 size1) | both (zero-shot) | `ckpt/cp_transformer_v0.42_..._schedule.epoch.00.fin.ckpt` |
-| S1 | single-stream POP909-finetune | melchord | `ckpt/cp_transformer_v0.42_size1_pop909ft_batch_48_schedule/` (finetune sbatch) |
-| A1 | M2CIntraCrossAttn (DuetAttn) | drumnondrum (trained); melchord (would need training — optional) | `ckpt/m2c_intra_cross_attn_v1.0_...` |
-| A3 | M2CDuetBlockDiffusion v1.1 | drumnondrum (98k); melchord (in training) | `ckpt/m2c_duet_block_diffusion_v1.1_..._{drumnondrum,melchord}_...` |
-| B1 | M2CDuetAnticipatory | drumnondrum | existing run dir |
-| C1 | M2CDuetRehearsal | drumnondrum | existing run dir |
-| C2 | M2CDuetPrefix | drumnondrum | existing run dir |
+### 2.1 Baseline systems (single-stream)
 
-Baseline preparation notes:
+| ID | Model | Architecture | Training data | Role |
+|---|---|---|---|---|
+| **S0** | `RoFormerSymbolicTransformer` v0.42 (size 1) | Single-stream CP transformer; one merged token stream; stream identity carried only by the MIDI program token | LA (large scraped MIDI corpus) | Unmatched lower anchor: no stream separation, no in-domain data |
+| **S1** | S0 + POP909 finetune | Identical architecture; weights finetuned on merged, program-tagged POP909 melody+chord | LA → POP909 (20k steps) | Matched single-stream baseline for melchord: in-domain data, still no architectural stream separation |
 
-- **S0/S1 need merged prompts with distinct stream programs** (melody 0 /
-  chord tag 48; drums are natively 127) or the streams fuse. Prompt
-  folders: RWC unsplit prompts for drumnondrum; for melchord either the
-  tagged combined folder or same-program files via the inference
-  script's automatic CHORD-track tagging. Outputs are split back into
-  streams with `split_melody_chord.py` for stream-level metrics.
-- S1 is the *matched* single-stream baseline for melchord (saw POP909);
-  S0 is the *unmatched* lower anchor. Report both.
+### 2.2 Two-stream (duet) systems
+
+| ID | Model | Architecture | Generation modes | Training status |
+|---|---|---|---|---|
+| **A.1** | `M2CIntraCrossAttn` (DuetAttn) | Interleaved two-stream joint AR; strict causal attention; intra- and cross-stream SDPA passes | co, mel2chord, chord2mel, mel_only, chord_only | drumnondrum: trained. melchord: optional (train only if E1-melchord needs the reference point) |
+| **A.3** | `M2CDuetBlockDiffusion` v1.1 | A.1 + two appended next-frame query slots trained as discrete denoisers across noise levels K; inference runs K+1 parallel-refinement passes per frame | same five modes; refinement depth K is a decode-time knob | drumnondrum: trained (98k). melchord: in training |
+| **B.1** | `M2CDuetAnticipatory` | A.1 with the drum stream re-indexed k frames ahead, giving the partner stream k frames of future context | co, conditional | drumnondrum: trained |
+| **C.1** | `M2CDuetRehearsal` | Bidirectional conditioning-stream prefix ("rehearsal") + interleaved suffix; purpose-built conditional model | drum→nondrum only | drumnondrum: trained |
+| **C.2** | `M2CDuetPrefix` | Prefix-LM: bidirectional conditioning stream, causal target stream; purpose-built conditional model | drum→nondrum only | drumnondrum: trained |
+
+Decode-variant notation: **A.3(K=n)** denotes A.3 decoded with n
+refinement rounds; K=0 reduces to plain joint AR on the A.3 backbone
+(architecture ablation of the refinement mechanism at inference time).
+
+### 2.3 Baseline preparation requirements
+
+- **S0/S1 prompts must carry distinct stream programs** (melody 0 /
+  chord 48; drums are natively 127); otherwise the streams fuse
+  irreversibly in token space. Prompt sources: RWC unsplit prompts
+  (drumnondrum); the program-tagged combined POP909 folder, or
+  same-program files via `cp_transformer_inference.py`'s automatic
+  CHORD-track tagging (melchord).
+- S0/S1 outputs are separated into streams with
+  `split_melody_chord.py` before any stream-level metric is computed.
+- Report S0 and S1 side by side on melchord: the S0→S1 gap isolates
+  the value of in-domain data; the S1→A.3 gap isolates the value of
+  architectural stream separation.
 
 ---
 
@@ -80,67 +96,78 @@ Baseline preparation notes:
 
 ### E1 — Co-generation (RQ1)
 
-Both streams generated jointly from a 4-bar prompt of both.
+Both streams are generated jointly, conditioned on a 4-bar prompt of
+both streams.
 
-| task | systems | mode |
-|---|---|---|
-| drumnondrum | S0 (merged) vs A1 vs A3(K=0) vs A3(K=1) vs B1 | `co` |
-| melchord | S0 vs S1 (merged) vs A3(K=0) vs A3(K=1) [vs A1-melchord if trained] | `co` |
+| Task | Systems under test | Baseline | Mode |
+|---|---|---|---|
+| drumnondrum | A.1, A.3(K=0), A.3(K=1), B.1 | S0 (merged stream) | `co` |
+| melchord | A.3(K=0), A.3(K=1); A.1-melchord if trained | S0, S1 (merged stream) | `co` |
 
-Key contrasts: S* vs A* (does stream separation help at all);
-A3(K=0) vs A1 (is the A.3 backbone as good as the reference when run
-as plain AR); A3(K≥1) vs A3(K=0) (does refinement help — expected to
-matter most when both streams are active; melchord always has both
-active, so this is the cleanest test of refinement yet).
+Planned contrasts:
 
-### E2 — Single-stream / marginal generation (RQ2)
+1. **S\* vs duet systems** — value of architectural stream separation.
+2. **A.3(K=0) vs A.1** — parity check: the A.3 backbone decoded as
+   plain joint AR should match the reference architecture; a deficit
+   indicates the diffusion objective taxed the AR pathway.
+3. **A.3(K≥1) vs A.3(K=0)** — contribution of within-frame iterative
+   refinement. Prior drumnondrum listening results indicate refinement
+   helps only when both streams are active; melchord has both streams
+   active throughout, making it the cleanest test of this mechanism.
 
-Only one stream generated; the other absent (silence).
+### E2 — Marginal (single-stream) generation (RQ2)
 
-| task | systems | modes |
-|---|---|---|
-| drumnondrum | A1, A3 (`mel_only`, `chord_only`) vs S0 prompted with drum-only / nondrum-only files | one stream each |
-| melchord | A3 (`mel_only`, `chord_only`) vs S1 prompted with melody-only / chord-only files | one stream each |
+Exactly one stream is generated; the partner stream is absent.
 
-Question: is the duet model's marginal P(one stream) intact, or did
-joint training siphon capacity? Baseline = single-stream model prompted
-with exactly the same one-stream material.
+| Task | Systems under test | Baseline | Modes |
+|---|---|---|---|
+| drumnondrum | A.1, A.3 | S0 prompted with the corresponding single-stream files | `mel_only`, `chord_only` |
+| melchord | A.3 | S1 prompted with the corresponding single-stream files | `mel_only`, `chord_only` |
+
+Hypothesis under test: joint two-stream training does not degrade the
+marginal distribution of a single stream relative to a model prompted
+with identical single-stream material. A deficit would indicate
+capacity interference from the joint objective.
 
 ### E3 — Conditional generation (RQ3)
 
-Full ground-truth partner stream given; generate the other stream.
+The complete ground-truth partner stream is provided; the model
+generates the remaining stream.
 
-| task | systems | direction |
-|---|---|---|
-| drumnondrum | C1, C2, B1, A1(`mel2chord`), A3(`mel2chord`) | drum → nondrum |
-| melchord | A3 `mel2chord` and `chord2mel` vs S1-conditional (below) | both directions |
+| Task | Systems under test | Baseline | Direction |
+|---|---|---|---|
+| drumnondrum | C.1, C.2, B.1, A.1, A.3 (conditional mode) | S0 (see protocol note) | drum → nondrum |
+| melchord | A.3 (`mel2chord`, `chord2mel`) | S1 (see protocol note) | both directions |
 
-**S1-conditional baseline**: the single-stream model cannot condition
-on the future of the partner stream; give it the fairest equivalent —
-merged prompt where the conditioning stream continues (spliced in) and
-generation is constrained to... not expressible. So instead report the
-honest version: S1 co-generates from the same prompt and we *discard*
-its partner stream, scoring only the generated stream against the
-conditional systems' outputs. Document this asymmetry explicitly — the
-conditional systems see strictly more information; the gap measures the
-value of that information + architecture.
+**Baseline protocol note.** A single-stream AR model cannot condition
+on the future of the partner stream; no faithful conditional decoding
+exists for S0/S1. The reported baseline is therefore: S\* co-generates
+from the same prompt, the partner stream is discarded, and only the
+generated target stream is scored. This asymmetry is disclosed in the
+write-up: the conditional systems observe strictly more information,
+and the measured gap quantifies the combined value of that information
+and of the conditioning architecture.
 
-Conditional-specific scoring (in addition to §5): agreement between the
-generated stream and the *ground-truth* stream it replaces
-(the reference continuation is known for every eval song).
+Conditional-specific scoring (in addition to §5): agreement between
+the generated stream and the ground-truth stream it replaces (the
+reference continuation is available for every evaluation song).
 
-### E4 — Ablations (RQ4, A.3 only)
+### E4 — Decode-time ablations (RQ4; A.3 only)
 
-Already run on drumnondrum (listening): decode schedule winner
-K=1 / final_temp 0.9 / top_p 0.95; K=4 > K=0 with drums present,
-K=4 ≤ K=0 without; A3_ADAPTIVE implemented in response. Replicate on
-melchord:
+Completed on drumnondrum via listening tests: the selected decode
+schedule is K=1, final temperature 0.9, nucleus 0.95; refinement at
+K=4 outperformed K=0 when both streams were active and matched or
+underperformed it otherwise, motivating the A3_ADAPTIVE early-exit.
+Replication on melchord:
 
-1. K ∈ {0, 1, 4} at the winner schedule, `co` mode, eval list above.
-2. A3_ADAPTIVE on/off at K=4 (melchord rarely has silent frames —
-   expect no effect; a null result here confirms the mechanism is
-   silence-specific and not a confound).
-3. (optional) draft-temp piecewise schedule vs linear anneal.
+1. **Refinement depth**: K ∈ {0, 1, 4} at the selected schedule,
+   `co` mode, full evaluation list.
+2. **Adaptive early-exit**: A3_ADAPTIVE ∈ {off, on} at K=4. Melchord
+   material contains few silent frames, so the expected result is a
+   null effect; observing one confirms the mechanism is
+   silence-specific rather than a general confound.
+3. (Optional) **Temperature schedule**: piecewise draft/commit schedule
+   vs linear annealing.
 
 ---
 
@@ -149,9 +176,9 @@ melchord:
 | system | settings |
 |---|---|
 | S0/S1 | temperature 1.0, `--prompt-length 64 --gen-length 384 --n-samples 3` |
-| A1 | temperature 1.0 (its tuned default) |
-| A3 | `A3_REFINE_STEPS=1 A3_FINAL_TEMP=0.9 A3_TOP_P=0.95` (drumnondrum winner) — used for ALL headline A3 rows; K-sweep only inside E4 |
-| B1/C1/C2 | temperature 1.0, existing script defaults |
+| A.1 | temperature 1.0 (its tuned default) |
+| A.3 | `A3_REFINE_STEPS=1 A3_FINAL_TEMP=0.9 A3_TOP_P=0.95` (schedule selected on drumnondrum) — used for ALL headline A.3 rows; the K-sweep is confined to E4 |
+| B.1/C.1/C.2 | temperature 1.0, existing script defaults |
 
 Freeze these; no per-song or per-metric cherry-picking. Any change ⇒
 rerun the whole grid (it's cheap: ≤ ~15 songs × ~6 systems × 3 samples).
@@ -187,7 +214,7 @@ Joint / cross-stream:
 
 Model-based:
 - teacher-forced NLL of ground-truth continuations. Comparable ONLY
-  within a family (A1 vs A3 share tokenization+layout; S0 vs S1 share
+  within a family (A.1 vs A.3 share tokenization+layout; S0 vs S1 share
   theirs). Never compare NLL across families — different token spaces.
 
 ### 5.2 Subjective — listening test
@@ -228,7 +255,7 @@ Phase 1 — generation sweeps (all sbatch, mostly existing scripts)
   `MEL_FOLDER/CHORD_FOLDER/MAX_POLYPHONY=4` (melchord).
 - E1/E2 baselines: `cp_transformer_inference.py` runs per prompt folder
   (S0 and S1 ckpts).
-- E4: three more A3 melchord runs (K sweep + adaptive toggle).
+- E4: three additional A.3 melchord runs (K sweep + adaptive toggle).
 
 Phase 2 — scoring: run `eval_metrics.py` over Phase-1 outputs; produce
 the per-mode comparison tables.
