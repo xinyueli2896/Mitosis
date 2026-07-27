@@ -8,19 +8,19 @@ answers nothing, so the matrix below keeps them apart.
 
 Research questions:
 
-- **RQ1 (co-generation)**: does explicit two-stream joint AR beat a
-  single merged-stream model at generating both parts together?
-  Does A.3's within-frame refinement add anything over plain joint AR?
+- **RQ1 (co-generation)**: does explicit two-stream joint modeling beat
+  a single merged-stream model at generating both parts together?
 - **RQ2 (single-stream / marginal)**: does joint training degrade or
   improve the quality of ONE stream generated alone, vs a model that
   only ever saw that kind of material?
 - **RQ3 (conditional)**: given the full partner stream, do the
   purpose-built conditional architectures (C.1/C.2) beat the symmetric
-  models run in conditional mode, and do all of them beat the
-  single-stream baseline given the same information in-context?
-- **RQ4 (ablations)**: refinement depth K, adaptive skipping, decode
-  schedule — already partially answered on drumnondrum; replicate the
-  winner settings on melchord to test generality.
+  models run in conditional mode, and how does the conditioning
+  horizon (none / bounded / unbounded future) shape quality?
+- **RQ4 (ablations)**: what does the simultaneous mutual within-frame
+  conditioning strategy (同步看, realized by A.2's block-diffusion
+  refinement) contribute — isolated at decode time, at training time,
+  and combined — plus decode-schedule ablations.
 
 ---
 
@@ -62,33 +62,51 @@ the write-up; no other aliases are permitted.
 | **S0** | `RoFormerSymbolicTransformer` v0.42 (size 1) | Single-stream CP transformer; one merged token stream; stream identity carried only by the MIDI program token | LA (large scraped MIDI corpus) | Unmatched lower anchor: no stream separation, no in-domain data |
 | **S1** | S0 + POP909 finetune | Identical architecture; weights finetuned on merged, program-tagged POP909 melody+chord | LA → POP909 (20k steps) | Matched single-stream baseline for melchord: in-domain data, still no architectural stream separation |
 
-### 2.2 Two-stream (duet) systems
+### 2.2 Two-stream (duet) systems — main experiments
 
 | ID | Model | Architecture | Generation modes | Training status |
 |---|---|---|---|---|
-| **A.1** | `M2CIntraCrossAttn` (DuetAttn) | Interleaved two-stream joint AR; strict causal attention; intra- and cross-stream SDPA passes | co, mel2chord, chord2mel, mel_only, chord_only | drumnondrum: trained. melchord: optional (train only if E1-melchord needs the reference point) |
-| **A.3** | `M2CDuetBlockDiffusion` v1.1 | A.1 + two appended next-frame query slots trained as discrete denoisers across noise levels K; inference runs K+1 parallel-refinement passes per frame | same five modes; refinement depth K is a decode-time knob | drumnondrum: trained (98k). melchord: in training |
-| **B.1** | `M2CDuetAnticipatory` | A.1 with the drum stream re-indexed k frames ahead, giving the partner stream k frames of future context | co, conditional | drumnondrum: trained |
+| **A.2** | `M2CDuetBlockDiffusion` v1.1 | Interleaved two-stream joint AR backbone + two appended next-frame query slots trained as discrete denoisers across noise levels (diffusion_K = 4); inference runs K+1 parallel-refinement passes per frame, giving the two streams simultaneous mutual within-frame conditioning (同步看) | co, mel2chord, chord2mel, mel_only, chord_only; refinement depth K is a decode-time knob | drumnondrum: trained (98k). melchord: in training |
+| **B.1** | `M2CDuetAnticipatory` | Joint-AR duet with the drum stream re-indexed k frames ahead, giving the partner stream k frames of future context | co, conditional (drum→nondrum) | drumnondrum: trained |
 | **C.1** | `M2CDuetRehearsal` | Bidirectional conditioning-stream prefix ("rehearsal") + interleaved suffix; purpose-built conditional model | drum→nondrum only | drumnondrum: trained |
 | **C.2** | `M2CDuetPrefix` | Prefix-LM: bidirectional conditioning stream, causal target stream; purpose-built conditional model | drum→nondrum only | drumnondrum: trained |
 
-Decode-variant notation: **A.3(K=n)** denotes A.3 decoded with n
-refinement rounds; K=0 reduces to plain joint AR on the A.3 backbone
-(architecture ablation of the refinement mechanism at inference time).
+### 2.3 Ablation-only system
+
+| ID | Model | Architecture | Role |
+|---|---|---|---|
+| **A.1** | `M2CIntraCrossAttn` (DuetAttn) | Interleaved two-stream joint AR; strict causal attention; NO query slots, NO refinement — each stream sees the partner only up to the previous position | Excluded from the main experiments. Used exclusively in the E4 ablation to isolate what A.2's 同步看 mechanism adds over plain sequential joint AR |
+
+**Paper-ID ↔ code-name mapping (important).** The repository's
+historical numbering differs from the paper IDs used here:
+
+| Paper ID | Code / repo name | Repo-historical label |
+|---|---|---|
+| A.2 | `M2CDuetBlockDiffusion` (`A3_*` env knobs, `m2c_duet_block_diffusion*` ckpt dirs and scripts) | "A.3" |
+| A.1 | `M2CIntraCrossAttn` (`m2c_intra_cross_attn*`) | "A.1" (unchanged) |
+| — | `M2CDuetBlockAttn` (retired; query slots trained only fully-masked, collapsed at inference) | "A.2" — plays NO role in any experiment; the label is reused here for the diffusion model |
+
+Filenames, environment variables (`A3_REFINE_STEPS`, …), and checkpoint
+directories keep their historical names; only the experiment/paper
+nomenclature changes.
+
+Decode-variant notation: **A.2(K=n)** denotes A.2 decoded with n
+refinement rounds; K=0 commits the AR-head draft with no slot
+refinement (plain sequential joint AR on the A.2 backbone).
 
 Disambiguation — the symbol K is overloaded and the two meanings must
 not be conflated:
 
-- **Training `diffusion_K` = 4** (fixed, a property of every A.3
+- **Training `diffusion_K` = 4** (fixed, a property of every A.2
   checkpoint): the number of noise-level bins the query slots were
   trained across (k ∈ {0..4}, independently per slot).
 - **Inference K = `A3_REFINE_STEPS`** (free decode-time knob, the K in
-  A.3(K=n)): how many refinement rounds the decoder runs per frame.
+  A.2(K=n)): how many refinement rounds the decoder runs per frame.
   Because training covered every noise level, any inference K in
-  {0..diffusion_K} is in-distribution. All A.3(K=n) rows in this plan
+  {0..diffusion_K} is in-distribution. All A.2(K=n) rows in this plan
   are the SAME checkpoint at different decode compute.
 
-### 2.3 Baseline preparation requirements
+### 2.4 Baseline preparation requirements
 
 - **S0/S1 prompts must carry distinct stream programs** (melody 0 /
   chord 48; drums are natively 127); otherwise the streams fuse
@@ -99,7 +117,7 @@ not be conflated:
 - S0/S1 outputs are separated into streams with
   `split_melody_chord.py` before any stream-level metric is computed.
 - Report S0 and S1 side by side on melchord: the S0→S1 gap isolates
-  the value of in-domain data; the S1→A.3 gap isolates the value of
+  the value of in-domain data; the S1→A.2 gap isolates the value of
   architectural stream separation.
 
 ---
@@ -113,28 +131,23 @@ both streams.
 
 | Task | Systems under test | Baseline | Mode |
 |---|---|---|---|
-| drumnondrum | A.1, A.3(K=0), A.3(K=1), B.1 | S0 (merged stream) | `co` |
-| melchord | A.3(K=0), A.3(K=1); A.1-melchord if trained | S0, S1 (merged stream) | `co` |
+| drumnondrum | A.2(K=1), B.1 | S0 (merged stream) | `co` |
+| melchord | A.2(K=1) | S0, S1 (merged stream) | `co` |
 
 Planned contrasts:
 
-1. **S\* vs duet systems** — value of architectural stream separation.
-2. **A.3(K=0) vs A.1** — parity check: the A.3 backbone decoded as
-   plain joint AR should match the reference architecture; a deficit
-   indicates the diffusion objective taxed the AR pathway.
-3. **A.3(K≥1) vs A.3(K=0)** — contribution of within-frame iterative
-   refinement. Prior drumnondrum listening results indicate refinement
-   helps only when both streams are active; melchord has both streams
-   active throughout, making it the cleanest test of this mechanism.
-4. **B.1 vs A.1** — effect of leader/follower asymmetry in
-   co-generation. A.1 is exactly B.1 with k=0, so this pair is a clean
-   ablation of the anticipation mechanism. The hypothesis is
-   stream-asymmetric: the follower (nondrum) improves because it always
-   harmonizes against k frames of already-committed drum future, while
-   the leader (drum) is generated with k-frames-stale partner context
-   and should be unchanged or slightly degraded. B.1's E1 results are
-   therefore ALWAYS reported per-stream; a joint aggregate would
-   average away the effect under test.
+1. **S\* vs duet systems** — value of architectural stream separation
+   (the headline RQ1 comparison).
+2. **B.1 vs A.2(K=1)** — bounded-lookahead leader/follower design vs
+   symmetric refinement design, as the two competing duet strategies.
+   B.1's hypothesis is stream-asymmetric: the follower (nondrum)
+   improves because it always harmonizes against k frames of committed
+   drum future, while the leader (drum) is generated with
+   k-frames-stale partner context. B.1's results are therefore ALWAYS
+   reported per-stream; a joint aggregate would average away the
+   effect under test. (The strict architecture-matched ablation pair
+   for B.1 — A.1, which is exactly B.1 with k=0 — is reported in the
+   E4 appendix, not here.)
 
 ### E2 — Marginal (single-stream) generation (RQ2)
 
@@ -142,8 +155,8 @@ Exactly one stream is generated; the partner stream is absent.
 
 | Task | Systems under test | Baseline | Modes |
 |---|---|---|---|
-| drumnondrum | A.1, A.3 | S0 prompted with the corresponding single-stream files | `mel_only`, `chord_only` |
-| melchord | A.3 | S1 prompted with the corresponding single-stream files | `mel_only`, `chord_only` |
+| drumnondrum | A.2 | S0 prompted with the corresponding single-stream files | `mel_only`, `chord_only` |
+| melchord | A.2 | S1 prompted with the corresponding single-stream files | `mel_only`, `chord_only` |
 
 Hypothesis under test: joint two-stream training does not degrade the
 marginal distribution of a single stream relative to a model prompted
@@ -157,22 +170,22 @@ generates the remaining stream.
 
 | Task | Systems under test | Baseline | Direction |
 |---|---|---|---|
-| drumnondrum | A.1, B.1, C.1, C.2, A.3 (conditional mode) | S0 (see protocol note) | drum → nondrum |
-| melchord | A.3 (`mel2chord`, `chord2mel`) | S1 (see protocol note) | both directions |
+| drumnondrum | A.2 (conditional mode), B.1, C.1, C.2 | S0 (see protocol note) | drum → nondrum |
+| melchord | A.2 (`mel2chord`, `chord2mel`) | S1 (see protocol note) | both directions |
 
-**Conditioning-horizon spectrum (drum → nondrum).** Three of the
-systems form an ordered spectrum in how much FUTURE of the
-conditioning stream the target stream can attend:
+**Conditioning-horizon spectrum (drum → nondrum).** The systems form
+an ordered spectrum in how much FUTURE of the conditioning stream the
+target stream can attend:
 
 | System | Future drum context visible to nondrum_t | Streamable |
 |---|---|---|
-| A.1 (conditional mode) | 0 frames (same-frame only) | yes |
+| A.2 (conditional mode) | 0 frames (same-frame only; the given stream is committed frame-by-frame) | yes |
 | B.1 | k frames (bounded lookahead; k = 16 ≈ 1 bar) | yes, with k-frame latency |
 | C.1 / C.2 | entire sequence (bidirectional) | no |
 
 This ordering turns E3 from an unordered system comparison into a
 dose–response study of conditioning horizon. The headline question:
-does B.1's bounded lookahead recover most of the C.2−A.1 gap? If yes,
+does B.1's bounded lookahead recover most of the C.2−A.2 gap? If yes,
 bounded (hence real-time-capable) conditioning suffices and the
 offline bidirectional architectures buy little; if no, full-sequence
 conditioning is genuinely load-bearing.
@@ -181,9 +194,8 @@ conditioning is genuinely load-bearing.
 (nondrum → drum) is EXCLUDED for B.1 by design: under the anticipatory
 layout, drum_{t+k} attends nondrum only up to t−1, so even with the
 full ground-truth nondrum available the model conditions on
-k-frames-stale partner context — strictly worse conditioning than
-A.1's reverse mode. It is an expected-negative by construction, not a
-fair capability test. (At most, report it once as an asymmetry
+k-frames-stale partner context — an expected-negative by construction,
+not a fair capability test. (At most, report it once as an asymmetry
 control, clearly labeled.) B.1 is likewise excluded from E2: its
 marginals are not its design question, and the follower-only mode is
 structurally handicapped by the missing leader stream.
@@ -201,7 +213,33 @@ Conditional-specific scoring (in addition to §5): agreement between
 the generated stream and the ground-truth stream it replaces (the
 reference continuation is available for every evaluation song).
 
-### E4 — Decode-time ablations (RQ4; A.3 only)
+### E4 — Ablations (RQ4)
+
+#### E4a — Mutual within-frame conditioning (同步看) study: A.1 vs A.2
+
+The central mechanism ablation. A.2 differs from A.1 in exactly two
+coupled respects: (i) the training objective adds denoising query
+slots, and (ii) decoding can run iterative refinement in which both
+streams condition on each other's estimate of the SAME frame. The
+study factorizes the total effect into those parts:
+
+| Contrast | Isolates | Held fixed |
+|---|---|---|
+| A.2(K≥1) vs A.2(K=0) | the decode-time refinement mechanism | weights, tokenization, prompts |
+| A.2(K=0) vs A.1 | the training-objective effect on the plain-AR pathway (parity check: a deficit means the diffusion objective taxed the backbone) | decode procedure (both plain joint AR) |
+| A.1 vs A.2(K=1) | the combined package | task, prompts |
+
+Tasks: drumnondrum (A.1 trained). Melchord requires training
+A.1-melchord — decide after the drumnondrum ablation: if the combined
+effect is large, the melchord replication is worth the GPU-time;
+otherwise report drumnondrum only and run just A.2(K≥1) vs A.2(K=0)
+(weights-shared, free) on melchord.
+
+Also reported here: **B.1 vs A.1** (strict anticipation ablation —
+A.1 is exactly B.1 with k=0), per-stream, supporting the E1 B.1
+narrative.
+
+#### E4b — Decode-schedule ablations (A.2 only)
 
 Completed on drumnondrum via listening tests: the selected decode
 schedule is K=1, final temperature 0.9, nucleus 0.95; refinement at
@@ -210,7 +248,7 @@ underperformed it otherwise, motivating the A3_ADAPTIVE early-exit.
 Replication on melchord:
 
 1. **Refinement depth**: K ∈ {0, 1, 4} at the selected schedule,
-   `co` mode, full evaluation list.
+   `co` mode, full evaluation list (doubles as the E4a first-row data).
 2. **Adaptive early-exit**: A3_ADAPTIVE ∈ {off, on} at K=4. Melchord
    material contains few silent frames, so the expected result is a
    null effect; observing one confirms the mechanism is
@@ -221,22 +259,22 @@ Replication on melchord:
 ### E5 — (Optional) Anticipation-horizon sweep (B.1 only)
 
 Run only if the E3 horizon-spectrum result is positive (B.1 recovers a
-substantial fraction of the C.2−A.1 gap). Train B.1 at
+substantial fraction of the C.2−A.2 gap). Train B.1 at
 k ∈ {8, 16, 32} (`ANTICIPATION_FRAMES` knob in
 `train_duet_anticipatory.sbatch`; k=16 already trained) and plot the
-E3 conditional metrics against k, with A.1 as the k=0 point and C.2 as
-the k=∞ asymptote. Deliverable: one dose–response figure locating the
-knee of the lookahead curve.
+E3 conditional metrics against k, with A.1 (ablation system) as the
+k=0 point and C.2 as the k=∞ asymptote. Deliverable: one dose–response
+figure locating the knee of the lookahead curve.
 
 ---
 
 ## 4. Decode settings (frozen before any scoring)
 
-| system | settings |
+| System | Settings |
 |---|---|
 | S0/S1 | temperature 1.0, `--prompt-length 64 --gen-length 384 --n-samples 3` |
-| A.1 | temperature 1.0 (its tuned default) |
-| A.3 | `A3_REFINE_STEPS=1 A3_FINAL_TEMP=0.9 A3_TOP_P=0.95` (schedule selected on drumnondrum) — used for ALL headline A.3 rows; the K-sweep is confined to E4 |
+| A.2 | `A3_REFINE_STEPS=1 A3_FINAL_TEMP=0.9 A3_TOP_P=0.95` (schedule selected on drumnondrum) — used for ALL headline A.2 rows; the K-sweep is confined to E4 |
+| A.1 (ablation only) | temperature 1.0 (its tuned default) |
 | B.1/C.1/C.2 | temperature 1.0, existing script defaults |
 
 Freeze these; no per-song or per-metric cherry-picking. Any change ⇒
@@ -260,7 +298,7 @@ Per-stream:
 - repetition: max 4-bar self-similarity over the continuation
   (catches the known repetition failure mode)
 - silence/EOS collapse rate (fraction of empty frames — catches the
-  known A.2-style collapse mode)
+  collapse mode of the retired `M2CDuetBlockAttn`)
 
 Joint / cross-stream:
 - melchord: chord-tone coverage — fraction of melody notes whose pitch
@@ -273,7 +311,7 @@ Joint / cross-stream:
 
 Model-based:
 - teacher-forced NLL of ground-truth continuations. Comparable ONLY
-  within a family (A.1 vs A.3 share tokenization+layout; S0 vs S1 share
+  within a family (A.1 vs A.2 share tokenization+layout; S0 vs S1 share
   theirs). Never compare NLL across families — different token spaces.
 
 ### 5.2 Subjective — listening test
@@ -300,8 +338,8 @@ directional evidence and let the listening test carry the headline.
 ## 6. Execution order
 
 Phase 0 — prerequisites
-1. A.3 melchord training to ≥50k steps; pick best-val ckpt.
-2. Single-stream POP909 finetune (`finetune_cp_transformer_pop909.sbatch`).
+1. A.2 melchord training to ≥50k steps; pick best-val ckpt.
+2. Single-stream POP909 finetune (`finetune_pop909.sbatch`) → S1.
 3. Build POP909 eval prompt folders for ids `001 011 ... 091`:
    split melody/chord folders (already exist) + tagged combined folder
    (for S0/S1). RWC prompt folders already exist.
@@ -314,7 +352,9 @@ Phase 1 — generation sweeps (all sbatch, mostly existing scripts)
   `MEL_FOLDER/CHORD_FOLDER/MAX_POLYPHONY=4` (melchord).
 - E1/E2 baselines: `cp_transformer_inference.py` runs per prompt folder
   (S0 and S1 ckpts).
-- E4: three additional A.3 melchord runs (K sweep + adaptive toggle).
+- E4a: A.1 drumnondrum runs (co + conditional, existing ckpt);
+  A.1-melchord training deferred until the drumnondrum result is in.
+- E4b: three additional A.2 melchord runs (K sweep + adaptive toggle).
 
 Phase 2 — scoring: run `eval_metrics.py` over Phase-1 outputs; produce
 the per-mode comparison tables.
@@ -322,7 +362,8 @@ the per-mode comparison tables.
 Phase 3 — listening test on the E1/E3 shortlist; collate votes.
 
 Phase 4 — write-up: one table per E-block (rows = systems, columns =
-metrics + listening win-rate), plus the E4 ablation figure (metric vs K).
+metrics + listening win-rate), plus the E4 figures (metric vs K; the
+A.1/A.2 factorization bar chart).
 
 ---
 
@@ -335,6 +376,10 @@ results/
     metrics_<task>.csv
     listening_votes.csv
 ```
+
+System directory names use the PAPER IDs (S0, S1, A.2, B.1, C.1, C.2,
+and A.1 only under an `ablation/` prefix), regardless of the historical
+script/ckpt names.
 
 Keep every generated file until the write-up is done — re-listening
 beats re-generating.
