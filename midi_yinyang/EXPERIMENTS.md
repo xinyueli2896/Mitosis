@@ -76,6 +76,18 @@ Decode-variant notation: **A.3(K=n)** denotes A.3 decoded with n
 refinement rounds; K=0 reduces to plain joint AR on the A.3 backbone
 (architecture ablation of the refinement mechanism at inference time).
 
+Disambiguation — the symbol K is overloaded and the two meanings must
+not be conflated:
+
+- **Training `diffusion_K` = 4** (fixed, a property of every A.3
+  checkpoint): the number of noise-level bins the query slots were
+  trained across (k ∈ {0..4}, independently per slot).
+- **Inference K = `A3_REFINE_STEPS`** (free decode-time knob, the K in
+  A.3(K=n)): how many refinement rounds the decoder runs per frame.
+  Because training covered every noise level, any inference K in
+  {0..diffusion_K} is in-distribution. All A.3(K=n) rows in this plan
+  are the SAME checkpoint at different decode compute.
+
 ### 2.3 Baseline preparation requirements
 
 - **S0/S1 prompts must carry distinct stream programs** (melody 0 /
