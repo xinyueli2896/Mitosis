@@ -6,9 +6,12 @@
 # upstream repo automatically before launch.
 #
 # Env knobs (override via --export=ALL,KEY=val or shell-prefix + --export=ALL):
-#   UPSTREAM_DIR    the midi-function-alignment checkout.
-#                   default: /l/users/xinyue.li/midi-function-alignment
-#   MITOSIS_DIR     where to copy finetune_pop909.py from.
+#   UPSTREAM_DIR    directory containing cp_transformer.py + ckpt/ + data/.
+#                   default: /home/xinyue.li/Mitosis/midi_yinyang
+#                   (set to another checkout, e.g. a separate
+#                   midi-function-alignment clone, to run there instead)
+#   MITOSIS_DIR     where finetune_pop909.py lives (copied over only when
+#                   UPSTREAM_DIR differs).
 #                   default: /home/xinyue.li/Mitosis/midi_yinyang
 #   DATA            default data/pop909_melchord_cp16_v2.pt (relative to
 #                   UPSTREAM_DIR; auto-copied from MITOSIS_DIR/data if absent)
@@ -40,7 +43,7 @@ set -euo pipefail
 source ~/.bashrc
 
 CONDA_ENV=mitosis
-UPSTREAM_DIR="${UPSTREAM_DIR:-/l/users/xinyue.li/midi-function-alignment}"
+UPSTREAM_DIR="${UPSTREAM_DIR:-/home/xinyue.li/Mitosis/midi_yinyang}"
 MITOSIS_DIR="${MITOSIS_DIR:-/home/xinyue.li/Mitosis/midi_yinyang}"
 
 DATA="${DATA:-data/pop909_melchord_cp16_v2.pt}"
@@ -61,9 +64,11 @@ if [[ ! -d "$UPSTREAM_DIR" ]]; then
 fi
 cd "$UPSTREAM_DIR"
 
-# keep the driver current in the upstream repo
-cp -f "$MITOSIS_DIR/finetune_pop909.py" .
-echo "[setup] copied finetune_pop909.py from $MITOSIS_DIR"
+# keep the driver current when running in a separate checkout
+if [[ "$(readlink -f "$UPSTREAM_DIR")" != "$(readlink -f "$MITOSIS_DIR")" ]]; then
+    cp -f "$MITOSIS_DIR/finetune_pop909.py" .
+    echo "[setup] copied finetune_pop909.py from $MITOSIS_DIR"
+fi
 
 # auto-copy the tokenized data from the Mitosis checkout if absent here
 if [[ ! -f "$DATA" && -f "$MITOSIS_DIR/$DATA" ]]; then
