@@ -129,15 +129,45 @@ not be conflated:
 Both streams are generated jointly, conditioned on a 4-bar prompt of
 both streams.
 
-| Task | Systems under test | Baseline | Mode |
+| Task | Systems under test | Matched baseline | Mode |
 |---|---|---|---|
-| drumnondrum | A.2(K=1), B.1 | S0 (merged stream) | `co` |
-| melchord | A.2(K=1) | S0, S1 (merged stream) | `co` |
+| drumnondrum | A.2(K=1), B.1 | S0 (merged stream; same LA training corpus) | `co` |
+| melchord | A.2(K=1) | S1 (merged stream; same POP909 data); S0 as unmatched anchor | `co` |
+
+**Claim under test.** The duet architecture — per-stream Q/K/V/O
+projections, dedicated cross-stream attention, and shared-MoE routing
+over two interleaved streams — models two symbolic streams that follow
+different musical grammars (drum vs pitched; melody vs chord) better
+than a single-stream model that treats them as one homogeneous token
+sequence distinguished only by program tokens. The baseline pairing is
+MATCHED within each row (same training corpus), so the measured gap is
+attributable to architecture alone.
+
+**Pre-registered expectations** — how the co-generation advantage
+should manifest, mapped to §5 metrics. The single-stream model carries
+three burdens the duet removes; each removal predicts a specific
+observable:
+
+| # | Burden removed | Predicted observable | Metric |
+|---|---|---|---|
+| H1 | stream identity inferred from program tokens | no role leakage / stream death: melody stays monophonic, chords stay block-voiced, neither stream vanishes; S\* shows register drift, texture thickening, or a stream dying mid-piece | per-stream polyphony profile; silence/collapse rate; stream-survival length |
+| H2 | free-form token budget across streams | stable per-stream density over all 24 bars; S\* density drifts with continuation length | density trajectory error as a function of bar index |
+| H3 | partner context buried in the merged sequence | better inter-stream fit | chord-tone coverage (melchord); onset synchrony (drumnondrum) |
+| H4 | one set of weights multiplexing two grammars | stream-appropriate statistics (harmonic rhythm ≈ 1 chord change/bar; melodic contour smoothness); supporting evidence: MoE expert usage separating by stream | duration / harmonic-rhythm distributions; expert-routing side analysis |
+| H5 | (net perceptual effect) | listening wins concentrated on the inter-stream-coherence axis rather than raw musicality | pairwise A/B axis (b) |
+
+**Pre-registered counter-expectations** (stated now so results are not
+cherry-picked later): S\* is expected to TIE on local plausibility and
+pitch-class histograms (S1 saw the same data; merged AR is strong
+locally) — the claim lives in the structural/cross-stream measures
+H1–H3, not the local ones. A.2 may LOSE on the structure/development
+listening axis due to its known repetition tendency; that axis is
+reported but is not the claim under test.
 
 Planned contrasts:
 
 1. **S\* vs duet systems** — value of architectural stream separation
-   (the headline RQ1 comparison).
+   (the headline RQ1 comparison), read through H1–H5 above.
 2. **B.1 vs A.2(K=1)** — bounded-lookahead leader/follower design vs
    symmetric refinement design, as the two competing duet strategies.
    B.1's hypothesis is stream-asymmetric: the follower (nondrum)
