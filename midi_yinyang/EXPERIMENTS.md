@@ -114,6 +114,15 @@ Planned contrasts:
    refinement. Prior drumnondrum listening results indicate refinement
    helps only when both streams are active; melchord has both streams
    active throughout, making it the cleanest test of this mechanism.
+4. **B.1 vs A.1** — effect of leader/follower asymmetry in
+   co-generation. A.1 is exactly B.1 with k=0, so this pair is a clean
+   ablation of the anticipation mechanism. The hypothesis is
+   stream-asymmetric: the follower (nondrum) improves because it always
+   harmonizes against k frames of already-committed drum future, while
+   the leader (drum) is generated with k-frames-stale partner context
+   and should be unchanged or slightly degraded. B.1's E1 results are
+   therefore ALWAYS reported per-stream; a joint aggregate would
+   average away the effect under test.
 
 ### E2 — Marginal (single-stream) generation (RQ2)
 
@@ -136,8 +145,36 @@ generates the remaining stream.
 
 | Task | Systems under test | Baseline | Direction |
 |---|---|---|---|
-| drumnondrum | C.1, C.2, B.1, A.1, A.3 (conditional mode) | S0 (see protocol note) | drum → nondrum |
+| drumnondrum | A.1, B.1, C.1, C.2, A.3 (conditional mode) | S0 (see protocol note) | drum → nondrum |
 | melchord | A.3 (`mel2chord`, `chord2mel`) | S1 (see protocol note) | both directions |
+
+**Conditioning-horizon spectrum (drum → nondrum).** Three of the
+systems form an ordered spectrum in how much FUTURE of the
+conditioning stream the target stream can attend:
+
+| System | Future drum context visible to nondrum_t | Streamable |
+|---|---|---|
+| A.1 (conditional mode) | 0 frames (same-frame only) | yes |
+| B.1 | k frames (bounded lookahead; k = 16 ≈ 1 bar) | yes, with k-frame latency |
+| C.1 / C.2 | entire sequence (bidirectional) | no |
+
+This ordering turns E3 from an unordered system comparison into a
+dose–response study of conditioning horizon. The headline question:
+does B.1's bounded lookahead recover most of the C.2−A.1 gap? If yes,
+bounded (hence real-time-capable) conditioning suffices and the
+offline bidirectional architectures buy little; if no, full-sequence
+conditioning is genuinely load-bearing.
+
+**B.1 direction restriction.** The reverse direction
+(nondrum → drum) is EXCLUDED for B.1 by design: under the anticipatory
+layout, drum_{t+k} attends nondrum only up to t−1, so even with the
+full ground-truth nondrum available the model conditions on
+k-frames-stale partner context — strictly worse conditioning than
+A.1's reverse mode. It is an expected-negative by construction, not a
+fair capability test. (At most, report it once as an asymmetry
+control, clearly labeled.) B.1 is likewise excluded from E2: its
+marginals are not its design question, and the follower-only mode is
+structurally handicapped by the missing leader stream.
 
 **Baseline protocol note.** A single-stream AR model cannot condition
 on the future of the partner stream; no faithful conditional decoding
@@ -168,6 +205,16 @@ Replication on melchord:
    silence-specific rather than a general confound.
 3. (Optional) **Temperature schedule**: piecewise draft/commit schedule
    vs linear annealing.
+
+### E5 — (Optional) Anticipation-horizon sweep (B.1 only)
+
+Run only if the E3 horizon-spectrum result is positive (B.1 recovers a
+substantial fraction of the C.2−A.1 gap). Train B.1 at
+k ∈ {8, 16, 32} (`ANTICIPATION_FRAMES` knob in
+`train_duet_anticipatory.sbatch`; k=16 already trained) and plot the
+E3 conditional metrics against k, with A.1 as the k=0 point and C.2 as
+the k=∞ asymptote. Deliverable: one dose–response figure locating the
+knee of the lookahead curve.
 
 ---
 
