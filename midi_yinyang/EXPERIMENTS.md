@@ -318,7 +318,21 @@ rerun the whole grid (it's cheap: ≤ ~15 songs × ~6 systems × 3 samples).
 
 ## 5. Metrics
 
-### 5.1 Objective — needs a small new module (`eval_metrics.py`, TODO)
+### 5.1 Objective — implemented in `eval_metrics.py`
+
+The module scores H1–H3 only (H4 is the listening test) and reports in
+the pre-registered priority order **H3 > H2 > H1**, with one primary
+endpoint per hypothesis (marked `*` in the summary): H3
+`harmonic_rhythm_jsd` (melchord) / `onset_grid_jsd_b` (drumnondrum);
+H2 `chord_tone_cov_delta` / `onset_sync_delta`; H1 `survival_min`.
+Reference-calibrated throughout: distribution metrics are
+Jensen–Shannon divergences against the ground-truth continuation's
+distributions, fit metrics are deltas against the same statistic
+computed on the reference pair. Batch interface: a TSV manifest
+(system, mode, song, sample, path) + reference stream folders → CSV +
+priority-ordered summary. Validated on synthetic fixtures where each
+failure mode (grammar chaos, stream death) trips exactly its own
+hypothesis block.
 
 Computed per generated continuation (frames 64..384), against the
 ground-truth continuation of the same song where applicable. All
