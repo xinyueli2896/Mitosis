@@ -217,13 +217,25 @@ other:
   (H-E2.1). Note this prompt is OOD for S\* too — its training data
   always had both streams — so this comparison alone cannot measure
   capacity interference.
-- **S-specialist** (the same backbone finetuned on single-modality
-  data: S-mel / S-chord from `pop909_melody_cp4_v2.pt` /
+- **S-specialist**: the fair opponent for the marginal question,
+  constructed to match A.2's provenance in everything but the
+  objective — warm-started from the SAME LA-pretrained ckpt that A.2's
+  backbone warm-started from, finetuned with the SAME recipe/steps as
+  S1, on the SAME POP909 songs, but on single-modality data only
+  (S-mel / S-chord from `pop909_melody_cp4_v2.pt` /
   `pop909_chord_cp4_v2.pt`; optionally S-drum / S-nondrum from
-  `la_drum_cp16_v2.pt` / `la_nondrum_cp16_v2.pt`): the model whose
-  training objective IS the marginal — the upper anchor required for
-  the strict capacity-interference test (H-E2.2). A specialist is
-  useless for H-E2.1 (it cannot intrude on a partner it never
+  `la_drum_cp16_v2.pt` / `la_nondrum_cp16_v2.pt`). Rejected
+  alternatives, for the record: S0 alone confounds objective with
+  in-domain exposure (kept only as lower anchor); a from-scratch
+  single-modality model is denied the pretraining inheritance A.2
+  received and would lose for data-scale reasons — a strawman. Two
+  owned asymmetries: architecture cannot be held constant (there is no
+  non-degenerate "A.2 trained marginally"), so this compares the joint
+  system's marginal against the single-stream pipeline's best
+  specialist; and the specialist sees half the tokens per song — if
+  A.2 nevertheless WINS, that is evidence of positive cross-stream
+  transfer, a reportable finding rather than a confound. A specialist
+  is useless for H-E2.1 (it cannot intrude on a partner it never
   learned).
 
 | Task | Systems under test | Baselines | Modes |
