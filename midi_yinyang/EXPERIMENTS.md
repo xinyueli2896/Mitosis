@@ -106,7 +106,29 @@ not be conflated:
   {0..diffusion_K} is in-distribution. All A.2(K=n) rows in this plan
   are the SAME checkpoint at different decode compute.
 
-### 2.4 Baseline preparation requirements
+### 2.4 Published conditional baseline (YinYang)
+
+| ID | Model | Architecture | Task coverage | Training data |
+|---|---|---|---|---|
+| **Y** | `RoformerYinyang` (`cp_transformer_yinyang.py`; arXiv:2506.15548) | FROZEN pretrained CP transformer run twice — one pass fully encodes the conditioning stream, a second pass generates the target stream AR while low-rank cross-attention adapters (every `n_skip` layers, + LoRA on Q/V) inject the conditioning stream's hidden states at ALL positions. Parameter-efficient conditional adaptation of S0 | both directions per task: mel→chord, chord→mel; drum→others, others→drum | **Y-mc**: Nottingham (1,020 songs). **Y-dn**: LA subset with drums (31k songs) |
+
+Role: the external, published conditional baseline — unlike S0/S1 it
+genuinely conditions on the full partner stream, so it is the honest
+conditional comparison point. It also contrasts architecturally with
+C.1/C.2 at the SAME conditioning horizon: fully-trained duet
+architectures vs frozen-backbone + adapters.
+
+**Domain caveat (must be disclosed wherever Y-mc appears).** Y-mc is
+finetuned on Nottingham (folk); our melchord evaluation is POP909
+(pop). The Y-mc vs A.2-melchord comparison therefore confounds
+architecture with training domain. Y-mc is reported as an external
+reference point, NOT as a matched baseline. Optional upgrade if the
+comparison matters to the write-up: finetune a POP909-matched YinYang
+(`cp_transformer_yinyang.py` on the POP909 melody/chord data) — record
+the decision either way. Y-dn has no such caveat: it is LA-trained
+like the duet drumnondrum systems and evaluated on held-out RWC.
+
+### 2.5 Baseline preparation requirements
 
 - **S0/S1 prompts must carry distinct stream programs** (melody 0 /
   chord 48; drums are natively 127); otherwise the streams fuse
@@ -202,20 +224,21 @@ capacity interference from the joint objective.
 The complete ground-truth partner stream is provided; the model
 generates the remaining stream.
 
-| Task | Systems under test | Baseline | Direction |
+| Task | Systems under test | Baselines | Direction |
 |---|---|---|---|
-| drumnondrum | A.2 (conditional mode), B.1, C.1, C.2 | S0 (see protocol note) | drum → nondrum |
-| melchord | A.2 (`mel2chord`, `chord2mel`) | S1 (see protocol note) | both directions |
+| drumnondrum | A.2 (conditional mode), B.1, C.1, C.2 | **Y-dn** (matched external conditional baseline); S0 (no-conditioning anchor, see protocol note) | drum → nondrum (Y-dn additionally: nondrum → drum vs A.2 `chord2mel`-equivalent) |
+| melchord | A.2 (`mel2chord`, `chord2mel`) | **Y-mc** (external reference, domain caveat §2.4); S1 (no-conditioning anchor, see protocol note) | both directions |
 
 **Conditioning-horizon spectrum (drum → nondrum).** The systems form
 an ordered spectrum in how much FUTURE of the conditioning stream the
 target stream can attend:
 
-| System | Future drum context visible to nondrum_t | Streamable |
-|---|---|---|
-| A.2 (conditional mode) | 0 frames (same-frame only; the given stream is committed frame-by-frame) | yes |
-| B.1 | k frames (bounded lookahead; k = 16 ≈ 1 bar) | yes, with k-frame latency |
-| C.1 / C.2 | entire sequence (bidirectional) | no |
+| System | Future drum context visible to nondrum_t | Streamable | Parameter profile |
+|---|---|---|---|
+| A.2 (conditional mode) | 0 frames (same-frame only; the given stream is committed frame-by-frame) | yes | fully-trained duet |
+| B.1 | k frames (bounded lookahead; k = 16 ≈ 1 bar) | yes, with k-frame latency | fully-trained duet |
+| C.1 / C.2 | entire sequence (bidirectional) | no | fully-trained duet |
+| Y | entire sequence (cross-attention into the fully-encoded conditioning stream) | no | frozen backbone + LoRA/adapters |
 
 This ordering turns E3 from an unordered system comparison into a
 dose–response study of conditioning horizon. The headline question:
@@ -223,6 +246,13 @@ does B.1's bounded lookahead recover most of the C.2−A.2 gap? If yes,
 bounded (hence real-time-capable) conditioning suffices and the
 offline bidirectional architectures buy little; if no, full-sequence
 conditioning is genuinely load-bearing.
+
+A second contrast now available at FIXED (unbounded) horizon:
+**C.1/C.2 vs Y** — fully-trained duet conditional architectures vs
+parameter-efficient adaptation of the frozen single-stream backbone.
+If Y matches C.\*, full conditional training buys little over adapters;
+if C.\* wins clearly, the duet training is load-bearing, not just the
+conditioning pathway.
 
 **B.1 direction restriction.** The reverse direction
 (nondrum → drum) is EXCLUDED for B.1 by design: under the anticipatory
@@ -310,6 +340,7 @@ figure locating the knee of the lookahead curve.
 | A.2 | `A3_REFINE_STEPS=1 A3_FINAL_TEMP=0.9 A3_TOP_P=0.95` (schedule selected on drumnondrum) — used for ALL headline A.2 rows; the K-sweep is confined to E4 |
 | A.1 (ablation only) | temperature 1.0 (its tuned default) |
 | B.1/C.1/C.2 | temperature 1.0, existing script defaults |
+| Y | temperature 1.0, `cp_transformer_yinyang_inference.py` defaults; the paper's released/finetuned ckpts (Y-dn, Y-mc) as-is |
 
 Freeze these; no per-song or per-metric cherry-picking. Any change ⇒
 rerun the whole grid (it's cheap: ≤ ~15 songs × ~6 systems × 3 samples).
@@ -400,6 +431,9 @@ Phase 1 — generation sweeps (all sbatch, mostly existing scripts)
   `MEL_FOLDER/CHORD_FOLDER/MAX_POLYPHONY=4` (melchord).
 - E1/E2 baselines: `cp_transformer_inference.py` runs per prompt folder
   (S0 and S1 ckpts).
+- E3 conditional baseline: `cp_transformer_yinyang_inference.py` with
+  the Y-dn ckpt on the RWC prompt pairs (both directions) and the Y-mc
+  ckpt on the POP909 eval pairs (both directions, domain caveat noted).
 - E4a: A.1 drumnondrum runs (co + conditional, existing ckpt);
   A.1-melchord training deferred until the drumnondrum result is in.
 - E4b: three additional A.2 melchord runs (K sweep + adaptive toggle).
