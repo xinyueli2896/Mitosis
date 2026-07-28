@@ -153,8 +153,8 @@ both streams.
 
 | Task | Systems under test | Matched baseline | Mode |
 |---|---|---|---|
-| drumnondrum | A.2(K=1), B.1 | S0 (merged stream; same LA training corpus) | `co` |
-| melchord | A.2(K=1) | S1 (merged stream; same POP909 data); S0 as unmatched anchor | `co` |
+| drumnondrum | A.2(K=4), B.1 | S0 (merged stream; same LA training corpus) | `co` |
+| melchord | A.2(K=4) | S1 (merged stream; same POP909 data); S0 as unmatched anchor | `co` |
 
 **Claim under test.** The duet architecture — per-stream Q/K/V/O
 projections, dedicated cross-stream attention, and shared-MoE routing
@@ -194,7 +194,7 @@ Planned contrasts:
 
 1. **S\* vs duet systems** — value of architectural stream separation
    (the headline RQ1 comparison), read through H1–H4 above.
-2. **B.1 vs A.2(K=1)** — bounded-lookahead leader/follower design vs
+2. **B.1 vs A.2(K=4)** — bounded-lookahead leader/follower design vs
    symmetric refinement design, as the two competing duet strategies.
    B.1's hypothesis is stream-asymmetric: the follower (nondrum)
    improves because it always harmonizes against k frames of committed
@@ -291,7 +291,7 @@ study factorizes the total effect into those parts:
 |---|---|---|
 | A.2(K≥1) vs A.2(K=0) | the decode-time refinement mechanism | weights, tokenization, prompts |
 | A.2(K=0) vs A.1 | the training-objective effect on the plain-AR pathway (parity check: a deficit means the diffusion objective taxed the backbone) | decode procedure (both plain joint AR) |
-| A.1 vs A.2(K=1) | the combined package | task, prompts |
+| A.1 vs A.2(K=4) | the combined package | task, prompts |
 
 Tasks: drumnondrum (A.1 trained). Melchord requires training
 A.1-melchord — decide after the drumnondrum ablation: if the combined
@@ -305,11 +305,12 @@ narrative.
 
 #### E4b — Decode-schedule ablations (A.2 only)
 
-Completed on drumnondrum via listening tests: the selected decode
-schedule is K=1, final temperature 0.9, nucleus 0.95; refinement at
-K=4 outperformed K=0 when both streams were active and matched or
-underperformed it otherwise, motivating the A3_ADAPTIVE early-exit.
-Replication on melchord:
+Drumnondrum listening tests established the temperature/nucleus
+schedule (final temperature 0.9, nucleus 0.95) and found refinement at
+K=4 outperformed K=0 when both streams were active but matched or
+underperformed it on silent-stream material — motivating the
+A3_ADAPTIVE early-exit that guards the headline K=4 configuration
+(§4). Replication on melchord:
 
 1. **Refinement depth**: K ∈ {0, 1, 4} at the selected schedule,
    `co` mode, full evaluation list (doubles as the E4a first-row data).
@@ -337,7 +338,7 @@ figure locating the knee of the lookahead curve.
 | System | Settings |
 |---|---|
 | S0/S1 | temperature 1.0, `--prompt-length 64 --gen-length 384 --n-samples 3` |
-| A.2 | `A3_REFINE_STEPS=1 A3_FINAL_TEMP=0.9 A3_TOP_P=0.95` (schedule selected on drumnondrum) — used for ALL headline A.2 rows; the K-sweep is confined to E4 |
+| A.2 | `A3_REFINE_STEPS=4 A3_FINAL_TEMP=0.9 A3_TOP_P=0.95 A3_ADAPTIVE=1` — used for ALL headline A.2 rows; the K-sweep is confined to E4. Rationale: K=4 exercises the full trained refinement depth (K = diffusion_K), so the headline tests the complete 同步看 mechanism rather than a compute-trimmed variant; the temperature/nucleus schedule is the drumnondrum listening-test selection; A3_ADAPTIVE guards the known silent-frame regression of deep refinement (drumnondrum listening: K=4 ≤ K=0 on silent-stream material) and is itself ablated in E4b |
 | A.1 (ablation only) | temperature 1.0 (its tuned default) |
 | B.1/C.1/C.2 | temperature 1.0, existing script defaults |
 | Y | temperature 1.0, `cp_transformer_yinyang_inference.py` defaults; the paper's released/finetuned ckpts (Y-dn, Y-mc) as-is |
