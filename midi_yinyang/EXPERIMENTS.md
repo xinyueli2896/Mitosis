@@ -148,11 +148,20 @@ should manifest, mapped to §5 metrics. The single-stream model carries
 three burdens the duet removes; each removal predicts a specific
 observable:
 
+The three hypotheses partition cleanly: H1 judges WHAT each stream
+plays (role identity), H2 judges HOW MUCH it plays over time (budget
+stability), H3 judges how well the two streams FIT EACH OTHER. H1 and
+H2 are independent failure modes — a merged model can keep every role
+correct while the texture gradually thickens (H2 fails, H1 holds), or
+keep counts stable while the melody turns polyphonic or drifts into
+chord register (H1 fails, H2 holds); only outright stream death
+violates both.
+
 | # | Burden removed | Predicted observable | Metric |
 |---|---|---|---|
-| H1 | stream identity inferred from program tokens | no role leakage / stream death: melody stays monophonic, chords stay block-voiced, neither stream vanishes; S\* shows register drift, texture thickening, or a stream dying mid-piece | per-stream polyphony profile; silence/collapse rate; stream-survival length |
-| H2 | free-form token budget across streams | stable per-stream density over all 24 bars; S\* density drifts with continuation length | density trajectory error as a function of bar index |
-| H3 | partner context buried in the merged sequence | better inter-stream fit | chord-tone coverage (melchord); onset synchrony (drumnondrum) |
+| H1 | stream identity inferable only from program tokens (duet: identity is structural — the interleave position IS the stream) | role fidelity: melody stays monophonic, chords stay block-voiced, registers stay separated, neither stream dies; S\* shows role leakage or a stream vanishing mid-piece | per-stream polyphony profile; register overlap; silence/collapse rate; stream-survival length |
+| H2 | both streams' notes compete inside one shared per-frame token budget (duet: each stream gets its own frame slot at every time step) | quantity stability: per-stream note density stays near the reference across all 24 bars; S\* thickens or thins with continuation length even when roles stay correct | density trajectory error as a function of bar index |
+| H3 | partner notes are ordinary tokens scattered in one undifferentiated sequence — attention must LEARN to find them (duet: a dedicated cross-stream attention pass makes the partner architecturally addressable) | inter-stream fit: generated chords are consonant with the simultaneous melody; nondrum onsets lock to drum onsets — each stream can be individually well-formed and still fail this | chord-tone coverage of concurrent melody notes (melchord); onset synchrony (drumnondrum) |
 | H4 | one set of weights multiplexing two grammars | stream-appropriate statistics (harmonic rhythm ≈ 1 chord change/bar; melodic contour smoothness); supporting evidence: MoE expert usage separating by stream | duration / harmonic-rhythm distributions; expert-routing side analysis |
 | H5 | (net perceptual effect) | listening wins concentrated on the inter-stream-coherence axis rather than raw musicality | pairwise A/B axis (b) |
 
