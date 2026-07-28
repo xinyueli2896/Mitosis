@@ -148,35 +148,30 @@ should manifest, mapped to §5 metrics. The single-stream model carries
 three burdens the duet removes; each removal predicts a specific
 observable:
 
-The three hypotheses partition cleanly: H1 judges WHAT each stream
-plays (role identity), H2 judges HOW MUCH it plays over time (budget
-stability), H3 judges how well the two streams FIT EACH OTHER. H1 and
-H2 are independent failure modes — a merged model can keep every role
-correct while the texture gradually thickens (H2 fails, H1 holds), or
-keep counts stable while the melody turns polyphonic or drifts into
-chord register (H1 fails, H2 holds); only outright stream death
-violates both.
+The hypotheses partition cleanly: H1 judges each stream ON ITS OWN
+(consistent role and texture), H2 judges how well the two streams FIT
+EACH OTHER, H3 judges whether the statistics are stream-appropriate,
+H4 is the net perceptual effect.
 
 | # | Burden removed | Predicted observable | Metric |
 |---|---|---|---|
-| H1 | stream identity inferable only from program tokens (duet: identity is structural — the interleave position IS the stream) | role fidelity: melody stays monophonic, chords stay block-voiced, registers stay separated, neither stream dies; S\* shows role leakage or a stream vanishing mid-piece | per-stream polyphony profile; register overlap; silence/collapse rate; stream-survival length |
-| H2 | both streams' notes compete inside one shared per-frame token budget (duet: each stream gets its own frame slot at every time step) | quantity stability: per-stream note density stays near the reference across all 24 bars; S\* thickens or thins with continuation length even when roles stay correct | density trajectory error as a function of bar index |
-| H3 | partner notes are ordinary tokens scattered in one undifferentiated sequence — attention must LEARN to find them (duet: a dedicated cross-stream attention pass makes the partner architecturally addressable) | inter-stream fit: generated chords are consonant with the simultaneous melody; nondrum onsets lock to drum onsets — each stream can be individually well-formed and still fail this | chord-tone coverage of concurrent melody notes (melchord); onset synchrony (drumnondrum) |
-| H4 | one set of weights multiplexing two grammars | stream-appropriate statistics (harmonic rhythm ≈ 1 chord change/bar; melodic contour smoothness); supporting evidence: MoE expert usage separating by stream | duration / harmonic-rhythm distributions; expert-routing side analysis |
-| H5 | (net perceptual effect) | listening wins concentrated on the inter-stream-coherence axis rather than raw musicality | pairwise A/B axis (b) |
+| H1 | stream identity inferable only from program tokens, and both streams' notes competing inside one shared per-frame token budget (duet: the interleave position IS the stream, and each stream gets its own frame slot at every time step) | consistent role and texture per stream across all 24 bars: melody stays monophonic and in register, chords stay block-voiced, per-stream density stays near the reference, neither stream dies; S\* shows role leakage, texture thickening/thinning with continuation length, or a stream vanishing mid-piece | per-stream polyphony profile; register overlap; density trajectory as a function of bar index; silence/collapse rate; stream-survival length |
+| H2 | partner notes are ordinary tokens scattered in one undifferentiated sequence — attention must LEARN to find them (duet: a dedicated cross-stream attention pass makes the partner architecturally addressable) | inter-stream fit: generated chords are consonant with the simultaneous melody; nondrum onsets lock to drum onsets — each stream can be individually well-formed and still fail this | chord-tone coverage of concurrent melody notes (melchord); onset synchrony (drumnondrum) |
+| H3 | one set of weights multiplexing two grammars | stream-appropriate statistics (harmonic rhythm ≈ 1 chord change/bar; melodic contour smoothness); supporting evidence: MoE expert usage separating by stream | duration / harmonic-rhythm distributions; expert-routing side analysis |
+| H4 | (net perceptual effect) | listening wins concentrated on the inter-stream-coherence axis rather than raw musicality | pairwise A/B axis (b) |
 
 **Pre-registered counter-expectations** (stated now so results are not
 cherry-picked later): S\* is expected to TIE on local plausibility and
 pitch-class histograms (S1 saw the same data; merged AR is strong
 locally) — the claim lives in the structural/cross-stream measures
-H1–H3, not the local ones. A.2 may LOSE on the structure/development
+H1–H2, not the local ones. A.2 may LOSE on the structure/development
 listening axis due to its known repetition tendency; that axis is
 reported but is not the claim under test.
 
 Planned contrasts:
 
 1. **S\* vs duet systems** — value of architectural stream separation
-   (the headline RQ1 comparison), read through H1–H5 above.
+   (the headline RQ1 comparison), read through H1–H4 above.
 2. **B.1 vs A.2(K=1)** — bounded-lookahead leader/follower design vs
    symmetric refinement design, as the two competing duet strategies.
    B.1's hypothesis is stream-asymmetric: the follower (nondrum)
