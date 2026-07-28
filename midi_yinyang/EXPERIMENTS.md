@@ -209,10 +209,31 @@ Planned contrasts:
 
 Exactly one stream is generated; the partner stream is absent.
 
-| Task | Systems under test | Baseline | Modes |
+Two baselines with DISTINCT roles — neither can substitute for the
+other:
+
+- **S\*-merged** (S0/S1 as trained, prompted with single-stream files):
+  tests graceful degradation and carries the containment hypothesis
+  (H-E2.1). Note this prompt is OOD for S\* too — its training data
+  always had both streams — so this comparison alone cannot measure
+  capacity interference.
+- **S-specialist** (the same backbone finetuned on single-modality
+  data: S-mel / S-chord from `pop909_melody_cp4_v2.pt` /
+  `pop909_chord_cp4_v2.pt`; optionally S-drum / S-nondrum from
+  `la_drum_cp16_v2.pt` / `la_nondrum_cp16_v2.pt`): the model whose
+  training objective IS the marginal — the upper anchor required for
+  the strict capacity-interference test (H-E2.2). A specialist is
+  useless for H-E2.1 (it cannot intrude on a partner it never
+  learned).
+
+| Task | Systems under test | Baselines | Modes |
 |---|---|---|---|
-| drumnondrum | A.2 | S0 prompted with the corresponding single-stream files | `mel_only`, `chord_only` |
-| melchord | A.2 | S1 prompted with the corresponding single-stream files | `mel_only`, `chord_only` |
+| melchord | A.2 | S1-merged (containment); S-mel / S-chord specialists (capacity tax) | `mel_only`, `chord_only` |
+| drumnondrum | A.2 | S0-merged (containment); S-drum / S-nondrum specialists GATED — train only if the melchord E2 result is surprising | `mel_only`, `chord_only` |
+
+Specialist training is cheap: the single-stream tokenized data already
+exists and each specialist is one `finetune_pop909.py --data <file>`
+run with the same recipe as S1.
 
 **Pre-registered hypotheses:**
 
@@ -228,12 +249,13 @@ Exactly one stream is generated; the partner stream is absent.
 - **H-E2.2 (non-inferiority — the capacity-interference test).** On
   the stream actually generated, A.2's marginal grammar quality (H3
   block: onset-grid JSD, duration JSD, stepwise motion, harmonic
-  rhythm) is not worse than S\*'s by more than a small margin.
-  Deliberately a non-inferiority claim, not superiority: the risk
-  being ruled out is that the joint objective split capacity so that
-  each marginal is worse than a specialist's. Expectation: parity,
-  because per-stream projections and MoE routing partially decouple
-  the streams' capacity.
+  rhythm) is not worse than the SPECIALIST's by more than a small
+  margin. The specialist (not S\*-merged) is the reference here:
+  against S\*-merged a tie could merely mean both systems pay the same
+  partner-absence OOD penalty, which says nothing about capacity.
+  Deliberately a non-inferiority claim, not superiority. Expectation:
+  parity, because per-stream projections and MoE routing partially
+  decouple the streams' capacity.
 - **H-E2.3 (pre-registered risk — partner silence may be OOD for
   A.2-melchord).** On drumnondrum, silent-partner stretches occur
   naturally in training (songs without drums), so marginal generation
