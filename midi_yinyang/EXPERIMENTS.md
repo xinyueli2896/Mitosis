@@ -214,10 +214,37 @@ Exactly one stream is generated; the partner stream is absent.
 | drumnondrum | A.2 | S0 prompted with the corresponding single-stream files | `mel_only`, `chord_only` |
 | melchord | A.2 | S1 prompted with the corresponding single-stream files | `mel_only`, `chord_only` |
 
-Hypothesis under test: joint two-stream training does not degrade the
-marginal distribution of a single stream relative to a model prompted
-with identical single-stream material. A deficit would indicate
-capacity interference from the joint objective.
+**Pre-registered hypotheses:**
+
+- **H-E2.1 (containment — predicted duet advantage).** S\*, whose
+  training distribution always contains both streams, will tend to
+  SPAWN the missing partner when prompted with single-stream material
+  (chord-program notes appearing in a melody-only continuation). A.2's
+  `mel_only`/`chord_only` modes exclude this structurally. Metric:
+  partner-intrusion rate — in E2 the absent stream's `survival` /
+  `density` metrics should be exactly 0, and any nonzero value is
+  intrusion (interpretation flips relative to E1: survival of the
+  absent stream is a FAILURE here).
+- **H-E2.2 (non-inferiority — the capacity-interference test).** On
+  the stream actually generated, A.2's marginal grammar quality (H3
+  block: onset-grid JSD, duration JSD, stepwise motion, harmonic
+  rhythm) is not worse than S\*'s by more than a small margin.
+  Deliberately a non-inferiority claim, not superiority: the risk
+  being ruled out is that the joint objective split capacity so that
+  each marginal is worse than a specialist's. Expectation: parity,
+  because per-stream projections and MoE routing partially decouple
+  the streams' capacity.
+- **H-E2.3 (pre-registered risk — partner silence may be OOD for
+  A.2-melchord).** On drumnondrum, silent-partner stretches occur
+  naturally in training (songs without drums), so marginal generation
+  is in-distribution. On POP909 the chord stream is essentially always
+  active and training used no silence augmentation, so an entirely
+  silent partner is a regime A.2-melchord never saw. Possible outcome:
+  degraded A.2 marginals on melchord specifically (drift or
+  EOS-collapse of the generated stream). If observed, this is an
+  informative limitation of joint training without silence
+  augmentation — registered now so the result cannot be reframed
+  post-hoc in either direction.
 
 ### E3 — Conditional generation (RQ3)
 
