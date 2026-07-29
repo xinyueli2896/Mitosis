@@ -60,8 +60,8 @@ the write-up; no other aliases are permitted.
 | ID | Model | Architecture | Training data | Role |
 |---|---|---|---|---|
 | **S0** | `RoFormerSymbolicTransformer` v0.42 (size 1) | Single-stream CP transformer; one merged token stream; stream identity carried only by the MIDI program token | LA (large scraped MIDI corpus) | Unmatched lower anchor: no stream separation, no in-domain data |
-| **S1** | S0 + POP909 finetune | Identical architecture; weights finetuned on merged, program-tagged POP909 melody+chord | LA → POP909 (20k steps) | Matched single-stream baseline for melchord (E1/E3 anchor; E2 containment) |
-| **S-mel** / **S-chord** | S0 + single-modality POP909 finetune | Identical architecture; same finetune recipe as S1, but on ONE stream's data only | LA → POP909 melody-only / chord-only | Per-stream marginal specialists: the fair E2 opponents for A.2's `mel_only` / `chord_only` modes (H-E2.2); pairing is per-stream and never crossed (§E2) |
+| **S1** | S0 + POP909 finetune | Identical architecture; weights finetuned on merged, program-tagged POP909 melody+chord | LA → POP909 (20k steps) | Matched single-stream baseline for melchord (E1 headline opponent; E3 no-conditioning anchor) |
+| **S-mel** / **S-chord** | S0 + single-modality POP909 finetune | Identical architecture; same finetune recipe as S1, but on ONE stream's data only | LA → POP909 melody-only / chord-only | Per-stream marginal specialists: the fair E2 opponents for A.2's `mel_only` / `chord_only` modes (H-E2.1); pairing is per-stream and never crossed (§E2) |
 | **S-drum** / **S-nondrum** | S0 + single-modality LA finetune | As above, on `la_drum_cp16_v2.pt` / `la_nondrum_cp16_v2.pt` | LA → LA drum-only / nondrum-only | Drumnondrum marginal specialists — GATED on the melchord E2 outcome |
 
 ### 2.2 Two-stream (duet) systems — main experiments
@@ -230,39 +230,41 @@ pre-registered non-inferiority margin:
   (positive cross-stream transfer, see §2.1 note) and is reported as
   such — but E2's design and framing do not depend on it.
 
-Two baselines with DISTINCT roles — neither can substitute for the
-other:
+The baseline is the **S-specialist**: the fair opponent for the
+marginal question, constructed to match A.2's provenance in everything
+but the objective — warm-started from the SAME LA-pretrained ckpt that
+A.2's backbone warm-started from, finetuned with the SAME recipe/steps
+as S1, on the SAME POP909 songs, but on single-modality data only
+(S-mel / S-chord from `pop909_melody_cp4_v2.pt` /
+`pop909_chord_cp4_v2.pt`; optionally S-drum / S-nondrum from
+`la_drum_cp16_v2.pt` / `la_nondrum_cp16_v2.pt`).
 
-- **S\*-merged** (S0/S1 as trained, prompted with single-stream files):
-  tests graceful degradation and carries the containment hypothesis
-  (H-E2.1). Note this prompt is OOD for S\* too — its training data
-  always had both streams — so this comparison alone cannot measure
-  capacity interference.
-- **S-specialist**: the fair opponent for the marginal question,
-  constructed to match A.2's provenance in everything but the
-  objective — warm-started from the SAME LA-pretrained ckpt that A.2's
-  backbone warm-started from, finetuned with the SAME recipe/steps as
-  S1, on the SAME POP909 songs, but on single-modality data only
-  (S-mel / S-chord from `pop909_melody_cp4_v2.pt` /
-  `pop909_chord_cp4_v2.pt`; optionally S-drum / S-nondrum from
-  `la_drum_cp16_v2.pt` / `la_nondrum_cp16_v2.pt`). Rejected
-  alternatives, for the record: S0 alone confounds objective with
-  in-domain exposure (kept only as lower anchor); a from-scratch
-  single-modality model is denied the pretraining inheritance A.2
-  received and would lose for data-scale reasons — a strawman. Two
-  owned asymmetries: architecture cannot be held constant (there is no
-  non-degenerate "A.2 trained marginally"), so this compares the joint
-  system's marginal against the single-stream pipeline's best
-  specialist; and the specialist sees half the tokens per song — if
-  A.2 nevertheless WINS, that is evidence of positive cross-stream
-  transfer, a reportable finding rather than a confound. A specialist
-  is useless for H-E2.1 (it cannot intrude on a partner it never
-  learned).
+Rejected baseline alternatives, for the record:
 
-| Task | Systems under test | Baselines | Modes |
+- **S0 alone** confounds objective with in-domain exposure.
+- **A from-scratch single-modality model** is denied the pretraining
+  inheritance A.2 received and would lose for data-scale reasons — a
+  strawman.
+- **S\*-merged prompted with single-stream files** cannot express a
+  single-stream request at all: its training distribution always
+  contains both streams, so it tends to spawn the missing partner in
+  the continuation (and the prompt is OOD for it besides). This is
+  the one-line justification for building specialists rather than
+  reusing S1 — optionally verified by an informal spot-check, but NOT
+  run as a scored E2 lane or carried as a hypothesis.
+
+Two owned asymmetries of the specialist comparison: architecture
+cannot be held constant (there is no non-degenerate "A.2 trained
+marginally"), so this compares the joint system's marginal against the
+single-stream pipeline's best specialist; and the specialist sees half
+the tokens per song — if A.2 nevertheless WINS, that is evidence of
+positive cross-stream transfer, a reportable finding rather than a
+confound.
+
+| Task | Systems under test | Baseline | Modes |
 |---|---|---|---|
-| melchord | A.2 | S1-merged (containment); S-mel / S-chord specialists (capacity tax) | `mel_only`, `chord_only` |
-| drumnondrum | A.2 | S0-merged (containment); S-drum / S-nondrum specialists GATED — train only if the melchord E2 result is surprising | `mel_only`, `chord_only` |
+| melchord | A.2 | S-mel / S-chord specialists | `mel_only`, `chord_only` |
+| drumnondrum | A.2 | S-drum / S-nondrum specialists GATED — train only if the melchord E2 result is surprising | `mel_only`, `chord_only` |
 
 **Specialist pairing is per-stream and never crossed** — each A.2
 marginal mode is compared only against the specialist of the SAME
@@ -290,28 +292,14 @@ run with the same recipe as S1.
 
 **Pre-registered hypotheses:**
 
-- **H-E2.1 (containment — supporting observation, not a headline
-  claim).** S\*, whose training distribution always contains both
-  streams, will tend to SPAWN the missing partner when prompted with
-  single-stream material (chord-program notes appearing in a
-  melody-only continuation); A.2's `mel_only`/`chord_only` modes
-  exclude this structurally. Reported as a robustness property of the
-  duet interface — deliberately NOT framed as a victory, since the
-  guarantee is partly by construction. Metric: partner-intrusion rate
-  — in E2 the absent stream's `survival` / `density` metrics should be
-  exactly 0, and any nonzero value is intrusion (interpretation flips
-  relative to E1: survival of the absent stream is a FAILURE here).
-- **H-E2.2 (non-inferiority — the capacity-interference test).** On
+- **H-E2.1 (non-inferiority — the capacity-interference test).** On
   the stream actually generated, A.2's marginal grammar quality (H3
   block: onset-grid JSD, duration JSD, stepwise motion, harmonic
-  rhythm) is not worse than the SPECIALIST's by more than a small
-  margin. The specialist (not S\*-merged) is the reference here:
-  against S\*-merged a tie could merely mean both systems pay the same
-  partner-absence OOD penalty, which says nothing about capacity.
-  Deliberately a non-inferiority claim, not superiority. Expectation:
-  parity, because per-stream projections and MoE routing partially
-  decouple the streams' capacity.
-- **H-E2.3 (pre-registered risk — partner silence may be OOD for
+  rhythm) is not worse than the SPECIALIST's by more than the margin δ
+  above. Deliberately a non-inferiority claim, not superiority.
+  Expectation: parity, because per-stream projections and MoE routing
+  partially decouple the streams' capacity.
+- **H-E2.2 (pre-registered risk — partner silence may be OOD for
   A.2-melchord).** On drumnondrum, silent-partner stretches occur
   naturally in training (songs without drums), so marginal generation
   is in-distribution. On POP909 the chord stream is essentially always
@@ -542,9 +530,8 @@ Phase 1 — generation sweeps (all sbatch, mostly existing scripts)
 - E1 baselines: `cp_transformer_inference.py` on the tagged combined
   prompts (S0 and S1 ckpts).
 - E2 baselines: `cp_transformer_inference.py` on the single-stream
-  prompt folders — S\*-merged (containment) AND the matching
-  specialist ckpt per stream (S-mel on melody prompts, S-chord on
-  chord prompts; never crossed).
+  prompt folders with the matching specialist ckpt per stream (S-mel
+  on melody prompts, S-chord on chord prompts; never crossed).
 - E3 conditional baseline: `cp_transformer_yinyang_inference.py` with
   the Y-dn ckpt on the RWC prompt pairs (both directions) and the Y-mc
   ckpt on the POP909 eval pairs (both directions, domain caveat noted).
