@@ -217,7 +217,7 @@ def preprocess_midi(midi_path, max_polyphony, beat_div=4, ins_ids='all', filter=
     return torch.tensor(result_rolls.reshape(midi_end_time, -1)), torch.tensor([pitch_shift_min, pitch_shift_max], dtype=torch.int8)
 
 
-def create_npy_dataset_from_midi(folder, max_polyphony, dataset_name, ins_ids='all', scan_subfolders=True, dedup=False, max_idx=None, filter=True):
+def create_npy_dataset_from_midi(folder, max_polyphony, dataset_name, ins_ids='all', scan_subfolders=True, dedup=False, max_idx=None, filter=True, include_files=None):
     # Get all midi files in the folder, recursively
     midi_files = []
     if scan_subfolders:
@@ -234,6 +234,14 @@ def create_npy_dataset_from_midi(folder, max_polyphony, dataset_name, ins_ids='a
     # same file names — that breaks paired-stream datasets (melody vs chord)
     # since song i in one .pt would map to a different song in the other.
     midi_files.sort()
+    if include_files is not None:
+        # Pre-filter to a known-good file set (e.g. only songs that have
+        # BOTH streams) so two ins_ids passes over the same folder tokenize
+        # identical file lists from the start, instead of relying on
+        # preprocess_midi's per-file None-drop to coincidentally agree.
+        include_files = set(include_files)
+        midi_files = [p for p in midi_files
+                     if os.path.relpath(p, folder) in include_files]
     if max_idx is not None:
         midi_files = midi_files[:max_idx]
     # Process files in parallel
@@ -340,31 +348,61 @@ def _nottingham_midi_folder():
                           os.path.join(NOTTINGHAM_DATASET_PATH, 'MIDI'))
 
 
+def _nottingham_two_track_files(folder):
+    """Song ids (basenames) that have >=2 note-bearing instruments.
+    A minority of Nottingham tunes (mostly 'morris' and a few others)
+    carry melody only, with no chord accompaniment track at all; those
+    must be excluded from BOTH streams up front, or the melody pass
+    keeps them while the chord pass silently drops them (preprocess_midi
+    returns None for a track-1 filter with no track 1), desynchronizing
+    the pairing."""
+    import warnings
+    keep = []
+    for name in sorted(os.listdir(folder)):
+        if not (name.endswith('.mid') or name.endswith('.MID')):
+            continue
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                pm = pretty_midi.PrettyMIDI(os.path.join(folder, name))
+            n_note_tracks = sum(1 for ins in pm.instruments if len(ins.notes) > 0)
+        except Exception:
+            n_note_tracks = 0
+        if n_note_tracks >= 2:
+            keep.append(name)
+    return keep
+
+
 def create_nottingham_melody(max_polyphony=4):
     # Nottingham midis carry melody as instrument 0 and the rendered
     # chord accompaniment as instrument 1 (same convention the legacy
     # create_nottingham_parts relied on). max_polyphony=4 matches the
     # POP909 melchord convention so the two corpora are interchangeable
-    # downstream. filter=False: curated data; also keeps the two stream
-    # runs' drop decisions identical so pairing survives.
+    # downstream. filter=False: curated data. include_files restricts
+    # to songs with both tracks so this pass and the chord pass tokenize
+    # an identical file set (see _nottingham_two_track_files).
+    folder = _nottingham_midi_folder()
     create_npy_dataset_from_midi(
-        _nottingham_midi_folder(),
+        folder,
         max_polyphony,
         f'nottingham_melody_cp{max_polyphony}_v2',
         ins_ids=['track-0'],
         scan_subfolders=False,
         filter=False,
+        include_files=_nottingham_two_track_files(folder),
     )
 
 
 def create_nottingham_chord(max_polyphony=4):
+    folder = _nottingham_midi_folder()
     create_npy_dataset_from_midi(
-        _nottingham_midi_folder(),
+        folder,
         max_polyphony,
         f'nottingham_chord_cp{max_polyphony}_v2',
         ins_ids=['track-1'],
         scan_subfolders=False,
         filter=False,
+        include_files=_nottingham_two_track_files(folder),
     )
 
 

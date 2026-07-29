@@ -10,6 +10,12 @@
 # conditional baseline (EXPERIMENTS.md §2.4) — enables matched-domain
 # evaluation and/or Nottingham-trained duet/finetune variants.
 #
+# A minority of tunes (mostly "morris") carry melody only, with no
+# chord track at all; the preprocessing entrypoints pre-scan the
+# folder and exclude those songs from BOTH streams up front, so the
+# two passes tokenize an identical file set and the pairing gate below
+# passes cleanly (this is expected -- ~1% of the corpus, not a bug).
+#
 # Output (under midi_yinyang/data/):
 #   nottingham_melody_cp4_v2.pt (+ .length.pt, .pitch_shift_range.pt, .txt)
 #   nottingham_chord_cp4_v2.pt  (+ sidecars)
