@@ -1,0 +1,378 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1.1in]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[hidelinks]{hyperref}
+\usepackage{microtype}
+\usepackage{tabularx}
+
+\newcommand{\sys}[1]{\textbf{#1}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+
+\title{Evaluating Two-Stream Symbolic Music Generation:\\ Experiment Plan Report}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\noindent\emph{Companion document to \code{EXPERIMENTS.md} (the
+operational protocol).}
+
+\section{Setup}
+
+\paragraph{Tasks.} Generation of symbolic music with two paired
+streams:
+\begin{enumerate}[nosep]
+  \item melody and chord pair (POP909);
+  \item drum and non-drum pair (LA corpus; evaluated on held-out RWC).
+\end{enumerate}
+
+\paragraph{Generation modes.}
+\begin{enumerate}[nosep]
+  \item co-generation (co-gen);
+  \item marginal generation (marg.\ gen);
+  \item conditional generation (cond.\ gen).
+\end{enumerate}
+
+\paragraph{Baselines.}
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lL@{}}
+\toprule
+ID & Construction \\
+\midrule
+\sys{S0} & pretrained single-stream CP transformer, trained on the LA dataset \\
+\sys{S1} & S0 finetuned on the POP909 melody--chord dataset (merged streams) \\
+\sys{S-mel}\,/\,\sys{S-chord} & S0 finetuned on \emph{one} stream of the POP909 melody--chord data \\
+\sys{Y} & YinYang: frozen S0 $+$ low-rank cross-attention adapters $+$ LoRA; conditional generation \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{Our models.}
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lL@{}}
+\toprule
+ID & Model \\
+\midrule
+\sys{A.1} & DuetAttn (\code{M2CIntraCrossAttn}) \\
+\sys{A.2} & DuetBlockDiffusion (\code{M2CDuetBlockDiffusion}) \\
+\sys{B.1} & DuetAnticipatory (\code{M2CDuetAnticipatory}) \\
+\sys{C.1} & \code{M2CDuetRehearsal} \\
+\sys{C.2} & \code{M2CDuetPrefix} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{Research questions}
+
+\begin{description}[nosep]
+  \item[RQ1 --- Co-generation.] Does explicit two-stream joint modeling
+    beat a merged-stream model at generating both parts together?
+  \item[RQ2 --- Marginals.] Does joint training \emph{retain} the
+    ability to generate each stream alone (a non-inferiority question,
+    not a superiority one)?
+  \item[RQ3 --- Conditional generation.] Given the full partner
+    stream, how does the \emph{conditioning horizon} (no future /
+    bounded future / unbounded future) shape quality, and do
+    fully-trained conditional duets beat parameter-efficient adapter
+    conditioning?
+  \item[RQ4 --- Mechanisms.] Which architectural components are
+    causally load-bearing: the within-frame refinement mechanism, the
+    training objective behind it, and the MoE routing?
+\end{description}
+
+\section{Experiment blocks}
+
+\subsection{E1 --- Co-generation (headline)}
+
+Both streams are generated jointly from a 4-bar prompt of both.
+Corpus-matched pairing: A.2-drumnondrum vs.\ \sys{S0} (both
+LA-trained); A.2-melchord vs.\ \sys{S1} (both POP909-trained) --- so
+the measured gap is attributable to architecture alone. B.1
+participates per-stream as the competing duet strategy.
+
+Four pre-registered hypotheses map each burden the single-stream model
+carries to a specific observable
+(Table~\ref{tab:e1-hypotheses}).
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lp{1.8cm}Lp{3.2cm}@{}}
+\toprule
+\# & Judges & Prediction & Primary metric \\
+\midrule
+H1 & each stream alone & consistent role \& texture across 24 bars
+  (melody monophonic, chords block-voiced, stable density, no stream
+  death); S* shows role leakage, density drift, or stream death &
+  \code{survival\_min} \\
+H2 & mutual fit & chords consonant with the simultaneous melody;
+  non-drum onsets lock to drums &
+  \code{chord\_tone\_cov\_delta} / \code{onset\_sync\_delta} \\
+H3 & grammar & stream-appropriate statistics (harmonic rhythm
+  $\approx$ 1 change/bar, contour smoothness); MoE experts separate by
+  stream & \code{harmonic\_rhythm\_jsd} / \code{onset\_grid\_jsd} \\
+H4 & listeners & an \emph{ordering} of listening margins:
+  coherence $>$ musicality $\ge 0 \approx$ structure --- a uniform
+  profile would indicate generic quality, not the mechanism &
+  pairwise A/B per axis \\
+\bottomrule
+\end{tabularx}
+\caption{E1 pre-registered hypotheses.}
+\label{tab:e1-hypotheses}
+\end{table}
+
+Pre-registered counter-expectations: ties on local plausibility and
+pitch-class histograms (the matched baseline saw the same data);
+possible loss on the structure axis (A.2's known repetition tendency).
+
+\subsection{E2 --- Marginal generation (guard; retention, not superiority)}
+
+Claim: joint training did not cost the model its marginals. Opponent:
+the per-stream \emph{specialist} --- same pretrained initialization,
+same finetune recipe, same songs, single-modality data --- the
+strictest fair opponent (each devotes full capacity to one marginal).
+Success criterion: non-inferiority within a pre-registered margin
+($\delta = 0.05$ on primary JSD grammar metrics). Outside-margin
+results are reported as the \emph{quantified marginal cost} of joint
+training; a better-than-specialist result is reported as positive
+cross-stream transfer.
+
+Mechanism note (pre-registered): in marginal mode the absent stream is
+\emph{clamped} to explicit silence (never sampled), and under the
+frozen adaptive decode the refinement loop exits every step ---
+marginal-mode A.2 is therefore its AR pathway. Disclosed risk: an
+all-silent partner is out-of-distribution for the melody/chord model
+(POP909 chords are always active), while in-distribution for
+drum/non-drum. The two-task contrast is the built-in diagnostic
+separating capacity interference from distribution shift.
+
+\subsection{E3 --- Conditional generation (horizon dose--response)}
+
+The full ground-truth partner is given; the model generates the other
+stream. The systems form an ordered conditioning-horizon spectrum
+(Table~\ref{tab:e3-horizon}).
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}Lll@{}}
+\toprule
+Horizon of visible partner future & System & Streamable \\
+\midrule
+0 frames (same-frame) & A.2 conditional mode & yes \\
+$k = 16$ frames (1 bar) & B.1 & yes, $k$-frame latency \\
+unbounded (bidirectional) & C.1, C.2, Y & no \\
+\bottomrule
+\end{tabularx}
+\caption{E3 conditioning-horizon spectrum.}
+\label{tab:e3-horizon}
+\end{table}
+
+Scoring separates two notions of quality: \emph{fit to the given
+stream} (primary --- what conditioning is for; computed by the metric
+module on the pair $\langle$given ground truth, generated$\rangle$)
+and agreement with the original target (secondary only --- many
+accompaniments are valid for one partner). Hypotheses:
+\begin{description}[nosep]
+  \item[H-E3.1 (sanity gate, within-family).] Each system must beat
+    its own co-generation output scored against the ground-truth
+    partner --- same model, same decode, only the conditioning
+    differs.
+  \item[H-E3.2 (dose--response).] Monotone improvement along the
+    horizon spectrum; the headline sub-question is the fraction of the
+    $\mathrm{C.2}-\mathrm{A.2}$ gap B.1 recovers (a large fraction
+    $\Rightarrow$ bounded, streamable conditioning suffices).
+  \item[H-E3.3 (training vs.\ adapters).] Fully-trained duets vs.\
+    adapters at fixed unbounded horizon --- deliberately registered
+    without a directional prior, as both outcomes are informative.
+\end{description}
+
+\subsection{E4 --- Ablations}
+
+\paragraph{E4a --- mechanism factorization.} A.2 differs from A.1 in a
+coupled objective $+$ decode change; three contrasts separate them:
+A.2($K{\ge}1$) vs.\ A.2($K{=}0$) isolates the decode-time refinement
+(weights shared --- free); A.2($K{=}0$) vs.\ A.1 is the
+training-objective parity check (expected parity; deficit $=$
+objective tax, surplus $=$ beneficial auxiliary task); A.1 vs.\
+A.2($K{=}4$) is the combined package (expected $\approx$ additive).
+The refinement gain is predicted to be \emph{metric-selective}
+(landing on H2, the fit block) --- a uniform gain would indicate
+generic decode compute rather than the claimed mechanism. Disclosed
+confound: A.1 and A.2 are separate training runs; their step counts
+are recorded and any imbalance stated with its bias direction.
+
+\paragraph{E4b --- decode schedule (melody/chord replication).}
+$K \in \{0, 1, 4\}$ (expected: clearer monotone H2 benefit than on
+drum/non-drum, since both streams are always active; a flat curve
+would weaken the $K{=}4$ headline choice); adaptive early-exit on/off
+at $K{=}4$ (expected null on melody/chord --- confirming the mechanism
+is silence-specific); optional temperature-schedule comparison.
+
+\paragraph{E4c --- MoE ablation.} A.2 vs.\ \sys{A.2-dense}
+(compute-matched dense FFN), identical otherwise. Predicted deficit
+profile is the mirror image of E4a's: landing on H3 (grammar) and
+secondarily H1, with H2 least affected --- the coupling is carried by
+the attention structure both variants share. Combined with the
+observational expert-routing analysis, a positive result closes the
+specialization story from both ends; a null is reported as
+MoE-not-load-bearing.
+
+\subsection{E5 --- Anticipation-horizon sweep (optional, gated)}
+
+Only if E3 shows B.1 recovering a substantial fraction of the
+unbounded-horizon gap: train B.1 at $k \in \{8, 16, 32\}$ and plot the
+conditional fit against $k$, with A.1 as the $k{=}0$ point and C.2 as
+the $k{=}\infty$ asymptote --- one dose--response figure locating the
+knee of the lookahead curve.
+
+\section{Evaluation methodology}
+
+\subsection{Objective metrics (implemented: \code{eval\_metrics.py})}
+
+All metrics are \emph{reference-calibrated}: distributional metrics
+are Jensen--Shannon divergences against the ground-truth
+continuation's distributions; fit metrics are deltas against the same
+statistic computed on the reference pair; density is a ratio plus a
+drift slope. Scoring is confined to the continuation window (frames
+64--384). Reporting follows the pre-registered priority ordering
+$\mathrm{H3} > \mathrm{H2} > \mathrm{H1}$, with one primary endpoint
+per hypothesis; the remaining metrics are supporting diagnostics. The
+module was validated on synthetic fixtures in which each engineered
+failure mode (grammar chaos, stream death) trips exactly its own
+hypothesis block.
+
+\subsection{Listening test}
+
+Blind pairwise A/B comparisons on three axes --- (a) overall
+musicality, (b) inter-stream coherence, (c) 24-bar structure --- with
+$\ge 3$ raters, randomized order, and samples pre-drawn at fixed seed
+order (no curation). Win rates per axis with a sign test. The H4
+prediction is about the \emph{profile} across axes, not the overall
+win rate.
+
+\subsection{Frozen decode settings}
+
+One configuration per system, frozen before scoring: A.2 at $K{=}4$,
+final temperature 0.9, top-$p$ 0.95, adaptive early-exit on ($K{=}4$
+exercises the full trained refinement depth; the temperature schedule
+is the prior listening-test selection; the adaptive guard covers the
+known silent-frame regression and is itself ablated in E4b). All
+other systems at temperature 1.0 with their script defaults. Any
+change to these settings invalidates and reruns the affected grid.
+
+\subsection{Statistics}
+
+Paired per-song comparisons on identical prompts; three samples
+averaged per song before testing; Wilcoxon signed-rank on per-song
+means. With 10--15 evaluation songs, only large effects reach
+conventional significance --- objective metrics are treated as
+directional evidence and the listening test carries the headline
+perceptual claims.
+
+\section{Threats to validity (all pre-registered)}
+
+\begin{enumerate}[nosep]
+  \item \textbf{Y-mc domain mismatch} --- the melody/chord YinYang is
+    Nottingham-trained while evaluation is POP909; it is reported as
+    an external reference, never as a matched baseline. A
+    POP909-matched YinYang finetune is an identified optional upgrade.
+  \item \textbf{E4a training-budget imbalance} --- A.1 and A.2 are
+    separate runs; step counts are recorded and any imbalance
+    disclosed with its bias direction.
+  \item \textbf{E2 architecture non-constancy} --- there is no
+    non-degenerate ``A.2 trained marginally,'' so E2 compares the
+    joint system's marginal against the single-stream pipeline's best
+    specialist; the specialist also sees half the tokens per song (an
+    asymmetry that makes an A.2 win evidence of positive transfer,
+    not a confound).
+  \item \textbf{Multiple valid accompaniments} --- ground-truth
+    agreement is never a primary conditional endpoint; fit-to-given
+    is.
+  \item \textbf{Small evaluation set} --- 10 POP909 $+$ 5--15 RWC
+    songs bounds statistical power; mitigated by the paired design,
+    three samples per cell, and the listening test as the perceptual
+    arbiter.
+  \item \textbf{Marginal-mode decode path} --- under the frozen
+    adaptive setting, E2's A.2 outputs come from the AR pathway
+    (refinement exits on the clamped-silent partner); stated so
+    results are attributed to the right mechanism.
+\end{enumerate}
+
+\section{Execution roadmap}
+
+\paragraph{Phase 0 --- prerequisites (current phase).}
+\begin{enumerate}[nosep]
+  \item A.2 melody/chord training to best-validation checkpoint
+    (in progress).
+  \item S1 merged finetune; S-mel and S-chord specialist finetunes
+    (existing script, distinct run tags). \emph{Status note:} the
+    first S1 run (20k steps, max-LR $2{\times}10^{-5}$, validation
+    every 250 steps) overfit immediately --- POP909 train is
+    ${\sim}20$ steps/epoch at this batch, so the first validation
+    measurement landed ${\sim}12$ epochs in, past the minimum, and
+    validation loss rose monotonically $0.37 \rightarrow 0.74$ while
+    train loss fell to $0.10$. The recipe was retuned (2k-step
+    schedule, max-LR $10^{-5}$, validation every 25 steps) to capture
+    the early domain-adaptation dip; the same short recipe applies to
+    the specialists. If the rerun's validation never dips below its
+    initial value, S1 is defined as the earliest checkpoint and the
+    null in-domain gain is itself reported.
+  \item E4c: A.2-dense melody/chord training run (job knobs in place).
+  \item Evaluation prompt folders for the ten held-out POP909 ids;
+    RWC folders already exist.
+  \item Locate the Y-dn / Y-mc checkpoints. (Metric module:
+    complete.)
+\end{enumerate}
+
+\paragraph{Phase 1 --- generation sweeps.} All inference via existing
+batch scripts: the duet lanes, the S*/specialist lanes, the YinYang
+lanes, the E4a A.1 runs (existing checkpoint), and the E4b decode
+grid. A.1-melchord training and the drum/non-drum specialists are
+\emph{gated} on the corresponding first-task results.
+
+\paragraph{Phase 2 --- scoring.} Manifest construction;
+\code{eval\_metrics.py} over all outputs; per-mode comparison tables
+in the pre-registered priority order.
+
+\paragraph{Phase 3 --- listening test} on the E1/E3 shortlist; vote
+collation.
+
+\paragraph{Phase 4 --- write-up.} One results table per experiment
+block; the E4b metric-vs-$K$ figure; the E4a factorization chart; the
+E5 dose--response figure if gated in.
+
+\medskip
+\noindent Approximate additional training cost beyond runs already
+underway: three short finetunes (S1, S-mel, S-chord $\approx$ a few
+GPU-hours each) plus one full A.2-dense run ($\approx$ one
+A.2-melchord budget). All evaluation sweeps are single-GPU inference
+jobs.
+
+\section{Planned deliverables}
+
+\begin{itemize}[nosep]
+  \item \textbf{T1}: E1 co-generation table (systems $\times$ H1--H3
+    primaries $+$ listening win rates), per task.
+  \item \textbf{T2}: E2 retention table (A.2 marginal vs.\
+    specialist, margin verdict per stream).
+  \item \textbf{T3}: E3 horizon table ordered by conditioning
+    horizon, with the B.1 gap-recovery fraction highlighted.
+  \item \textbf{F1}: E4a factorization bar chart (decode effect /
+    objective effect / combined).
+  \item \textbf{F2}: E4b metric-vs-$K$ curve.
+  \item \textbf{F3}: expert routing by stream (observational
+    companion to E4c).
+  \item \textbf{T4}: E4c MoE table (A.2 vs.\ A.2-dense across
+    hypothesis blocks).
+  \item Listening-test protocol sheet and anonymized vote record.
+\end{itemize}
+
+\end{document}

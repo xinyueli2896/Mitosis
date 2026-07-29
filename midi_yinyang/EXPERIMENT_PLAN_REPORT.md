@@ -1,52 +1,44 @@
 # Evaluating Two-Stream Symbolic Music Generation: Experiment Plan Report
 
-*Companion document to `EXPERIMENTS.md` (the operational protocol). This
-report presents the design rationale, the hypothesis structure, and the
-execution roadmap in narrative form.*
+*Companion document to `EXPERIMENTS.md` (the operational protocol).*
 
 ---
 
-## 1. Executive summary
+## 1. Setup
 
-This study evaluates a family of **two-stream (duet) transformer
-architectures** for symbolic music generation against single-stream
-baselines, across three generation modes — co-generation, marginal
-(single-stream) generation, and conditional generation — on two tasks:
-**drum/non-drum** (trained on the Los Angeles MIDI corpus, evaluated on
-held-out RWC) and **melody/chord** (trained and evaluated on POP909
-with a doubly-held-out song split).
+**Tasks** — generation of symbolic music with two paired streams:
 
-The central system is **A.2** (`M2CDuetBlockDiffusion`), an interleaved
-two-stream joint autoregressive model whose appended query slots are
-trained as discrete denoisers, enabling *simultaneous mutual
-within-frame conditioning* (同步看) at decode time via iterative
-refinement. The design principle throughout the plan is that **every
-generation mode is paired with its own matched baseline**, every
-experiment carries **pre-registered hypotheses with expected effect
-profiles**, and every known confound is **disclosed in advance** rather
-than discovered in review.
+1. Melody and chord pair (POP909)
+2. Drum and non-drum pair (LA corpus; evaluated on held-out RWC)
 
-Five experiment blocks are defined: E1 (co-generation, the headline),
-E2 (marginal retention, a guard), E3 (conditional generation as a
-conditioning-horizon dose–response study), E4 (three ablations:
-mechanism, decode schedule, MoE), and E5 (an optional anticipation
-sweep). Objective scoring is implemented and validated
-(`eval_metrics.py`); a blind pairwise listening test carries the
-perceptual claims.
+**Generation modes:**
+
+1. Co-generation (co-gen)
+2. Marginal generation (marg. gen)
+3. Conditional generation (cond. gen)
+
+**Baselines:**
+
+| ID | Construction |
+|---|---|
+| **S0** | Pretrained single-stream CP transformer, trained on the LA dataset |
+| **S1** | S0 finetuned on the POP909 melody–chord dataset (merged streams) |
+| **S-mel / S-chord** | S0 finetuned on ONE stream of the POP909 melody–chord data |
+| **Y** | YinYang: frozen S0 + low-rank cross-attention adapters + LoRA; conditional generation |
+
+**Our models:**
+
+| ID | Model |
+|---|---|
+| **A.1** | DuetAttn (`M2CIntraCrossAttn`) |
+| **A.2** | DuetBlockDiffusion (`M2CDuetBlockDiffusion`) |
+| **B.1** | DuetAnticipatory (`M2CDuetAnticipatory`) |
+| **C.1** | `M2CDuetRehearsal` |
+| **C.2** | `M2CDuetPrefix` |
 
 ---
 
-## 2. Objectives and research questions
-
-The architectural thesis: two symbolic streams that follow different
-musical grammars (drums vs pitched material; melody vs chords) are
-better modeled by an architecture that **separates the streams
-structurally** — per-stream Q/K/V/O projections, dedicated cross-stream
-attention, shared mixture-of-experts FFN — than by a single-stream
-model that concatenates everything into one token sequence and
-distinguishes streams only by MIDI program tokens.
-
-Four research questions operationalize the thesis:
+## 2. Research questions
 
 - **RQ1 — Co-generation.** Does explicit two-stream joint modeling
   beat a merged-stream model at generating both parts together?
@@ -63,63 +55,7 @@ Four research questions operationalize the thesis:
 
 ---
 
-## 3. Tasks, data, and evaluation material
-
-| | drum/non-drum | melody/chord |
-|---|---|---|
-| Streams | drum / non-drum | melody / chord |
-| Training corpus | LA (~large scraped MIDI) | POP909 (~900 pop songs) |
-| Evaluation prompts | RWC — an entirely held-out corpus | 10 POP909 songs held out from **every** training split |
-| Data polyphony | 16 | 4 (duet) / 16 (merged single-stream) |
-
-A detail that matters for fairness: the duet code and the base
-single-stream code use different train/validation split conventions on
-POP909. The evaluation list (`001, 011, …, 091` — sorted index ≡ 0
-mod 10) was chosen because those songs are unseen by **both**
-conventions, making every cross-system comparison legitimate.
-
-**Shared generation protocol** (all experiments): 4-bar prompt
-(64 frames), 384 total frames (24 bars), 3 samples per (song, system,
-mode). Decode settings are frozen per system before any scoring
-(§6.3); the K-sweep lives only inside the ablation block.
-
----
-
-## 4. Systems
-
-### 4.1 Duet systems (main experiments)
-
-| ID | Model | One-line architecture |
-|---|---|---|
-| **A.2** | `M2CDuetBlockDiffusion` | Interleaved joint AR + query slots trained as denoisers over noise levels 0..4; decode runs K+1 refinement passes per frame (mutual within-frame conditioning). Headline decode: K=4, temp 0.9, top-p 0.95, adaptive silent-frame skip |
-| **B.1** | `M2CDuetAnticipatory` | Joint AR with the leader stream re-indexed k=16 frames ahead — the follower sees one bar of committed future |
-| **C.1 / C.2** | `M2CDuetRehearsal` / `M2CDuetPrefix` | Purpose-built conditional models; the conditioning stream is encoded bidirectionally (unbounded horizon) |
-
-### 4.2 Baselines
-
-| ID | Construction | Role |
-|---|---|---|
-| **S0** | Single-stream CP transformer, LA-pretrained | Corpus-matched E1 opponent (drum/non-drum); unmatched anchor elsewhere |
-| **S1** | S0 finetuned on merged, program-tagged POP909 | Corpus-matched E1 opponent (melody/chord) |
-| **S-mel / S-chord** | S0 finetuned on ONE stream's POP909 data (same recipe as S1) | E2 marginal specialists; per-stream pairing, never crossed |
-| **Y** | YinYang (arXiv:2506.15548): frozen S0 + low-rank cross-attention adapters + LoRA; conditions on the fully-encoded partner | E3 conditional baseline. Y-dn (LA-trained) is matched; Y-mc (Nottingham-trained) is an external reference with a disclosed domain caveat |
-
-### 4.3 Ablation-only systems
-
-**A.1** (`M2CIntraCrossAttn`, DuetAttn) — plain sequential joint AR,
-no query slots, no refinement; used exclusively to isolate what A.2's
-mechanism adds. **A.2-dense** — A.2 with the MoE FFN replaced by a
-compute-matched dense FFN (`moe_num_experts=1`, intermediate 6144 =
-the activated 2-of-4 × 3072 experts); used exclusively in the MoE
-ablation.
-
-A paper-ID ↔ code-name mapping is maintained because the repository's
-historical numbering differs (code "A.3" = paper A.2; the retired
-`M2CDuetBlockAttn`, historically "A.2", plays no role).
-
----
-
-## 5. Experiment blocks
+## 3. Experiment blocks
 
 ### E1 — Co-generation (headline)
 
@@ -227,9 +163,9 @@ lookahead curve.
 
 ---
 
-## 6. Evaluation methodology
+## 4. Evaluation methodology
 
-### 6.1 Objective metrics (implemented: `eval_metrics.py`)
+### 4.1 Objective metrics (implemented: `eval_metrics.py`)
 
 All metrics are **reference-calibrated**: distributional metrics are
 Jensen–Shannon divergences against the ground-truth continuation's
@@ -242,7 +178,7 @@ are supporting diagnostics. The module was validated on synthetic
 fixtures in which each engineered failure mode (grammar chaos, stream
 death) trips exactly its own hypothesis block.
 
-### 6.2 Listening test
+### 4.2 Listening test
 
 Blind pairwise A/B comparisons on three axes — (a) overall musicality,
 (b) inter-stream coherence, (c) 24-bar structure — with ≥3 raters,
@@ -250,7 +186,7 @@ randomized order, and samples pre-drawn at fixed seed order (no
 curation). Win rates per axis with a sign test. The H4 prediction is
 about the *profile* across axes, not the overall win rate.
 
-### 6.3 Frozen decode settings
+### 4.3 Frozen decode settings
 
 One configuration per system, frozen before scoring: A.2 at
 `K=4, final-temp 0.9, top-p 0.95, adaptive on` (K=4 exercises the full
@@ -260,7 +196,7 @@ silent-frame regression and is itself ablated in E4b). All other
 systems at temperature 1.0 with their script defaults. Any change to
 these settings invalidates and reruns the affected grid.
 
-### 6.4 Statistics
+### 4.4 Statistics
 
 Paired per-song comparisons on identical prompts; three samples
 averaged per song before testing; Wilcoxon signed-rank on per-song
@@ -271,7 +207,7 @@ perceptual claims.
 
 ---
 
-## 7. Threats to validity (all pre-registered)
+## 5. Threats to validity (all pre-registered)
 
 1. **Y-mc domain mismatch** — the melody/chord YinYang is
    Nottingham-trained while evaluation is POP909; it is reported as an
@@ -297,7 +233,7 @@ perceptual claims.
 
 ---
 
-## 8. Execution roadmap
+## 6. Execution roadmap
 
 **Phase 0 — prerequisites** (current phase)
 1. A.2 melody/chord training to best-validation checkpoint *(in
@@ -342,7 +278,7 @@ sweeps are single-GPU inference jobs.
 
 ---
 
-## 9. Planned deliverables
+## 7. Planned deliverables
 
 - **T1**: E1 co-generation table (systems × H1–H3 primaries +
   listening win rates), per task.
