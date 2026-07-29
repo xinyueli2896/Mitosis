@@ -211,6 +211,25 @@ Planned contrasts:
 
 Exactly one stream is generated; the partner stream is absent.
 
+**Claim under test — RETENTION, not superiority.** E2 does not argue
+that A.2 generates single streams better than anything; it argues that
+joint training did not COST the model its marginal ability — a jointly
+trained model can still generate each modality alone at
+specialist-comparable quality. The experiment is a guard against the
+capacity-interference failure mode, and its success criterion is a
+pre-registered non-inferiority margin:
+
+- **Margin δ**: A.2 retains the marginal if, on each primary H3 grammar
+  metric of the generated stream, its mean is within δ = 0.05 absolute
+  (JSD metrics) / within the between-song standard deviation (delta
+  metrics) of the matching specialist's mean. Within margin → "joint
+  training retains clean marginals." Outside margin → the deficit is
+  reported as the QUANTIFIED marginal cost of joint training — an
+  informative result, not a failure to be explained away.
+- If A.2 lands BETTER than the specialist, that is a bonus finding
+  (positive cross-stream transfer, see §2.1 note) and is reported as
+  such — but E2's design and framing do not depend on it.
+
 Two baselines with DISTINCT roles — neither can substitute for the
 other:
 
@@ -271,15 +290,17 @@ run with the same recipe as S1.
 
 **Pre-registered hypotheses:**
 
-- **H-E2.1 (containment — predicted duet advantage).** S\*, whose
-  training distribution always contains both streams, will tend to
-  SPAWN the missing partner when prompted with single-stream material
-  (chord-program notes appearing in a melody-only continuation). A.2's
-  `mel_only`/`chord_only` modes exclude this structurally. Metric:
-  partner-intrusion rate — in E2 the absent stream's `survival` /
-  `density` metrics should be exactly 0, and any nonzero value is
-  intrusion (interpretation flips relative to E1: survival of the
-  absent stream is a FAILURE here).
+- **H-E2.1 (containment — supporting observation, not a headline
+  claim).** S\*, whose training distribution always contains both
+  streams, will tend to SPAWN the missing partner when prompted with
+  single-stream material (chord-program notes appearing in a
+  melody-only continuation); A.2's `mel_only`/`chord_only` modes
+  exclude this structurally. Reported as a robustness property of the
+  duet interface — deliberately NOT framed as a victory, since the
+  guarantee is partly by construction. Metric: partner-intrusion rate
+  — in E2 the absent stream's `survival` / `density` metrics should be
+  exactly 0, and any nonzero value is intrusion (interpretation flips
+  relative to E1: survival of the absent stream is a FAILURE here).
 - **H-E2.2 (non-inferiority — the capacity-interference test).** On
   the stream actually generated, A.2's marginal grammar quality (H3
   block: onset-grid JSD, duration JSD, stepwise motion, harmonic
