@@ -67,6 +67,15 @@ NOTTINGHAM_MIDI_PATH="$NOTTINGHAM_DIR" \
 python check_paired_dataset.py \
     data/nottingham_melody_cp4_v2 data/nottingham_chord_cp4_v2
 
+# Listening audit: decode a handful of songs back to midi (melody /
+# chord / combined, chord remapped to program 48 for separation) plus
+# the per-stream notes-per-frame orientation check. Listen to these
+# against the source midis before training on the data.
+python audit_pt_melchord.py \
+    --mel-prefix data/nottingham_melody_cp4_v2 \
+    --chord-prefix data/nottingham_chord_cp4_v2 \
+    --out-dir temp/nottingham_audit --n-songs 8
+
 echo "----------------------------------------------------------------"
 ls -lh data/nottingham_*_cp4_v2* || true
 echo "================================================================"
