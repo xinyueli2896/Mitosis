@@ -80,10 +80,23 @@ CONDA_ENV=mitosis
 REPO_DIR=/home/xinyue.li/Mitosis
 
 PRETRAINED=ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt
+# MoE configuration (defaults = the standard 4-expert top-2 setup).
+# For the E4c MoE ablation: MOE_NUM_EXPERTS=1 MOE_TOPK=1 with
+# MOE_INTERMEDIATE_SIZE sized to match the activated compute of the
+# standard config, plus RUN_TAG to keep the run directory distinct.
+MOE_NUM_EXPERTS="${MOE_NUM_EXPERTS:-4}"
+MOE_TOPK="${MOE_TOPK:-2}"
+MOE_INTERMEDIATE_SIZE="${MOE_INTERMEDIATE_SIZE:-}"
+RUN_TAG="${RUN_TAG:-}"
 # Init ckpt path is K-dependent so different K values don't overwrite
-# each other (the k_emb_* tables have different shapes).
+# each other (the k_emb_* tables have different shapes); non-default MoE
+# configs get their own suffix for the same reason.
 DIFFUSION_K="${DIFFUSION_K:-4}"
-INIT_CKPT="ckpt/m2c_duet_block_diffusion_init_K${DIFFUSION_K}/m2c_duet_block_diffusion_init_K${DIFFUSION_K}.ckpt"
+MOE_SUFFIX=""
+if [[ "$MOE_NUM_EXPERTS" != "4" || "$MOE_TOPK" != "2" || -n "$MOE_INTERMEDIATE_SIZE" ]]; then
+    MOE_SUFFIX="_moe${MOE_NUM_EXPERTS}t${MOE_TOPK}${MOE_INTERMEDIATE_SIZE:+i$MOE_INTERMEDIATE_SIZE}"
+fi
+INIT_CKPT="ckpt/m2c_duet_block_diffusion_init_K${DIFFUSION_K}${MOE_SUFFIX}/m2c_duet_block_diffusion_init_K${DIFFUSION_K}${MOE_SUFFIX}.ckpt"
 
 CKPT="${CKPT:-}"
 FRESH_SCHEDULE="${FRESH_SCHEDULE:-0}"
@@ -136,7 +149,7 @@ fi
 # the user didn't pass CKPT explicitly and last.ckpt exists there from a
 # prior submission, auto-resume.
 GLOBAL_BATCH=$((BATCH_SIZE * NGPUS))
-RUN_DIR="ckpt/m2c_duet_block_diffusion_v1.1_large_gnl12_K${DIFFUSION_K}_${TASK}_batch_${GLOBAL_BATCH}_schedule"
+RUN_DIR="ckpt/m2c_duet_block_diffusion_v1.1_large_gnl12_K${DIFFUSION_K}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
     CKPT="$RUN_DIR/last.ckpt"
     echo "[auto-resume] found $CKPT  (run dir: $RUN_DIR)"
@@ -164,6 +177,7 @@ fi
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
 echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K"
+echo "MoE: experts=$MOE_NUM_EXPERTS topk=$MOE_TOPK intermediate=${MOE_INTERMEDIATE_SIZE:-<default 3072/expert>}  RUN_TAG=${RUN_TAG:-<none>}"
 echo "Task:    $TASK   (data max_polyphony: $MAX_POLYPHONY)"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS   query_loss_weight: $QUERY_LOSS_WEIGHT"
@@ -191,14 +205,19 @@ if [[ -z "$CKPT" ]]; then
             exit 1
         fi
         echo "[init] running init_pretrained_into_duet_block_diffusion.py"
+        INIT_EXTRA=()
+        if [[ -n "$MOE_INTERMEDIATE_SIZE" ]]; then
+            INIT_EXTRA+=(--moe_intermediate_size "$MOE_INTERMEDIATE_SIZE")
+        fi
         python init_pretrained_into_duet_block_diffusion.py \
             --pretrained "$PRETRAINED" \
             --output     "$INIT_CKPT" \
             --model_size large --global_num_layers 12 \
-            --moe_num_experts 4 --moe_topk 2 \
+            --moe_num_experts "$MOE_NUM_EXPERTS" --moe_topk "$MOE_TOPK" \
             --gate_init_bias "$GATE_INIT_BIAS" \
             --query_loss_weight "$QUERY_LOSS_WEIGHT" \
-            --diffusion_K "$DIFFUSION_K"
+            --diffusion_K "$DIFFUSION_K" \
+            "${INIT_EXTRA[@]}"
         echo "[init] done -> $INIT_CKPT"
     fi
     TRAIN_CKPT="$INIT_CKPT"
@@ -218,6 +237,12 @@ export MASTER_PORT=$((20000 + RANDOM % 10000))
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 EXTRA_TRAIN_ARGS=()
+if [[ -n "$MOE_INTERMEDIATE_SIZE" ]]; then
+    EXTRA_TRAIN_ARGS+=(--moe_intermediate_size "$MOE_INTERMEDIATE_SIZE")
+fi
+if [[ -n "$RUN_TAG" ]]; then
+    EXTRA_TRAIN_ARGS+=(--run_tag "$RUN_TAG")
+fi
 if [[ "$FRESH_SCHEDULE" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--fresh_schedule)
 fi
@@ -226,7 +251,7 @@ COMMON_ARGS=(
     --task "$TASK"
     --batch_size "$BATCH_SIZE"
     --model_size large
-    --moe_num_experts 4 --moe_topk 2
+    --moe_num_experts "$MOE_NUM_EXPERTS" --moe_topk "$MOE_TOPK"
     --max_lr "$MAX_LR"
     --lr_total_steps "$LR_TOTAL_STEPS"
     --gradient_clip_val 1.0

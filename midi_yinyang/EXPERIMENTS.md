@@ -21,7 +21,8 @@ Research questions:
 - **RQ4 (ablations)**: what does the simultaneous mutual within-frame
   conditioning strategy (同步看, realized by A.2's block-diffusion
   refinement) contribute — isolated at decode time, at training time,
-  and combined — plus decode-schedule ablations.
+  and combined; does the MoE FFN causally contribute to per-stream
+  grammar specialization; plus decode-schedule ablations.
 
 ---
 
@@ -79,6 +80,7 @@ the write-up; no other aliases are permitted.
 | ID | Model | Architecture | Role |
 |---|---|---|---|
 | **A.1** | `M2CIntraCrossAttn` (DuetAttn) | Interleaved two-stream joint AR; strict causal attention; NO query slots, NO refinement — each stream sees the partner only up to the previous position | Excluded from the main experiments. Used exclusively in the E4 ablation to isolate what A.2's 同步看 mechanism adds over plain sequential joint AR |
+| **A.2-dense** | A.2 with the MoE FFN replaced by a dense FFN (`moe_num_experts=1`), compute-matched to the standard config (intermediate 6144 = the activated 2-of-4 × 3072 experts) | Identical to A.2 in every other respect: same layout, attention, diffusion objective, training recipe | E4c only: isolates the causal contribution of expert routing to per-stream grammar specialization |
 
 **Paper-ID ↔ code-name mapping (important).** The repository's
 historical numbering differs from the paper IDs used here:
@@ -500,6 +502,49 @@ A3_ADAPTIVE early-exit that guards the headline K=4 configuration
 3. (Optional) **Temperature schedule**: piecewise draft/commit schedule
    vs linear annealing.
 
+#### E4c — MoE ablation: A.2 vs A.2-dense
+
+Complements E4a: E4a ablates the ATTENTION-SIDE mechanism (mutual
+within-frame conditioning), E4c ablates the CAPACITY-SIDE mechanism
+(expert routing). Together they factorize the architecture story:
+cross-stream attention carries the coupling, MoE carries the
+per-stream grammars. E4c tests whether the second half of that story
+is causal rather than decorative.
+
+**Design.** Train A.2-dense on melchord: identical to A.2 in layout,
+objective, recipe, steps, and data; only the FFN differs —
+`moe_num_experts=1` (a plain dense FFN by construction) with
+intermediate width 6144, matching the ACTIVATED compute of the
+standard 4-expert top-2 × 3072 config. Compute-matched is the primary
+comparison (same FLOPs per token); a parameter-matched variant
+(intermediate 12288) is optional if the compute-matched result is
+ambiguous. Training command (the sbatch exposes the knobs):
+
+    MOE_NUM_EXPERTS=1 MOE_TOPK=1 MOE_INTERMEDIATE_SIZE=6144 \
+    RUN_TAG=densecm TASK=melchord \
+        sbatch --export=ALL midi_yinyang/train_duet_block_diffusion.sbatch
+
+**Pre-registered expectations.** The deficit of A.2-dense should be
+metric-selective in the OPPOSITE direction from E4a's contrast 1: it
+should land on H3 (stream-appropriate grammar — harmonic rhythm,
+contour, duration distributions) and secondarily H1 (role/texture
+maintenance), with H2 (inter-stream fit) least affected, since the
+coupling is carried by the attention structure that both variants
+share. A uniform deficit → MoE capacity helps generically; no deficit
+→ MoE is not load-bearing for the duet claim (reported honestly; the
+E1 claim survives but the H3 mechanism attribution weakens and the
+routing analysis is demoted to descriptive).
+
+**Closing the loop with the routing analysis.** E1-H3's expert-usage
+side analysis is observational (experts LOOK stream-specialized). E4c
+makes it causal: if routing shows specialization AND removing routing
+hurts exactly the grammar metrics, the specialization story is closed
+from both ends.
+
+**Cost & gating.** One additional melchord training run (same budget
+as A.2-melchord, ~50k steps × 4 GPUs). Drumnondrum replication gated
+on the melchord outcome, like the other training-side ablations.
+
 ### E5 — (Optional) Anticipation-horizon sweep (B.1 only)
 
 Run only if the E3 horizon-spectrum result is positive (B.1 recovers a
@@ -625,6 +670,8 @@ Phase 1 — generation sweeps (all sbatch, mostly existing scripts)
 - E4a: A.1 drumnondrum runs (co + conditional, existing ckpt);
   A.1-melchord training deferred until the drumnondrum result is in.
 - E4b: three additional A.2 melchord runs (K sweep + adaptive toggle).
+- E4c: one A.2-dense melchord TRAINING run (sbatch command in §E4c),
+  then its co-mode inference sweep at the frozen decode settings.
 
 Phase 2 — scoring: run `eval_metrics.py` over Phase-1 outputs; produce
 the per-mode comparison tables.
