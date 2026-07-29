@@ -15,8 +15,9 @@ Research questions:
   only ever saw that kind of material?
 - **RQ3 (conditional)**: given the full partner stream, do the
   purpose-built conditional architectures (C.1/C.2) beat the symmetric
-  models run in conditional mode, and how does the conditioning
-  horizon (none / bounded / unbounded future) shape quality?
+  models run in conditional mode and the published adapter baseline
+  (Y), and how does the conditioning horizon (none / bounded /
+  unbounded future) shape quality?
 - **RQ4 (ablations)**: what does the simultaneous mutual within-frame
   conditioning strategy (同步看, realized by A.2's block-diffusion
   refinement) contribute — isolated at decode time, at training time,
@@ -60,7 +61,7 @@ the write-up; no other aliases are permitted.
 | ID | Model | Architecture | Training data | Role |
 |---|---|---|---|---|
 | **S0** | `RoFormerSymbolicTransformer` v0.42 (size 1) | Single-stream CP transformer; one merged token stream; stream identity carried only by the MIDI program token | LA (large scraped MIDI corpus) | Unmatched lower anchor: no stream separation, no in-domain data |
-| **S1** | S0 + POP909 finetune | Identical architecture; weights finetuned on merged, program-tagged POP909 melody+chord | LA → POP909 (20k steps) | Matched single-stream baseline for melchord (E1 headline opponent; E3 no-conditioning anchor) |
+| **S1** | S0 + POP909 finetune | Identical architecture; weights finetuned on merged, program-tagged POP909 melody+chord | LA → POP909 (20k steps) | Matched single-stream baseline for melchord (E1 headline opponent) |
 | **S-mel** / **S-chord** | S0 + single-modality POP909 finetune | Identical architecture; same finetune recipe as S1, but on ONE stream's data only | LA → POP909 melody-only / chord-only | Per-stream marginal specialists: the fair E2 opponents for A.2's `mel_only` / `chord_only` modes (H-E2.1); pairing is per-stream and never crossed (§E2) |
 | **S-drum** / **S-nondrum** | S0 + single-modality LA finetune | As above, on `la_drum_cp16_v2.pt` / `la_nondrum_cp16_v2.pt` | LA → LA drum-only / nondrum-only | Drumnondrum marginal specialists — GATED on the melchord E2 outcome |
 
@@ -332,8 +333,16 @@ generates the remaining stream.
 
 | Task | Systems under test | Baselines | Direction |
 |---|---|---|---|
-| drumnondrum | A.2 (conditional mode), B.1, C.1, C.2 | **Y-dn** (matched external conditional baseline); S0 (no-conditioning anchor, see protocol note) | drum → nondrum (Y-dn additionally: nondrum → drum vs A.2 `chord2mel`-equivalent) |
-| melchord | A.2 (`mel2chord`, `chord2mel`) | **Y-mc** (external reference, domain caveat §2.4); S1 (no-conditioning anchor, see protocol note) | both directions |
+| drumnondrum | A.2 (conditional mode), B.1, C.1, C.2 | **Y-dn** (matched external conditional baseline) | drum → nondrum (Y-dn additionally: nondrum → drum vs A.2 `chord2mel`-equivalent) |
+| melchord | A.2 (`mel2chord`, `chord2mel`) | **Y-mc** (external reference, domain caveat §2.4) | both directions |
+
+The no-conditioning FLOOR needed to interpret fit scores is taken from
+the E1 co-generation outputs (already produced, no extra runs): score
+a system's co-mode target stream against the ground-truth partner. No
+single-stream anchor participates in E3 — a merged-stream model has no
+faithful conditional decoding, and scoring its co-generation against a
+partner it never saw is a cross-architecture construct that adds noise
+without information.
 
 **Conditioning-horizon spectrum (drum → nondrum).** The systems form
 an ordered spectrum in how much FUTURE of the conditioning stream the
@@ -370,14 +379,6 @@ control, clearly labeled.) B.1 is likewise excluded from E2: its
 marginals are not its design question, and the follower-only mode is
 structurally handicapped by the missing leader stream.
 
-**Baseline protocol note.** A single-stream AR model cannot condition
-on the future of the partner stream; no faithful conditional decoding
-exists for S0/S1. The reported baseline is therefore: S\* co-generates
-from the same prompt, the partner stream is discarded, and only the
-generated target stream is scored. This asymmetry is disclosed in the
-write-up: the conditional systems observe strictly more information,
-and the measured gap quantifies the combined value of that information
-and of the conditioning architecture.
 
 **Scoring — fit-to-given is primary, target agreement is secondary.**
 Two notions of conditional quality must not be conflated:
@@ -398,10 +399,15 @@ Two notions of conditional quality must not be conflated:
 
 **Pre-registered hypotheses:**
 
-- **H-E3.1 (sanity gate).** Every conditional system exceeds the S\*
-  no-conditioning anchor on the primary fit metric. A system that ties
-  the anchor is not using the conditioning information; its remaining
-  E3 numbers are then reported but flagged as uninterpretable.
+- **H-E3.1 (sanity gate — within-family).** Each conditional system
+  exceeds its own NO-CONDITIONING floor on the primary fit metric: the
+  same family's E1 co-generation output scored against the
+  ground-truth partner (A.2-cond vs A.2-co; B.1-cond vs B.1-co — same
+  model, same decode, the ONLY difference is whether the partner was
+  given). For C.\*/Y, which have no co mode, the A.2-co floor serves
+  as the common reference. A system that ties its floor is not using
+  the conditioning information; its remaining E3 numbers are then
+  reported but flagged as uninterpretable.
 - **H-E3.2 (horizon dose–response — the headline).** Primary fit
   improves monotonically with conditioning horizon:
   A.2-cond (0 future) ≤ B.1 (k = 16) ≤ C.\*/Y (unbounded).
