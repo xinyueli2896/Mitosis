@@ -439,6 +439,32 @@ study factorizes the total effect into those parts:
 | A.2(K=0) vs A.1 | the training-objective effect on the plain-AR pathway (parity check: a deficit means the diffusion objective taxed the backbone) | decode procedure (both plain joint AR) |
 | A.1 vs A.2(K=4) | the combined package | task, prompts |
 
+**Pre-registered expectations per contrast:**
+
+1. **A.2(K≥1) vs A.2(K=0)** — the refinement gain should be
+   metric-SELECTIVE, mirroring E1's H4 logic: the mechanism is mutual
+   within-frame negotiation, so the gain should land on the H2 block
+   (inter-stream fit: chord-tone coverage / onset synchrony), with at
+   most secondary movement on H1 and little on H3 (refinement does not
+   teach new grammar). A uniform improvement across all blocks would
+   suggest the extra decode compute helps generically rather than via
+   the claimed mechanism.
+2. **A.2(K=0) vs A.1** — expected PARITY within the E2-style margin
+   (δ = 0.05 on JSD metrics). A deficit on A.2's side means the
+   diffusion objective taxed the AR pathway; a surplus would suggest
+   the query-slot objective acted as a beneficial auxiliary task. Both
+   deviations are findings.
+3. **A.1 vs A.2(K=4)** — the combined effect should approximately
+   decompose as (1) + (2); a large interaction term (combined ≫ sum of
+   parts) would itself be interesting and reported.
+
+**Disclosed confound for contrast 2**: A.1 and A.2 are different
+training runs; their checkpoints may differ in total training steps
+and data passes. Record both ckpts' global_step in the write-up and,
+if they differ substantially, state the direction of the resulting
+bias (the longer-trained side is favored). This cannot be fixed
+without retraining and is disclosed rather than hidden.
+
 Tasks: drumnondrum (A.1 trained). Melchord requires training
 A.1-melchord — decide after the drumnondrum ablation: if the combined
 effect is large, the melchord replication is worth the GPU-time;
@@ -446,8 +472,8 @@ otherwise report drumnondrum only and run just A.2(K≥1) vs A.2(K=0)
 (weights-shared, free) on melchord.
 
 Also reported here: **B.1 vs A.1** (strict anticipation ablation —
-A.1 is exactly B.1 with k=0), per-stream, supporting the E1 B.1
-narrative.
+A.1 is exactly B.1 with k=0), per-stream, with the E1 stream-asymmetric
+expectation (follower improves, leader flat or slightly degraded).
 
 #### E4b — Decode-schedule ablations (A.2 only)
 
@@ -460,6 +486,13 @@ A3_ADAPTIVE early-exit that guards the headline K=4 configuration
 
 1. **Refinement depth**: K ∈ {0, 1, 4} at the selected schedule,
    `co` mode, full evaluation list (doubles as the E4a first-row data).
+   Pre-registered expectation: the K benefit should be CLEARER on
+   melchord than it was on drumnondrum — both streams are active in
+   every frame, which is exactly the regime where refinement helped in
+   the drumnondrum listening tests; there is no silent-stream material
+   to dilute it. Expected profile: monotone improvement on the H2
+   block from K=0 → 4 with diminishing returns; a flat curve would
+   weaken the E1 headline's reliance on K=4.
 2. **Adaptive early-exit**: A3_ADAPTIVE ∈ {off, on} at K=4. Melchord
    material contains few silent frames, so the expected result is a
    null effect; observing one confirms the mechanism is
