@@ -52,6 +52,21 @@ TASKS = {
         mod_a_default_program=24,
         mod_b_default_program=0,
     ),
+    'melchord_nottingham': TaskConfig(
+        name='melchord_nottingham',
+        mod_a_label='mel',
+        mod_b_label='chord',
+        # Nottingham (folk): melody = instrument 0, rendered chord
+        # accompaniment = instrument 1, tokenized at max_polyphony=4 to
+        # match the POP909 melchord convention. Built by
+        # preprocess_nottingham_melchord.sbatch. Primary use: the
+        # domain-matched counterpart to the Nottingham-trained YinYang
+        # conditional baseline (EXPERIMENTS.md §2.4).
+        mod_a_path='data/nottingham_melody_cp4_v2.pt',
+        mod_b_path='data/nottingham_chord_cp4_v2.pt',
+        mod_a_default_program=24,
+        mod_b_default_program=0,
+    ),
     'drumnondrum': TaskConfig(
         name='drumnondrum',
         mod_a_label='drum',

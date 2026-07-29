@@ -332,6 +332,42 @@ def create_pop909_chord(max_polyphony=4):
     )
 
 
+def _nottingham_midi_folder():
+    # settings.py carries a Windows path; NOTTINGHAM_MIDI_PATH overrides
+    # with the cluster location of the folder that directly contains the
+    # .mid files (e.g. .../nottingham-dataset/MIDI).
+    return os.environ.get('NOTTINGHAM_MIDI_PATH',
+                          os.path.join(NOTTINGHAM_DATASET_PATH, 'MIDI'))
+
+
+def create_nottingham_melody(max_polyphony=4):
+    # Nottingham midis carry melody as instrument 0 and the rendered
+    # chord accompaniment as instrument 1 (same convention the legacy
+    # create_nottingham_parts relied on). max_polyphony=4 matches the
+    # POP909 melchord convention so the two corpora are interchangeable
+    # downstream. filter=False: curated data; also keeps the two stream
+    # runs' drop decisions identical so pairing survives.
+    create_npy_dataset_from_midi(
+        _nottingham_midi_folder(),
+        max_polyphony,
+        f'nottingham_melody_cp{max_polyphony}_v2',
+        ins_ids=['track-0'],
+        scan_subfolders=False,
+        filter=False,
+    )
+
+
+def create_nottingham_chord(max_polyphony=4):
+    create_npy_dataset_from_midi(
+        _nottingham_midi_folder(),
+        max_polyphony,
+        f'nottingham_chord_cp{max_polyphony}_v2',
+        ins_ids=['track-1'],
+        scan_subfolders=False,
+        filter=False,
+    )
+
+
 def create_pop909_melchord_combined(max_polyphony=16):
     # Merged melody+chord midis (merge_melody_chord.py) for finetuning the
     # single-stream CP transformer. max_polyphony=16 matches the pretrained
@@ -363,5 +399,9 @@ if __name__ == '__main__':
         create_pop909_chord()
     elif arg == 'pop909_melchord':
         create_pop909_melchord_combined()
+    elif arg == 'nottingham_melody':
+        create_nottingham_melody()
+    elif arg == 'nottingham_chord':
+        create_nottingham_chord()
     else:
         create_rwc_cp()

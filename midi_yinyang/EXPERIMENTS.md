@@ -128,10 +128,16 @@ finetuned on Nottingham (folk); our melchord evaluation is POP909
 (pop). The Y-mc vs A.2-melchord comparison therefore confounds
 architecture with training domain. Y-mc is reported as an external
 reference point, NOT as a matched baseline. Optional upgrade if the
-comparison matters to the write-up: finetune a POP909-matched YinYang
-(`cp_transformer_yinyang.py` on the POP909 melody/chord data) — record
-the decision either way. Y-dn has no such caveat: it is LA-trained
-like the duet drumnondrum systems and evaluated on held-out RWC.
+comparison matters to the write-up, two symmetric options now exist:
+(a) finetune a POP909-matched YinYang (`cp_transformer_yinyang.py` on
+the POP909 melody/chord data), or (b) evaluate on NOTTINGHAM instead,
+where Y-mc is the matched system — the Nottingham melody/chord
+tokenization pipeline exists (`preprocess_nottingham_melchord.sbatch`
+→ `data/nottingham_{melody,chord}_cp4_v2.pt`, POP909-compatible cp4
+format, plus a `melchord_nottingham` task entry for duet training).
+Record the decision either way. Y-dn has no such caveat: it is
+LA-trained like the duet drumnondrum systems and evaluated on held-out
+RWC.
 
 ### 2.5 Baseline preparation requirements
 
