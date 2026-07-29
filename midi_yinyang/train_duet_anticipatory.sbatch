@@ -21,7 +21,10 @@
 #
 # Knobs (all optional):
 #   --gres=gpu:N            how many GPUs to allocate (1..4).
-#   --export=ALL,TASK=...   drumnondrum (default) or melchord.
+#   --export=ALL,TASK=...   drumnondrum (default), melchord,
+#                           melchord_nottingham, or melchord_pop909_nottingham.
+#                           Data max_polyphony (cp16 vs cp4) is auto-set from
+#                           TASK; override with MAX_POLYPHONY if needed.
 #   --export=ALL,CKPT=...   explicit override for the resume ckpt. If
 #                           unset, the script auto-detects the run's
 #                           last.ckpt.
@@ -71,6 +74,16 @@ GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
 ANTICIPATION_FRAMES="${ANTICIPATION_FRAMES:-16}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_anticipatory_${SLURM_JOB_ID}}"
+# Data polyphony per stream: drumnondrum data is cp16, melchord data is
+# cp4 (POP909/Nottingham). Only affects the sample-dump callback's row
+# reshape, but it's on by default here and WILL crash on cp4 data at
+# the wrong width if left at the python default of 16.
+if [[ -z "${MAX_POLYPHONY:-}" ]]; then
+    case "$TASK" in
+        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=4 ;;
+        *)                                                       MAX_POLYPHONY=16 ;;
+    esac
+fi
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -122,7 +135,7 @@ fi
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
 echo "Variant: m2c_duet_anticipatory (B.1)  k=$ANTICIPATION_FRAMES"
-echo "Task:    $TASK"
+echo "Task:    $TASK   (data max_polyphony: $MAX_POLYPHONY)"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS"
 if [[ -n "$CKPT" ]]; then
@@ -187,6 +200,7 @@ COMMON_ARGS=(
     --aux_loss_weight 0.01
     --moe_monitor_every_n_steps 500
     --dump_samples_dir "$DUMP_SAMPLES_DIR"
+    --max_polyphony "$MAX_POLYPHONY"
     --gate_init_bias "$GATE_INIT_BIAS"
     --anticipation_frames "$ANTICIPATION_FRAMES"
     --checkpoint_path "$TRAIN_CKPT"
