@@ -17,8 +17,14 @@
 #                   UPSTREAM_DIR; auto-copied from MITOSIS_DIR/data if absent)
 #   PRETRAINED      default ckpt/cp_transformer_v0.42_..._schedule.epoch.00.fin.ckpt
 #   RESUME          prior finetune last.ckpt; auto-detected if unset
-#   MAX_LR          default 2e-5
-#   LR_TOTAL_STEPS  default 20000
+#   MAX_LR          default 1e-5
+#   LR_TOTAL_STEPS  default 2000
+#   VAL_CHECK_INTERVAL  default 25 (steps between val evals)
+#       Defaults retuned after the first 20k-step run overfit instantly:
+#       POP909 train is ~20 steps/epoch at global batch 36-48, so the
+#       val minimum sits within the first ~1-2 epochs -- a 250-step val
+#       interval never even measures it. Short schedule + low LR +
+#       dense validation captures the dip.
 #   BATCH_SIZE      per-GPU, default 12 (x4 GPUs = pretraining global 48)
 #   RUN_TAG         optional run-name suffix
 #   WANDB_PROJECT   default MusicMOE
@@ -49,8 +55,9 @@ MITOSIS_DIR="${MITOSIS_DIR:-/home/xinyue.li/Mitosis/midi_yinyang}"
 DATA="${DATA:-data/pop909_melchord_cp16_v2.pt}"
 PRETRAINED="${PRETRAINED:-ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt}"
 RESUME="${RESUME:-}"
-MAX_LR="${MAX_LR:-2e-5}"
-LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-20000}"
+MAX_LR="${MAX_LR:-1e-5}"
+LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-2000}"
+VAL_CHECK_INTERVAL="${VAL_CHECK_INTERVAL:-25}"
 BATCH_SIZE="${BATCH_SIZE:-12}"
 RUN_TAG="${RUN_TAG:-}"
 export WANDB_PROJECT="${WANDB_PROJECT:-MusicMOE}"
@@ -120,6 +127,7 @@ python finetune_pop909.py \
     --batch_size "$BATCH_SIZE" \
     --max_lr "$MAX_LR" \
     --lr_total_steps "$LR_TOTAL_STEPS" \
+    --val_check_interval "$VAL_CHECK_INTERVAL" \
     "${EXTRA_ARGS[@]}"
 
 echo "================================================================"
