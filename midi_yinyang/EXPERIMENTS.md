@@ -379,9 +379,43 @@ write-up: the conditional systems observe strictly more information,
 and the measured gap quantifies the combined value of that information
 and of the conditioning architecture.
 
-Conditional-specific scoring (in addition to §5): agreement between
-the generated stream and the ground-truth stream it replaces (the
-reference continuation is available for every evaluation song).
+**Scoring — fit-to-given is primary, target agreement is secondary.**
+Two notions of conditional quality must not be conflated:
+
+1. **Fit to the given stream** (PRIMARY): does the generated stream
+   follow the ground-truth partner it was handed? Measured with the H2
+   block on the pair (given ground-truth stream, generated stream) —
+   chord-tone coverage against the given melody / onset synchrony
+   against the given drums — calibrated against the fully-ground-truth
+   pair. This is what conditioning is FOR, and `eval_metrics.py`
+   computes it as-is.
+2. **Agreement with the ground-truth target** (SECONDARY,
+   corroborating only): similarity between the generated stream and
+   the original stream it replaces (frame-wise pc-set Jaccard). Weaker
+   by construction — many different accompaniments are musically valid
+   for the same partner, so mismatch is not failure. Never used as a
+   primary endpoint.
+
+**Pre-registered hypotheses:**
+
+- **H-E3.1 (sanity gate).** Every conditional system exceeds the S\*
+  no-conditioning anchor on the primary fit metric. A system that ties
+  the anchor is not using the conditioning information; its remaining
+  E3 numbers are then reported but flagged as uninterpretable.
+- **H-E3.2 (horizon dose–response — the headline).** Primary fit
+  improves monotonically with conditioning horizon:
+  A.2-cond (0 future) ≤ B.1 (k = 16) ≤ C.\*/Y (unbounded).
+  Sub-question: the fraction of the C.2−A.2 gap that B.1 recovers —
+  a large fraction means bounded (streamable, k-frame-latency)
+  conditioning suffices and offline bidirectional architectures buy
+  little.
+- **H-E3.3 (training vs adapters at fixed horizon — deliberately
+  open).** C.\* vs Y-dn at unbounded horizon. No directional prior is
+  registered: full conditional training may beat parameter-efficient
+  adaptation, or the frozen backbone's intact generative quality may
+  win. Both outcomes are informative; registering a fake prediction
+  here would be rigor theater. (Y-mc participates in the melchord rows
+  as an external reference only — domain caveat §2.4.)
 
 ### E4 — Ablations (RQ4)
 
