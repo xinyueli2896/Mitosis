@@ -303,7 +303,16 @@ perceptual claims.
 1. A.2 melody/chord training to best-validation checkpoint *(in
    progress)*.
 2. S1 merged finetune; S-mel and S-chord specialist finetunes
-   (existing script, distinct run tags).
+   (existing script, distinct run tags). *Status note: the first S1
+   run (20k steps, max-LR 2e-5, val every 250 steps) overfit
+   immediately — POP909 train is ~20 steps/epoch at this batch, so the
+   first val measurement landed ~12 epochs in, past the minimum, and
+   val loss rose monotonically 0.37 → 0.74 while train loss fell to
+   0.10. The recipe was retuned (2k-step schedule, max-LR 1e-5, val
+   every 25 steps) to capture the early domain-adaptation dip; the
+   same short recipe applies to the specialists. If the rerun's val
+   never dips below its initial value, S1 is defined as the earliest
+   checkpoint and the null in-domain gain is itself reported.*
 3. E4c: A.2-dense melody/chord training run (sbatch knobs in place).
 4. Evaluation prompt folders for the ten held-out POP909 ids; RWC
    folders already exist.
