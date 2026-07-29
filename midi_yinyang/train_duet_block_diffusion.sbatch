@@ -117,7 +117,7 @@ DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_block_diffusion_${
 # drumnondrum data is cp16, POP909 melchord data is cp4.
 if [[ -z "${MAX_POLYPHONY:-}" ]]; then
     case "$TASK" in
-        melchord) MAX_POLYPHONY=4 ;;
+        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=4 ;;
         *)        MAX_POLYPHONY=16 ;;
     esac
 fi

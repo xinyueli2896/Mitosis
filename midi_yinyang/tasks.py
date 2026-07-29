@@ -67,6 +67,22 @@ TASKS = {
         mod_a_default_program=24,
         mod_b_default_program=0,
     ),
+    'melchord_pop909_nottingham': TaskConfig(
+        name='melchord_pop909_nottingham',
+        mod_a_label='mel',
+        mod_b_label='chord',
+        # POP909 + Nottingham combined via combine_melchord_datasets.py
+        # (combine_pop909_nottingham.sbatch). POP909 is concatenated
+        # FIRST, unchanged internal order, so its songs keep their
+        # standalone absolute indices -- the EXPERIMENTS.md held-out ids
+        # (001,011,...,091) stay held out under FramedDataset's
+        # index-mod-10 split after combination. See that script's
+        # docstring for the full argument.
+        mod_a_path='data/melchord_pop909_nottingham_melody_cp4_v2.pt',
+        mod_b_path='data/melchord_pop909_nottingham_chord_cp4_v2.pt',
+        mod_a_default_program=24,
+        mod_b_default_program=0,
+    ),
     'drumnondrum': TaskConfig(
         name='drumnondrum',
         mod_a_label='drum',
