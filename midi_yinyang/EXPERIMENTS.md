@@ -243,6 +243,26 @@ other:
 | melchord | A.2 | S1-merged (containment); S-mel / S-chord specialists (capacity tax) | `mel_only`, `chord_only` |
 | drumnondrum | A.2 | S0-merged (containment); S-drum / S-nondrum specialists GATED — train only if the melchord E2 result is surprising | `mel_only`, `chord_only` |
 
+**Specialist pairing is per-stream and never crossed** — each A.2
+marginal mode is compared only against the specialist of the SAME
+stream:
+
+| A.2 mode | Opponent | Specialist training data |
+|---|---|---|
+| melody marginal (`mel_only`) | S-mel | `pop909_melody_cp4_v2.pt` |
+| chord marginal (`chord_only`) | S-chord | `pop909_chord_cp4_v2.pt` |
+| drum marginal | S-drum (gated) | `la_drum_cp16_v2.pt` |
+| nondrum marginal | S-nondrum (gated) | `la_nondrum_cp16_v2.pt` |
+
+Design note: separate per-stream specialists are DELIBERATELY the
+harshest opponents — each devotes its full capacity to one marginal,
+while A.2 holds both marginals plus their coupling in one set of
+weights. The asymmetry runs against A.2, which is the correct
+direction for a non-inferiority claim. (A capacity-matched alternative
+— one union model finetuned on the mixture of melody-only and
+chord-only sequences — exists as a softer fallback but is not the
+primary design.)
+
 Specialist training is cheap: the single-stream tokenized data already
 exists and each specialist is one `finetune_pop909.py --data <file>`
 run with the same recipe as S1.
