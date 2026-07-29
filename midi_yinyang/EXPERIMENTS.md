@@ -60,7 +60,9 @@ the write-up; no other aliases are permitted.
 | ID | Model | Architecture | Training data | Role |
 |---|---|---|---|---|
 | **S0** | `RoFormerSymbolicTransformer` v0.42 (size 1) | Single-stream CP transformer; one merged token stream; stream identity carried only by the MIDI program token | LA (large scraped MIDI corpus) | Unmatched lower anchor: no stream separation, no in-domain data |
-| **S1** | S0 + POP909 finetune | Identical architecture; weights finetuned on merged, program-tagged POP909 melody+chord | LA → POP909 (20k steps) | Matched single-stream baseline for melchord: in-domain data, still no architectural stream separation |
+| **S1** | S0 + POP909 finetune | Identical architecture; weights finetuned on merged, program-tagged POP909 melody+chord | LA → POP909 (20k steps) | Matched single-stream baseline for melchord (E1/E3 anchor; E2 containment) |
+| **S-mel** / **S-chord** | S0 + single-modality POP909 finetune | Identical architecture; same finetune recipe as S1, but on ONE stream's data only | LA → POP909 melody-only / chord-only | Per-stream marginal specialists: the fair E2 opponents for A.2's `mel_only` / `chord_only` modes (H-E2.2); pairing is per-stream and never crossed (§E2) |
+| **S-drum** / **S-nondrum** | S0 + single-modality LA finetune | As above, on `la_drum_cp16_v2.pt` / `la_nondrum_cp16_v2.pt` | LA → LA drum-only / nondrum-only | Drumnondrum marginal specialists — GATED on the melchord E2 outcome |
 
 ### 2.2 Two-stream (duet) systems — main experiments
 
@@ -418,7 +420,7 @@ figure locating the knee of the lookahead curve.
 
 | System | Settings |
 |---|---|
-| S0/S1 | temperature 1.0, `--prompt-length 64 --gen-length 384 --n-samples 3` |
+| S0/S1/S-specialists | temperature 1.0, `--prompt-length 64 --gen-length 384 --n-samples 3` |
 | A.2 | `A3_REFINE_STEPS=4 A3_FINAL_TEMP=0.9 A3_TOP_P=0.95 A3_ADAPTIVE=1` — used for ALL headline A.2 rows; the K-sweep is confined to E4. Rationale: K=4 exercises the full trained refinement depth (K = diffusion_K), so the headline tests the complete 同步看 mechanism rather than a compute-trimmed variant; the temperature/nucleus schedule is the drumnondrum listening-test selection; A3_ADAPTIVE guards the known silent-frame regression of deep refinement (drumnondrum listening: K=4 ≤ K=0 on silent-stream material) and is itself ablated in E4b |
 | A.1 (ablation only) | temperature 1.0 (its tuned default) |
 | B.1/C.1/C.2 | temperature 1.0, existing script defaults |
@@ -501,18 +503,27 @@ directional evidence and let the listening test carry the headline.
 Phase 0 — prerequisites
 1. A.2 melchord training to ≥50k steps; pick best-val ckpt.
 2. Single-stream POP909 finetune (`finetune_pop909.sbatch`) → S1.
-3. Build POP909 eval prompt folders for ids `001 011 ... 091`:
+3. Marginal specialists: `finetune_pop909.py --data
+   data/pop909_melody_cp4_v2.pt` → S-mel and `--data
+   data/pop909_chord_cp4_v2.pt` → S-chord (same recipe as S1; use
+   `--run_tag mel` / `--run_tag chord` so the run dirs stay distinct).
+   S-drum / S-nondrum deferred until the melchord E2 gate decides.
+4. Build POP909 eval prompt folders for ids `001 011 ... 091`:
    split melody/chord folders (already exist) + tagged combined folder
    (for S0/S1). RWC prompt folders already exist.
-4. Write `eval_metrics.py` (§5.1) + a results collator (one CSV row per
-   sample: task, mode, system, song, sample, metrics...).
+5. Locate the Y-dn / Y-mc checkpoints on the cluster.
+   (`eval_metrics.py` is done — §5.1.)
 
 Phase 1 — generation sweeps (all sbatch, mostly existing scripts)
 - E1/E2/E3 duet lanes: `infer_all_rwc.sbatch` (drumnondrum) and
   `infer_duet_block_diffusion.sbatch` with melchord ckpt +
   `MEL_FOLDER/CHORD_FOLDER/MAX_POLYPHONY=4` (melchord).
-- E1/E2 baselines: `cp_transformer_inference.py` runs per prompt folder
-  (S0 and S1 ckpts).
+- E1 baselines: `cp_transformer_inference.py` on the tagged combined
+  prompts (S0 and S1 ckpts).
+- E2 baselines: `cp_transformer_inference.py` on the single-stream
+  prompt folders — S\*-merged (containment) AND the matching
+  specialist ckpt per stream (S-mel on melody prompts, S-chord on
+  chord prompts; never crossed).
 - E3 conditional baseline: `cp_transformer_yinyang_inference.py` with
   the Y-dn ckpt on the RWC prompt pairs (both directions) and the Y-mc
   ckpt on the POP909 eval pairs (both directions, domain caveat noted).
