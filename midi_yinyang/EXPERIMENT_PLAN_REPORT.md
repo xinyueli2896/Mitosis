@@ -246,9 +246,11 @@ perceptual claims.
    val loss rose monotonically 0.37 → 0.74 while train loss fell to
    0.10. The recipe was retuned (2k-step schedule, max-LR 1e-5, val
    every 25 steps) to capture the early domain-adaptation dip; the
-   same short recipe applies to the specialists. If the rerun's val
-   never dips below its initial value, S1 is defined as the earliest
-   checkpoint and the null in-domain gain is itself reported.*
+   same short recipe applies to the specialists. **Rerun outcome
+   (batch 48): val descended 0.39 → ~0.358 over ~1k steps and
+   plateaued with no overfitting upturn — a genuine ~8% in-domain NLL
+   gain. S1 := the best-val checkpoint of the `short` run (record its
+   exact step and val loss from the ckpt filename).* 
 3. E4c: A.2-dense melody/chord training run (sbatch knobs in place).
 4. Evaluation prompt folders for the ten held-out POP909 ids; RWC
    folders already exist.
