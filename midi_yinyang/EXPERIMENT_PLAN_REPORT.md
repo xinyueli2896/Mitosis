@@ -57,6 +57,33 @@
 
 ## 3. Experiment blocks
 
+Per-experiment training requirements (checkpoints are reused across
+experiments; only the first introducing row carries a training cost;
+**bold** = new runs currently owed):
+
+| Exp. | System | Training data | Status |
+|---|---|---|---|
+| E1 | A.2 (drum/non-drum) | LA drum + non-drum pair (`la_drum_cp16_v2` / `la_nondrum_cp16_v2`) | trained (98k) |
+| E1 | A.2 (melody/chord) | POP909 melody + chord pair (`pop909_melody_cp4_v2` / `pop909_chord_cp4_v2`) | in training |
+| E1 | B.1 | LA drum + non-drum pair | trained |
+| E1 | S0 | LA merged single stream (pretraining) | trained |
+| E1 | S1 | POP909 merged, program-tagged (`pop909_melchord_cp16_v2`); finetune of S0 | trained (short recipe) |
+| E2 | A.2 | — (reuses the E1 checkpoints) | — |
+| E2 | S-mel | POP909 melody-only (`pop909_melody_cp4_v2`); finetune of S0, short recipe | **to train** |
+| E2 | S-chord | POP909 chord-only (`pop909_chord_cp4_v2`); finetune of S0, short recipe | **to train** |
+| E2 | S-drum / S-nondrum | LA drum-only / non-drum-only; finetunes of S0 | gated on melchord E2 |
+| E3 | A.2, B.1 | — (reuse the E1 checkpoints) | — |
+| E3 | C.1, C.2 | LA drum + non-drum pair | trained |
+| E3 | Y-dn | LA drum-subset, 31k songs (adapters + LoRA on frozen S0) | existing paper ckpt |
+| E3 | Y-mc | Nottingham, 1,020 songs (adapters + LoRA on frozen S0) | existing paper ckpt |
+| E3 | (optional domain match) | Nottingham melody + chord pair (`nottingham_{melody,chord}_cp4_v2`) for a Nottingham-trained duet, or POP909 pair for a POP909-matched YinYang | optional |
+| E4a | A.1 (drum/non-drum) | LA drum + non-drum pair | trained |
+| E4a | A.1 (melody/chord) | POP909 melody + chord pair | gated on drum/non-drum E4a |
+| E4b | — | decode-time only; reuses the A.2-melchord checkpoint | — |
+| E4c | A.2-dense | POP909 melody + chord pair (identical recipe to A.2-melchord) | **to train** |
+| E5 | B.1 at k ∈ {8, 32} | LA drum + non-drum pair (k=16 exists) | gated on E3 |
+
+
 ### E1 — Co-generation (headline)
 
 Both streams are generated jointly from a 4-bar prompt of both.

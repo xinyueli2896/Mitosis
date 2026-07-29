@@ -89,6 +89,50 @@ ID & Model \\
 
 \section{Experiment blocks}
 
+Table~\ref{tab:training-requirements} lists, per experiment, every
+model that must be trained (or already exists) and the dataset it is
+trained on. Checkpoints are reused across experiments wherever the
+same system appears; only the first row that introduces a checkpoint
+carries a training cost.
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}llLl@{}}
+\toprule
+Exp. & System & Training data & Status \\
+\midrule
+E1 & A.2 (drum/non-drum) & LA drum $+$ non-drum pair (\code{la\_drum\_cp16\_v2} / \code{la\_nondrum\_cp16\_v2}) & trained (98k) \\
+E1 & A.2 (melody/chord) & POP909 melody $+$ chord pair (\code{pop909\_melody\_cp4\_v2} / \code{pop909\_chord\_cp4\_v2}) & in training \\
+E1 & B.1 & LA drum $+$ non-drum pair & trained \\
+E1 & S0 & LA merged single stream (pretraining) & trained \\
+E1 & S1 & POP909 merged, program-tagged (\code{pop909\_melchord\_cp16\_v2}); finetune of S0 & trained (short recipe) \\
+\midrule
+E2 & A.2 & --- (reuses the E1 checkpoints) & --- \\
+E2 & S-mel & POP909 melody-only (\code{pop909\_melody\_cp4\_v2}); finetune of S0, short recipe & \textbf{to train} \\
+E2 & S-chord & POP909 chord-only (\code{pop909\_chord\_cp4\_v2}); finetune of S0, short recipe & \textbf{to train} \\
+E2 & S-drum / S-nondrum & LA drum-only / non-drum-only (\code{la\_drum\_cp16\_v2} / \code{la\_nondrum\_cp16\_v2}); finetunes of S0 & gated on melchord E2 \\
+\midrule
+E3 & A.2, B.1 & --- (reuse the E1 checkpoints) & --- \\
+E3 & C.1, C.2 & LA drum $+$ non-drum pair & trained \\
+E3 & Y-dn & LA drum-subset, 31k songs (adapters $+$ LoRA on frozen S0) & existing paper ckpt \\
+E3 & Y-mc & Nottingham, 1{,}020 songs (adapters $+$ LoRA on frozen S0) & existing paper ckpt \\
+E3 & (optional domain match) & Nottingham melody $+$ chord pair (\code{nottingham\_melody\_cp4\_v2} / \code{nottingham\_chord\_cp4\_v2}) for a Nottingham-trained duet, or POP909 pair for a POP909-matched YinYang & optional \\
+\midrule
+E4a & A.1 (drum/non-drum) & LA drum $+$ non-drum pair & trained \\
+E4a & A.1 (melody/chord) & POP909 melody $+$ chord pair & gated on drum/non-drum E4a \\
+E4b & --- & decode-time only; reuses the A.2-melchord checkpoint & --- \\
+E4c & A.2-dense & POP909 melody $+$ chord pair (identical recipe to A.2-melchord) & \textbf{to train} \\
+\midrule
+E5 & B.1 at $k \in \{8, 32\}$ & LA drum $+$ non-drum pair ($k{=}16$ exists) & gated on E3 \\
+\bottomrule
+\end{tabularx}
+\caption{Training requirements by experiment. Bold = new training
+runs currently owed; ``gated'' = trained only if the triggering result
+warrants it.}
+\label{tab:training-requirements}
+\end{table}
+
 \subsection{E1 --- Co-generation (headline)}
 
 Both streams are generated jointly from a 4-bar prompt of both.
