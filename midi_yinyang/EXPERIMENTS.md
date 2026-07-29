@@ -211,6 +211,20 @@ Planned contrasts:
 
 Exactly one stream is generated; the partner stream is absent.
 
+**Mechanism note (pre-registered, not a post-hoc discovery).** In
+A.2's `mel_only`/`chord_only` modes the absent stream is CLAMPED, not
+filtered: its frame is resolved to explicit silence before the model
+runs, held as a committed given (k=0) across all refinement rounds,
+and never sampled — so unwanted-modality content cannot exist, and the
+committed context contains explicit `[stream_t, silence_t]` pairs.
+Consequence of the frozen decode config: with `A3_ADAPTIVE=1`, the
+silent partner probe triggers the early-exit at EVERY step, so
+marginal-mode A.2 effectively decodes at K≈0 (AR-draft commit, no
+refinement). This is the adaptive mechanism working as designed —
+refinement is mutual negotiation and a clamped-silent partner leaves
+nothing to negotiate — but it must be stated in the write-up: E2's
+A.2 outputs come from the AR pathway, not the refinement machinery.
+
 **Claim under test — RETENTION, not superiority.** E2 does not argue
 that A.2 generates single streams better than anything; it argues that
 joint training did not COST the model its marginal ability — a jointly
