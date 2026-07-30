@@ -15,6 +15,12 @@
 # Env knobs (override via --export=ALL,KEY=val):
 #   TASK          melchord (default) | drumnondrum
 #   CKPT_A2       A.2 run dir or ckpt file        (required)
+#
+#   CHECKPOINT SELECTION: every system resolves to the SMALLEST
+#   val_loss ckpt when given a run DIRECTORY (or a last.ckpt that
+#   has val_loss-tagged siblings). Pass an explicit non-last
+#   filename to pin a specific epoch instead. All systems share
+#   this rule, so the comparison is best-val vs best-val.
 #   CKPT_B1       B.1 run dir or ckpt file        (optional)
 #   CKPT_S1       S1 ckpt file                    (melchord; optional)
 #   CKPT_S0       S0 pretrained ckpt              (optional)

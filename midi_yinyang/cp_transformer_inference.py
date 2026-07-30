@@ -3,6 +3,7 @@ import numpy as np
 from cp_transformer import RoFormerSymbolicTransformer, CPTokenizer
 from preprocess_large_midi_dataset import preprocess_midi, DURATION_TEMPLATES
 from settings import RWC_DATASET_PATH
+from ckpt_utils import resolve_best_ckpt
 import torch
 import pretty_midi
 import os
@@ -221,7 +222,10 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser(
         description='Single-stream continuation on a folder of prompt midis '
                     '(merged stream, program token = stream identity).')
-    p.add_argument('--ckpt', default='ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt')
+    p.add_argument('--ckpt', default='ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt',
+                   help='ckpt file OR run directory; a directory (or a '
+                        'last.ckpt with val_loss-tagged siblings) '
+                        'auto-selects the smallest-val_loss ckpt')
     p.add_argument('--midi-folder', required=True,
                    help='folder of prompt midis (searched recursively)')
     p.add_argument('--prompt-length', type=int, default=64,
@@ -240,7 +244,13 @@ if __name__ == '__main__':
                         'separate tracks in the outputs, then restored)')
     args = p.parse_args()
 
-    model = RoFormerSymbolicTransformer.load_from_checkpoint(args.ckpt)
+    # Resolve to the BEST-val ckpt when given a run directory (or a
+    # last.ckpt that has val_loss-tagged siblings), matching how the
+    # duet inference scripts pick checkpoints -- otherwise an eval
+    # would compare best-val duet models against a LAST baseline.
+    ckpt_path = resolve_best_ckpt(args.ckpt)
+    print(f'[main] ckpt = {ckpt_path}')
+    model = RoFormerSymbolicTransformer.load_from_checkpoint(ckpt_path)
     model.save_name = args.save_name or os.path.basename(args.ckpt)
     model.cuda()
     model.eval()
