@@ -115,6 +115,19 @@ echo "================================================================"
 nvidia-smi | head -n 12 || true
 
 # ---------------------------------------------------------------------
+# 0. checkpoint integrity pre-flight
+#    A truncated/corrupt ckpt otherwise surfaces as an opaque
+#    "PytorchStreamReader ... failed finding central directory" stack
+#    trace partway through the run. Report it up front instead; the
+#    resolver skips unreadable files, so a warning here is survivable
+#    but tells you the picked ckpt may not be the best-val one.
+# ---------------------------------------------------------------------
+for _c in "$CKPT_A2" "$CKPT_B1" "$CKPT_S1" "$CKPT_S0"; do
+    [[ -n "$_c" && -e "$_c" ]] && python check_ckpts.py "$_c" || true
+done
+echo "================================================================"
+
+# ---------------------------------------------------------------------
 # 1. eval-subset prompt folders
 #    Inference iterates whole folders, so restricting to the held-out
 #    songs here is what keeps this from decoding all ~900 POP909 songs.

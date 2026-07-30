@@ -75,10 +75,11 @@ def resolve_best_ckpt(path):
     # Skip unreadable candidates (truncated / mid-write / zero-byte) and
     # fall through to the next-best, so a single bad file cannot kill an
     # evaluation that has other perfectly good checkpoints.
+    deep = os.environ.get('CKPT_DEEP_CHECK', '1') != '0'
     skipped = []
     for val_loss, fname in candidates:
         path_i = os.path.join(directory, fname)
-        problem = _ckpt_problem(path_i)
+        problem = _ckpt_problem(path_i, deep=deep)
         if problem is None:
             if skipped:
                 print(f'[ckpt] WARNING: skipped {len(skipped)} unreadable '
@@ -91,7 +92,7 @@ def resolve_best_ckpt(path):
         skipped.append((fname, problem))
 
     last_path = os.path.join(directory, 'last.ckpt')
-    if os.path.exists(last_path) and _ckpt_problem(last_path) is None:
+    if os.path.exists(last_path) and _ckpt_problem(last_path, deep=deep) is None:
         print(f'[ckpt] WARNING: all {len(candidates)} val_loss-tagged ckpt(s) '
               f'in {directory} are unreadable (' +
               '; '.join(f'{n}: {why}' for n, why in skipped) +
@@ -108,7 +109,7 @@ def resolve_best_ckpt(path):
     )
 
 
-def _ckpt_problem(path):
+def _ckpt_problem(path, deep=False):
     """Return None if `path` looks like a loadable torch checkpoint, else a
     short human-readable reason. Cheap: no tensor deserialization.
 
@@ -135,4 +136,17 @@ def _ckpt_problem(path):
     if not zipfile.is_zipfile(path):
         return (f'truncated zip ({size} bytes; no central directory) -- '
                 f'still being written, or the write was cut short')
+    if deep:
+        # The structural check can still pass files that PyTorch's own
+        # reader rejects (e.g. trailing junk after the central directory,
+        # or a corrupt member). Only a real load is authoritative.
+        try:
+            import torch
+            torch.load(path, map_location='meta', weights_only=False)
+        except Exception:
+            try:
+                import torch
+                torch.load(path, map_location='cpu', weights_only=False)
+            except Exception as e:
+                return f'{type(e).__name__}: {str(e)[:70]}'
     return None
