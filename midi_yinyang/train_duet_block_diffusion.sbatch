@@ -29,6 +29,15 @@
 #
 # Knobs (all optional):
 #   --gres=gpu:N            how many GPUs to allocate (1..4).
+#                           DEFAULT IS NOW 2. The run directory name
+#                           encodes the GLOBAL batch (BATCH_SIZE x NGPUS),
+#                           so changing the GPU count changes the run dir
+#                           and auto-resume will NOT find a run trained at
+#                           a different GPU count. To keep the previous
+#                           4-GPU global batch of 16 on 2 GPUs, pass
+#                           BATCH_SIZE=8 (memory permitting); otherwise the
+#                           2-GPU default gives global batch 8 and a new
+#                           run dir, i.e. a fresh cold-start run.
 #   --export=ALL,TASK=...   drumnondrum (default) or melchord.
 #   --export=ALL,CKPT=...   explicit override for the resume ckpt. If
 #                           unset, the script auto-detects the run's
@@ -66,9 +75,9 @@
 #SBATCH --error=/home/xinyue.li/logs/%x_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64
-#SBATCH --mem=240G
-#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=120G
+#SBATCH --gres=gpu:2
 #SBATCH -p cscc-gpu-p
 #SBATCH -q cscc-gpu-qos
 #SBATCH --time=12:00:00
@@ -153,6 +162,19 @@ RUN_DIR="ckpt/m2c_duet_block_diffusion_v1.1_large_gnl12_K${DIFFUSION_K}_${TASK}$
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
     CKPT="$RUN_DIR/last.ckpt"
     echo "[auto-resume] found $CKPT  (run dir: $RUN_DIR)"
+elif [[ -z "$CKPT" ]]; then
+    # No run at THIS global batch. Warn if runs exist for the same
+    # task at a different GPU count -- the run dir encodes global
+    # batch, so changing --gres silently starts a fresh run instead
+    # of continuing the old one.
+    _sibling=$(ls -d "${RUN_DIR%_batch_*}"_batch_*_schedule 2>/dev/null | grep -v "^${RUN_DIR}$" || true)
+    if [[ -n "$_sibling" ]]; then
+        echo "[warn] no last.ckpt in $RUN_DIR (global batch $GLOBAL_BATCH = $BATCH_SIZE x $NGPUS GPUs)."
+        echo "[warn] but these runs exist for the same task at other global batches:"
+        echo "$_sibling" | sed "s/^/[warn]   /"
+        echo "[warn] This run will COLD-START. To continue one of the above instead,"
+        echo "[warn] match its GPU count/BATCH_SIZE, or pass CKPT=<that dir>/last.ckpt."
+    fi
 fi
 
 # --- resolve LR_TOTAL_STEPS ------------------------------------------
