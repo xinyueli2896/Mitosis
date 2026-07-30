@@ -25,7 +25,12 @@
 #       val minimum sits within the first ~1-2 epochs -- a 250-step val
 #       interval never even measures it. Short schedule + low LR +
 #       dense validation captures the dip.
-#   BATCH_SIZE      per-GPU, default 12 (x4 GPUs = pretraining global 48)
+#   BATCH_SIZE      per-GPU, default 12. NOW 2 GPUs by default, so the
+#                   global batch is 24 (was 48 on 4 GPUs). The run dir
+#                   encodes the global batch, so a 2-GPU run lands in a
+#                   DIFFERENT dir than a prior 4-GPU one (no auto-resume
+#                   across that change). Pass BATCH_SIZE=24 to keep the
+#                   old global batch of 48 on 2 GPUs, memory permitting.
 #   RUN_TAG         optional run-name suffix
 #   WANDB_PROJECT   default MusicMOE
 #
@@ -38,9 +43,9 @@
 #SBATCH --error=/home/xinyue.li/logs/%x_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=160G
-#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=80G
+#SBATCH --gres=gpu:2
 #SBATCH -p cscc-gpu-p
 #SBATCH -q cscc-gpu-qos
 #SBATCH --time=12:00:00
@@ -89,7 +94,7 @@ if [[ ! -f "$DATA" && -f "$MITOSIS_DIR/$DATA" ]]; then
 fi
 
 # auto-resume if this exact run already has a last.ckpt
-NGPUS="${SLURM_GPUS_ON_NODE:-4}"
+NGPUS="${SLURM_GPUS_ON_NODE:-2}"
 TAG_SUFFIX=""; [[ -n "$RUN_TAG" ]] && TAG_SUFFIX="_${RUN_TAG}"
 RUN_DIR="ckpt/cp_transformer_v0.42_size1_pop909ft${TAG_SUFFIX}_batch_$((BATCH_SIZE * NGPUS))_schedule"
 if [[ -z "$RESUME" && -f "$RUN_DIR/last.ckpt" ]]; then

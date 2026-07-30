@@ -6,20 +6,16 @@
 #
 # Systems evaluated:
 #   A.2  duet block diffusion, co mode, frozen decode schedule
+#   B.1  duet anticipatory, co mode (--mode co honours the k-frame
+#        anticipatory re-indexing; the leader stream starts generating k
+#        steps before the follower, which is the mechanism under test)
 #   S1   single-stream in-domain finetune  (melchord: the MATCHED baseline)
 #   S0   single-stream pretrained          (unmatched lower anchor)
-#
-# NOT included: B.1. Its inference script
-# (cp_transformer_m2c_duet_anticipatory_inference.py) implements ONLY
-# conditional leader->follower decoding; there is no co-generation decode
-# loop for the anticipatory re-indexing, and running a B.1 ckpt through
-# the generic A.1 combined script would decode it WITHOUT the k-frame
-# shift it was trained with (train/inference mismatch -> invalid row).
-# Add B.1 to E1 only once a proper co-gen decoder exists.
 #
 # Env knobs (override via --export=ALL,KEY=val):
 #   TASK          melchord (default) | drumnondrum
 #   CKPT_A2       A.2 run dir or ckpt file        (required)
+#   CKPT_B1       B.1 run dir or ckpt file        (optional)
 #   CKPT_S1       S1 ckpt file                    (melchord; optional)
 #   CKPT_S0       S0 pretrained ckpt              (optional)
 #   MEL_FOLDER    full melody/drum midis  (prompts AND scoring references)
@@ -59,6 +55,7 @@ REPO_DIR=/home/xinyue.li/Mitosis
 
 TASK="${TASK:-melchord}"
 CKPT_A2="${CKPT_A2:-}"
+CKPT_B1="${CKPT_B1:-}"
 CKPT_S1="${CKPT_S1:-}"
 CKPT_S0="${CKPT_S0:-ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt}"
 N_SAMPLES="${N_SAMPLES:-3}"
@@ -94,6 +91,7 @@ echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "E1 CO-GENERATION EVALUATION   task=$TASK"
 echo "CKPT_A2 = ${CKPT_A2:-<unset: A.2 will be SKIPPED>}"
+echo "CKPT_B1 = ${CKPT_B1:-<unset: B.1 will be SKIPPED>}"
 echo "CKPT_S1 = ${CKPT_S1:-<unset: S1 will be SKIPPED>}"
 echo "CKPT_S0 = ${CKPT_S0:-<unset: S0 will be SKIPPED>}"
 echo "MEL_FOLDER=$MEL_FOLDER  CHORD_FOLDER=$CHORD_FOLDER"
@@ -152,6 +150,7 @@ echo "[prompts] merged+tagged -> $EVAL_MERGED"
 # 2. inference
 # ---------------------------------------------------------------------
 A2_OUT="$OUT_ROOT/A.2"
+B1_OUT="$OUT_ROOT/B.1"
 S1_OUT_NAME="e1_${TASK}_S1_${SLURM_JOB_ID:-local}"
 S0_OUT_NAME="e1_${TASK}_S0_${SLURM_JOB_ID:-local}"
 S1_OUT="temp/$S1_OUT_NAME"
@@ -180,6 +179,23 @@ else
         echo "[A.2] SKIPPED (CKPT_A2 unset)"
     fi
 
+    if [[ -n "$CKPT_B1" ]]; then
+        echo "--- B.1 co-generation (anticipatory, --mode co) ---"
+        # --mode co prompts BOTH streams then generates both, honouring
+        # the k-frame lead (auto-detected from the ckpt path's _k<N>_).
+        python cp_transformer_m2c_duet_anticipatory_inference.py \
+            --ckpt "$CKPT_B1" \
+            --mode co \
+            --drum-folder "$EVAL_MEL" --nondrum-folder "$EVAL_CHORD" \
+            --output-dir "$B1_OUT" \
+            --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
+            --temperature 1.0 \
+            --max-polyphony "$MAX_POLYPHONY_DUET" \
+            --model-size large --moe-num-experts 4 --moe-topk 2
+    else
+        echo "[B.1] SKIPPED (CKPT_B1 unset)"
+    fi
+
     for spec in "S1:$CKPT_S1:$S1_OUT_NAME" "S0:$CKPT_S0:$S0_OUT_NAME"; do
         sys="${spec%%:*}"; rest="${spec#*:}"
         ckpt="${rest%%:*}"; name="${rest##*:}"
@@ -204,6 +220,7 @@ TABLE="results/e1_${TASK}_table.md"
 
 SRC_ARGS=()
 [[ -d "$A2_OUT" ]] && SRC_ARGS+=(--source "A.2:duet:$A2_OUT")
+[[ -d "$B1_OUT" ]] && SRC_ARGS+=(--source "B.1:duet:$B1_OUT")
 [[ -d "$S1_OUT" ]] && SRC_ARGS+=(--source "S1:single:$S1_OUT")
 [[ -d "$S0_OUT" ]] && SRC_ARGS+=(--source "S0:single:$S0_OUT")
 if [[ ${#SRC_ARGS[@]} -eq 0 ]]; then
@@ -233,9 +250,9 @@ python aggregate_eval_results.py --csv "$METRICS" \
 
 echo "================================================================"
 echo "E1 evaluation complete."
-echo "  generated midis : $OUT_ROOT (A.2), $S1_OUT, $S0_OUT"
+echo "  generated midis : $OUT_ROOT (A.2, B.1), $S1_OUT, $S0_OUT"
 echo "  manifest        : $MANIFEST"
 echo "  per-sample CSV  : $METRICS"
 echo "  comparison table: $TABLE"
-echo "Reminder: B.1's co-generation row is NOT included (no co-gen"
-echo "decoder for the anticipatory re-indexing yet)."
+echo "Note: B.1 rows should be read PER-STREAM (its design predicts the"
+echo "follower improves while the leader stays flat) -- see EXPERIMENTS.md E1."

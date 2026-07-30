@@ -155,6 +155,80 @@ def drum_to_nondrum(model, drum_tokens, nondrum_prompt_tokens, gen_length,
     return mel_frames, chord_frames
 
 
+def co_generate(model, drum_prompt_tokens, nondrum_prompt_tokens,
+                gen_length, temperature):
+    """CO-GENERATION with the anticipatory relabeling: BOTH streams are
+    generated past the prompt (nothing is given as ground truth).
+
+    The layout the model was trained on puts drum_{s+k} at mod-a slot s
+    and nondrum_s at mod-b slot s, so one decode step s emits a drum
+    frame k ahead of the nondrum frame. Consequences, all handled here:
+
+      * mod-a slot s is teacher-forced while s+k < P (still inside the
+        prompt) and SAMPLED afterwards -- so the drum stream starts
+        being generated at step P-k, k steps before the nondrum stream
+        does. That asymmetry is the mechanism under test, not a bug.
+      * the loop must run gen_length steps to emit nondrum_{L-1}; along
+        the way it emits drum frames up to L-1+k, which are truncated.
+      * drum frames 0..k-1 never appear in the model's sequence at all
+        (their slot index would be negative), so they are taken from
+        the prompt. This requires k <= P.
+
+    Returns (drum_frames, nondrum_frames), each a list of gen_length
+    [B, subseq] tensors on the REAL timeline: frames 0..P-1 are the
+    prompt, P..L-1 are generated. Directly comparable to A.2's co-mode
+    output.
+    """
+    device = drum_prompt_tokens.device
+    B, P_drum, S = drum_prompt_tokens.shape
+    k = model.anticipation_frames
+    P_nd = (nondrum_prompt_tokens.shape[1]
+            if nondrum_prompt_tokens is not None else 0)
+    P = min(P_drum, P_nd) if P_nd else P_drum
+    if k > P:
+        raise ValueError(
+            f'anticipation k={k} exceeds prompt length P={P}: drum frames '
+            f'{P}..{k - 1} would be neither prompted nor generated (their '
+            f'mod-a slot index is negative). Use a prompt of at least k '
+            f'frames.'
+        )
+
+    def mel_action(s):
+        # mod-a slot s holds drum_{s+k}.
+        d = s + k
+        if d < P:
+            return ('given', drum_prompt_tokens[:, d])
+        return 'sample'
+
+    def chord_action(s):
+        if s < P and nondrum_prompt_tokens is not None:
+            return ('given', nondrum_prompt_tokens[:, s])
+        return 'sample'
+
+    shifted_drum, nondrum_frames = general_inference(
+        model, gen_length, B, S,
+        temperature=temperature,
+        mel_action_fn=mel_action,
+        chord_action_fn=chord_action,
+    )
+
+    # Un-shift the drum stream back onto the real timeline:
+    # shifted_drum[s] is drum_{s+k}; drum_0..drum_{k-1} come from the prompt.
+    drum_frames = [None] * gen_length
+    for i in range(min(k, gen_length)):
+        drum_frames[i] = drum_prompt_tokens[:, i]
+    for s in range(gen_length):
+        d = s + k
+        if d < gen_length:
+            drum_frames[d] = shifted_drum[s]
+    # Safety net: any slot still unset (only possible if gen_length < k)
+    # falls back to the prompt frame at that index.
+    for i in range(gen_length):
+        if drum_frames[i] is None:
+            drum_frames[i] = drum_prompt_tokens[:, min(i, P_drum - 1)]
+    return drum_frames, nondrum_frames
+
+
 def _list_midis(folder):
     out = []
     for root, _, files in os.walk(folder):
@@ -177,8 +251,11 @@ def run_folder(model, args):
     if args.max_songs is not None:
         drum_files = drum_files[:args.max_songs]
 
-    print(f'[infer] {len(drum_files)} drum prompts  '
+    print(f'[infer] {len(drum_files)} drum prompts  mode={args.mode}  '
           f'(anticipation k={model.anticipation_frames})')
+    if args.mode == 'co' and not args.nondrum_folder:
+        raise SystemExit('--mode co requires --nondrum-folder '
+                         '(both streams must be prompted)')
     os.makedirs(args.output_dir, exist_ok=True)
 
     for i, drum_path in enumerate(drum_files):
@@ -204,14 +281,33 @@ def run_folder(model, args):
                         :, :drum_tokens.shape[1],
                     ]
 
-            mel_frames, chord_frames = drum_to_nondrum(
-                model, drum_tokens, nondrum_prompt_tokens,
-                gen_length=args.gen_length, temperature=args.temperature,
-            )
+            if args.mode == 'co':
+                # Co-generation: prompt BOTH streams, generate both.
+                drum_prompt = drum_tokens
+                if args.prompt_length > 0:
+                    drum_prompt = drum_tokens[:, :args.prompt_length]
+                if nondrum_prompt_tokens is None:
+                    raise ValueError(
+                        'co mode needs a nondrum prompt: pass '
+                        '--nondrum-folder with a file matching this song')
+                mel_frames, chord_frames = co_generate(
+                    model, drum_prompt, nondrum_prompt_tokens,
+                    gen_length=args.gen_length,
+                    temperature=args.temperature,
+                )
+            else:
+                mel_frames, chord_frames = drum_to_nondrum(
+                    model, drum_tokens, nondrum_prompt_tokens,
+                    gen_length=args.gen_length, temperature=args.temperature,
+                )
 
             out_dir = os.path.join(args.output_dir, sid)
             os.makedirs(out_dir, exist_ok=True)
-            out_path = os.path.join(out_dir, f'drum2nondrum_temp{args.temperature}.mid')
+            # 'co' writes <song>/co.mid so the output matches the 'duet'
+            # layout the eval manifest builder scans.
+            out_name = ('co.mid' if args.mode == 'co'
+                        else f'drum2nondrum_temp{args.temperature}.mid')
+            out_path = os.path.join(out_dir, out_name)
             output_tempo = _get_input_tempo(drum_path, default=120.0)
             print(f'[tempo] source={drum_path} -> tempo={output_tempo:.2f} BPM')
             decode_m2c_frames(
@@ -234,9 +330,18 @@ def main():
                     'with k-frame drum lookahead.',
     )
     p.add_argument('--ckpt', required=True)
+    p.add_argument('--mode', default='drum2nondrum',
+                   choices=['drum2nondrum', 'co'],
+                   help='drum2nondrum (default): the FULL drum stream is '
+                        'given as ground truth and only nondrum is '
+                        'generated (conditional, E3). co: both streams are '
+                        'prompted for --prompt-length frames and both are '
+                        'generated afterwards (co-generation, E1); requires '
+                        '--nondrum-folder and writes <song>/co.mid.')
     p.add_argument('--drum-folder', required=True)
     p.add_argument('--nondrum-folder',
-                   help='Optional nondrum prompt folder (paired by basename).')
+                   help='Optional nondrum prompt folder (paired by basename). '
+                        'REQUIRED for --mode co.')
     p.add_argument('--output-dir', required=True)
     p.add_argument('--gen-length', type=int, default=384)
     p.add_argument('--prompt-length', type=int, default=64)
