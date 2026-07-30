@@ -115,6 +115,11 @@ echo "[train] --checkpoint_path = $TRAIN_CKPT"
 echo "================================================================"
 
 # --- step 2: training -------------------------------------------------
+# Pre-flight: fail fast with a clear message if the allocated GPUs
+# are visible but unusable (bad node) -- otherwise the job dies deep
+# inside Lightning device setup with a cryptic INTERNAL ASSERT.
+python check_gpu_health.py --expect "$NGPUS" || exit 1
+
 export MASTER_PORT=$((20000 + RANDOM % 10000))
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
