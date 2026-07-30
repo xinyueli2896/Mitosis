@@ -1,5 +1,7 @@
 \documentclass[11pt]{article}
 
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
 \usepackage[margin=1.1in]{geometry}
 \usepackage{booktabs}
 \usepackage{array}
@@ -29,7 +31,12 @@ operational protocol).}
 \paragraph{Tasks.} Generation of symbolic music with two paired
 streams:
 \begin{enumerate}[nosep]
-  \item melody and chord pair (POP909);
+  \item melody and chord pair. TRAINING corpus: POP909
+    ($\sim$900 songs) $+$ Nottingham ($\sim$1{,}000 two-track tunes)
+    combined, which roughly doubles the melody/chord training data;
+    EVALUATION stays POP909-only (\S1, held-out ids), so metrics remain
+    interpretable in the target domain and Nottingham contributes
+    training signal only;
   \item drum and non-drum pair (LA corpus; evaluated on held-out RWC).
 \end{enumerate}
 
@@ -47,8 +54,8 @@ streams:
 ID & Construction \\
 \midrule
 \sys{S0} & pretrained single-stream CP transformer, trained on the LA dataset \\
-\sys{S1} & S0 finetuned on the POP909 melody--chord dataset (merged streams) \\
-\sys{S-mel}\,/\,\sys{S-chord} & S0 finetuned on \emph{one} stream of the POP909 melody--chord data \\
+\sys{S1} & S0 finetuned on the COMBINED POP909$+$Nottingham melody--chord data (merged streams), i.e.\ the same corpus the duet systems train on \\
+\sys{S-mel}\,/\,\sys{S-chord} & S0 finetuned on \emph{one} stream of the combined melody--chord data \\
 \sys{Y} & YinYang: frozen S0 $+$ low-rank cross-attention adapters $+$ LoRA; conditional generation \\
 \bottomrule
 \end{tabularx}
@@ -102,27 +109,28 @@ carries a training cost.
 \toprule
 Exp. & System & Training data & Status \\
 \midrule
-E1 & A.2 (drum/non-drum) & LA drum $+$ non-drum pair (\code{la\_drum\_cp16\_v2} / \code{la\_nondrum\_cp16\_v2}) & trained (98k) \\
-E1 & A.2 (melody/chord) & POP909 melody $+$ chord pair (\code{pop909\_melody\_cp4\_v2} / \code{pop909\_chord\_cp4\_v2}) & in training \\
-E1 & B.1 & LA drum $+$ non-drum pair & trained \\
+E1 & A.2 (drum/non-drum) & LA drum $+$ non-drum pair (cp16) & trained (98k) \\
+E1 & A.2 (melody/chord) & COMBINED melody $+$ chord pair (POP909 $+$ Nottingham, cp4) & trained \\
+E1 & B.1 (drum/non-drum) & LA drum $+$ non-drum pair & trained \\
+E1 & B.1 (melody/chord) & COMBINED melody $+$ chord pair, $k{=}16$ & trained \\
 E1 & S0 & LA merged single stream (pretraining) & trained \\
-E1 & S1 & POP909 merged, program-tagged (\code{pop909\_melchord\_cp16\_v2}); finetune of S0 & trained (short recipe) \\
+E1 & S1 & COMBINED merged, program-tagged (cp16); finetune of S0 & trained (short recipe) \\
 \midrule
 E2 & A.2 & --- (reuses the E1 checkpoints) & --- \\
-E2 & S-mel & POP909 melody-only (\code{pop909\_melody\_cp4\_v2}); finetune of S0, short recipe & \textbf{to train} \\
-E2 & S-chord & POP909 chord-only (\code{pop909\_chord\_cp4\_v2}); finetune of S0, short recipe & \textbf{to train} \\
-E2 & S-drum / S-nondrum & LA drum-only / non-drum-only (\code{la\_drum\_cp16\_v2} / \code{la\_nondrum\_cp16\_v2}); finetunes of S0 & gated on melchord E2 \\
+E2 & S-mel & COMBINED melody-only stream; finetune of S0, short recipe & \textbf{to train} \\
+E2 & S-chord & COMBINED chord-only stream; finetune of S0, short recipe & \textbf{to train} \\
+E2 & S-drum / S-nondrum & LA drum-only / non-drum-only; finetunes of S0 & gated on melchord E2 \\
 \midrule
 E3 & A.2, B.1 & --- (reuse the E1 checkpoints) & --- \\
 E3 & C.1, C.2 & LA drum $+$ non-drum pair & trained \\
 E3 & Y-dn & LA drum-subset, 31k songs (adapters $+$ LoRA on frozen S0) & existing paper ckpt \\
 E3 & Y-mc & Nottingham, 1{,}020 songs (adapters $+$ LoRA on frozen S0) & existing paper ckpt \\
-E3 & (optional domain match) & Nottingham melody $+$ chord pair (\code{nottingham\_melody\_cp4\_v2} / \code{nottingham\_chord\_cp4\_v2}) for a Nottingham-trained duet, or POP909 pair for a POP909-matched YinYang & optional \\
+E3 & (optional domain match) & a POP909-matched YinYang finetune, or a Nottingham-only evaluation slice; Nottingham is now part of the duet TRAINING mix, so Y-mc is no longer the only system seeing folk data & optional \\
 \midrule
 E4a & A.1 (drum/non-drum) & LA drum $+$ non-drum pair & trained \\
-E4a & A.1 (melody/chord) & POP909 melody $+$ chord pair & gated on drum/non-drum E4a \\
+E4a & A.1 (melody/chord) & COMBINED melody $+$ chord pair & gated on drum/non-drum E4a \\
 E4b & --- & decode-time only; reuses the A.2-melchord checkpoint & --- \\
-E4c & A.2-dense & POP909 melody $+$ chord pair (identical recipe to A.2-melchord) & \textbf{to train} \\
+E4c & A.2-dense & COMBINED melody $+$ chord pair (identical recipe to A.2-melchord) & \textbf{to train} \\
 \midrule
 E5 & B.1 at $k \in \{8, 32\}$ & LA drum $+$ non-drum pair ($k{=}16$ exists) & gated on E3 \\
 \bottomrule
@@ -137,7 +145,8 @@ warrants it.}
 
 Both streams are generated jointly from a 4-bar prompt of both.
 Corpus-matched pairing: A.2-drumnondrum vs.\ \sys{S0} (both
-LA-trained); A.2-melchord vs.\ \sys{S1} (both POP909-trained) --- so
+LA-trained); A.2-melchord vs.\ \sys{S1} (both trained on the combined
+POP909$+$Nottingham corpus) --- so
 the measured gap is attributable to architecture alone. B.1
 participates per-stream as the competing duet strategy.
 
@@ -148,7 +157,7 @@ carries to a specific observable
 \begin{table}[ht]
 \centering
 \small
-\begin{tabularx}{\textwidth}{@{}lp{1.8cm}Lp{3.2cm}@{}}
+\begin{tabularx}{\textwidth}{@{}lp{1.7cm}Lp{3.9cm}@{}}
 \toprule
 \# & Judges & Prediction & Primary metric \\
 \midrule
@@ -193,9 +202,14 @@ Mechanism note (pre-registered): in marginal mode the absent stream is
 frozen adaptive decode the refinement loop exits every step ---
 marginal-mode A.2 is therefore its AR pathway. Disclosed risk: an
 all-silent partner is out-of-distribution for the melody/chord model
-(POP909 chords are always active), while in-distribution for
-drum/non-drum. The two-task contrast is the built-in diagnostic
-separating capacity interference from distribution shift.
+(chords are essentially always active in BOTH corpora of the combined
+mix --- Nottingham tunes carry a rendered chord track throughout, and
+the $\sim$13 melody-only tunes were excluded during preprocessing
+precisely so the streams stayed paired --- so adding Nottingham does
+NOT relieve this risk), while it is in-distribution for drum/non-drum,
+where drum-less songs occur naturally. The two-task contrast is
+therefore still the built-in diagnostic separating capacity
+interference from distribution shift.
 
 \subsection{E3 --- Conditional generation (horizon dose--response)}
 
@@ -324,10 +338,28 @@ perceptual claims.
 \section{Threats to validity (all pre-registered)}
 
 \begin{enumerate}[nosep]
-  \item \textbf{Y-mc domain mismatch} --- the melody/chord YinYang is
-    Nottingham-trained while evaluation is POP909; it is reported as
-    an external reference, never as a matched baseline. A
-    POP909-matched YinYang finetune is an identified optional upgrade.
+  \item \textbf{Genre mixing in the melody/chord training corpus} ---
+    POP909 (pop piano) and Nottingham (folk tunes) differ in harmonic
+    rhythm, voicing conventions and phrase structure, so the combined
+    corpus does not represent one homogeneous ``melody/chord grammar.''
+    This is accepted deliberately: it roughly doubles a corpus small
+    enough that the first S1 finetune attempt overfit before its first
+    validation measurement, and EVALUATION remains POP909-only so the
+    reported numbers stay in the target domain. The cost is that H3
+    (stream-appropriate grammar) is tested against a model whose
+    training grammar is a genre mixture; a system could in principle
+    lose H3 points for importing folk conventions into pop
+    continuations. All melody/chord systems --- duet and baseline
+    alike --- share the same mixture, so the COMPARISON stays matched
+    even though the absolute H3 values are harder to interpret.
+  \item \textbf{Y-mc domain position} --- the melody/chord YinYang is
+    Nottingham-trained. It is reported as an external reference, never
+    as a matched baseline. Note this threat CHANGED with the combined
+    corpus: Nottingham is now part of every melody/chord system's
+    training mix, so Y-mc is no longer the only system exposed to folk
+    data --- but it is still the only one that never saw POP909, which
+    is the evaluation domain. A POP909-matched YinYang finetune remains
+    the identified optional upgrade.
   \item \textbf{E4a training-budget imbalance} --- A.1 and A.2 are
     separate runs; step counts are recorded and any imbalance
     disclosed with its bias direction.
@@ -352,28 +384,41 @@ perceptual claims.
 
 \section{Execution roadmap}
 
-\paragraph{Phase 0 --- prerequisites (current phase).}
+\paragraph{Phase 0 --- prerequisites.} Data preparation for the
+combined melody/chord corpus is complete: Nottingham was tokenized into
+paired cp4 streams (melody = track 0, chords = track 1; ${\sim}13$
+melody-only tunes excluded from BOTH streams so the pairing gate
+passes), a program-tagged single-stream variant was built for the S*
+baselines, and each was concatenated after POP909 --- POP909 FIRST and
+unreordered, which preserves its songs' absolute indices and therefore
+keeps the held-out evaluation ids held out under the index-mod-10 split.
 \begin{enumerate}[nosep]
-  \item A.2 melody/chord training to best-validation checkpoint
-    (in progress).
-  \item S1 merged finetune; S-mel and S-chord specialist finetunes
-    (existing script, distinct run tags). \emph{Status note:} the
-    first S1 run (20k steps, max-LR $2{\times}10^{-5}$, validation
-    every 250 steps) overfit immediately --- POP909 train is
-    ${\sim}20$ steps/epoch at this batch, so the first validation
-    measurement landed ${\sim}12$ epochs in, past the minimum, and
-    validation loss rose monotonically $0.37 \rightarrow 0.74$ while
-    train loss fell to $0.10$. The recipe was retuned (2k-step
-    schedule, max-LR $10^{-5}$, validation every 25 steps) to capture
-    the early domain-adaptation dip; the same short recipe applies to
-    the specialists. If the rerun's validation never dips below its
-    initial value, S1 is defined as the earliest checkpoint and the
-    null in-domain gain is itself reported.
-  \item E4c: A.2-dense melody/chord training run (job knobs in place).
-  \item Evaluation prompt folders for the ten held-out POP909 ids;
-    RWC folders already exist.
-  \item Locate the Y-dn / Y-mc checkpoints. (Metric module:
-    complete.)
+  \item A.2 melody/chord on the combined corpus --- \textbf{trained}.
+  \item B.1 melody/chord on the combined corpus, $k{=}16$ ---
+    \textbf{trained}.
+  \item S1 on the combined merged/tagged corpus --- \textbf{trained}.
+    \emph{Status note:} the first S1 attempt (20k steps, max-LR
+    $2{\times}10^{-5}$, validation every 250 steps) overfit before its
+    FIRST validation measurement --- ${\sim}20$ steps/epoch at this
+    batch put that measurement ${\sim}12$ epochs in, past the minimum,
+    and validation loss rose monotonically $0.37 \rightarrow 0.74$
+    while train loss fell to $0.10$. The retuned recipe (2k-step
+    schedule, max-LR $10^{-5}$, validation every 25 steps) captured the
+    real dip on POP909-only: $0.39 \rightarrow {\sim}0.358$ over
+    ${\sim}1$k steps, then a clean plateau. The same short recipe is
+    used for the combined corpus and the specialists; because the
+    combined corpus is roughly twice the size, its validation minimum
+    is expected LATER in step count, so a still-descending curve at 2k
+    steps calls for a fresh 4k-step run rather than a resume (the
+    OneCycle LR has annealed to ${\sim}0$ by then).
+  \item S-mel / S-chord specialists on the combined single-modality
+    streams --- \textbf{to train}.
+  \item E4c: A.2-dense on the combined corpus --- \textbf{to train}.
+  \item Evaluation prompt folders for the ten held-out POP909 ids ---
+    built automatically by \code{eval\_e1.sbatch}; RWC folders already
+    exist.
+  \item Locate the Y-dn / Y-mc checkpoints. (Metric and scoring
+    modules: complete and dry-run verified.)
 \end{enumerate}
 
 \paragraph{Phase 1 --- generation sweeps.} All inference via existing

@@ -8,7 +8,7 @@
 
 **Tasks** — generation of symbolic music with two paired streams:
 
-1. Melody and chord pair (POP909)
+1. Melody and chord pair. **Training**: POP909 (~900 songs) + Nottingham (~1,000 two-track tunes) combined, roughly doubling the melody/chord training data. **Evaluation**: POP909-only held-aside test split (`input/pop909_split/{melody,chord}`), so metrics stay in the target domain.
 2. Drum and non-drum pair (LA corpus; evaluated on held-out RWC)
 
 **Generation modes:**
@@ -22,8 +22,8 @@
 | ID | Construction |
 |---|---|
 | **S0** | Pretrained single-stream CP transformer, trained on the LA dataset |
-| **S1** | S0 finetuned on the POP909 melody–chord dataset (merged streams) |
-| **S-mel / S-chord** | S0 finetuned on ONE stream of the POP909 melody–chord data |
+| **S1** | S0 finetuned on the COMBINED POP909+Nottingham melody–chord data (merged streams) — the same corpus the duet systems train on |
+| **S-mel / S-chord** | S0 finetuned on ONE stream of the combined melody–chord data |
 | **Y** | YinYang: frozen S0 + low-rank cross-attention adapters + LoRA; conditional generation |
 
 **Our models:**
@@ -64,23 +64,24 @@ experiments; only the first introducing row carries a training cost;
 | Exp. | System | Training data | Status |
 |---|---|---|---|
 | E1 | A.2 (drum/non-drum) | LA drum + non-drum pair (`la_drum_cp16_v2` / `la_nondrum_cp16_v2`) | trained (98k) |
-| E1 | A.2 (melody/chord) | POP909 melody + chord pair (`pop909_melody_cp4_v2` / `pop909_chord_cp4_v2`) | in training |
-| E1 | B.1 | LA drum + non-drum pair | trained |
+| E1 | A.2 (melody/chord) | COMBINED melody + chord pair (POP909 + Nottingham, cp4) | trained |
+| E1 | B.1 (drum/non-drum) | LA drum + non-drum pair | trained |
+| E1 | B.1 (melody/chord) | COMBINED melody + chord pair, k=16 | trained |
 | E1 | S0 | LA merged single stream (pretraining) | trained |
-| E1 | S1 | POP909 merged, program-tagged (`pop909_melchord_cp16_v2`); finetune of S0 | trained (short recipe) |
+| E1 | S1 | COMBINED merged, program-tagged (cp16); finetune of S0 | trained (short recipe) |
 | E2 | A.2 | — (reuses the E1 checkpoints) | — |
-| E2 | S-mel | POP909 melody-only (`pop909_melody_cp4_v2`); finetune of S0, short recipe | **to train** |
-| E2 | S-chord | POP909 chord-only (`pop909_chord_cp4_v2`); finetune of S0, short recipe | **to train** |
+| E2 | S-mel | COMBINED melody-only stream; finetune of S0, short recipe | **to train** |
+| E2 | S-chord | COMBINED chord-only stream; finetune of S0, short recipe | **to train** |
 | E2 | S-drum / S-nondrum | LA drum-only / non-drum-only; finetunes of S0 | gated on melchord E2 |
 | E3 | A.2, B.1 | — (reuse the E1 checkpoints) | — |
 | E3 | C.1, C.2 | LA drum + non-drum pair | trained |
 | E3 | Y-dn | LA drum-subset, 31k songs (adapters + LoRA on frozen S0) | existing paper ckpt |
 | E3 | Y-mc | Nottingham, 1,020 songs (adapters + LoRA on frozen S0) | existing paper ckpt |
-| E3 | (optional domain match) | Nottingham melody + chord pair (`nottingham_{melody,chord}_cp4_v2`) for a Nottingham-trained duet, or POP909 pair for a POP909-matched YinYang | optional |
+| E3 | (optional domain match) | a POP909-matched YinYang finetune, or a Nottingham-only eval slice; Nottingham is now in the duet training mix, so Y-mc is no longer the only system seeing folk data | optional |
 | E4a | A.1 (drum/non-drum) | LA drum + non-drum pair | trained |
-| E4a | A.1 (melody/chord) | POP909 melody + chord pair | gated on drum/non-drum E4a |
+| E4a | A.1 (melody/chord) | COMBINED melody + chord pair | gated on drum/non-drum E4a |
 | E4b | — | decode-time only; reuses the A.2-melchord checkpoint | — |
-| E4c | A.2-dense | POP909 melody + chord pair (identical recipe to A.2-melchord) | **to train** |
+| E4c | A.2-dense | COMBINED melody + chord pair (identical recipe to A.2-melchord) | **to train** |
 | E5 | B.1 at k ∈ {8, 32} | LA drum + non-drum pair (k=16 exists) | gated on E3 |
 
 
@@ -88,7 +89,7 @@ experiments; only the first introducing row carries a training cost;
 
 Both streams are generated jointly from a 4-bar prompt of both.
 Corpus-matched pairing: A.2-drumnondrum vs **S0** (both LA-trained);
-A.2-melchord vs **S1** (both POP909-trained) — so the measured gap is
+A.2-melchord vs **S1** (both trained on the combined POP909+Nottingham corpus) — so the measured gap is
 attributable to architecture alone. B.1 participates per-stream as the
 competing duet strategy.
 
@@ -121,10 +122,14 @@ Mechanism note (pre-registered): in marginal mode the absent stream is
 **clamped** to explicit silence (never sampled), and under the frozen
 adaptive decode the refinement loop exits every step — marginal-mode
 A.2 is therefore its AR pathway. Disclosed risk: an all-silent partner
-is out-of-distribution for the melody/chord model (POP909 chords are
-always active), while in-distribution for drum/non-drum. The
-two-task contrast is the built-in diagnostic separating capacity
-interference from distribution shift.
+is out-of-distribution for the melody/chord model — chords are
+essentially always active in BOTH corpora of the combined mix
+(Nottingham tunes carry a rendered chord track throughout, and the ~13
+melody-only tunes were excluded in preprocessing so the streams stayed
+paired), so adding Nottingham does NOT relieve this risk — while it is
+in-distribution for drum/non-drum, where drum-less songs occur
+naturally. The two-task contrast remains the built-in diagnostic
+separating capacity interference from distribution shift.
 
 ### E3 — Conditional generation (horizon dose–response)
 

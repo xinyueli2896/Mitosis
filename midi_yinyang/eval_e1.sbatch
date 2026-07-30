@@ -1,6 +1,6 @@
 #!/bin/bash
 # SLURM: END-TO-END E1 (co-generation) evaluation.
-#   1. builds eval-subset prompt folders (held-out songs only)
+#   1. collects the held-aside TEST SPLIT into prompt folders
 #   2. runs co-generation inference for every system, saving outputs
 #   3. runs the quantitative analysis (manifest -> metrics -> table)
 #
@@ -26,9 +26,12 @@
 #   CKPT_S0       S0 pretrained ckpt              (optional)
 #   MEL_FOLDER    full melody/drum midis  (prompts AND scoring references)
 #   CHORD_FOLDER  full chord/nondrum midis
-#   SONGS         space-separated eval song ids
-#                 default (melchord): 001 011 ... 091   (held out from
-#                 BOTH the duet and single-stream splits)
+#                 melchord defaults: input/pop909_split/{melody,chord}
+#                 -- the held-aside POP909 test split.
+#   SONGS         space-separated song ids to restrict to. DEFAULT EMPTY
+#                 = evaluate every song present in the folders, i.e. the
+#                 test split itself defines the evaluation set. Set this
+#                 only to score a subset.
 #   OUT_ROOT      default temp/e1_<TASK>_<JOBID>
 #   BASELINE      system id the table is tested against
 #                 (default: S1 for melchord, S0 for drumnondrum)
@@ -71,9 +74,13 @@ SKIP_INFER="${SKIP_INFER:-0}"
 
 case "$TASK" in
     melchord)
-        MEL_FOLDER="${MEL_FOLDER:-POP909-Dataset/POP909-melody}"
-        CHORD_FOLDER="${CHORD_FOLDER:-POP909-Dataset/POP909-chord}"
-        SONGS="${SONGS:-001 011 021 031 041 051 061 071 081 091}"
+        # The held-aside POP909 TEST SPLIT. These folders define the
+        # evaluation set: every song in them is evaluated, so no id list
+        # is hardcoded here (a stale list would silently evaluate the
+        # wrong songs, or fail on songs the split does not contain).
+        MEL_FOLDER="${MEL_FOLDER:-input/pop909_split/melody}"
+        CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"
+        SONGS="${SONGS:-}"          # empty = every song in the folders
         MAX_POLYPHONY_DUET=4
         BASELINE="${BASELINE:-S1}"
         ;;
@@ -134,8 +141,21 @@ else
     cp -f "$MEL_FOLDER"/*.mid "$EVAL_MEL"/ 2>/dev/null || true
     cp -f "$CHORD_FOLDER"/*.mid "$EVAL_CHORD"/ 2>/dev/null || true
 fi
-N_EVAL=$(ls "$EVAL_MEL" | wc -l)
+N_EVAL=$(ls "$EVAL_MEL" 2>/dev/null | wc -l)
+N_EVAL_CHORD=$(ls "$EVAL_CHORD" 2>/dev/null | wc -l)
+if [[ "$N_EVAL" -eq 0 ]]; then
+    echo "ERROR: no midis collected from MEL_FOLDER=$MEL_FOLDER"
+    echo "       (does the test split exist? expected .mid files there)"
+    exit 1
+fi
+if [[ "$N_EVAL" -ne "$N_EVAL_CHORD" ]]; then
+    echo "ERROR: melody/chord test split sizes differ ($N_EVAL vs"
+    echo "       $N_EVAL_CHORD). The two folders must hold the SAME songs"
+    echo "       -- scoring pairs them by filename."
+    exit 1
+fi
 echo "[prompts] $N_EVAL eval songs -> $EVAL_MEL , $EVAL_CHORD"
+echo "[prompts] songs: $(ls "$EVAL_MEL" | sed 's/\.mid$//' | tr '\n' ' ')"
 
 # merged, program-tagged prompts for the single-stream systems: the
 # tokenizer separates streams by PROGRAM only, so the chord stream must
