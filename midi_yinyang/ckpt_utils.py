@@ -12,6 +12,7 @@ finetune does).
 
 import os
 import re
+import zipfile
 
 
 def resolve_best_ckpt(path):
@@ -71,8 +72,67 @@ def resolve_best_ckpt(path):
         )
 
     candidates.sort()
-    best_val_loss, best_fname = candidates[0]
-    best_path = os.path.join(directory, best_fname)
-    print(f'[ckpt] auto-selected {best_fname} (val_loss={best_val_loss:.5f}) '
-          f'from {len(candidates)} val_loss-tagged ckpt(s) in {directory}')
-    return best_path
+    # Skip unreadable candidates (truncated / mid-write / zero-byte) and
+    # fall through to the next-best, so a single bad file cannot kill an
+    # evaluation that has other perfectly good checkpoints.
+    skipped = []
+    for val_loss, fname in candidates:
+        path_i = os.path.join(directory, fname)
+        problem = _ckpt_problem(path_i)
+        if problem is None:
+            if skipped:
+                print(f'[ckpt] WARNING: skipped {len(skipped)} unreadable '
+                      f'ckpt(s) before this one: ' +
+                      '; '.join(f'{n} ({why})' for n, why in skipped))
+            print(f'[ckpt] auto-selected {fname} (val_loss={val_loss:.5f}) '
+                  f'from {len(candidates)} val_loss-tagged ckpt(s) in '
+                  f'{directory}')
+            return path_i
+        skipped.append((fname, problem))
+
+    last_path = os.path.join(directory, 'last.ckpt')
+    if os.path.exists(last_path) and _ckpt_problem(last_path) is None:
+        print(f'[ckpt] WARNING: all {len(candidates)} val_loss-tagged ckpt(s) '
+              f'in {directory} are unreadable (' +
+              '; '.join(f'{n}: {why}' for n, why in skipped) +
+              '); falling back to last.ckpt')
+        return last_path
+
+    raise FileNotFoundError(
+        f'[resolve_best_ckpt] every candidate in {directory!r} is unreadable: '
+        + '; '.join(f'{n} ({why})' for n, why in skipped)
+        + '. Typical causes: the training job is still WRITING the file '
+          '(wait for it to finish, or pass an older ckpt explicitly), the '
+          'write was truncated by a full disk/quota, or the file was '
+          'copied while being written.'
+    )
+
+
+def _ckpt_problem(path):
+    """Return None if `path` looks like a loadable torch checkpoint, else a
+    short human-readable reason. Cheap: no tensor deserialization.
+
+    Modern torch checkpoints are zip archives; the classic corruption
+    symptom (`PytorchStreamReader failed reading zip archive: failed
+    finding central directory`) is exactly a zip whose end-of-central-
+    directory record is missing, which zipfile.is_zipfile also detects.
+    Legacy non-zip (pure-pickle) checkpoints do not start with 'PK' and
+    are passed through untouched.
+    """
+    try:
+        size = os.path.getsize(path)
+    except OSError as e:
+        return f'stat failed: {e}'
+    if size == 0:
+        return 'zero bytes'
+    try:
+        with open(path, 'rb') as f:
+            magic = f.read(2)
+    except OSError as e:
+        return f'unreadable: {e}'
+    if magic != b'PK':
+        return None          # legacy pickle-format ckpt; leave it alone
+    if not zipfile.is_zipfile(path):
+        return (f'truncated zip ({size} bytes; no central directory) -- '
+                f'still being written, or the write was cut short')
+    return None
