@@ -165,7 +165,7 @@ def _decode_and_save(frames, save_path, tempo, restore_map):
 
 def continuation(model, midi_path, prompt_length=100, generation_length=384,
                  temperature=1.0, n_samples=1, tempo=120.0,
-                 split_named_tracks=True):
+                 split_named_tracks=True, max_polyphony=16):
     name = os.path.basename(midi_path)
     restore_map = {}
     tokenize_path = midi_path
@@ -174,7 +174,11 @@ def continuation(model, midi_path, prompt_length=100, generation_length=384,
             midi_path, f'temp/{model.save_name}/_tagged')
     # filter=False: the LA-quantization heuristic is for noisy scraped data;
     # it can reject curated inputs (RWC, POP909) by returning None.
-    out = preprocess_midi(tokenize_path, 16, filter=False)
+    # max_polyphony MUST match the ckpt's training data: a model
+    # finetuned on cp4 single-stream data sees 8-token subsequences,
+    # so tokenizing prompts at cp16 (32 tokens) would be a
+    # train/inference mismatch.
+    out = preprocess_midi(tokenize_path, max_polyphony, filter=False)
     if out is None:
         print(f'  [skip] preprocess_midi failed for {midi_path}')
         return
@@ -234,6 +238,11 @@ if __name__ == '__main__':
                    help='TOTAL frames incl. prompt (matches the m2c scripts)')
     p.add_argument('--temperature', type=float, default=1.0)
     p.add_argument('--n-samples', type=int, default=2)
+    p.add_argument('--max-polyphony', type=int, default=16,
+                   help='polyphony slots used to tokenize prompts. MUST match '
+                        'the training data of --ckpt: 16 for the LA-pretrained '
+                        'and merged-stream finetunes, 4 for single-modality '
+                        'specialists trained on cp4 streams.')
     p.add_argument('--max-songs', type=int, default=None)
     p.add_argument('--save-name', default=None,
                    help='output subdir under temp/; default: ckpt basename')
@@ -270,6 +279,7 @@ if __name__ == '__main__':
                          temperature=args.temperature,
                          n_samples=args.n_samples,
                          tempo=get_input_tempo(f),
-                         split_named_tracks=not args.no_split_tracks)
+                         split_named_tracks=not args.no_split_tracks,
+                         max_polyphony=args.max_polyphony)
         except Exception as e:
             print(f'  failed: {e!r}')
