@@ -41,8 +41,39 @@ def _try_float(v):
         return None
 
 
-def wilcoxon_signed_rank(diffs):
-    """Two-sided Wilcoxon signed-rank test. Returns (W, p, n_used).
+def metric_target(metric):
+    """Value a metric is trying to hit, or None if its direction is not
+    unambiguous from eval_metrics' own legend ('deltas/JSD: closer to 0 is
+    better; ratios: closer to 1 is better').
+
+    Only metrics with a known target can be tested one-sided: the
+    directional hypothesis is 'this system lands CLOSER to the target than
+    the baseline', which is a test on |value - target|, not on the raw
+    value. That distinction matters -- for a delta metric a raw one-sided
+    'less' test would score -0.065 as an improvement over -0.013 when it
+    is actually further from 0, i.e. worse.
+
+    Anything not listed stays two-sided. Guessing a direction and being
+    wrong silently inverts the conclusion, so absence of metadata is
+    treated as absence of a hypothesis.
+    """
+    if 'jsd' in metric or metric.endswith('_delta'):
+        return 0.0
+    if 'ratio' in metric:
+        return 1.0
+    if metric.startswith('survival'):
+        # fraction of active bars; the reference continuation is ~1.0
+        return 1.0
+    return None
+
+
+def wilcoxon_signed_rank(diffs, alternative='two-sided'):
+    """Wilcoxon signed-rank test. Returns (W, p, n_used).
+
+    alternative:
+      'two-sided' -- differences are non-zero (default)
+      'less'      -- differences are negative (system scores BELOW baseline)
+      'greater'   -- differences are positive (system scores ABOVE baseline)
 
     Exact enumeration for n<=12 (our regime: ~10 songs), normal
     approximation with continuity correction above that. scipy is not
@@ -78,14 +109,26 @@ def wilcoxon_signed_rank(diffs):
         for signs in product((0, 1), repeat=n):
             s = sum(r for r, sign in zip(ranks, signs) if sign)
             total += 1
-            if min(s, sum(ranks) - s) <= W:
-                hits += 1
+            if alternative == 'two-sided':
+                if min(s, sum(ranks) - s) <= W:
+                    hits += 1
+            else:
+                # One-sided: only arrangements at least as extreme in the
+                # PREDICTED direction count. Halves the attainable p, which
+                # is what makes n=5 usable at all (floor 1/2^5 = 0.031 vs
+                # the two-sided 2/2^5 = 0.0625, the latter above 0.05 at
+                # ANY effect size).
+                if (s <= w_plus if alternative == 'less' else
+                        sum(ranks) - s <= w_minus):
+                    hits += 1
         p = hits / total
     else:
         mean_w = n * (n + 1) / 4.0
         var_w = n * (n + 1) * (2 * n + 1) / 24.0
         z = (abs(W - mean_w) - 0.5) / math.sqrt(var_w)
         p = 2.0 * 0.5 * math.erfc(z / math.sqrt(2.0))
+        if alternative != 'two-sided':
+            p *= 0.5
         p = min(1.0, p)
     return W, p, n
 
@@ -118,6 +161,18 @@ def main():
     p.add_argument('--mode', default=None,
                    help='restrict to one mode (default: all modes present)')
     p.add_argument('--out-md', default=None, help='also write a markdown table')
+    p.add_argument('--one-sided', action='store_true',
+                   help='test the PRE-REGISTERED direction (system lands '
+                        'closer to the metric target than the baseline) '
+                        'instead of mere difference. Only valid because '
+                        'H1-H3 fix the direction in advance in '
+                        'EXPERIMENTS.md -- picking the direction after '
+                        'seeing the data would just be a two-sided test '
+                        'with the alpha doubled. Halves attainable p, '
+                        'which is the difference between reachable and '
+                        'unreachable significance at n=5 (0.031 vs 0.062). '
+                        'Metrics with no unambiguous target stay two-sided; '
+                        'one-sided cells are marked p>.')
     p.add_argument('--complete-cases', action='store_true',
                    help='score every system on the SAME songs (per metric): '
                         'intersect the songs each system defines the metric '
@@ -205,12 +260,26 @@ def main():
                     if (base_songs is not None and s != args.baseline):
                         common = sorted(songs & base_songs)
                         if len(common) >= 2:
-                            diffs = [per_song[(s, mode, song)][metric]
-                                     - per_song[(args.baseline, mode, song)][metric]
-                                     for song in common]
-                            _, pval, n_used = wilcoxon_signed_rank(diffs)
+                            target = metric_target(metric) if args.one_sided else None
+                            if target is None:
+                                diffs = [per_song[(s, mode, song)][metric]
+                                         - per_song[(args.baseline, mode, song)][metric]
+                                         for song in common]
+                                alt = 'two-sided'
+                            else:
+                                # distance to target: smaller = better, so the
+                                # pre-registered prediction 'this system beats
+                                # the baseline' is diffs < 0.
+                                diffs = [
+                                    abs(per_song[(s, mode, song)][metric] - target)
+                                    - abs(per_song[(args.baseline, mode, song)][metric]
+                                          - target)
+                                    for song in common]
+                                alt = 'less'
+                            _, pval, n_used = wilcoxon_signed_rank(diffs, alt)
                             if not math.isnan(pval):
-                                cell += f' p={pval:.3f}(n={n_used})'
+                                tag = '' if alt == 'two-sided' else '>'
+                                cell += f' p{tag}={pval:.3f}(n={n_used})'
                     line += cell.ljust(30)
                     md_cells.append(cell)
                 print(line)
