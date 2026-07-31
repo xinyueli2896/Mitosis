@@ -35,7 +35,13 @@
 #   OUT_ROOT      default temp/e1_<TASK>_<JOBID>
 #   BASELINE      system id the table is tested against
 #                 (default: S1 for melchord, S0 for drumnondrum)
-#   N_SAMPLES     single-stream samples per song (default 3)
+#   N_SAMPLES     samples per song for EVERY system (default 3). Scores
+#                 are averaged over samples per song before the paired
+#                 test, so raising this shrinks each song's standard
+#                 error (~1/sqrt(n)) without changing the song count.
+#                 That is the only lever on a fixed, small test set:
+#                 it will not raise n, but it makes a real effect far
+#                 more likely to hold the same sign on every song.
 #   SKIP_INFER=1  reuse existing outputs under OUT_ROOT, score only
 #
 # Example:
@@ -247,7 +253,7 @@ else
             --output-dir "$A2_OUT" \
             --modes co \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
-            --temperature 1.0 \
+            --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$MAX_POLYPHONY_DUET" \
             --model-size large --moe-num-experts 4 --moe-topk 2
     else
@@ -293,9 +299,15 @@ MANIFEST="results/e1_${TASK}_manifest.tsv"
 METRICS="results/e1_${TASK}_metrics.csv"
 TABLE="results/e1_${TASK}_table.md"
 
+# The duet scripts write the 'duet' layout (<song>/<mode>.mid) for a
+# single sample and 'duet_multi' (<song>/<mode>/sample_<i>_temp<T>.mid)
+# when sampling; the manifest scanner needs to be told which.
+DUET_LAYOUT=duet
+[[ "$N_SAMPLES" -gt 1 ]] && DUET_LAYOUT=duet_multi
+
 SRC_ARGS=()
-[[ -d "$A2_OUT" ]] && SRC_ARGS+=(--source "A.2:duet:$A2_OUT")
-[[ -d "$B1_OUT" ]] && SRC_ARGS+=(--source "B.1:duet:$B1_OUT")
+[[ -d "$A2_OUT" ]] && SRC_ARGS+=(--source "A.2:$DUET_LAYOUT:$A2_OUT")
+[[ -d "$B1_OUT" ]] && SRC_ARGS+=(--source "B.1:$DUET_LAYOUT:$B1_OUT")
 [[ -d "$S1_OUT" ]] && SRC_ARGS+=(--source "S1:single:$S1_OUT")
 [[ -d "$S0_OUT" ]] && SRC_ARGS+=(--source "S0:single:$S0_OUT")
 if [[ ${#SRC_ARGS[@]} -eq 0 ]]; then

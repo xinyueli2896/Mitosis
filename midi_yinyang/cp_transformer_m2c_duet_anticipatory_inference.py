@@ -281,45 +281,57 @@ def run_folder(model, args):
                         :, :drum_tokens.shape[1],
                     ]
 
-            if args.mode == 'co':
-                # Co-generation: prompt BOTH streams, generate both.
-                drum_prompt = drum_tokens
-                if args.prompt_length > 0:
-                    drum_prompt = drum_tokens[:, :args.prompt_length]
-                if nondrum_prompt_tokens is None:
-                    raise ValueError(
-                        'co mode needs a nondrum prompt: pass '
-                        '--nondrum-folder with a file matching this song')
-                mel_frames, chord_frames = co_generate(
-                    model, drum_prompt, nondrum_prompt_tokens,
-                    gen_length=args.gen_length,
-                    temperature=args.temperature,
-                )
-            else:
-                mel_frames, chord_frames = drum_to_nondrum(
-                    model, drum_tokens, nondrum_prompt_tokens,
-                    gen_length=args.gen_length, temperature=args.temperature,
-                )
+            # Prompt loading above is deterministic; only generation is
+            # stochastic, so just the draw + write repeat. Matching the
+            # baselines' sample count matters: the evaluation averages
+            # samples per song before the paired test, so a system left at
+            # one draw carries more per-song sampling variance than its
+            # competitors and loses power in the comparison itself.
+            for s in range(args.n_samples):
+                if args.mode == 'co':
+                    # Co-generation: prompt BOTH streams, generate both.
+                    drum_prompt = drum_tokens
+                    if args.prompt_length > 0:
+                        drum_prompt = drum_tokens[:, :args.prompt_length]
+                    if nondrum_prompt_tokens is None:
+                        raise ValueError(
+                            'co mode needs a nondrum prompt: pass '
+                            '--nondrum-folder with a file matching this song')
+                    mel_frames, chord_frames = co_generate(
+                        model, drum_prompt, nondrum_prompt_tokens,
+                        gen_length=args.gen_length,
+                        temperature=args.temperature,
+                    )
+                else:
+                    mel_frames, chord_frames = drum_to_nondrum(
+                        model, drum_tokens, nondrum_prompt_tokens,
+                        gen_length=args.gen_length,
+                        temperature=args.temperature,
+                    )
 
-            out_dir = os.path.join(args.output_dir, sid)
-            os.makedirs(out_dir, exist_ok=True)
-            # 'co' writes <song>/co.mid so the output matches the 'duet'
-            # layout the eval manifest builder scans.
-            out_name = ('co.mid' if args.mode == 'co'
-                        else f'drum2nondrum_temp{args.temperature}.mid')
-            out_path = os.path.join(out_dir, out_name)
-            output_tempo = _get_input_tempo(drum_path, default=120.0)
-            print(f'[tempo] source={drum_path} -> tempo={output_tempo:.2f} BPM')
-            decode_m2c_frames(
-                mel_frames, chord_frames,
-                save_path=out_path,
-                tokenizer=model.tokenizer,
-                with_velocity=model.with_velocity,
-                tempo=output_tempo,
-                write_mel=True,
-                write_chord=True,
-            )
-            print(f'  wrote {out_path}')
+                out_dir = os.path.join(args.output_dir, sid)
+                if args.n_samples > 1:
+                    # 'duet_multi': <song>/<mode>/sample_<i>_temp<T>.mid
+                    out_dir = os.path.join(out_dir, args.mode)
+                    out_name = f'sample_{s}_temp{args.temperature}.mid'
+                else:
+                    # 'duet': 'co' writes <song>/co.mid so the output matches
+                    # the layout the eval manifest builder scans.
+                    out_name = ('co.mid' if args.mode == 'co'
+                                else f'drum2nondrum_temp{args.temperature}.mid')
+                os.makedirs(out_dir, exist_ok=True)
+                out_path = os.path.join(out_dir, out_name)
+                output_tempo = _get_input_tempo(drum_path, default=120.0)
+                decode_m2c_frames(
+                    mel_frames, chord_frames,
+                    save_path=out_path,
+                    tokenizer=model.tokenizer,
+                    with_velocity=model.with_velocity,
+                    tempo=output_tempo,
+                    write_mel=True,
+                    write_chord=True,
+                )
+                print(f'  wrote {out_path}')
         except Exception as e:
             print(f'  failed: {e!r}')
 
@@ -346,6 +358,12 @@ def main():
     p.add_argument('--gen-length', type=int, default=384)
     p.add_argument('--prompt-length', type=int, default=64)
     p.add_argument('--temperature', type=float, default=1.0)
+    p.add_argument('--n-samples', dest='n_samples', type=int, default=1,
+                   help='independent continuations per song. >1 writes the '
+                        "'duet_multi' manifest layout "
+                        '(<song>/<mode>/sample_<i>_temp<T>.mid) instead of '
+                        "'duet'; pass the SAME value as the other systems "
+                        'so per-song sampling variance is comparable.')
     p.add_argument('--max-polyphony', type=int, default=16)
     p.add_argument('--model-size', type=str, default='large',
                    choices=['small', 'large'])

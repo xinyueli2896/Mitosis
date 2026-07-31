@@ -159,6 +159,13 @@ def main():
     p.add_argument('--prompt-length', type=int, default=100)
     p.add_argument('--gen-length', type=int, default=384)
     p.add_argument('--temperature', type=float, default=1.0)
+    p.add_argument('--n-samples', dest='n_samples', type=int, default=1,
+                   help='independent continuations per song. >1 writes the '
+                        "'duet_multi' manifest layout "
+                        '(<song>/<mode>/sample_<i>_temp<T>.mid) instead of '
+                        "'duet' (<song>/<mode>.mid); pass the SAME value as "
+                        'the single-stream baselines so every system carries '
+                        'the same per-song sampling variance.')
     p.add_argument('--max-polyphony', type=int, default=16)
     p.add_argument('--max-songs', type=int, default=None)
     p.add_argument('--model-size', type=str, default='large',
@@ -217,36 +224,53 @@ def main():
 
         for mode in args.modes:
             print(f'  mode={mode}')
-            try:
-                mel_frames, chord_frames = run_mode_for_song(
-                    model, mode, mel_path, chord_path, args,
-                )
-                if mel_frames is None and chord_frames is None:
-                    print('    skipped (missing input)')
-                    continue
-                # mel_only / chord_only: write only the generated side.
-                write_mel = mode != 'chord_only'
-                write_chord = mode != 'mel_only'
-                save_path = os.path.join(song_dir, f'{mode}.mid')
-                # Preserve the prompt's tempo (beat grid) in the output.
-                # Source picked per mode: chord-driven modes read the
-                # chord prompt's tempo, everything else the mel prompt's.
-                tempo_source = mel_path if mel_path else chord_path
-                if mode in ('chord2mel', 'chord_only'):
-                    tempo_source = chord_path if chord_path else mel_path
-                output_tempo = _get_input_tempo(tempo_source, default=120.0)
-                decode_m2c_frames(
-                    mel_frames, chord_frames,
-                    save_path=save_path,
-                    tokenizer=model.tokenizer,
-                    with_velocity=model.with_velocity,
-                    tempo=output_tempo,
-                    write_mel=write_mel,
-                    write_chord=write_chord,
-                )
-                print(f'    -> {save_path}')
-            except Exception as e:
-                print(f'    failed: {e!r}')
+            # Draw n_samples independent continuations per song. Generation
+            # is stochastic, so a single draw makes each song's score one
+            # noisy sample; the evaluation averages samples per song before
+            # the paired test, and that average's standard error falls as
+            # 1/sqrt(n). This used to be fixed at 1 here while the
+            # single-stream baselines drew N_SAMPLES=3 -- so the duet
+            # systems carried ~3x the per-song sampling variance in exactly
+            # the comparison being tested, costing power for no reason.
+            for s in range(args.n_samples):
+                try:
+                    mel_frames, chord_frames = run_mode_for_song(
+                        model, mode, mel_path, chord_path, args,
+                    )
+                    if mel_frames is None and chord_frames is None:
+                        print('    skipped (missing input)')
+                        break
+                    # mel_only / chord_only: write only the generated side.
+                    write_mel = mode != 'chord_only'
+                    write_chord = mode != 'mel_only'
+                    if args.n_samples > 1:
+                        # 'duet_multi' layout: <song>/<mode>/sample_<i>_temp<T>.mid
+                        mode_dir = os.path.join(song_dir, mode)
+                        os.makedirs(mode_dir, exist_ok=True)
+                        save_path = os.path.join(
+                            mode_dir, f'sample_{s}_temp{args.temperature}.mid')
+                    else:
+                        # 'duet' layout: <song>/<mode>.mid (unchanged)
+                        save_path = os.path.join(song_dir, f'{mode}.mid')
+                    # Preserve the prompt's tempo (beat grid) in the output.
+                    # Source picked per mode: chord-driven modes read the
+                    # chord prompt's tempo, everything else the mel prompt's.
+                    tempo_source = mel_path if mel_path else chord_path
+                    if mode in ('chord2mel', 'chord_only'):
+                        tempo_source = chord_path if chord_path else mel_path
+                    output_tempo = _get_input_tempo(tempo_source, default=120.0)
+                    decode_m2c_frames(
+                        mel_frames, chord_frames,
+                        save_path=save_path,
+                        tokenizer=model.tokenizer,
+                        with_velocity=model.with_velocity,
+                        tempo=output_tempo,
+                        write_mel=write_mel,
+                        write_chord=write_chord,
+                    )
+                    print(f'    -> {save_path}')
+                except Exception as e:
+                    print(f'    failed: {e!r}')
 
 
 if __name__ == '__main__':
