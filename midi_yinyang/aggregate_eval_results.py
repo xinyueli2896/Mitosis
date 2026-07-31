@@ -118,6 +118,14 @@ def main():
     p.add_argument('--mode', default=None,
                    help='restrict to one mode (default: all modes present)')
     p.add_argument('--out-md', default=None, help='also write a markdown table')
+    p.add_argument('--complete-cases', action='store_true',
+                   help='score every system on the SAME songs (per metric): '
+                        'intersect the songs each system defines the metric '
+                        'on. Removes the survivorship bias of grading a '
+                        'system only on the songs it managed to handle, and '
+                        'makes rows comparable. n becomes equal across '
+                        'systems, but equal to the MINIMUM -- it cannot '
+                        'raise a system that produced empty streams.')
     args = p.parse_args()
 
     per_song = load(args.csv)
@@ -154,17 +162,36 @@ def main():
                                       if sy == s and m == mode and metric in vals})
                 if not song_sets or not any(song_sets):
                     continue
+                # Complete-case mode: score every system on the SAME songs.
+                # By default each system is summarised over whatever songs
+                # it happens to define the metric on, which is survivorship
+                # bias -- a system that emits an empty stream has that song
+                # silently removed rather than penalised, so it is graded
+                # only on the songs it handled. It also makes rows
+                # mutually incomparable, since each uses its own subset.
+                # Intersecting equalises n across systems (at the minimum,
+                # not at the maximum: songs no system can score are gone).
+                common_all = set.intersection(*song_sets) if song_sets else set()
+                if args.complete_cases:
+                    dropped = {s: len(ss - common_all)
+                               for s, ss in zip(systems, song_sets) if ss - common_all}
+                    if dropped:
+                        print(f'    [complete-cases] {metric}: keeping '
+                              f'{len(common_all)} song(s); dropped ' +
+                              ', '.join(f'{s}:{n}' for s, n in sorted(dropped.items())))
                 star = '*' if metric in PRIMARY[args.task][h] else ' '
                 line = (star + metric).ljust(26)
                 md_cells = []
                 base_songs = None
                 if args.baseline in systems:
-                    base_songs = {song for (sy, m, song), vals in per_song.items()
-                                  if sy == args.baseline and m == mode
-                                  and metric in vals}
+                    base_songs = (common_all if args.complete_cases else
+                                  {song for (sy, m, song), vals in per_song.items()
+                                   if sy == args.baseline and m == mode
+                                   and metric in vals})
                 for s in systems:
-                    songs = {song for (sy, m, song), vals in per_song.items()
-                             if sy == s and m == mode and metric in vals}
+                    songs = (common_all if args.complete_cases else
+                             {song for (sy, m, song), vals in per_song.items()
+                              if sy == s and m == mode and metric in vals})
                     vals = [per_song[(s, mode, song)][metric]
                             for song in sorted(songs)]
                     if not vals:
