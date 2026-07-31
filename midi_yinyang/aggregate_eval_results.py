@@ -161,6 +161,14 @@ def main():
     p.add_argument('--mode', default=None,
                    help='restrict to one mode (default: all modes present)')
     p.add_argument('--out-md', default=None, help='also write a markdown table')
+    p.add_argument('--systems', nargs='*', default=None,
+                   help='restrict the table to these system ids. Matters '
+                        'with --complete-cases, which intersects over EVERY '
+                        'system shown: leaving a weak anchor like S0 in the '
+                        'table lets ITS failures shrink the song set of the '
+                        'comparison you actually care about. Use '
+                        '"--systems A.2 S1" to test that pair on all songs '
+                        'they both handled.')
     p.add_argument('--one-sided', action='store_true',
                    help='test the PRE-REGISTERED direction (system lands '
                         'closer to the metric target than the baseline) '
@@ -193,6 +201,16 @@ def main():
     md_lines = []
     for mode in modes:
         systems = sorted({s for (s, m, _) in per_song if m == mode})
+        if args.systems:
+            keep = set(args.systems)
+            unknown = keep - set(systems)
+            if unknown:
+                print(f'[{mode}] --systems: not present in csv: '
+                      f'{sorted(unknown)} (have {systems})')
+            systems = [s for s in systems if s in keep]
+            if not systems:
+                raise SystemExit(f'--systems {args.systems} matched nothing '
+                                 f'for mode={mode}')
         if args.baseline not in systems:
             print(f'\n[{mode}] baseline {args.baseline!r} absent '
                   f'(systems: {systems}) -- printing means only')
