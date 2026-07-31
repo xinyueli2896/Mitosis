@@ -338,16 +338,42 @@ python eval_metrics.py --task "$TASK" \
     --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
     --out "$METRICS"
 
+# Primary analysis. Both flags default ON because they are what makes the
+# comparison sound on this test set:
+#   ONE_SIDED      H1-H3 predict a direction, and at n=5 the two-sided
+#                  exact test floors at p=0.0625 -- above 0.05 at ANY
+#                  effect size, so a two-sided-only run cannot produce a
+#                  significant result no matter what the models do.
+#   COMPLETE_CASES scores every system on the same songs, instead of
+#                  grading each on whichever songs it happened to handle.
+# A plain two-sided / all-cases table is also written alongside, so the
+# conservative reading stays available and nothing is hidden by a default.
+ONE_SIDED="${ONE_SIDED:-1}"
+COMPLETE_CASES="${COMPLETE_CASES:-1}"
+AGG_ARGS=()
+[[ "$ONE_SIDED" == "1" ]] && AGG_ARGS+=(--one-sided)
+[[ "$COMPLETE_CASES" == "1" ]] && AGG_ARGS+=(--complete-cases)
+
 echo "--- comparison table (paired Wilcoxon vs $BASELINE) ---"
+echo "[agg] primary: ${AGG_ARGS[*]:-<two-sided, all cases>}"
 python aggregate_eval_results.py --csv "$METRICS" \
     --task "$TASK" --baseline "$BASELINE" --mode co \
-    --out-md "$TABLE"
+    "${AGG_ARGS[@]}" --out-md "$TABLE"
+
+if [[ ${#AGG_ARGS[@]} -gt 0 ]]; then
+    TABLE_2S="${TABLE%.md}_twosided.md"
+    echo "--- reference table (two-sided, all cases) ---"
+    python aggregate_eval_results.py --csv "$METRICS" \
+        --task "$TASK" --baseline "$BASELINE" --mode co \
+        --out-md "$TABLE_2S"
+fi
 
 echo "================================================================"
 echo "E1 evaluation complete."
 echo "  generated midis : $OUT_ROOT (A.2, B.1), $S1_OUT, $S0_OUT"
 echo "  manifest        : $MANIFEST"
 echo "  per-sample CSV  : $METRICS"
-echo "  comparison table: $TABLE"
+echo "  comparison table: $TABLE   (primary)"
+[[ ${#AGG_ARGS[@]} -gt 0 ]] && echo "  two-sided table : ${TABLE%.md}_twosided.md"
 echo "Note: B.1 rows should be read PER-STREAM (its design predicts the"
 echo "follower improves while the leader stays flat) -- see EXPERIMENTS.md E1."
