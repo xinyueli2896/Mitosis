@@ -303,8 +303,16 @@ if [[ ${#SRC_ARGS[@]} -eq 0 ]]; then
     exit 1
 fi
 
-SONG_ARGS=()
-[[ -n "$SONGS" ]] && SONG_ARGS=(--songs $SONGS)
+# Always pass the evaluation song list. --songs does double duty in
+# build_eval_manifest: it filters, AND it is what enables the [coverage]
+# report that names the songs each system failed to produce. Passing it
+# only when SONGS is set (the old behaviour) disabled that report in the
+# default configuration -- which is how a run scored 5 songs out of a
+# ~90-song test split without a word about the other 85. The list is
+# derived from the prompts actually staged, so as a filter it is a no-op.
+EVAL_SONG_IDS=$(ls "$EVAL_MEL" | sed 's/\.[Mm][Ii][Dd]$//' | tr '\n' ' ')
+SONG_ARGS=(--songs $EVAL_SONG_IDS)
+echo "[coverage] expecting $N_EVAL song(s) per system"
 
 echo "================================================================"
 echo "--- building manifest ---"
