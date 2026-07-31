@@ -115,38 +115,58 @@ def _get_input_tempo(midi_path, default=120.0):
 
 def decode_m2c_frames(mel_frames, chord_frames, save_path, tokenizer,
                       with_velocity=False, tempo=120.0,
-                      write_mel=True, write_chord=True):
+                      write_mel=True, write_chord=True,
+                      stream_names=('MELODY', 'CHORD')):
+    """Render the two generated streams to one midi, keeping them apart.
+
+    Instruments are keyed on (stream, program) and NAMED after the stream
+    they came from. Keying on program alone -- as this did originally --
+    silently merged the streams whenever they shared a program, which is
+    the normal case for melchord: POP909 keeps melody and chord on the
+    same program and distinguishes them by track name. The merge is not
+    recoverable downstream, so eval_metrics.load_streams attributed every
+    note to stream A and scored stream B as identically empty
+    (survival_b = 0.000 +- 0.000, empty_rate_b = 1.000) while stream A
+    came out at ~2x reference density.
+
+    The names must match load_streams' preferred branch EXACTLY
+    ('melody' / 'chord' after strip+lower); several instruments may share
+    one name, which is how a multi-program stream stays splittable.
+    """
     midi = pretty_midi.PrettyMIDI(initial_tempo=tempo)
     time_step_length = 60.0 / tempo / 4
 
     inst_map = {}
 
-    def get_inst(program):
+    def get_inst(program, stream_idx):
         # program 127 = drum (preprocess_large_midi_dataset assigns this for
-        # any is_drum=True instrument). Use a single drum track per file.
+        # any is_drum=True instrument). One drum track per stream.
+        name = stream_names[stream_idx]
         if program == 127:
-            key = ('drum',)
+            key = (stream_idx, 'drum')
             if key not in inst_map:
                 inst_map[key] = pretty_midi.Instrument(
-                    program=0, is_drum=True, name='DRUM',
+                    program=0, is_drum=True, name=name,
                 )
                 midi.instruments.append(inst_map[key])
             return inst_map[key]
-        key = ('inst', program)
+        key = (stream_idx, program)
         if key not in inst_map:
             inst_map[key] = pretty_midi.Instrument(
-                program=program, name=f'PROG{program:03d}',
+                program=program, name=name,
             )
             midi.instruments.append(inst_map[key])
         return inst_map[key]
 
+    # Carry the stream index alongside the frames; mel_only/chord_only
+    # still tag their single stream correctly.
     streams = []
     if write_mel:
-        streams.append(mel_frames)
+        streams.append((0, mel_frames))
     if write_chord:
-        streams.append(chord_frames)
+        streams.append((1, chord_frames))
 
-    for frames in streams:
+    for stream_idx, frames in streams:
         if frames is None:
             continue
         for t, frame in enumerate(frames):
@@ -181,7 +201,7 @@ def decode_m2c_frames(mel_frames, chord_frames, save_path, tokenizer,
                 if duration < 0 or duration >= len(DURATION_TEMPLATES):
                     continue
                 end_time = DURATION_TEMPLATES[duration] * time_step_length + start_time
-                inst = get_inst(program)
+                inst = get_inst(program, stream_idx)
                 inst.notes.append(pretty_midi.Note(
                     velocity=note_velocity, pitch=pitch,
                     start=start_time, end=end_time,
