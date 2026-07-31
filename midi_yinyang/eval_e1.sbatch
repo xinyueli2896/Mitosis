@@ -115,6 +115,42 @@ echo "================================================================"
 nvidia-smi | head -n 12 || true
 
 # ---------------------------------------------------------------------
+# 0a. GPU pre-flight.
+#     Every generation stage below calls model.cuda(). Without this the
+#     absence of a GPU surfaces only once python is deep inside the
+#     first inference script ("RuntimeError: No CUDA GPUs are
+#     available"), by which point the job has burned its queue slot.
+#     nvidia-smi above is NOT sufficient: it is piped through `|| true`
+#     so a failure is silent, and a node can list a device that torch
+#     still cannot initialise. Ask torch directly -- that is what the
+#     generation scripts actually use -- and force a real context init.
+# ---------------------------------------------------------------------
+if ! python -c "
+import sys, torch
+if not torch.cuda.is_available():
+    sys.exit('torch.cuda.is_available() == False')
+torch.zeros(1).cuda()
+print(f'[gpu] {torch.cuda.device_count()} visible; {torch.cuda.get_device_name(0)}')
+"; then
+    echo "----------------------------------------------------------------"
+    echo "ERROR: no usable CUDA GPU in this job; every stage would fail."
+    if [[ -z "${SLURM_JOB_ID:-}" ]]; then
+        echo "  CAUSE: SLURM_JOB_ID is unset -- this was NOT run through"
+        echo "         sbatch, so the #SBATCH --gres=gpu:1 line never took"
+        echo "         effect. Submit it instead of executing it:"
+        echo "             sbatch --export=ALL,... midi_yinyang/eval_e1.sbatch"
+    else
+        echo "  CAUSE: allocated node $(hostname) has no working GPU"
+        echo "         (CUDA_VISIBLE_DEVICES='${CUDA_VISIBLE_DEVICES:-<unset>}')."
+        echo "         Resubmit excluding it:"
+        echo "             sbatch --exclude=$(hostname) --export=ALL,... \\"
+        echo "                 midi_yinyang/eval_e1.sbatch"
+    fi
+    echo "----------------------------------------------------------------"
+    exit 1
+fi
+
+# ---------------------------------------------------------------------
 # 0. checkpoint integrity pre-flight
 #    A truncated/corrupt ckpt otherwise surfaces as an opaque
 #    "PytorchStreamReader ... failed finding central directory" stack
