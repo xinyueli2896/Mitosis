@@ -1,4 +1,11 @@
-"""Inference for M2CDuetBlockAttn (Option B: denoising decode via query slots).
+"""DEPRECATED -- inference for the RETIRED M2CDuetBlockAttn.
+
+The paper's A.2 is M2CDuetBlockDiffusion; use
+cp_transformer_m2c_duet_block_diffusion_inference.py. This model
+collapses at decode (query slots trained only fully-masked, so each
+predicts its frame independently of the other).
+
+Inference for M2CDuetBlockAttn (Option B: denoising decode via query slots).
 
 The training-time forward of M2CDuetBlockAttn appends 2 "query slots"
 (mask_m_emb, mask_c_emb) to the global stack input and predicts a

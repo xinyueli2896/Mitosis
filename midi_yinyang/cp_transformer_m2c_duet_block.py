@@ -1,4 +1,27 @@
-"""M2CDuetBlockAttn -- DuetAttn extended with appended next-frame query slots
+"""DEPRECATED -- RETIRED MODEL. Do not use for experiments.
+
+M2CDuetBlockAttn is the model the CODE calls "A.2". The PAPER's A.2 is
+M2CDuetBlockDiffusion (code name "A.3", cp_transformer_m2c_duet_block_
+diffusion.py). Two different models, one string -- check the class, not
+the label.
+
+Retired because it collapses at inference: its query slots are trained
+ONLY in the both-fully-masked regime, so at decode each slot predicts
+its frame conditionally independently of the other, given the past.
+That is "equalize by removing" -- neither stream sees the other's
+current-frame value. Fixing it is exactly why M2CDuetBlockDiffusion
+exists (it trains the slots across noise levels so refinement rounds
+give real mutual within-frame conditioning).
+
+Per EXPERIMENTS.md it "plays NO role in any experiment", and nothing
+warm-starts from it -- M2CDuetBlockDiffusion inits straight from the
+pretrained single-stream CP transformer via
+init_pretrained_into_duet_block_diffusion.py.
+
+The file stays only because M2CDuetBlockDiffusion subclasses
+M2CDuetBlockAttn, so the class must remain importable.
+
+M2CDuetBlockAttn -- DuetAttn extended with appended next-frame query slots
 and a third "frame" attention pass for symmetric same-instant coupling.
 
 Conceptual diff vs M2CIntraCrossAttn:

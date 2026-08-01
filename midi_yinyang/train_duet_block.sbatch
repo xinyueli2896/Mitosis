@@ -1,4 +1,12 @@
 #!/bin/bash
+# DEPRECATED -- TRAINS A RETIRED MODEL. You almost certainly want
+# train_duet_block_diffusion.sbatch instead.
+#
+# This trains M2CDuetBlockAttn, which the CODE calls "A.2" but which is
+# NOT the paper's A.2 (that is M2CDuetBlockDiffusion, code name "A.3").
+# M2CDuetBlockAttn collapses at inference -- its query slots are trained
+# only fully-masked, so each predicts its frame independently of the
+# other -- and per EXPERIMENTS.md it plays no role in any experiment.
 # SLURM batch script: multi-GPU training of M2CDuetBlockAttn on cscc-gpu.
 # DuetAttn extended with appended next-frame query slots + a 3rd
 # "frame" attention pass (same-frame, other-modality, bidirectional).
