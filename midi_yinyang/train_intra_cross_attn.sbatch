@@ -51,12 +51,6 @@ REPO_DIR=/home/xinyue.li/Mitosis
 PRETRAINED=ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt
 INIT_CKPT=ckpt/m2c_intra_cross_attn_init/m2c_intra_cross_attn_init.ckpt
 
-# Default CKPT for resume. If set (and the file exists), the script
-# skips the warm-start init and resumes training from this Lightning
-# ckpt -- optimizer state, LR scheduler step, global_step all restored.
-# Leave empty to do a fresh warm-start from INIT_CKPT instead.
-# Override at submit time via --export=ALL,CKPT=path/to/other.ckpt.
-CKPT="${CKPT:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/last.ckpt}"
 MAX_LR="${MAX_LR:-}"
 # Default per-GPU batch size 4. intra-cross-attn's two SDPA passes per
 # block roughly double attention activation memory vs jointattn, so 8
@@ -70,10 +64,40 @@ GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
 # resolved from tasks.py based on this name. Override with
 # --export=ALL,TASK=melchord on the sbatch line.
 TASK="${TASK:-drumnondrum}"
+# Data max_polyphony, auto-set from TASK (override with MAX_POLYPHONY).
+# The melchord datasets are cp4 (4 polyphony slots -> 8-token frames);
+# everything else is cp16. The trainer defaults this to 16, and the
+# --dump_samples_dir callback below decodes real frames with it, so
+# leaving it unset silently mis-decodes -- or crashes -- the sample dump
+# on any cp4 task. train_duet_block_diffusion.sbatch and
+# train_duet_anticipatory.sbatch already derive it the same way.
+if [[ -z "${MAX_POLYPHONY:-}" ]]; then
+    case "$TASK" in
+        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=4 ;;
+        *)                                                       MAX_POLYPHONY=16 ;;
+    esac
+fi
 # Optional: dump the first training batch as .mid files into this dir at
 # train start. Useful for sanity-check listening before letting training
 # run for hours. Default empty = off.
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_${SLURM_JOB_ID}}"
+
+# Resume default is per-TASK. It used to hard-code the drumnondrum run's
+# last.ckpt for every task, so submitting TASK=melchord* without CKPT
+# silently RESUMED a drumnondrum run: wrong-domain weights plus a
+# restored optimizer/LR-scheduler state from another schedule. The run
+# dir embeds task.name, so nothing was overwritten -- it just quietly
+# produced a model that is not what the run name claims, and would break
+# the A.1-vs-A.2 ablation, which requires both to warm-start identically
+# from the pretrained single-stream ckpt. train_duet_block_diffusion and
+# train_duet_anticipatory both default to empty (fresh init); match them
+# for every task except the drumnondrum run this default was written for.
+if [[ -z "${CKPT+x}" ]]; then
+    case "$TASK" in
+        drumnondrum) CKPT=ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_drumnondrum_batch_16_schedule/last.ckpt ;;
+        *)           CKPT= ;;
+    esac
+fi
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -101,7 +125,7 @@ fi
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
 echo "Variant: m2c_intra_cross_attn  (per-block gated intra+cross attn)"
-echo "Task:    $TASK"
+echo "Task:    $TASK   (data max_polyphony: $MAX_POLYPHONY)"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS"
 if [[ -n "$CKPT" ]]; then
@@ -172,6 +196,7 @@ if [[ "$NGPUS" -le 1 ]]; then
         --gate_init_bias "$GATE_INIT_BIAS" \
         --fresh_schedule \
         --checkpoint_path "$TRAIN_CKPT" \
+        --max_polyphony "$MAX_POLYPHONY" \
         --wandb
 else
     torchrun --standalone --nnodes=1 --nproc_per_node="$NGPUS" \
@@ -189,6 +214,7 @@ else
         --gate_init_bias "$GATE_INIT_BIAS" \
         --fresh_schedule \
         --checkpoint_path "$TRAIN_CKPT" \
+        --max_polyphony "$MAX_POLYPHONY" \
         --wandb
 fi
 
