@@ -488,6 +488,13 @@ if __name__ == '__main__':
                         action='store_false')
     parser.add_argument('--wandb_dir', type=str, default='/tmp/wandb')
     parser.add_argument('--save_top_k', type=int, default=2)
+    parser.add_argument('--val_check_interval', type=int, default=500,
+                        help='steps between val evaluations. On the small '
+                             'melchord corpora the val minimum can arrive '
+                             'within the first ~1k steps, which 500 '
+                             'resolves with only one or two points -- too '
+                             'coarse to tell a real minimum from a '
+                             'monotonic rise.')
     parser.add_argument('--ckpt_dir', type=str, default=None)
     parser.add_argument('--max_lr', type=float, default=1e-4)
     parser.add_argument('--lr_total_steps', type=int, default=None)
@@ -639,7 +646,7 @@ if __name__ == '__main__':
         max_steps=(args.lr_total_steps if args.lr_total_steps is not None else MAX_STEPS),
         accelerator='gpu' if torch.cuda.is_available() else 'cpu',
         callbacks=[checkpoint_callback] + extra_callbacks,
-        val_check_interval=500,
+        val_check_interval=args.val_check_interval,
         limit_val_batches=25,
         check_val_every_n_epoch=None,
         gradient_clip_val=(args.gradient_clip_val if args.gradient_clip_val > 0 else None),

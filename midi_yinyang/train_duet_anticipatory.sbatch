@@ -77,6 +77,12 @@ FRESH_SCHEDULE="${FRESH_SCHEDULE:-0}"
 # Empty default; resolved below to 50000 on cold start or to
 # (prior_step + 50000) on auto-resume.
 LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-}"
+# Steps between val evaluations. The default 500 resolves a minimum
+# that arrives inside the first ~1k steps with one or two points --
+# enough to make a real descent look like a monotonic rise, and to
+# place the saved checkpoint badly. Lower it on the small melchord
+# corpora (VAL_CHECK_INTERVAL=100).
+VAL_CHECK_INTERVAL="${VAL_CHECK_INTERVAL:-500}"
 MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
@@ -169,7 +175,7 @@ if [[ -n "$CKPT" ]]; then
 else
     echo "Mode: COLD START (init from PRETRAINED -> INIT_CKPT=$INIT_CKPT, reusing A.1's init)"
 fi
-echo "LR_TOTAL_STEPS=$LR_TOTAL_STEPS   RUN_DIR=$RUN_DIR"
+echo "LR_TOTAL_STEPS=$LR_TOTAL_STEPS   VAL_CHECK_INTERVAL=$VAL_CHECK_INTERVAL   RUN_DIR=$RUN_DIR"
 echo "----------------------------------------------------------------"
 nvidia-smi || true
 echo "================================================================"
@@ -222,7 +228,8 @@ COMMON_ARGS=(
     --model_size large
     --moe_num_experts 4 --moe_topk 2
     --max_lr "$MAX_LR"
-    --lr_total_steps "$LR_TOTAL_STEPS"
+    --lr_total_steps "$LR_TOTAL_STEPS" \
+    --val_check_interval "$VAL_CHECK_INTERVAL"
     --gradient_clip_val 1.0
     --aux_loss_weight 0.01
     --moe_monitor_every_n_steps 500
