@@ -71,6 +71,15 @@ LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-50000}"
 # stock 500 resolves it with one or two points; lower it to place the
 # checkpoint accurately.
 VAL_CHECK_INTERVAL="${VAL_CHECK_INTERVAL:-500}"
+# Optional run-name suffix. The run directory is derived from variant +
+# task + global batch, so two runs of the SAME task land in the SAME
+# dir and their checkpoints intermingle. That is silently dangerous:
+# resolve_best_ckpt picks the global val_loss minimum across the dir,
+# so a superseded run with a lower val_loss (e.g. one that overfit
+# under a wrong LR horizon) would be selected for evaluation instead
+# of the run you meant. Set RUN_TAG when re-running a task under
+# changed settings, or move the old dir aside first.
+RUN_TAG="${RUN_TAG:-}"
 # Task config: melchord (mod_a=mel, mod_b=chord) or drumnondrum
 # (mod_a=drum, mod_b=nondrum). Dataset paths and display labels are
 # resolved from tasks.py based on this name. Override with
@@ -141,6 +150,7 @@ echo "Task:    $TASK   (data max_polyphony: $MAX_POLYPHONY)"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS"
 echo "LR schedule: OneCycle over $LR_TOTAL_STEPS steps   val every $VAL_CHECK_INTERVAL"
+echo "Run tag: ${RUN_TAG:-<none -- shares the default run dir for this task>}"
 if [[ -n "$CKPT" ]]; then
     echo "Mode: RESUME from CKPT=$CKPT (skip init)"
 else
@@ -211,6 +221,7 @@ if [[ "$NGPUS" -le 1 ]]; then
         --fresh_schedule \
         --checkpoint_path "$TRAIN_CKPT" \
         --max_polyphony "$MAX_POLYPHONY" \
+        ${RUN_TAG:+--run_tag "$RUN_TAG"} \
         --wandb
 else
     torchrun --standalone --nnodes=1 --nproc_per_node="$NGPUS" \
@@ -230,6 +241,7 @@ else
         --fresh_schedule \
         --checkpoint_path "$TRAIN_CKPT" \
         --max_polyphony "$MAX_POLYPHONY" \
+        ${RUN_TAG:+--run_tag "$RUN_TAG"} \
         --wandb
 fi
 
