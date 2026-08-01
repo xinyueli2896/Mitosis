@@ -42,6 +42,14 @@
 #                 That is the only lever on a fixed, small test set:
 #                 it will not raise n, but it makes a real effect far
 #                 more likely to hold the same sign on every song.
+#   PROMPT_LENGTH prompt frames at 16 frames/bar: 64 = 4 bars (default),
+#                 96 = 6 bars. Also sets the scoring window, so the
+#                 metrics measure only what was GENERATED, not the prompt.
+#   RESULT_TAG    extra suffix on the result filenames. Results are
+#                 already scoped by prompt length
+#                 (results/e1_<task>_p<PROMPT_LENGTH>_*), so a rerun at a
+#                 different prompt length no longer overwrites the last
+#                 one; use RESULT_TAG to separate runs that share it.
 #   SKIP_INFER=1  reuse existing outputs under OUT_ROOT, score only
 #
 # Example:
@@ -117,6 +125,7 @@ echo "MEL_FOLDER=$MEL_FOLDER  CHORD_FOLDER=$CHORD_FOLDER"
 echo "SONGS=${SONGS:-<all>}"
 echo "OUT_ROOT=$OUT_ROOT   BASELINE=$BASELINE"
 echo "PROMPT_LENGTH=$PROMPT_LENGTH GEN_LENGTH=$GEN_LENGTH N_SAMPLES=$N_SAMPLES"
+echo "PROMPT bars: $((PROMPT_LENGTH / 16))  (16 frames/bar)"
 echo "================================================================"
 nvidia-smi | head -n 12 || true
 
@@ -295,9 +304,17 @@ fi
 # ---------------------------------------------------------------------
 # 3. quantitative analysis
 # ---------------------------------------------------------------------
-MANIFEST="results/e1_${TASK}_manifest.tsv"
-METRICS="results/e1_${TASK}_metrics.csv"
-TABLE="results/e1_${TASK}_table.md"
+# Result files are scoped by prompt length (and an optional RESULT_TAG).
+# They used to be fixed at results/e1_<task>_{manifest,metrics,table}, so
+# a rerun under different settings silently overwrote the previous run's
+# numbers -- with no way to tell afterwards which prompt length produced
+# a given table. PROMPT_LENGTH is in FRAMES at 16 frames/bar
+# (eval_metrics.FRAMES_PER_BAR), i.e. 64 = 4 bars, 96 = 6 bars.
+RESULT_TAG="${RESULT_TAG:-}"
+RSUF="p${PROMPT_LENGTH}${RESULT_TAG:+_${RESULT_TAG}}"
+MANIFEST="results/e1_${TASK}_${RSUF}_manifest.tsv"
+METRICS="results/e1_${TASK}_${RSUF}_metrics.csv"
+TABLE="results/e1_${TASK}_${RSUF}_table.md"
 
 # The duet scripts write the 'duet' layout (<song>/<mode>.mid) for a
 # single sample and 'duet_multi' (<song>/<mode>/sample_<i>_temp<T>.mid)
