@@ -59,6 +59,18 @@ MAX_LR="${MAX_LR:-}"
 # push if you have memory headroom.
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
+# OneCycle horizon. Was hardcoded at 200000, while A.2
+# (train_duet_block_diffusion.sbatch) uses 50000 -- so at a given step
+# A.1 sat far earlier in its cycle, at a much higher LR, than the model
+# it is meant to be an ablation OF. The A.1-vs-A.2 comparison is only
+# about the 同步看 (simultaneous mutual conditioning) mechanism if the
+# optimisation matches, so default to A.2's horizon and allow override.
+LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-50000}"
+# Steps between val evaluations. On the ~1.9k-song combined melchord
+# corpus the val minimum arrives within the first ~1k steps, so the
+# stock 500 resolves it with one or two points; lower it to place the
+# checkpoint accurately.
+VAL_CHECK_INTERVAL="${VAL_CHECK_INTERVAL:-500}"
 # Task config: melchord (mod_a=mel, mod_b=chord) or drumnondrum
 # (mod_a=drum, mod_b=nondrum). Dataset paths and display labels are
 # resolved from tasks.py based on this name. Override with
@@ -128,6 +140,7 @@ echo "Variant: m2c_intra_cross_attn  (per-block gated intra+cross attn)"
 echo "Task:    $TASK   (data max_polyphony: $MAX_POLYPHONY)"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS"
+echo "LR schedule: OneCycle over $LR_TOTAL_STEPS steps   val every $VAL_CHECK_INTERVAL"
 if [[ -n "$CKPT" ]]; then
     echo "Mode: RESUME from CKPT=$CKPT (skip init)"
 else
@@ -188,7 +201,8 @@ if [[ "$NGPUS" -le 1 ]]; then
         --model_size large \
         --moe_num_experts 4 --moe_topk 2 \
         --max_lr "$MAX_LR" \
-        --lr_total_steps 200000 \
+        --lr_total_steps "$LR_TOTAL_STEPS" \
+        --val_check_interval "$VAL_CHECK_INTERVAL" \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --moe_monitor_every_n_steps 500 \
@@ -206,7 +220,8 @@ else
         --model_size large \
         --moe_num_experts 4 --moe_topk 2 \
         --max_lr "$MAX_LR" \
-        --lr_total_steps 200000 \
+        --lr_total_steps "$LR_TOTAL_STEPS" \
+        --val_check_interval "$VAL_CHECK_INTERVAL" \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --moe_monitor_every_n_steps 500 \
