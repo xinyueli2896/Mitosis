@@ -49,7 +49,6 @@ CONDA_ENV=mitosis
 REPO_DIR=/home/xinyue.li/Mitosis
 
 PRETRAINED=ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt
-INIT_CKPT=ckpt/m2c_intra_cross_attn_init/m2c_intra_cross_attn_init.ckpt
 
 MAX_LR="${MAX_LR:-}"
 # Default per-GPU batch size 4. intra-cross-attn's two SDPA passes per
@@ -59,6 +58,15 @@ MAX_LR="${MAX_LR:-}"
 # push if you have memory headroom.
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
+# The warm-start init BAKES gate_init_bias into the checkpoint
+# (gate_m/gate_c weight=0, bias=GATE_INIT_BIAS), and the step below
+# skips regeneration when INIT_CKPT already exists. With a fixed
+# filename that silently reused a cached init built at a DIFFERENT
+# bias, so raising GATE_INIT_BIAS was a no-op: training loaded the
+# old gates and the knob appeared to do nothing. Encode the bias in
+# the path so each value gets its own init.
+GATE_TAG="${GATE_INIT_BIAS//./p}"; GATE_TAG="${GATE_TAG//-/m}"
+INIT_CKPT="ckpt/m2c_intra_cross_attn_init_gb${GATE_TAG}/m2c_intra_cross_attn_init_gb${GATE_TAG}.ckpt"
 # OneCycle horizon. Was hardcoded at 200000, while A.2
 # (train_duet_block_diffusion.sbatch) uses 50000 -- so at a given step
 # A.1 sat far earlier in its cycle, at a much higher LR, than the model

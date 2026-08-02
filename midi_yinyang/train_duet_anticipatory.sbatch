@@ -70,7 +70,6 @@ REPO_DIR=/home/xinyue.li/Mitosis
 # Reuse the A.1 init ckpt -- state dict is identical, only the
 # loss-time data reindexing differs.
 PRETRAINED=ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt
-INIT_CKPT=ckpt/m2c_intra_cross_attn_init/m2c_intra_cross_attn_init.ckpt
 
 CKPT="${CKPT:-}"
 FRESH_SCHEDULE="${FRESH_SCHEDULE:-0}"
@@ -86,6 +85,15 @@ VAL_CHECK_INTERVAL="${VAL_CHECK_INTERVAL:-500}"
 MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
+# The warm-start init BAKES gate_init_bias into the checkpoint
+# (gate_m/gate_c weight=0, bias=GATE_INIT_BIAS), and the step below
+# skips regeneration when INIT_CKPT already exists. With a fixed
+# filename that silently reused a cached init built at a DIFFERENT
+# bias, so raising GATE_INIT_BIAS was a no-op: training loaded the
+# old gates and the knob appeared to do nothing. Encode the bias in
+# the path so each value gets its own init.
+GATE_TAG="${GATE_INIT_BIAS//./p}"; GATE_TAG="${GATE_TAG//-/m}"
+INIT_CKPT="ckpt/m2c_intra_cross_attn_init_gb${GATE_TAG}/m2c_intra_cross_attn_init_gb${GATE_TAG}.ckpt"
 ANTICIPATION_FRAMES="${ANTICIPATION_FRAMES:-16}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_anticipatory_${SLURM_JOB_ID}}"
