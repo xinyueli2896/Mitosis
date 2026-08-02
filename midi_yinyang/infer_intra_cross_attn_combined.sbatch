@@ -72,8 +72,10 @@ case "$TASK" in
         CHORD_FOLDER="${CHORD_FOLDER:-input/lamd_test_prompts_split/nondrum}"
         ;;
     melchord)
-        MEL_FOLDER="${MEL_FOLDER:-input/pop909_test_prompts_split/melody}"
-        CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_test_prompts_split/chord}"
+        # The held-aside POP909 test split -- the same folders eval_e1
+        # and the diagnostics use, so outputs are comparable.
+        MEL_FOLDER="${MEL_FOLDER:-input/pop909_split/melody}"
+        CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"
         ;;
     *)
         echo "ERROR: unknown TASK=$TASK (expected drumnondrum or melchord)"
@@ -85,7 +87,16 @@ OUTPUT_DIR="${OUTPUT_DIR:-temp/intra_cross_attn_combined_${SLURM_JOB_ID}}"
 PROMPT_LENGTH="${PROMPT_LENGTH:-64}"
 GEN_LENGTH="${GEN_LENGTH:-384}"
 TEMPERATURE="${TEMPERATURE:-1.0}"
-MAX_POLYPHONY="${MAX_POLYPHONY:-16}"
+# Data max_polyphony, auto-set from TASK. The melchord models are
+# trained on cp4 streams (8-token frames); tokenizing prompts at 16
+# slots is a silent train/inference mismatch -- same bug fixed in the
+# training sbatches and cp_transformer_inference.py.
+if [[ -z "${MAX_POLYPHONY:-}" ]]; then
+    case "$TASK" in
+        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=4 ;;
+        *)                                                       MAX_POLYPHONY=16 ;;
+    esac
+fi
 MIN_CHORD_TOKENS_BEFORE_EOS="${MIN_CHORD_TOKENS_BEFORE_EOS:-0}"
 MODES="${MODES:-co mel2chord chord2mel mel_only chord_only}"
 
