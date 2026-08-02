@@ -1,19 +1,19 @@
 #!/bin/bash
-# SLURM: did the cross-stream gates ever open? (CPU, no GPU needed)
+# SLURM: how far have the cross-stream gates trained? (CPU, no GPU)
 #
-# Wraps check_gates.py, which reads a resolved checkpoint and reports per
-# gate parameter: sigmoid(bias) -- the open fraction -- and ||weight||.
+# Wraps check_gates.py, which reports per gate parameter the bias and
+# ||weight||.
 #
-# Why it matters. The duet variants warm-start from a single-stream CP
-# transformer, which has no cross-stream parameters, so those are baked
-# in SILENT: gate_m/gate_c weight=0, bias=GATE_INIT_BIAS (default -10,
-# sigmoid ~ 4.5e-5). At step 0 each modality just reproduces the
-# pretrained block on its own stream, and the entire duet mechanism has
-# to be learned through those gates. On a ~1.9k-song corpus val turns
-# upward within ~1k steps, so best-val selection can hand back a
-# checkpoint whose gates never opened -- a model that is functionally
-# two independent single-stream models, with a val_loss that reflects
-# the inherited backbone rather than any trained duet behaviour.
+# READ ||W||, NOT THE BIAS. A gate is sigmoid(W.x + b). At warm-start W
+# is EXACTLY zero, so the bias alone fixes the output and sigmoid(bias)
+# is the open fraction. Once W trains off zero the gate modulates on its
+# input and the bias barely moves -- A.2 at 43k steps generates well
+# (survival_b = 1.000) with its biases still at ~-9.8 and |W| ~ 0.99.
+# Judging on the bias would call that model's gates shut, which is why
+# the verdict keys on |W|.
+#
+# |W| ~ 0 means no cross-stream information can flow. Otherwise the
+# mechanism is live and |W| is only meaningful compared ACROSS runs.
 #
 # Only gated duet variants are checked by default; the single-stream
 # finetunes (S0/S1/S-mel/S-chord) have no gates and are skipped.
@@ -81,37 +81,33 @@ fi
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "CROSS-STREAM GATE REPORT   (CPU; no GPU needed)"
-echo "INIT_BIAS=$INIT_BIAS  -> gates start at sigmoid($INIT_BIAS)"
+echo "INIT_BIAS=$INIT_BIAS   (gates start at W=0, bias=$INIT_BIAS)"
 echo "targets (${#TARGETS[@]}):"
 printf '  %s\n' "${TARGETS[@]}"
 echo "================================================================"
 
-# check_gates.py exits 1 when a checkpoint's gates never moved; that is
-# a finding, not a crash, so capture it rather than let set -e abort.
+# check_gates.py exits 1 when a checkpoint's gate W never left zero;
+# that is a finding, not a crash, so capture it rather than abort.
 rc=0
 python check_gates.py --init-bias "$INIT_BIAS" "${TARGETS[@]}" || rc=$?
 
 echo "================================================================"
 if [[ "$rc" -eq 0 ]]; then
-    echo "All checked checkpoints have gates off their initial value."
-    echo "Cross-stream conditioning is at least partly trained in each."
+    echo "Every checkpoint has gate weights trained off their zero init,"
+    echo "so none of them is a case of cross-stream conditioning never"
+    echo "switching on. Read mean |W| COMPARATIVELY across runs; the bias"
+    echo "staying near its init is normal and says nothing on its own."
 else
-    echo "UNOPENED GATES FOUND (exit $rc)."
-    echo "That checkpoint carries essentially no cross-stream conditioning,"
-    echo "so the follower stream has no partner information to work with"
-    echo "however good its val_loss looks. On a corpus too small to open the"
-    echo "gates before val turns, retrain with the gates started open:"
+    echo "UNTRAINED GATES FOUND (exit $rc): some gate W is still at its"
+    echo "zero init, so no cross-stream information can flow through it."
+    echo "Raise GATE_INIT_BIAS and regenerate the warm-start init:"
     echo ""
     echo "  sbatch --gres=gpu:2 --export=ALL,TASK=melchord_pop909_nottingham,\\"
     echo "BATCH_SIZE=8,GATE_INIT_BIAS=-2.0,VAL_CHECK_INTERVAL=100,RUN_TAG=gb2 \\"
     echo "      midi_yinyang/train_duet_anticipatory.sbatch"
     echo ""
-    echo "sigmoid(-2) ~ 0.12 rather than 4.5e-5, so cross-conditioning is"
-    echo "live from step 0. INIT_CKPT now encodes the bias, so a new value"
-    echo "regenerates the warm-start instead of reusing the cached one."
-    echo "Judge the result on survival_b from diagnose_b1_follower.sbatch,"
-    echo "NOT on val_loss -- more cross-stream capacity can raise val while"
-    echo "improving generation."
+    echo "INIT_CKPT encodes the bias, so a new value regenerates the"
+    echo "warm-start instead of reusing the cached one."
 fi
 echo "================================================================"
 exit "$rc"

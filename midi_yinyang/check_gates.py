@@ -1,26 +1,26 @@
-"""Did the cross-stream gates ever open?
+"""How far have the cross-stream gates trained?
 
-The duet variants warm-start from a single-stream CP transformer, and the
-parameters that carry information BETWEEN the two streams do not exist in
-that source. They are baked in silent:
+The duet variants warm-start from a single-stream CP transformer, which
+has no cross-stream parameters, so those are baked in silent:
 
-    gate_m.weight = 0
-    gate_m.bias   = GATE_INIT_BIAS   (default -10 -> sigmoid ~ 4.5e-5)
+    gate_m.weight = 0                 (EXACTLY zero)
+    gate_m.bias   = GATE_INIT_BIAS    (default -10)
 
-so at step 0 each modality reproduces what the pretrained block computes
-on its own stream in isolation, and the entire duet mechanism has to be
-LEARNED through those gates. If training stops before they open -- which
-best-val selection can force on a small corpus, where val turns upward
-within ~1k steps -- the model is still effectively two independent
-single-stream models, and the stream that depends on cross-conditioning
-(the follower/chord) degenerates while the other coasts on inherited
-weights.
+READ THE WEIGHT NORM, NOT THE BIAS. A gate is sigmoid(W.x + b), so it is
+input-dependent. Only while W is exactly zero does the bias alone decide
+the output, making sigmoid(bias) the open fraction. Once W trains away
+from zero the gate modulates on its input and the bias barely needs to
+move -- so a near-init bias says nothing about whether the gate works.
 
-This reports, per gate parameter: sigmoid(bias) -- the open fraction --
-and ||weight||, which is 0 at init and only becomes non-zero if the gate
-learned to modulate on its input. A checkpoint whose gates all still sit
-at the init value is undertrained for the duet task no matter what its
-val_loss says.
+This was learned the hard way. A.2 at 43k steps generates well
+(survival_b = 1.000) yet its biases still sit at ~-9.8, i.e.
+sigmoid(bias) ~ 6e-5; an earlier version of this script judged on that
+and declared the healthy model's gates shut. Its |W| had reached ~0.99,
+which is what actually shows the gates trained.
+
+So: |W| ~ 0 means no cross-stream information can flow at all. |W| well
+above zero means the mechanism is live, and the number is meaningful
+only COMPARED ACROSS RUNS -- it is not a pass/fail test.
 
 Usage:
     python check_gates.py ckpt/<run dir>                 # resolves best-val
@@ -72,6 +72,9 @@ def main():
     ap.add_argument('--init-bias', type=float, default=-10.0,
                     help='the GATE_INIT_BIAS the run started from '
                          '(default -10.0); used to flag gates that never moved')
+    ap.add_argument('--w-eps', type=float, default=0.05,
+                    help='mean ||W|| below this counts as untrained '
+                         '(W is EXACTLY 0 at init)')
     args = ap.parse_args()
 
     any_stuck = False
@@ -102,24 +105,43 @@ def main():
         wnorms = [w for _, _, _, w in rows if not math.isnan(w)]
         moved = sum(1 for b in biases if abs(b - args.init_bias) > 0.05)
         mean_open = sum(opens) / len(opens)
-        print(f'  ---- mean open fraction {mean_open:.5f}   '
-              f'gates moved from init: {moved}/{len(biases)}   '
-              f'mean |W| {sum(wnorms) / len(wnorms) if wnorms else float("nan"):.4f}')
-        if moved == 0 or mean_open < 1e-3:
+        mean_w = sum(wnorms) / len(wnorms) if wnorms else float('nan')
+        print(f'  ---- bias-only open {mean_open:.5f} (NOT the true open '
+              f'fraction; see below)')
+        print(f'  ---- mean |W| {mean_w:.4f}   bias moved from init: '
+              f'{moved}/{len(biases)}')
+        # A gate is sigmoid(W.x + b) -- input-dependent. At init W is EXACTLY
+        # zero, so the bias alone decides the output and sigmoid(bias) is the
+        # open fraction. Once |W| > 0 that stops being true: the gate is
+        # modulated by its input and the bias barely has to move. Judging on
+        # sigmoid(bias) therefore condemns healthy models -- A.2 at 43k steps
+        # generates well (survival_b = 1.000) with mean |W| 0.99 and its bias
+        # still at -9.8. Untrained means W never left zero.
+        if mean_w < args.w_eps:
             any_stuck = True
-            print('  *** GATES STILL AT INIT: this checkpoint has essentially no')
-            print('      cross-stream conditioning. Its val_loss reflects the')
-            print('      inherited single-stream backbone, not a trained duet.')
+            print(f'  *** GATES UNTRAINED: mean |W| {mean_w:.4f} < {args.w_eps} --')
+            print('      W is still at its zero init, so the gate output is')
+            print('      fixed at sigmoid(bias) regardless of input and no')
+            print('      cross-stream information can flow.')
+        else:
+            print(f'  ok: W has left its zero init, so the gates modulate on')
+            print(f'      input. Compare mean |W| ACROSS runs for relative')
+            print(f'      cross-stream development; it is not an on/off test.')
         del ck, state
-
     print('=' * 78)
     if any_stuck:
-        print('At least one checkpoint has unopened gates. On a corpus too small')
-        print('to train them before val turns, raise GATE_INIT_BIAS (e.g. -4 or')
-        print('-2) so they start partly open instead of at sigmoid(-10)=4.5e-5,')
-        print('and regenerate the warm-start init -- the INIT_CKPT path now')
-        print('encodes the bias, so a new value gets its own init rather than')
-        print('silently reusing the cached one.')
+        print('At least one checkpoint has gates whose W never left zero --')
+        print('no cross-stream information can flow through them at all.')
+        print('Raise GATE_INIT_BIAS and regenerate the warm-start init (the')
+        print('INIT_CKPT path now encodes the bias, so a new value gets its')
+        print('own init rather than reusing the cached one).')
+    else:
+        print('All gates have trained W off zero, so none of these')
+        print('checkpoints is a case of "cross-stream conditioning never')
+        print('switched on". Differences in generation quality between them')
+        print('have to be explained by something else -- compare mean |W|')
+        print('and global_step across runs rather than reading any single')
+        print('run as pass/fail.')
     return 1 if any_stuck else 0
 
 
