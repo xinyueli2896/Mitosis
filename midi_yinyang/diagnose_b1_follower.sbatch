@@ -59,6 +59,14 @@ CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"
 PROMPT_LENGTH="${PROMPT_LENGTH:-64}"
 GEN_LENGTH="${GEN_LENGTH:-384}"
 N_SAMPLES="${N_SAMPLES:-3}"
+# Anticipation override. k is auto-detected from the ckpt path pattern
+# _k<N>_, with DEFAULT 16 when absent -- so pointing this diagnostic at
+# an A.1 checkpoint (whose dir has no _k<N>_) would silently run A.1
+# with a k=16 shift it was never trained for. A.1 IS B.1 with k=0 and
+# their state dicts are identical, so ANTICIPATION_FRAMES=0 makes this
+# script the architecture-matched control run: same decode, same songs,
+# only the shift differs.
+ANTICIPATION_FRAMES="${ANTICIPATION_FRAMES:-}"
 OUT_ROOT="${OUT_ROOT:-temp/b1_follower_${SLURM_JOB_ID:-local}}"
 
 conda activate "$CONDA_ENV"
@@ -74,6 +82,7 @@ echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "B.1 FOLLOWER-DECAY DIAGNOSTIC"
 echo "CKPT_B1  = $CKPT_B1"
+echo "ANTICIPATION_FRAMES=${ANTICIPATION_FRAMES:-<auto from ckpt path; default 16>}"
 echo "prompts  = $MEL_FOLDER (leader) / $CHORD_FOLDER (follower)"
 echo "PROMPT_LENGTH=$PROMPT_LENGTH ($((PROMPT_LENGTH / 16)) bars)  "\
 "GEN_LENGTH=$GEN_LENGTH ($((GEN_LENGTH / 16)) bars)  N_SAMPLES=$N_SAMPLES"
@@ -129,7 +138,8 @@ python cp_transformer_m2c_duet_anticipatory_inference.py \
     --output-dir "$CO_OUT" \
     --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
     --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 4 \
-    --model-size large --moe-num-experts 4 --moe-topk 2
+    --model-size large --moe-num-experts 4 --moe-topk 2 \
+    ${ANTICIPATION_FRAMES:+--anticipation-frames "$ANTICIPATION_FRAMES"}
 
 # ---------------------------------------------------------------------
 # 2. conditional: leader is GIVEN (real) for the whole piece
@@ -141,7 +151,8 @@ python cp_transformer_m2c_duet_anticipatory_inference.py \
     --output-dir "$CD_OUT" \
     --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
     --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 4 \
-    --model-size large --moe-num-experts 4 --moe-topk 2
+    --model-size large --moe-num-experts 4 --moe-topk 2 \
+    ${ANTICIPATION_FRAMES:+--anticipation-frames "$ANTICIPATION_FRAMES"}
 
 # ---------------------------------------------------------------------
 # 3. score both
