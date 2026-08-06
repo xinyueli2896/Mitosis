@@ -202,8 +202,11 @@ if [[ -n "$SONGS" ]]; then
         done
     done
 else
-    cp -f "$MEL_FOLDER"/*.mid "$EVAL_MEL"/ 2>/dev/null || true
-    cp -f "$CHORD_FOLDER"/*.mid "$EVAL_CHORD"/ 2>/dev/null || true
+    # Both extension cases: RWC files are named *.SMF_SYNC.MID (uppercase),
+    # POP909 files *.mid -- a lowercase-only glob silently collects NOTHING
+    # from the RWC split and the run dies at the count check below.
+    cp -f "$MEL_FOLDER"/*.mid "$MEL_FOLDER"/*.MID "$EVAL_MEL"/ 2>/dev/null || true
+    cp -f "$CHORD_FOLDER"/*.mid "$CHORD_FOLDER"/*.MID "$EVAL_CHORD"/ 2>/dev/null || true
 fi
 N_EVAL=$(ls "$EVAL_MEL" 2>/dev/null | wc -l)
 N_EVAL_CHORD=$(ls "$EVAL_CHORD" 2>/dev/null | wc -l)

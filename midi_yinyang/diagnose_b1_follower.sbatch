@@ -115,8 +115,8 @@ python check_ckpts.py "$CKPT_B1" || {
 for d in "$MEL_FOLDER" "$CHORD_FOLDER"; do
     [[ -d "$d" ]] || { echo "ERROR: $d not found"; exit 1; }
 done
-N_MEL=$(ls "$MEL_FOLDER"/*.mid 2>/dev/null | wc -l)
-N_CHD=$(ls "$CHORD_FOLDER"/*.mid 2>/dev/null | wc -l)
+N_MEL=$(ls "$MEL_FOLDER"/*.mid "$MEL_FOLDER"/*.MID 2>/dev/null | wc -l)
+N_CHD=$(ls "$CHORD_FOLDER"/*.mid "$CHORD_FOLDER"/*.MID 2>/dev/null | wc -l)
 if [[ "$N_MEL" -eq 0 || "$N_MEL" -ne "$N_CHD" ]]; then
     echo "ERROR: leader/follower folders must hold the SAME songs "\
 "(got $N_MEL vs $N_CHD) -- scoring pairs them by filename."
