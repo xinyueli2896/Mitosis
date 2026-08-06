@@ -466,6 +466,11 @@ if __name__ == '__main__':
     parser.add_argument('--mel_loss_weight', type=float, default=1.0)
     parser.add_argument('--acc_loss_weight', type=float, default=1.0)
     parser.add_argument('--run_tag', type=str, default=None)
+    parser.add_argument('--val_check_interval', type=int, default=500,
+                        help='steps between val evaluations. On the small '
+                             'melchord corpora the val minimum arrives '
+                             'within ~1k steps; 500 resolves it with only '
+                             'one or two points.')
     parser.add_argument('--preserve_program', action='store_true', default=True)
     parser.add_argument('--hardcode_program', dest='preserve_program',
                         action='store_false')
@@ -592,7 +597,7 @@ if __name__ == '__main__':
         max_steps=(args.lr_total_steps if args.lr_total_steps is not None else MAX_STEPS),
         accelerator='gpu' if torch.cuda.is_available() else 'cpu',
         callbacks=[checkpoint_callback] + extra_callbacks,
-        val_check_interval=500,
+        val_check_interval=args.val_check_interval,
         limit_val_batches=25,
         check_val_every_n_epoch=None,
         gradient_clip_val=(args.gradient_clip_val if args.gradient_clip_val > 0 else None),

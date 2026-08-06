@@ -41,6 +41,25 @@ BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
 RECON_WEIGHT="${RECON_WEIGHT:-1.0}"
 TASK="${TASK:-drumnondrum}"
+# Data max_polyphony, auto-set from TASK (override with MAX_POLYPHONY).
+# The melchord datasets are cp4 (8-token frames); the trainer defaults to
+# 16 and the --dump_samples_dir callback decodes real frames with it, so
+# an unset value silently mis-decodes the sample dump on cp4 tasks --
+# the same bug fixed in the other duet training sbatches.
+if [[ -z "${MAX_POLYPHONY:-}" ]]; then
+    case "$TASK" in
+        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=4 ;;
+        *)                                                       MAX_POLYPHONY=16 ;;
+    esac
+fi
+# OneCycle horizon (was hardcoded 50000; same default kept).
+LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-50000}"
+# Steps between val evals; lower on small melchord corpora (e.g. 100) so
+# the early minimum is resolved by more than one or two points.
+VAL_CHECK_INTERVAL="${VAL_CHECK_INTERVAL:-500}"
+# Optional run-name suffix: keeps a rerun out of an older run's ckpt dir,
+# where resolve_best_ckpt would otherwise pick across both runs.
+RUN_TAG="${RUN_TAG:-}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_rehearsal_${SLURM_JOB_ID}}"
 
 conda activate "$CONDA_ENV"
@@ -124,7 +143,10 @@ if [[ "$NGPUS" -le 1 ]]; then
         --model_size large \
         --moe_num_experts 4 --moe_topk 2 \
         --max_lr "$MAX_LR" \
-        --lr_total_steps 50000 \
+        --lr_total_steps "$LR_TOTAL_STEPS" \
+        --val_check_interval "$VAL_CHECK_INTERVAL" \
+        --max_polyphony "$MAX_POLYPHONY" \
+        ${RUN_TAG:+--run_tag "$RUN_TAG"} \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --moe_monitor_every_n_steps 500 \
@@ -141,7 +163,10 @@ else
         --model_size large \
         --moe_num_experts 4 --moe_topk 2 \
         --max_lr "$MAX_LR" \
-        --lr_total_steps 50000 \
+        --lr_total_steps "$LR_TOTAL_STEPS" \
+        --val_check_interval "$VAL_CHECK_INTERVAL" \
+        --max_polyphony "$MAX_POLYPHONY" \
+        ${RUN_TAG:+--run_tag "$RUN_TAG"} \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --moe_monitor_every_n_steps 500 \
