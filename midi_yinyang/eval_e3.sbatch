@@ -92,10 +92,14 @@ case "$TASK" in
         CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"
         MAX_POLYPHONY=4
         BASELINE="${BASELINE:-Y-mc}"
+        # C.1/C.2 on melchord are valid once their melchord trainings
+        # exist (train_duet_{rehearsal,prefix}.sbatch with
+        # TASK=melchord_pop909_nottingham). Passing a ckpt asserts you
+        # have one; the integrity pre-flight below rejects a wrong path.
         if [[ -n "$CKPT_C1" || -n "$CKPT_C2" ]]; then
-            echo "ERROR: C.1/C.2 are drumnondrum-only conditional models"
-            echo "       (no melchord training exists for them)."
-            exit 1
+            echo "[note] C.1/C.2 on melchord: make sure these are MELCHORD"
+            echo "       checkpoints -- a drumnondrum ckpt here would decode"
+            echo "       cp4 prompts with cp16 assumptions and score garbage."
         fi
         ;;
     drumnondrum)
