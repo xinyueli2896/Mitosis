@@ -46,10 +46,14 @@ def main():
     args.mel_programs = {int(x) for x in args.mel_programs.split(',')}
     args.chord_programs = {int(x) for x in args.chord_programs.split(',')}
 
-    a_files = {os.path.splitext(os.path.basename(f))[0]: f
-               for f in sorted(glob(os.path.join(args.ref_a_dir, '*.mid')))}
-    b_files = {os.path.splitext(os.path.basename(f))[0]: f
-               for f in sorted(glob(os.path.join(args.ref_b_dir, '*.mid')))}
+    # Both extension cases: the RWC split uses uppercase .MID
+    # (RM-P*.SMF_SYNC.MID), POP909 lowercase .mid.
+    def _midis(d):
+        return {os.path.splitext(os.path.basename(f))[0]: f
+                for pat in ('*.mid', '*.MID')
+                for f in sorted(glob(os.path.join(d, pat)))}
+    a_files = _midis(args.ref_a_dir)
+    b_files = _midis(args.ref_b_dir)
     songs = sorted(set(a_files) & set(b_files))
     if not songs:
         raise SystemExit(
