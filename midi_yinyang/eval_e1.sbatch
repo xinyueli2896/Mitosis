@@ -302,6 +302,32 @@ else
 fi
 
 # ---------------------------------------------------------------------
+# 2b. piano listening copies (melchord). The scored files keep the chord
+#     stream on program 48 (strings) BY DESIGN -- that program is the
+#     stream identity: the tokenizer separates the merged prompt by it
+#     and eval_metrics attributes S0/S1 output notes by it
+#     (chord_programs={48}). Rewriting programs in the scored files
+#     would re-fuse the streams for the scorer, so listening gets
+#     parallel <dir>_piano copies instead: every non-drum track set to
+#     program 0 (Acoustic Grand -- the GM slot a Steinway soundfont
+#     occupies), names/notes/timing preserved. PIANO_COPIES=0 disables.
+# ---------------------------------------------------------------------
+PIANO_COPIES="${PIANO_COPIES:-}"
+if [[ -z "$PIANO_COPIES" ]]; then
+    [[ "$TASK" == "melchord" ]] && PIANO_COPIES=1 || PIANO_COPIES=0
+fi
+if [[ "$PIANO_COPIES" == "1" ]]; then
+    PIANO_DIRS=()
+    for d in "$A2_OUT" "$B1_OUT" "$S1_OUT" "$S0_OUT"; do
+        [[ -d "$d" ]] && PIANO_DIRS+=("$d")
+    done
+    if [[ ${#PIANO_DIRS[@]} -gt 0 ]]; then
+        echo "--- piano listening copies (originals untouched) ---"
+        python render_piano_copies.py "${PIANO_DIRS[@]}"
+    fi
+fi
+
+# ---------------------------------------------------------------------
 # 3. quantitative analysis
 # ---------------------------------------------------------------------
 # Result files are scoped by prompt length (and an optional RESULT_TAG).
@@ -388,6 +414,7 @@ fi
 echo "================================================================"
 echo "E1 evaluation complete."
 echo "  generated midis : $OUT_ROOT (A.2, B.1), $S1_OUT, $S0_OUT"
+[[ "$PIANO_COPIES" == "1" ]] && echo "  piano copies    : same folders with _piano suffix (listening only)"
 echo "  manifest        : $MANIFEST"
 echo "  per-sample CSV  : $METRICS"
 echo "  comparison table: $TABLE   (primary)"
