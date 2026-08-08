@@ -259,7 +259,13 @@ MANIFEST="results/e3_${TASK}_${RSUF}_manifest.tsv"
 METRICS="results/e3_${TASK}_${RSUF}_metrics.csv"
 TABLE="results/e3_${TASK}_${RSUF}_table.md"
 
+# Optional published-baseline rows: point Y_OUT at a duet_multi root
+# produced by eval_yinyang.sbatch / yinyang_e3_driver.py. Its mode
+# dirs use the same direction labels, so the rows land in the same
+# table sections; BASELINE=Y then gives paired tests vs YinYang.
+Y_OUT="${Y_OUT:-}"
 SRC_ARGS=(--source "A.2:${A2_LAYOUT}:${A2_OUT}")
+[[ -n "$Y_OUT" && -d "$Y_OUT" ]] && SRC_ARGS+=(--source "Y:duet_multi:${Y_OUT}")
 [[ -d "$B1_OUT" ]] && SRC_ARGS+=(--source "B.1:${B1_LAYOUT}:${B1_OUT}")
 [[ -d "$C1_OUT" ]] && SRC_ARGS+=(--source "C.1:cond:${C1_OUT}")
 [[ -d "$C2_OUT" ]] && SRC_ARGS+=(--source "C.2:cond:${C2_OUT}")
