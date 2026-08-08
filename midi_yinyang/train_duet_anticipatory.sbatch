@@ -82,6 +82,12 @@ LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-}"
 # place the saved checkpoint badly. Lower it on the small melchord
 # corpora (VAL_CHECK_INTERVAL=100).
 VAL_CHECK_INTERVAL="${VAL_CHECK_INTERVAL:-500}"
+# Anti-exposure-bias augmentation for the sparse stream: prob per
+# frame that a silent run of CTX_CORRUPT_LEN frames begins in the acc
+# INPUT context while CE targets stay clean. 0 = off (default,
+# behaviour unchanged). See the comment in cp_transformer_m2c_moe.loss.
+CTX_CORRUPT_PROB="${CTX_CORRUPT_PROB:-0.0}"
+CTX_CORRUPT_LEN="${CTX_CORRUPT_LEN:-8}"
 MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
@@ -237,7 +243,9 @@ COMMON_ARGS=(
     --moe_num_experts 4 --moe_topk 2
     --max_lr "$MAX_LR"
     --lr_total_steps "$LR_TOTAL_STEPS" \
-    --val_check_interval "$VAL_CHECK_INTERVAL"
+    --val_check_interval "$VAL_CHECK_INTERVAL" \
+    --ctx_corrupt_prob "$CTX_CORRUPT_PROB" \
+    --ctx_corrupt_len "$CTX_CORRUPT_LEN"
     --gradient_clip_val 1.0
     --aux_loss_weight 0.01
     --moe_monitor_every_n_steps 500

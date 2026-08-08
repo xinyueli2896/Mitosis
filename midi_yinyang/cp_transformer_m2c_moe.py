@@ -232,6 +232,8 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         lr_pct_start: float = 0.005,
         aux_loss_weight: float = 0.01,
         silence_augment_prob: float = 0.0,
+        ctx_corrupt_prob: float = 0.0,
+        ctx_corrupt_len: int = 8,
         eos_loss_weight: float = 1.0,
     ):
         super().__init__()
@@ -258,6 +260,8 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         # handle the {mel_only, chord_only} inference modes in-distribution.
         # 0 disables (legacy behavior).
         self.silence_augment_prob = silence_augment_prob
+        self.ctx_corrupt_prob = float(ctx_corrupt_prob)
+        self.ctx_corrupt_len = int(ctx_corrupt_len)
         # When True, preprocess() keeps the actual per-note program in the
         # a-slot token instead of hardcoding 24 (mel) / 0 (chord). Needed
         # for LAMD-style multi-instrument streams; for POP909-style single-
@@ -832,6 +836,36 @@ class RoFormerSymbolicTransformer(L.LightningModule):
 
 
 
+    def _ctx_corrupt_acc(self, x_acc):
+        """Anti-exposure-bias augmentation: return a copy of the acc stream
+        with silent RUNS injected, for use as INPUT context only (callers
+        must keep CE targets on the clean tensor). With prob
+        ctx_corrupt_prob a run of ctx_corrupt_len frames starting at that
+        frame is replaced by the silence frame (a-slot=eos, rest pad) --
+        the exact frame an empty generation step produces. Trains the
+        model to emit the true next acc frame out of a silent acc history,
+        the state the free-running silence attractor exploits the absence
+        of. No-op (returns x_acc itself) when disabled or in eval.
+        """
+        if not (self.training and self.ctx_corrupt_prob > 0):
+            return x_acc
+        batch_size, seq_len, subseq_len = x_acc.shape
+        p = self.ctx_corrupt_prob
+        L = max(1, int(self.ctx_corrupt_len))
+        starts = torch.rand(batch_size, seq_len, device=x_acc.device) < p
+        mask = starts
+        run = starts
+        for _ in range(L - 1):
+            run = torch.cat(
+                [run.new_zeros(batch_size, 1), run[:, :-1]], dim=1)
+            mask = mask | run
+        silence_frame = torch.full(
+            (1, 1, subseq_len), self.tokenizer.pad_token,
+            dtype=x_acc.dtype, device=x_acc.device,
+        )
+        silence_frame[..., 0] = self.tokenizer.eos_token
+        return torch.where(mask[:, :, None], silence_frame, x_acc)
+
     def loss(self, x_mel, x_acc, pitch_shift):
 
         x_mel, x_acc = self.preprocess(x_mel, pitch_shift, y=x_acc)
@@ -860,10 +894,36 @@ class RoFormerSymbolicTransformer(L.LightningModule):
                 silence_acc_mask[:, None, None], silence_frame, x_acc,
             )
 
+        # Context-corruption augmentation for the SPARSE stream (mod-b /
+        # acc). The interleaved layout gives each stream a private history;
+        # on melchord the real chord stream is empty in ~89% of frames, so
+        # at free-running inference a few sampled empty frames put the
+        # model in an all-silent-context regime that teacher forcing never
+        # visits -- and the follower stream collapses into it (measured:
+        # survival_b ~0.66 for the AR duets vs 1.0 ground truth). This
+        # augmentation manufactures that regime during training: with prob
+        # ctx_corrupt_prob per frame a silent RUN of ctx_corrupt_len frames
+        # begins in the acc INPUT, while the CE targets keep the clean
+        # frames. The corrupted input frame at position 2t+1 only feeds
+        # predictions of LATER positions (shift-by-2 causality), so the
+        # model is trained to produce the true chord out of a silent chord
+        # history -- the exact recovery the silence attractor exploits the
+        # absence of. Unlike silence_augment_prob (whole-stream silence
+        # kept as TARGET, i.e. marginal-mode training), this never asks
+        # the model to PREDICT silence it did not see in the data.
+        # Context-corruption augmentation for the SPARSE stream: see
+        # _ctx_corrupt_acc. Inputs get silent runs; CE targets stay clean.
+        x_acc_in = self._ctx_corrupt_acc(x_acc)
+
         stacked = torch.stack([x_mel, x_acc], dim=2)
         x = stacked.view(batch_size, seq_len * 2, subseq_len)
+        if x_acc_in is x_acc:
+            x_in = x
+        else:
+            x_in = torch.stack([x_mel, x_acc_in], dim=2).view(
+                batch_size, seq_len * 2, subseq_len)
 
-        logits, aux_loss = self(x)
+        logits, aux_loss = self(x_in)
         targets = x
 
         frame_idx = torch.arange(seq_len * 2, device=targets.device)

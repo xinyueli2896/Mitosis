@@ -170,6 +170,13 @@ if __name__ == '__main__':
     parser.add_argument('--aux_loss_weight', type=float, default=0.01)
     parser.add_argument('--eos_loss_weight', type=float, default=1.0)
     parser.add_argument('--silence_augment_prob', type=float, default=0.0)
+    parser.add_argument('--ctx_corrupt_prob', type=float, default=0.0,
+                        help='prob per frame that a silent run of '
+                             'ctx_corrupt_len frames begins in the acc '
+                             'INPUT context (targets stay clean) -- '
+                             'anti-exposure-bias augmentation for the '
+                             'sparse stream')
+    parser.add_argument('--ctx_corrupt_len', type=int, default=8)
     parser.add_argument('--moe_monitor_every_n_steps', type=int, default=0)
     parser.add_argument('--moe_monitor_n_samples', type=int, default=4)
     parser.add_argument('--dump_samples_dir', type=str, default=None)
@@ -218,6 +225,8 @@ if __name__ == '__main__':
         lr_total_steps=args.lr_total_steps,
         aux_loss_weight=args.aux_loss_weight,
         silence_augment_prob=args.silence_augment_prob,
+        ctx_corrupt_prob=args.ctx_corrupt_prob,
+        ctx_corrupt_len=args.ctx_corrupt_len,
         eos_loss_weight=args.eos_loss_weight,
         gate_init_bias=args.gate_init_bias,
         anticipation_frames=args.anticipation_frames,

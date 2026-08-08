@@ -57,6 +57,12 @@ LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-50000}"
 # Steps between val evals; lower on small melchord corpora (e.g. 100) so
 # the early minimum is resolved by more than one or two points.
 VAL_CHECK_INTERVAL="${VAL_CHECK_INTERVAL:-500}"
+# Anti-exposure-bias augmentation for the sparse stream: prob per
+# frame that a silent run of CTX_CORRUPT_LEN frames begins in the acc
+# INPUT context while CE targets stay clean. 0 = off (default,
+# behaviour unchanged). See cp_transformer_m2c_moe._ctx_corrupt_acc.
+CTX_CORRUPT_PROB="${CTX_CORRUPT_PROB:-0.0}"
+CTX_CORRUPT_LEN="${CTX_CORRUPT_LEN:-8}"
 # Optional run-name suffix: keeps a rerun out of an older run's ckpt dir,
 # where resolve_best_ckpt would otherwise pick across both runs.
 RUN_TAG="${RUN_TAG:-}"
@@ -145,6 +151,8 @@ if [[ "$NGPUS" -le 1 ]]; then
         --max_lr "$MAX_LR" \
         --lr_total_steps "$LR_TOTAL_STEPS" \
         --val_check_interval "$VAL_CHECK_INTERVAL" \
+        --ctx_corrupt_prob "$CTX_CORRUPT_PROB" \
+        --ctx_corrupt_len "$CTX_CORRUPT_LEN" \
         --max_polyphony "$MAX_POLYPHONY" \
         ${RUN_TAG:+--run_tag "$RUN_TAG"} \
         --gradient_clip_val 1.0 \
@@ -165,6 +173,8 @@ else
         --max_lr "$MAX_LR" \
         --lr_total_steps "$LR_TOTAL_STEPS" \
         --val_check_interval "$VAL_CHECK_INTERVAL" \
+        --ctx_corrupt_prob "$CTX_CORRUPT_PROB" \
+        --ctx_corrupt_len "$CTX_CORRUPT_LEN" \
         --max_polyphony "$MAX_POLYPHONY" \
         ${RUN_TAG:+--run_tag "$RUN_TAG"} \
         --gradient_clip_val 1.0 \

@@ -373,9 +373,17 @@ class M2CDuetPrefix(RoFormerSymbolicTransformer):
         x_mel, x_acc = self.preprocess(x_mel, batch_pitch_shift, y=x_acc)
         batch_size, seq_len, subseq_len = x_mel.shape
 
+        # Anti-exposure-bias augmentation (see base _ctx_corrupt_acc):
+        # silent runs in the acc INPUT context; CE targets from clean x.
+        x_acc_in = self._ctx_corrupt_acc(x_acc)
         stacked = torch.stack([x_mel, x_acc], dim=2)
         x = stacked.view(batch_size, seq_len * 2, subseq_len)
-        logits, aux_loss = self.forward(x)
+        if x_acc_in is x_acc:
+            x_in = x
+        else:
+            x_in = torch.stack([x_mel, x_acc_in], dim=2).view(
+                batch_size, seq_len * 2, subseq_len)
+        logits, aux_loss = self.forward(x_in)
 
         # Targets: nondrum frames only.
         targets_nondrum = x[:, 1::2]   # [B, T_full, subseq_len]
@@ -482,6 +490,11 @@ if __name__ == '__main__':
     parser.add_argument('--gradient_clip_val', type=float, default=1.0)
     parser.add_argument('--aux_loss_weight', type=float, default=0.01)
     parser.add_argument('--eos_loss_weight', type=float, default=1.0)
+    parser.add_argument('--ctx_corrupt_prob', type=float, default=0.0,
+                        help='prob per frame that a silent run of '
+                             'ctx_corrupt_len frames begins in the acc '
+                             'INPUT context (targets stay clean)')
+    parser.add_argument('--ctx_corrupt_len', type=int, default=8)
     parser.add_argument('--silence_augment_prob', type=float, default=0.0)
     parser.add_argument('--moe_monitor_every_n_steps', type=int, default=0)
     parser.add_argument('--moe_monitor_n_samples', type=int, default=4)
@@ -525,6 +538,8 @@ if __name__ == '__main__':
         aux_loss_weight=args.aux_loss_weight,
         silence_augment_prob=args.silence_augment_prob,
         eos_loss_weight=args.eos_loss_weight,
+        ctx_corrupt_prob=args.ctx_corrupt_prob,
+        ctx_corrupt_len=args.ctx_corrupt_len,
         gate_init_bias=args.gate_init_bias,
     )
     print(f'Architecture: M2CDuetPrefix  prefix-LM (drum bidirectional + '

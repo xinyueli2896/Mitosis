@@ -79,6 +79,12 @@ LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-50000}"
 # stock 500 resolves it with one or two points; lower it to place the
 # checkpoint accurately.
 VAL_CHECK_INTERVAL="${VAL_CHECK_INTERVAL:-500}"
+# Anti-exposure-bias augmentation for the sparse stream: prob per
+# frame that a silent run of CTX_CORRUPT_LEN frames begins in the acc
+# INPUT context while CE targets stay clean. 0 = off (default,
+# behaviour unchanged). See the comment in cp_transformer_m2c_moe.loss.
+CTX_CORRUPT_PROB="${CTX_CORRUPT_PROB:-0.0}"
+CTX_CORRUPT_LEN="${CTX_CORRUPT_LEN:-8}"
 # Optional run-name suffix. The run directory is derived from variant +
 # task + global batch, so two runs of the SAME task land in the SAME
 # dir and their checkpoints intermingle. That is silently dangerous:
@@ -221,6 +227,8 @@ if [[ "$NGPUS" -le 1 ]]; then
         --max_lr "$MAX_LR" \
         --lr_total_steps "$LR_TOTAL_STEPS" \
         --val_check_interval "$VAL_CHECK_INTERVAL" \
+        --ctx_corrupt_prob "$CTX_CORRUPT_PROB" \
+        --ctx_corrupt_len "$CTX_CORRUPT_LEN" \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --moe_monitor_every_n_steps 500 \
@@ -241,6 +249,8 @@ else
         --max_lr "$MAX_LR" \
         --lr_total_steps "$LR_TOTAL_STEPS" \
         --val_check_interval "$VAL_CHECK_INTERVAL" \
+        --ctx_corrupt_prob "$CTX_CORRUPT_PROB" \
+        --ctx_corrupt_len "$CTX_CORRUPT_LEN" \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --moe_monitor_every_n_steps 500 \
