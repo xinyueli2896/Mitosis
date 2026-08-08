@@ -59,6 +59,8 @@ if [[ -z "${CKPTS:-}" ]]; then
         ckpt/m2c_intra_cross_attn_*melchord*
         ckpt/m2c_duet_anticipatory_*melchord*
         ckpt/m2c_duet_block_diffusion_*melchord*
+        ckpt/m2c_duet_rehearsal_*melchord*
+        ckpt/m2c_duet_prefix_*melchord*
     )
     TARGETS=()
     for c in "${CANDIDATES[@]}"; do
