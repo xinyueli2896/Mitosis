@@ -10,11 +10,11 @@
 #   drumnondrum : A.2, B.1, C.1 (rehearsal), C.2 (prefix), all
 #                 drum -> nondrum; A.2 additionally nondrum -> drum.
 #
-# Baselines Y-mc / Y-dn are EXTERNAL checkpoints with their own runner;
-# they are not wired here. Without a baseline the tables print means
-# only -- pass BASELINE=<system id present in the table> to get paired
-# tests between internal systems instead (e.g. BASELINE=A.2 on
-# drumnondrum tests B.1/C.1/C.2 against A.2).
+# Baselines Y-mc / Y-dn: generate them first with eval_yinyang.sbatch,
+# then pass Y_OUT=<its output root> here (adds the Y rows to the same
+# table; BASELINE=Y gives paired tests vs the published model). Without
+# any baseline present the tables print means only; BASELINE=<internal
+# system id> (e.g. A.2) tests the others against it instead.
 #
 # The no-conditioning FLOOR for interpreting fit scores is the E1
 # co-generation table (results/e1_<task>_p<P>_metrics.csv, mode=co):
