@@ -90,7 +90,10 @@ case "$TASK" in
     melchord)
         MEL_FOLDER="${MEL_FOLDER:-input/pop909_split/melody}"
         CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"
-        MAX_POLYPHONY=4
+        # cp8 is the melchord convention (cp4 retired: seventh chords are
+        # 5 notes). Must match the ckpts' training data -- pass
+        # MAX_POLYPHONY=4 for pre-migration cp4-trained checkpoints.
+        MAX_POLYPHONY="${MAX_POLYPHONY:-8}"
         BASELINE="${BASELINE:-Y-mc}"
         # C.1/C.2 on melchord are valid once their melchord trainings
         # exist (train_duet_{rehearsal,prefix}.sbatch with
@@ -99,13 +102,13 @@ case "$TASK" in
         if [[ -n "$CKPT_C1" || -n "$CKPT_C2" ]]; then
             echo "[note] C.1/C.2 on melchord: make sure these are MELCHORD"
             echo "       checkpoints -- a drumnondrum ckpt here would decode"
-            echo "       cp4 prompts with cp16 assumptions and score garbage."
+            echo "       melchord prompts with cp16 assumptions and score garbage."
         fi
         ;;
     drumnondrum)
         MEL_FOLDER="${MEL_FOLDER:-input/rwc_test_prompts_split/drum}"
         CHORD_FOLDER="${CHORD_FOLDER:-input/rwc_test_prompts_split/nondrum}"
-        MAX_POLYPHONY=16
+        MAX_POLYPHONY="${MAX_POLYPHONY:-16}"
         BASELINE="${BASELINE:-Y-dn}"
         ;;
     *) echo "ERROR: unknown TASK=$TASK"; exit 1 ;;

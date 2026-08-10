@@ -23,7 +23,18 @@ Phase 2 (deferred) would rename the internal symbols.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+
+# Polyphony budget for the melchord DUET datasets. cp8 is the certified
+# convention (cp_capacity_check): POP909 renders seventh chords as FIVE
+# simultaneous notes (1 bass + 4 upper tones, build_pop909_chord_midi.py),
+# so the former cp4 silently dropped the topmost tone -- the seventh --
+# from 13.8% of chord frames (3.3% of chord notes). cp8 covers the
+# observed maximum (5) with margin and half the padding of cp16.
+# Override with MELCHORD_CP=4 to address the legacy cp4 datasets that
+# the pre-migration checkpoints were trained on.
+MELCHORD_CP = os.environ.get('MELCHORD_CP', '8')
 
 
 @dataclass(frozen=True)
@@ -43,12 +54,12 @@ TASKS = {
         mod_a_label='mel',
         mod_b_label='chord',
         # POP909: melody track extracted by extract_pop909_melody.py, chord
-        # track rendered from chord_midi.txt by build_pop909_chord_midi.py,
-        # both tokenized at max_polyphony=4 (melody is monophonic; chords are
-        # rendered as exactly 4 voices). See preprocess_pop909.sbatch for the
-        # end-to-end pipeline.
-        mod_a_path='data/pop909_melody_cp4_v2.pt',
-        mod_b_path='data/pop909_chord_cp4_v2.pt',
+        # track rendered from chord_midi.txt by build_pop909_chord_midi.py
+        # (1 bass + up to 4 upper tones -> up to 5 simultaneous notes; see
+        # the MELCHORD_CP note above). Both streams tokenized at the same
+        # budget. See preprocess_pop909.sbatch for the end-to-end pipeline.
+        mod_a_path=f'data/pop909_melody_cp{MELCHORD_CP}_v2.pt',
+        mod_b_path=f'data/pop909_chord_cp{MELCHORD_CP}_v2.pt',
         mod_a_default_program=24,
         mod_b_default_program=0,
     ),
@@ -57,13 +68,13 @@ TASKS = {
         mod_a_label='mel',
         mod_b_label='chord',
         # Nottingham (folk): melody = instrument 0, rendered chord
-        # accompaniment = instrument 1, tokenized at max_polyphony=4 to
+        # accompaniment = instrument 1, tokenized at MELCHORD_CP to
         # match the POP909 melchord convention. Built by
         # preprocess_nottingham_melchord.sbatch. Primary use: the
         # domain-matched counterpart to the Nottingham-trained YinYang
         # conditional baseline (EXPERIMENTS.md §2.4).
-        mod_a_path='data/nottingham_melody_cp4_v2.pt',
-        mod_b_path='data/nottingham_chord_cp4_v2.pt',
+        mod_a_path=f'data/nottingham_melody_cp{MELCHORD_CP}_v2.pt',
+        mod_b_path=f'data/nottingham_chord_cp{MELCHORD_CP}_v2.pt',
         mod_a_default_program=24,
         mod_b_default_program=0,
     ),
@@ -78,8 +89,8 @@ TASKS = {
         # (001,011,...,091) stay held out under FramedDataset's
         # index-mod-10 split after combination. See that script's
         # docstring for the full argument.
-        mod_a_path='data/melchord_pop909_nottingham_melody_cp4_v2.pt',
-        mod_b_path='data/melchord_pop909_nottingham_chord_cp4_v2.pt',
+        mod_a_path=f'data/melchord_pop909_nottingham_melody_cp{MELCHORD_CP}_v2.pt',
+        mod_b_path=f'data/melchord_pop909_nottingham_chord_cp{MELCHORD_CP}_v2.pt',
         mod_a_default_program=24,
         mod_b_default_program=0,
     ),

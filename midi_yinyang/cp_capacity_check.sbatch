@@ -10,7 +10,7 @@
 #                  data instead of guessed.
 #     2. SURVEY    drumnondrum streams at budget 128, plus the pooled
 #                  drums+nondrum view (what the merged baseline sees).
-#     3. CERTIFY   melchord melody+chord streams at cp4  (duet side).
+#     3. CERTIFY   melchord melody+chord streams at cp8  (duet side).
 #     4. CERTIFY   drumnondrum drum+nondrum streams at cp16 (duet side).
 #     5. CERTIFY   POOLED drums+nondrum at cp16 -- the S0 merged-stream
 #                  budget, which can clip even when each stream alone
@@ -29,7 +29,9 @@
 #   BUDGET             budget for the custom run (required with FOLDERS)
 #   POOLED             1 = sum folders per song before measuring (merged
 #                      view); default per-stream
-#   MELCHORD_BUDGET    battery melchord budget      (default 4)
+#   MELCHORD_BUDGET    battery melchord budget      (default 8; cp4 was
+#                      retired after this check caught it clipping the
+#                      seventh out of 5-note seventh chords)
 #   DRUMNONDRUM_BUDGET battery drumnondrum budget   (default 16)
 #   MEL_FOLDER / CHORD_FOLDER / DRUM_FOLDER / NONDRUM_FOLDER
 #                      battery folder overrides; defaults match eval_e1:
@@ -81,7 +83,7 @@ if [[ -n "${FOLDERS:-}" ]]; then
 fi
 
 # ---------------- default battery ----------------
-MELCHORD_BUDGET="${MELCHORD_BUDGET:-4}"
+MELCHORD_BUDGET="${MELCHORD_BUDGET:-8}"
 DRUMNONDRUM_BUDGET="${DRUMNONDRUM_BUDGET:-16}"
 MEL_FOLDER="${MEL_FOLDER:-input/pop909_split/melody}"
 CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"

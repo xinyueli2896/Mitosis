@@ -4,7 +4,8 @@
 #
 # Nottingham midis carry melody as instrument 0 and the rendered chord
 # accompaniment as instrument 1; both streams are tokenized at
-# max_polyphony=4 to match the POP909 melchord convention, so models and
+# MAX_POLYPHONY (default 8, matching the POP909 melchord convention --
+# see preprocess_pop909.sbatch for why cp4 was retired), so models and
 # tooling are interchangeable across the two corpora. Primary purpose:
 # a domain-matched counterpart to the Nottingham-trained YinYang
 # conditional baseline (EXPERIMENTS.md §2.4) — enables matched-domain
@@ -17,14 +18,16 @@
 # passes cleanly (this is expected -- ~1% of the corpus, not a bug).
 #
 # Output (under midi_yinyang/data/):
-#   nottingham_melody_cp4_v2.pt (+ .length.pt, .pitch_shift_range.pt, .txt)
-#   nottingham_chord_cp4_v2.pt  (+ sidecars)
+#   nottingham_melody_cp${MAX_POLYPHONY}_v2.pt (+ sidecars)
+#   nottingham_chord_cp${MAX_POLYPHONY}_v2.pt  (+ sidecars)
 # followed by the song-pairing gate (check_paired_dataset.py).
 #
 # Env knobs (override via --export=ALL,KEY=val):
 #   NOTTINGHAM_DIR  folder that DIRECTLY contains the .mid files.
 #                   default: /home/xinyue.li/nottingham-dataset/MIDI
 #                   (clone: https://github.com/jukedeck/nottingham-dataset)
+#   MAX_POLYPHONY   polyphony budget, default 8. Output names encode it,
+#                   so different budgets never clobber each other.
 #
 # Example:
 #   sbatch midi_yinyang/preprocess_nottingham_melchord.sbatch
@@ -47,6 +50,7 @@ CONDA_ENV=mitosis
 REPO_DIR=/home/xinyue.li/Mitosis
 
 NOTTINGHAM_DIR="${NOTTINGHAM_DIR:-/home/xinyue.li/nottingham-dataset/MIDI}"
+MAX_POLYPHONY="${MAX_POLYPHONY:-8}"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -66,27 +70,28 @@ if [[ "$N_MID" -eq 0 ]]; then
 fi
 
 NOTTINGHAM_MIDI_PATH="$NOTTINGHAM_DIR" \
-    python preprocess_large_midi_dataset.py nottingham_melody
+    python preprocess_large_midi_dataset.py nottingham_melody "$MAX_POLYPHONY"
 NOTTINGHAM_MIDI_PATH="$NOTTINGHAM_DIR" \
-    python preprocess_large_midi_dataset.py nottingham_chord
+    python preprocess_large_midi_dataset.py nottingham_chord "$MAX_POLYPHONY"
 
 python check_paired_dataset.py \
-    data/nottingham_melody_cp4_v2 data/nottingham_chord_cp4_v2
+    "data/nottingham_melody_cp${MAX_POLYPHONY}_v2" \
+    "data/nottingham_chord_cp${MAX_POLYPHONY}_v2"
 
 # Listening audit: decode a handful of songs back to midi (melody /
 # chord / combined, chord remapped to program 48 for separation) plus
 # the per-stream notes-per-frame orientation check. Listen to these
 # against the source midis before training on the data.
 python audit_pt_melchord.py \
-    --mel-prefix data/nottingham_melody_cp4_v2 \
-    --chord-prefix data/nottingham_chord_cp4_v2 \
+    --mel-prefix "data/nottingham_melody_cp${MAX_POLYPHONY}_v2" \
+    --chord-prefix "data/nottingham_chord_cp${MAX_POLYPHONY}_v2" \
     --out-dir temp/nottingham_audit --n-songs 8
 
 echo "----------------------------------------------------------------"
-ls -lh data/nottingham_*_cp4_v2* || true
+ls -lh data/nottingham_*_cp"${MAX_POLYPHONY}"_v2* || true
 echo "================================================================"
-echo "Nottingham melchord tokenization complete."
-echo "  data/nottingham_melody_cp4_v2.pt"
-echo "  data/nottingham_chord_cp4_v2.pt"
+echo "Nottingham melchord tokenization complete (cp${MAX_POLYPHONY})."
+echo "  data/nottingham_melody_cp${MAX_POLYPHONY}_v2.pt"
+echo "  data/nottingham_chord_cp${MAX_POLYPHONY}_v2.pt"
 echo "Duet training on it: sbatch --export=ALL,TASK=melchord_nottingham \\"
 echo "    midi_yinyang/train_duet_block_diffusion.sbatch"

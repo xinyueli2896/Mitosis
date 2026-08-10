@@ -73,6 +73,11 @@ CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"
 PROMPT_LENGTH="${PROMPT_LENGTH:-64}"
 GEN_LENGTH="${GEN_LENGTH:-384}"
 N_SAMPLES="${N_SAMPLES:-3}"
+# Melchord polyphony budget: cp8 is the convention (cp4 retired --
+# seventh chords are 5 notes). Must match BOTH the A.2 duet ckpt's and
+# the specialists' training data; pass MAX_POLYPHONY=4 for the
+# pre-migration cp4-trained checkpoints.
+MAX_POLYPHONY="${MAX_POLYPHONY:-8}"
 RESULT_TAG="${RESULT_TAG:-}"
 SKIP_INFER="${SKIP_INFER:-0}"
 CHORD_OUT_PROGRAMS="${CHORD_OUT_PROGRAMS:-0,48}"
@@ -99,6 +104,7 @@ echo "CKPT_SCHORD = $CKPT_SCHORD"
 echo "prompts     = $MEL_FOLDER / $CHORD_FOLDER"
 echo "PROMPT_LENGTH=$PROMPT_LENGTH ($((PROMPT_LENGTH / 16)) bars)  "\
 "GEN_LENGTH=$GEN_LENGTH ($((GEN_LENGTH / 16)) bars)  N_SAMPLES=$N_SAMPLES"
+echo "MAX_POLYPHONY=$MAX_POLYPHONY  (must match ckpts' training data)"
 echo "OUT_ROOT=$OUT_ROOT"
 echo "================================================================"
 nvidia-smi | head -n 12 || true
@@ -154,14 +160,14 @@ else
         --modes mel_only chord_only \
         --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
         --temperature 1.0 --n-samples "$N_SAMPLES" \
-        --max-polyphony 4 \
+        --max-polyphony "$MAX_POLYPHONY" \
         --model-size large --moe-num-experts 4 --moe-topk 2
 
     # -----------------------------------------------------------------
     # 2. specialists. Two easy-to-miss requirements:
-    #    --max-polyphony 4: they are finetuned on cp4 single-stream data
-    #      (8-token frames); the default 16 is a silent train/inference
-    #      mismatch.
+    #    --max-polyphony: must match the cp of the single-stream data
+    #      the specialists were finetuned on; a mismatch is a silent
+    #      train/inference gap.
     #    --no-split-tracks for S-chord: its prompt files carry a track
     #      named CHORD, and the default track-tagging would force that
     #      track to program 48 during tokenization -- a program the
@@ -174,7 +180,7 @@ else
         --midi-folder "$MEL_FOLDER" \
         --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
         --temperature 1.0 --n-samples "$N_SAMPLES" \
-        --max-polyphony 4 --no-split-tracks \
+        --max-polyphony "$MAX_POLYPHONY" --no-split-tracks \
         --save-name "$SMEL_OUT_NAME"
 
     echo "--- S-chord single-stream continuation (chord prompts) ---"
@@ -183,7 +189,7 @@ else
         --midi-folder "$CHORD_FOLDER" \
         --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
         --temperature 1.0 --n-samples "$N_SAMPLES" \
-        --max-polyphony 4 --no-split-tracks \
+        --max-polyphony "$MAX_POLYPHONY" --no-split-tracks \
         --save-name "$SCHORD_OUT_NAME"
 fi
 

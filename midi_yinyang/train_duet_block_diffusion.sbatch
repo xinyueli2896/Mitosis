@@ -129,13 +129,17 @@ SELF_COND_PROB="${SELF_COND_PROB:-0.5}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_block_diffusion_${SLURM_JOB_ID}}"
 # Data polyphony per stream (drives the sample-dump reshape, not the model):
-# drumnondrum data is cp16, POP909 melchord data is cp4.
+# drumnondrum data is cp16, POP909/Nottingham melchord data is cp8
+# (cp4 retired -- seventh chords are 5 notes and cp4 dropped the seventh).
 if [[ -z "${MAX_POLYPHONY:-}" ]]; then
     case "$TASK" in
-        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=4 ;;
+        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=8 ;;
         *)        MAX_POLYPHONY=16 ;;
     esac
 fi
+# tasks.py resolves melchord dataset paths from MELCHORD_CP; keep it in
+# lockstep with the decode budget so data files and sample dump agree.
+case "$TASK" in melchord*) export MELCHORD_CP="$MAX_POLYPHONY" ;; esac
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"

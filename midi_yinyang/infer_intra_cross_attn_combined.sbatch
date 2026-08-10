@@ -88,12 +88,13 @@ PROMPT_LENGTH="${PROMPT_LENGTH:-64}"
 GEN_LENGTH="${GEN_LENGTH:-384}"
 TEMPERATURE="${TEMPERATURE:-1.0}"
 # Data max_polyphony, auto-set from TASK. The melchord models are
-# trained on cp4 streams (8-token frames); tokenizing prompts at 16
-# slots is a silent train/inference mismatch -- same bug fixed in the
-# training sbatches and cp_transformer_inference.py.
+# trained on cp8 streams (16-token frames; cp4 retired -- seventh
+# chords are 5 notes); tokenizing prompts at a different budget than
+# the ckpt's training data is a silent train/inference mismatch --
+# pass MAX_POLYPHONY=4 for pre-migration cp4-trained ckpts.
 if [[ -z "${MAX_POLYPHONY:-}" ]]; then
     case "$TASK" in
-        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=4 ;;
+        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=8 ;;
         *)                                                       MAX_POLYPHONY=16 ;;
     esac
 fi

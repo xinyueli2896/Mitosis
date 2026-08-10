@@ -100,18 +100,22 @@ RUN_TAG="${RUN_TAG:-}"
 # --export=ALL,TASK=melchord on the sbatch line.
 TASK="${TASK:-drumnondrum}"
 # Data max_polyphony, auto-set from TASK (override with MAX_POLYPHONY).
-# The melchord datasets are cp4 (4 polyphony slots -> 8-token frames);
-# everything else is cp16. The trainer defaults this to 16, and the
-# --dump_samples_dir callback below decodes real frames with it, so
-# leaving it unset silently mis-decodes -- or crashes -- the sample dump
-# on any cp4 task. train_duet_block_diffusion.sbatch and
-# train_duet_anticipatory.sbatch already derive it the same way.
+# The melchord datasets are cp8 (8 polyphony slots -> 16-token frames;
+# cp4 was retired -- seventh chords render as 5 notes and cp4 dropped
+# the seventh); everything else is cp16. The trainer defaults this to
+# 16, and the --dump_samples_dir callback below decodes real frames
+# with it, so leaving it unset silently mis-decodes -- or crashes --
+# the sample dump on any non-cp16 task. train_duet_block_diffusion.sbatch
+# and train_duet_anticipatory.sbatch already derive it the same way.
 if [[ -z "${MAX_POLYPHONY:-}" ]]; then
     case "$TASK" in
-        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=4 ;;
+        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=8 ;;
         *)                                                       MAX_POLYPHONY=16 ;;
     esac
 fi
+# tasks.py resolves melchord dataset paths from MELCHORD_CP; keep it in
+# lockstep with the decode budget so data files and sample dump agree.
+case "$TASK" in melchord*) export MELCHORD_CP="$MAX_POLYPHONY" ;; esac
 # Optional: dump the first training batch as .mid files into this dir at
 # train start. Useful for sanity-check listening before letting training
 # run for hours. Default empty = off.

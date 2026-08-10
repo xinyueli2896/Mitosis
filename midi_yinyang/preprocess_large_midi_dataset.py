@@ -311,10 +311,12 @@ def create_la_med(max_polyphony=16):
     la_folder = os.path.join(LA_DATASET_PATH, 'MIDIs')
     create_npy_dataset_from_midi(la_folder, max_polyphony, f'la_cp{max_polyphony}_v2_med_dedup', max_idx=50000, dedup=True)
 
-def create_pop909_melody(max_polyphony=4):
-    # POP909 melody is monophonic; max_polyphony=4 leaves headroom for any
-    # incidental overlap. filter=False because POP909 is already curated and
-    # the LA-quantization heuristic is for noisy datasets.
+def create_pop909_melody(max_polyphony=8):
+    # POP909 melody is monophonic; any budget leaves headroom for incidental
+    # overlap. Default 8 keeps the two melchord streams at ONE shared budget
+    # (see create_pop909_chord for why the chord side needs > 4).
+    # filter=False because POP909 is already curated and the LA-quantization
+    # heuristic is for noisy datasets.
     create_npy_dataset_from_midi(
         POP909_MELODY_PATH,
         max_polyphony,
@@ -325,11 +327,13 @@ def create_pop909_melody(max_polyphony=4):
     )
 
 
-def create_pop909_chord(max_polyphony=4):
-    # Each chord is rendered as exactly 4 simultaneous notes (1 bass + 3 upper
-    # voices) by build_pop909_chord_midi.py, so max_polyphony=4 is tight and
-    # matches the melody side's subseq length (also 4) -- no padding waste,
-    # symmetric subseqs across modalities.
+def create_pop909_chord(max_polyphony=8):
+    # Chords are rendered as 1 bass + up to 4 upper voices by
+    # build_pop909_chord_midi.py -- seventh chords are FIVE simultaneous
+    # notes, so the former cp4 budget silently dropped the topmost tone
+    # (the seventh) from every such frame (13.8% of chord frames, 3.3% of
+    # chord notes on the eval split, measured by cp_capacity_check.py).
+    # cp8 covers the observed maximum with margin.
     create_npy_dataset_from_midi(
         POP909_CHORD_PATH,
         max_polyphony,
@@ -373,12 +377,12 @@ def _nottingham_two_track_files(folder):
     return keep
 
 
-def create_nottingham_melody(max_polyphony=4):
+def create_nottingham_melody(max_polyphony=8):
     # Nottingham midis carry melody as instrument 0 and the rendered
     # chord accompaniment as instrument 1 (same convention the legacy
-    # create_nottingham_parts relied on). max_polyphony=4 matches the
-    # POP909 melchord convention so the two corpora are interchangeable
-    # downstream. filter=False: curated data. include_files restricts
+    # create_nottingham_parts relied on). The default matches the POP909
+    # melchord convention (cp8; see create_pop909_chord) so the two
+    # corpora are interchangeable downstream. filter=False: curated data. include_files restricts
     # to songs with both tracks so this pass and the chord pass tokenize
     # an identical file set (see _nottingham_two_track_files).
     folder = _nottingham_midi_folder()
@@ -393,7 +397,7 @@ def create_nottingham_melody(max_polyphony=4):
     )
 
 
-def create_nottingham_chord(max_polyphony=4):
+def create_nottingham_chord(max_polyphony=8):
     folder = _nottingham_midi_folder()
     create_npy_dataset_from_midi(
         folder,
@@ -431,15 +435,19 @@ def create_pop909_melchord_combined(max_polyphony=16):
 if __name__ == '__main__':
     import sys
     arg = sys.argv[1] if len(sys.argv) > 1 else None
+    # Optional second arg overrides max_polyphony; the output filename
+    # encodes it (..._cp{N}_v2), so different budgets never clobber.
+    cp = int(sys.argv[2]) if len(sys.argv) > 2 else None
+    kw = {} if cp is None else {'max_polyphony': cp}
     if arg == 'pop909_melody':
-        create_pop909_melody()
+        create_pop909_melody(**kw)
     elif arg == 'pop909_chord':
-        create_pop909_chord()
+        create_pop909_chord(**kw)
     elif arg == 'pop909_melchord':
-        create_pop909_melchord_combined()
+        create_pop909_melchord_combined(**kw)
     elif arg == 'nottingham_melody':
-        create_nottingham_melody()
+        create_nottingham_melody(**kw)
     elif arg == 'nottingham_chord':
-        create_nottingham_chord()
+        create_nottingham_chord(**kw)
     else:
-        create_rwc_cp()
+        create_rwc_cp(**kw)

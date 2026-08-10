@@ -31,9 +31,23 @@ Research questions:
 | | drumnondrum | melchord |
 |---|---|---|
 | streams (mod_a / mod_b) | drum / nondrum | melody / chord |
-| training corpus | LA (la_*_cp16_v2) | POP909 (pop909_*_cp4_v2) |
+| training corpus | LA (la_*_cp16_v2) | POP909 (pop909_*_cp8_v2) |
 | test prompts | RWC (`input/rwc_test_prompts_split/{drum,nondrum}`) — fully held-out corpus | POP909 held-out songs (below) |
-| polyphony | 16 | 4 (duet) / 16 (single-stream combined) |
+| polyphony | 16 | 8 (duet) / 16 (single-stream combined) |
+
+**Melchord polyphony = cp8, certified.** The chord renderer emits 1 bass
++ up to 4 upper tones, so seventh chords are FIVE simultaneous notes;
+the original cp4 budget silently dropped the topmost tone — the seventh —
+from 13.8% of chord frames (3.3% of chord notes on the eval split,
+measured by `cp_capacity_check.sbatch`). cp8 covers the observed maximum
+(5) with margin at half of cp16's padding. Budgets are certified against
+every corpus used (`cp_capacity_check.py` exits 1 on clipping); the
+remaining known clip is on the drumnondrum side and runs AGAINST the
+merged baseline: duet cp16/stream drops 0.69% of nondrum notes (worst
+frame 22) while S0's pooled cp16 drops 1.76% of all notes (worst 23).
+Pre-migration cp4-trained ckpts remain evaluable via the
+`MAX_POLYPHONY*=4` knobs on the eval/infer sbatches (`MELCHORD_CP=4`
+selects the legacy datasets in `tasks.py`).
 
 **POP909 held-out set.** Split conventions differ between codebases:
 the duet `FramedDataset` (cp_transformer_m2c_moe) holds out
@@ -133,7 +147,7 @@ comparison matters to the write-up, two symmetric options now exist:
 the POP909 melody/chord data), or (b) evaluate on NOTTINGHAM instead,
 where Y-mc is the matched system — the Nottingham melody/chord
 tokenization pipeline exists (`preprocess_nottingham_melchord.sbatch`
-→ `data/nottingham_{melody,chord}_cp4_v2.pt`, POP909-compatible cp4
+→ `data/nottingham_{melody,chord}_cp8_v2.pt`, POP909-compatible cp8
 format, plus a `melchord_nottingham` task entry for duet training).
 Record the decision either way. Y-dn has no such caveat: it is
 LA-trained like the duet drumnondrum systems and evaluated on held-out
@@ -258,8 +272,8 @@ marginal question, constructed to match A.2's provenance in everything
 but the objective — warm-started from the SAME LA-pretrained ckpt that
 A.2's backbone warm-started from, finetuned with the SAME recipe/steps
 as S1, on the SAME POP909 songs, but on single-modality data only
-(S-mel / S-chord from `pop909_melody_cp4_v2.pt` /
-`pop909_chord_cp4_v2.pt`; optionally S-drum / S-nondrum from
+(S-mel / S-chord from `pop909_melody_cp8_v2.pt` /
+`pop909_chord_cp8_v2.pt`; optionally S-drum / S-nondrum from
 `la_drum_cp16_v2.pt` / `la_nondrum_cp16_v2.pt`).
 
 Rejected baseline alternatives, for the record:
@@ -295,8 +309,8 @@ stream:
 
 | A.2 mode | Opponent | Specialist training data |
 |---|---|---|
-| melody marginal (`mel_only`) | S-mel | `pop909_melody_cp4_v2.pt` |
-| chord marginal (`chord_only`) | S-chord | `pop909_chord_cp4_v2.pt` |
+| melody marginal (`mel_only`) | S-mel | `pop909_melody_cp8_v2.pt` |
+| chord marginal (`chord_only`) | S-chord | `pop909_chord_cp8_v2.pt` |
 | drum marginal | S-drum (gated) | `la_drum_cp16_v2.pt` |
 | nondrum marginal | S-nondrum (gated) | `la_nondrum_cp16_v2.pt` |
 
@@ -651,8 +665,8 @@ Phase 0 — prerequisites
 1. A.2 melchord training to ≥50k steps; pick best-val ckpt.
 2. Single-stream POP909 finetune (`finetune_pop909.sbatch`) → S1.
 3. Marginal specialists: `finetune_pop909.py --data
-   data/pop909_melody_cp4_v2.pt` → S-mel and `--data
-   data/pop909_chord_cp4_v2.pt` → S-chord (same recipe as S1; use
+   data/pop909_melody_cp8_v2.pt` → S-mel and `--data
+   data/pop909_chord_cp8_v2.pt` → S-chord (same recipe as S1; use
    `--run_tag mel` / `--run_tag chord` so the run dirs stay distinct).
    S-drum / S-nondrum deferred until the melchord E2 gate decides.
 4. Build POP909 eval prompt folders for ids `001 011 ... 091`:

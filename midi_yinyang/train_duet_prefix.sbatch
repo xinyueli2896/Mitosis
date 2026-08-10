@@ -44,16 +44,20 @@ BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
 TASK="${TASK:-drumnondrum}"
 # Data max_polyphony, auto-set from TASK (override with MAX_POLYPHONY).
-# The melchord datasets are cp4 (8-token frames); the trainer defaults to
-# 16 and the --dump_samples_dir callback decodes real frames with it, so
-# an unset value silently mis-decodes the sample dump on cp4 tasks --
-# the same bug fixed in the other duet training sbatches.
+# The melchord datasets are cp8 (16-token frames; cp4 retired -- seventh
+# chords are 5 notes); the trainer defaults to 16 and the
+# --dump_samples_dir callback decodes real frames with it, so an unset
+# value silently mis-decodes the sample dump on non-cp16 tasks -- the
+# same bug fixed in the other duet training sbatches.
 if [[ -z "${MAX_POLYPHONY:-}" ]]; then
     case "$TASK" in
-        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=4 ;;
+        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=8 ;;
         *)                                                       MAX_POLYPHONY=16 ;;
     esac
 fi
+# tasks.py resolves melchord dataset paths from MELCHORD_CP; keep it in
+# lockstep with the decode budget so data files and sample dump agree.
+case "$TASK" in melchord*) export MELCHORD_CP="$MAX_POLYPHONY" ;; esac
 # OneCycle horizon (was hardcoded 50000; same default kept).
 LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-50000}"
 # Steps between val evals; lower on small melchord corpora (e.g. 100) so

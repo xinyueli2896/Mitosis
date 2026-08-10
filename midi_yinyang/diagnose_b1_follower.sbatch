@@ -59,6 +59,10 @@ CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"
 PROMPT_LENGTH="${PROMPT_LENGTH:-64}"
 GEN_LENGTH="${GEN_LENGTH:-384}"
 N_SAMPLES="${N_SAMPLES:-3}"
+# Melchord polyphony budget: cp8 is the convention (cp4 retired). Must
+# match the ckpt's training data -- pass MAX_POLYPHONY=4 to diagnose the
+# pre-migration cp4-trained checkpoints.
+MAX_POLYPHONY="${MAX_POLYPHONY:-8}"
 # Anticipation override. k is auto-detected from the ckpt path pattern
 # _k<N>_, with DEFAULT 16 when absent -- so pointing this diagnostic at
 # an A.1 checkpoint (whose dir has no _k<N>_) would silently run A.1
@@ -137,7 +141,7 @@ python cp_transformer_m2c_duet_anticipatory_inference.py \
     --drum-folder "$MEL_FOLDER" --nondrum-folder "$CHORD_FOLDER" \
     --output-dir "$CO_OUT" \
     --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
-    --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 4 \
+    --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony "$MAX_POLYPHONY" \
     --model-size large --moe-num-experts 4 --moe-topk 2 \
     ${ANTICIPATION_FRAMES:+--anticipation-frames "$ANTICIPATION_FRAMES"}
 
@@ -150,7 +154,7 @@ python cp_transformer_m2c_duet_anticipatory_inference.py \
     --drum-folder "$MEL_FOLDER" --nondrum-folder "$CHORD_FOLDER" \
     --output-dir "$CD_OUT" \
     --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
-    --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 4 \
+    --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony "$MAX_POLYPHONY" \
     --model-size large --moe-num-experts 4 --moe-topk 2 \
     ${ANTICIPATION_FRAMES:+--anticipation-frames "$ANTICIPATION_FRAMES"}
 

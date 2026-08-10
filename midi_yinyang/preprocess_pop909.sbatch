@@ -15,7 +15,8 @@
 #              NOTE: needs the RAW dataset for chord_midi.txt even when
 #              alignment was skipped.
 #   4. tokenize preprocess_large_midi_dataset.py pop909_melody / pop909_chord
-#              -> data/pop909_melody_cp4_v2.pt / data/pop909_chord_cp4_v2.pt
+#              -> data/pop909_{melody,chord}_cp${MAX_POLYPHONY}_v2.pt
+#              (MAX_POLYPHONY default 8 -- seventh chords are 5 notes)
 #              (+ .length.pt, .pitch_shift_range.pt, .txt manifests)
 #   5. verify  check_paired_dataset.py: both manifests keep exactly the same
 #              songs in the same order (FramedDataset pairs by index).
@@ -152,23 +153,32 @@ mkdir -p POP909-Dataset
 link_data_dir POP909-Dataset/POP909-melody "$MELODY_DIR"
 link_data_dir POP909-Dataset/POP909-chord  "$CHORD_DIR"
 
-if [[ "$FORCE" != "1" && -f data/pop909_melody_cp4_v2.pt ]]; then
-    echo "[tokenize] data/pop909_melody_cp4_v2.pt exists; skipping melody."
+# MAX_POLYPHONY: melchord duet budget, default cp8 (POP909 seventh
+# chords render as 5 simultaneous notes -- bass + 4 upper tones -- so
+# the former cp4 dropped the seventh from every such frame; certified
+# by cp_capacity_check.sbatch). Output names encode the budget, so
+# different budgets coexist under data/ without clobbering.
+MAX_POLYPHONY="${MAX_POLYPHONY:-8}"
+MEL_PT="data/pop909_melody_cp${MAX_POLYPHONY}_v2"
+CHORD_PT="data/pop909_chord_cp${MAX_POLYPHONY}_v2"
+
+if [[ "$FORCE" != "1" && -f "$MEL_PT.pt" ]]; then
+    echo "[tokenize] $MEL_PT.pt exists; skipping melody."
 else
-    python preprocess_large_midi_dataset.py pop909_melody
+    python preprocess_large_midi_dataset.py pop909_melody "$MAX_POLYPHONY"
 fi
-if [[ "$FORCE" != "1" && -f data/pop909_chord_cp4_v2.pt ]]; then
-    echo "[tokenize] data/pop909_chord_cp4_v2.pt exists; skipping chord."
+if [[ "$FORCE" != "1" && -f "$CHORD_PT.pt" ]]; then
+    echo "[tokenize] $CHORD_PT.pt exists; skipping chord."
 else
-    python preprocess_large_midi_dataset.py pop909_chord
+    python preprocess_large_midi_dataset.py pop909_chord "$MAX_POLYPHONY"
 fi
 
 # --- 5. verify pairing -------------------------------------------------
-python check_paired_dataset.py data/pop909_melody_cp4_v2 data/pop909_chord_cp4_v2
+python check_paired_dataset.py "$MEL_PT" "$CHORD_PT"
 
 echo "================================================================"
-echo "POP909 melchord preprocessing complete."
-echo "  data/pop909_melody_cp4_v2.pt"
-echo "  data/pop909_chord_cp4_v2.pt"
+echo "POP909 melchord preprocessing complete (cp${MAX_POLYPHONY})."
+echo "  $MEL_PT.pt"
+echo "  $CHORD_PT.pt"
 echo "Next: sbatch --export=ALL,TASK=melchord midi_yinyang/train_duet_block_diffusion.sbatch"
 echo "================================================================"

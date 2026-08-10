@@ -8,13 +8,17 @@
 #   (preprocess_pop909_melchord.sbatch, preprocess_nottingham_melchord.sbatch).
 #
 # Output (under midi_yinyang/data/):
-#   melchord_pop909_nottingham_melody_cp4_v2.pt (+ sidecars)
-#   melchord_pop909_nottingham_chord_cp4_v2.pt  (+ sidecars)
+#   melchord_pop909_nottingham_melody_cp${CP}_v2.pt (+ sidecars)
+#   melchord_pop909_nottingham_chord_cp${CP}_v2.pt  (+ sidecars)
 # followed by the song-pairing gate.
 #
 # Env knobs (override via --export=ALL,KEY=val):
-#   POP909_MEL / POP909_CHORD          default data/pop909_{melody,chord}_cp4_v2
-#   NOTTINGHAM_MEL / NOTTINGHAM_CHORD  default data/nottingham_{melody,chord}_cp4_v2
+#   CP                                 polyphony budget of the sources and
+#                                      output names. Default 8 (the melchord
+#                                      convention; cp4 was retired because
+#                                      seventh chords are 5 notes).
+#   POP909_MEL / POP909_CHORD          default data/pop909_{melody,chord}_cp${CP}_v2
+#   NOTTINGHAM_MEL / NOTTINGHAM_CHORD  default data/nottingham_{melody,chord}_cp${CP}_v2
 #
 # Then train with:
 #   sbatch --export=ALL,TASK=melchord_pop909_nottingham \
@@ -37,12 +41,13 @@ source ~/.bashrc
 CONDA_ENV=mitosis
 REPO_DIR=/home/xinyue.li/Mitosis
 
-POP909_MEL="${POP909_MEL:-data/pop909_melody_cp4_v2}"
-POP909_CHORD="${POP909_CHORD:-data/pop909_chord_cp4_v2}"
-NOTTINGHAM_MEL="${NOTTINGHAM_MEL:-data/nottingham_melody_cp4_v2}"
-NOTTINGHAM_CHORD="${NOTTINGHAM_CHORD:-data/nottingham_chord_cp4_v2}"
-OUT_MEL="data/melchord_pop909_nottingham_melody_cp4_v2"
-OUT_CHORD="data/melchord_pop909_nottingham_chord_cp4_v2"
+CP="${CP:-8}"
+POP909_MEL="${POP909_MEL:-data/pop909_melody_cp${CP}_v2}"
+POP909_CHORD="${POP909_CHORD:-data/pop909_chord_cp${CP}_v2}"
+NOTTINGHAM_MEL="${NOTTINGHAM_MEL:-data/nottingham_melody_cp${CP}_v2}"
+NOTTINGHAM_CHORD="${NOTTINGHAM_CHORD:-data/nottingham_chord_cp${CP}_v2}"
+OUT_MEL="data/melchord_pop909_nottingham_melody_cp${CP}_v2"
+OUT_CHORD="data/melchord_pop909_nottingham_chord_cp${CP}_v2"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"

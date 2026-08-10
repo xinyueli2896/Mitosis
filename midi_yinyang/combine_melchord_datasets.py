@@ -21,10 +21,10 @@ the same prefixed names, in the same order).
 
 Usage:
     python combine_melchord_datasets.py \
-        --source pop909:data/pop909_melody_cp4_v2:data/pop909_chord_cp4_v2 \
-        --source nottingham:data/nottingham_melody_cp4_v2:data/nottingham_chord_cp4_v2 \
-        --out-mel data/melchord_pop909_nottingham_melody_cp4_v2 \
-        --out-chord data/melchord_pop909_nottingham_chord_cp4_v2
+        --source pop909:data/pop909_melody_cp8_v2:data/pop909_chord_cp8_v2 \
+        --source nottingham:data/nottingham_melody_cp8_v2:data/nottingham_chord_cp8_v2 \
+        --out-mel data/melchord_pop909_nottingham_melody_cp8_v2 \
+        --out-chord data/melchord_pop909_nottingham_chord_cp8_v2
 """
 
 import argparse

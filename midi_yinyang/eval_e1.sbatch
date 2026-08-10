@@ -95,14 +95,18 @@ case "$TASK" in
         MEL_FOLDER="${MEL_FOLDER:-input/pop909_split/melody}"
         CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"
         SONGS="${SONGS:-}"          # empty = every song in the folders
-        MAX_POLYPHONY_DUET=4
+        # cp8 is the melchord convention (cp4 retired: seventh chords are
+        # 5 notes and cp4 dropped the seventh). MUST match the duet
+        # ckpts' training data -- pass MAX_POLYPHONY_DUET=4 to evaluate
+        # pre-migration cp4-trained checkpoints.
+        MAX_POLYPHONY_DUET="${MAX_POLYPHONY_DUET:-8}"
         BASELINE="${BASELINE:-S1}"
         ;;
     drumnondrum)
         MEL_FOLDER="${MEL_FOLDER:-input/rwc_test_prompts_split/drum}"
         CHORD_FOLDER="${CHORD_FOLDER:-input/rwc_test_prompts_split/nondrum}"
         SONGS="${SONGS:-}"          # empty = all songs in the folders
-        MAX_POLYPHONY_DUET=16
+        MAX_POLYPHONY_DUET="${MAX_POLYPHONY_DUET:-16}"
         BASELINE="${BASELINE:-S0}"
         ;;
     *) echo "ERROR: unknown TASK=$TASK"; exit 1 ;;
@@ -125,6 +129,7 @@ echo "MEL_FOLDER=$MEL_FOLDER  CHORD_FOLDER=$CHORD_FOLDER"
 echo "SONGS=${SONGS:-<all>}"
 echo "OUT_ROOT=$OUT_ROOT   BASELINE=$BASELINE"
 echo "PROMPT_LENGTH=$PROMPT_LENGTH GEN_LENGTH=$GEN_LENGTH N_SAMPLES=$N_SAMPLES"
+echo "MAX_POLYPHONY_DUET=$MAX_POLYPHONY_DUET  (must match the duet ckpts' training data)"
 echo "PROMPT bars: $((PROMPT_LENGTH / 16))  (16 frames/bar)"
 echo "================================================================"
 nvidia-smi | head -n 12 || true

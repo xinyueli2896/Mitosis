@@ -32,7 +32,7 @@
 #                           run dir, i.e. a fresh cold-start run.
 #   --export=ALL,TASK=...   drumnondrum (default), melchord,
 #                           melchord_nottingham, or melchord_pop909_nottingham.
-#                           Data max_polyphony (cp16 vs cp4) is auto-set from
+#                           Data max_polyphony (cp16 vs cp8) is auto-set from
 #                           TASK; override with MAX_POLYPHONY if needed.
 #   --export=ALL,CKPT=...   explicit override for the resume ckpt. If
 #                           unset, the script auto-detects the run's
@@ -104,15 +104,19 @@ ANTICIPATION_FRAMES="${ANTICIPATION_FRAMES:-16}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_anticipatory_${SLURM_JOB_ID}}"
 # Data polyphony per stream: drumnondrum data is cp16, melchord data is
-# cp4 (POP909/Nottingham). Only affects the sample-dump callback's row
-# reshape, but it's on by default here and WILL crash on cp4 data at
-# the wrong width if left at the python default of 16.
+# cp8 (POP909/Nottingham; cp4 retired -- seventh chords are 5 notes).
+# Only affects the sample-dump callback's row reshape, but it's on by
+# default here and WILL crash on non-cp16 data at the wrong width if
+# left at the python default of 16.
 if [[ -z "${MAX_POLYPHONY:-}" ]]; then
     case "$TASK" in
-        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=4 ;;
+        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=8 ;;
         *)                                                       MAX_POLYPHONY=16 ;;
     esac
 fi
+# tasks.py resolves melchord dataset paths from MELCHORD_CP; keep it in
+# lockstep with the decode budget so data files and sample dump agree.
+case "$TASK" in melchord*) export MELCHORD_CP="$MAX_POLYPHONY" ;; esac
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
