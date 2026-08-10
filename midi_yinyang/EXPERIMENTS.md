@@ -40,7 +40,13 @@ Research questions:
 the original cp4 budget silently dropped the topmost tone — the seventh —
 from 13.8% of chord frames (3.3% of chord notes on the eval split,
 measured by `cp_capacity_check.sbatch`). cp8 covers the observed maximum
-(5) with margin at half of cp16's padding. Budgets are certified against
+(5) with margin at half of cp16's padding. Certified over ALL melchord
+corpora, training included: full POP909 chords peak at 5 onsets/frame
+(12,061 five-note frames = 10.1% of chord frames — under cp4 the models
+TRAINED on targets missing those sevenths, ~2.5% of all chord notes);
+full POP909 melody peaks at 6 (four ornament frames corpus-wide);
+Nottingham peaks at 7 even with melody+chord pooled. Zero clipping at
+cp8 everywhere. Budgets are certified against
 every corpus used (`cp_capacity_check.py` exits 1 on clipping); the
 remaining known clip is on the drumnondrum side and runs AGAINST the
 merged baseline: duet cp16/stream drops 0.69% of nondrum notes (worst
