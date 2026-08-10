@@ -126,6 +126,12 @@ GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
 # val_ar_loss for regression; drop back toward 1.0 if it degrades.
 QUERY_LOSS_WEIGHT="${QUERY_LOSS_WEIGHT:-2.0}"
 SELF_COND_PROB="${SELF_COND_PROB:-0.5}"
+# v1.2 scheme: 1 = time-aligned RoPE (rotary index = physical // 2, so
+# m_t and c_t share rotary position t -- restores the pretrain
+# positional geometry; candidate fix for the long-term-structure
+# deficit). The scheme version is stamped into the run dir name
+# (v1.2 vs v1.1), so runs never intermingle. Default 0 = v1.1.
+TIME_ROPE_ALIGNED="${TIME_ROPE_ALIGNED:-0}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_block_diffusion_${SLURM_JOB_ID}}"
 # Data polyphony per stream (drives the sample-dump reshape, not the model):
@@ -168,7 +174,11 @@ fi
 # the user didn't pass CKPT explicitly and last.ckpt exists there from a
 # prior submission, auto-resume.
 GLOBAL_BATCH=$((BATCH_SIZE * NGPUS))
-RUN_DIR="ckpt/m2c_duet_block_diffusion_v1.1_large_gnl12_K${DIFFUSION_K}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
+# Scheme version must match the python side's default_name derivation
+# (v1.2 when TIME_ROPE_ALIGNED=1, else v1.1) or auto-resume looks in
+# the wrong directory.
+if [[ "$TIME_ROPE_ALIGNED" == "1" ]]; then SCHEME_VERSION=v1.2; else SCHEME_VERSION=v1.1; fi
+RUN_DIR="ckpt/m2c_duet_block_diffusion_${SCHEME_VERSION}_large_gnl12_K${DIFFUSION_K}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
     CKPT="$RUN_DIR/last.ckpt"
     echo "[auto-resume] found $CKPT  (run dir: $RUN_DIR)"
@@ -300,6 +310,7 @@ COMMON_ARGS=(
     --max_polyphony "$MAX_POLYPHONY"
     --query_loss_weight "$QUERY_LOSS_WEIGHT"
     --self_cond_prob "$SELF_COND_PROB"
+    --time_rope_aligned "$TIME_ROPE_ALIGNED"
     --diffusion_K "$DIFFUSION_K"
     --checkpoint_path "$TRAIN_CKPT"
     --wandb

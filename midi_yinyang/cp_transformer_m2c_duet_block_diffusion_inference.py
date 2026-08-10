@@ -87,8 +87,18 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         None,
     )
     slot_rope_aligned = bool(_sd[_flag_key].item()) if _flag_key else False
+    # v1.2 ckpts additionally carry time_rope_aligned_flag (rotary index
+    # = physical // 2, m_t/c_t share position t). Absent in v1.0/v1.1.
+    _tflag_key = next(
+        (k for k in state_dict_keys if k.endswith('time_rope_aligned_flag')),
+        None,
+    )
+    time_rope_aligned = bool(_sd[_tflag_key].item()) if _tflag_key else False
+    scheme = ('v1.2 time-aligned scheme' if time_rope_aligned
+              else 'v1.1 aligned scheme' if slot_rope_aligned
+              else 'legacy v1.0 -> decode-time padding')
     print(f'[load_model] slot_rope_aligned={slot_rope_aligned} '
-          f'({"v1.1 aligned scheme" if slot_rope_aligned else "legacy v1.0 -> decode-time padding"})')
+          f'time_rope_aligned={time_rope_aligned} ({scheme})')
     if diffusion_K is None:
         for key, name in (('k_emb_m.weight', 'k_emb_m'),
                           ('k_emb_c.weight', 'k_emb_c')):
@@ -115,6 +125,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         gate_init_bias=gate_init_bias,
         diffusion_K=diffusion_K,
         slot_rope_aligned=slot_rope_aligned,
+        time_rope_aligned=time_rope_aligned,
     )
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)
@@ -322,9 +333,11 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
             env_pad = _os.environ.get('A3_PAD_FRAMES')
             if env_pad is not None:
                 pad_frames_target = int(env_pad)
-            elif getattr(model, 'slot_rope_aligned', False):
-                # v1.1 aligned scheme: the slots are rotary-indexed at
-                # 2*T_query+2/+3 inside _run_global_stack, so their
+            elif (getattr(model, 'slot_rope_aligned', False)
+                  or getattr(model, 'time_rope_aligned', False)):
+                # v1.1/v1.2 aligned schemes: the slots are rotary-indexed
+                # from T_query inside _run_global_stack (v1.1: physical
+                # 2*T_query+2/+3; v1.2: both at T_query+1), so their
                 # phase already matches training at any t. No padding.
                 pad_frames_target = 0
             else:

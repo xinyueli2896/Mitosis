@@ -67,7 +67,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
     """
 
     def __init__(self, *args, diffusion_K=4, slot_rope_aligned=True,
-                 self_cond_prob=0.5, **kwargs):
+                 time_rope_aligned=False, self_cond_prob=0.5, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # Per-modality noise-level (timestep) embeddings, indexed by
@@ -93,6 +93,28 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             'slot_rope_aligned_flag',
             torch.tensor(1 if slot_rope_aligned else 0, dtype=torch.long),
         )
+        # --- v1.2 training-scheme flag --------------------------------
+        # time_rope_aligned: rotary index = physical index // 2 for the
+        # whole sequence, so m_t and c_t share rotary position t and the
+        # SOS pair sits at 0. Musical distance == rotary distance again
+        # (the legacy parity scheme DOUBLES every musical distance
+        # relative to the single-stream pretrain and pushes a 384-frame
+        # sample to rotary 0..767, half of it untrained in the warm
+        # start) -- the candidate fix for the duet family's long-term-
+        # structure deficit, which A.2 exhibits despite 43k steps and
+        # full stream survival. Subsumes v1.1: the slot remap to
+        # 2*T_query+2/+3 then halves to T_query+1 for BOTH slots --
+        # exactly the rotary phase frame T_query's content occupies in
+        # the SOS-shifted clean stream, at any t, so decode needs no
+        # padding. Stream identity is carried by content (mask_*_emb,
+        # k_emb_*, token types), not position parity. Stored as a buffer
+        # so the scheme travels inside the ckpt and inference auto-
+        # detects it (legacy ckpts lack the key). Same D.1 scheme as
+        # M2CIntraCrossAttn's time_rope_aligned_flag.
+        self.register_buffer(
+            'time_rope_aligned_flag',
+            torch.tensor(1 if time_rope_aligned else 0, dtype=torch.long),
+        )
         # self_cond_prob: per-item probability that an UNMASKED slot is
         # fed the model's own (no-grad) prediction of the target frame
         # instead of the ground-truth embedding. Closes the exposure gap
@@ -104,33 +126,47 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
     def slot_rope_aligned(self):
         return bool(self.slot_rope_aligned_flag.item())
 
-    def _run_global_stack(self, h, T_query):
-        """Override: slot-aligned RoPE indexing (v1.1 scheme).
+    @property
+    def time_rope_aligned(self):
+        return bool(self.time_rope_aligned_flag.item())
 
-        Clean positions keep rotary index == physical index (0..L-3);
-        the two slots get index 2*T_query+2 and 2*T_query+3, matching
-        where inference naturally places them after the committed pairs
-        of frame T_query. Legacy scheme (v1.0 ckpts) falls through to
-        the parent implementation (contiguous 0..L-1).
+    def _run_global_stack(self, h, T_query):
+        """Override: slot-aligned (v1.1) / time-aligned (v1.2) RoPE.
+
+        v1.1 (slot_rope_aligned): clean positions keep rotary index ==
+        physical index (0..L-3); the two slots get index 2*T_query+2 and
+        2*T_query+3, matching where inference naturally places them
+        after the committed pairs of frame T_query.
+
+        v1.2 (time_rope_aligned): the same position vector is then
+        HALVED (// 2), so m_t and c_t share rotary position t and both
+        slots land on T_query+1 -- the rotary phase frame T_query's
+        content occupies in the SOS-shifted clean stream. Musical
+        distance == rotary distance; within-stream geometry matches the
+        single-stream pretrain exactly.
+
+        Legacy scheme (v1.0 ckpts) falls through to the parent
+        implementation (contiguous 0..L-1).
 
         Note the slots' rotary index may coincide with clean positions
-        2*T_query+2/+3 (which hold frame T_query+1's content at training
-        time). Duplicate rotary phases are benign: attention stays
-        well-defined, the slots never attend those rows (frame >=
-        T_query is masked for slot queries), and clean rows never attend
-        the slots.
+        holding frame T_query{+1}'s content at training time. Duplicate
+        rotary phases are benign: attention stays well-defined, the
+        slots never attend those rows (frame >= T_query is masked for
+        slot queries), and clean rows never attend the slots.
         """
-        if not self.slot_rope_aligned:
+        if not (self.slot_rope_aligned or self.time_rope_aligned):
             return super()._run_global_stack(h, T_query)
         B, L, H = h.shape
         clean_len = L - 2
         head_dim = H // self.num_attention_heads
-        max_pos = max(L, 2 * int(T_query) + 4)
-        cos_b, sin_b = _rope_freqs(max_pos, head_dim,
-                                    device=h.device, dtype=h.dtype)
         positions = torch.arange(L, device=h.device)
         positions[clean_len] = 2 * int(T_query) + 2
         positions[clean_len + 1] = 2 * int(T_query) + 3
+        if self.time_rope_aligned:
+            positions = torch.div(positions, 2, rounding_mode='floor')
+        max_pos = int(positions.max().item()) + 1
+        cos_b, sin_b = _rope_freqs(max_pos, head_dim,
+                                    device=h.device, dtype=h.dtype)
         cos = cos_b[:, :, positions]
         sin = sin_b[:, :, positions]
         total_aux = torch.zeros((), device=h.device, dtype=h.dtype)
@@ -534,6 +570,16 @@ if __name__ == '__main__':
                         help='Train with the v1.0 slot RoPE scheme (slots '
                              'at constant end-of-sequence phase) instead '
                              'of the v1.1 aligned scheme. Ablation only.')
+    parser.add_argument('--time_rope_aligned', type=int, default=0,
+                        help='1 = v1.2 scheme: rotary index = physical '
+                             'index // 2, so m_t and c_t share rotary '
+                             'position t and musical distance == rotary '
+                             'distance (restores the pretrain positional '
+                             'geometry; candidate fix for the long-term-'
+                             'structure deficit). Subsumes v1.1 slot '
+                             'alignment. Baked into the ckpt as a buffer; '
+                             'inference auto-detects. Incompatible with '
+                             '--legacy_slot_rope.')
     parser.add_argument('--fresh_schedule', action='store_true', default=False)
     args = parser.parse_args()
 
@@ -547,7 +593,11 @@ if __name__ == '__main__':
     mod_b_path = args.path_to_dataset if args.path_to_dataset is not None else task.mod_b_path
 
     tag = f'_{args.run_tag}' if args.run_tag else ''
-    scheme_version = 'v1.0' if args.legacy_slot_rope else 'v1.1'
+    if args.time_rope_aligned and args.legacy_slot_rope:
+        raise SystemExit('--time_rope_aligned and --legacy_slot_rope are '
+                         'mutually exclusive (v1.2 vs v1.0).')
+    scheme_version = ('v1.2' if args.time_rope_aligned
+                      else 'v1.0' if args.legacy_slot_rope else 'v1.1')
     default_name = (f"m2c_duet_block_diffusion_{scheme_version}_{args.model_size}_"
                     f"gnl{gnl}_K{args.diffusion_K}_{task.name}{tag}_"
                     f"batch_{args.batch_size * n_gpus}_schedule")
@@ -574,9 +624,11 @@ if __name__ == '__main__':
         query_loss_weight=args.query_loss_weight,
         diffusion_K=args.diffusion_K,
         slot_rope_aligned=(not args.legacy_slot_rope),
+        time_rope_aligned=bool(args.time_rope_aligned),
         self_cond_prob=args.self_cond_prob,
     )
-    print(f'[scheme] slot_rope_aligned={not args.legacy_slot_rope}  '
+    print(f'[scheme] {scheme_version}: slot_rope_aligned={not args.legacy_slot_rope}  '
+          f'time_rope_aligned={bool(args.time_rope_aligned)}  '
           f'self_cond_prob={args.self_cond_prob}')
     print(f'Architecture: M2CDuetBlockDiffusion (A.3)  K={args.diffusion_K}  '
           f'3-pass (intra/cross/frame) + 2 gates + query slots with per-item '
