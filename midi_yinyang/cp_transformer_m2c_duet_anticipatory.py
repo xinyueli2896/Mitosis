@@ -177,6 +177,12 @@ if __name__ == '__main__':
                              'anti-exposure-bias augmentation for the '
                              'sparse stream')
     parser.add_argument('--ctx_corrupt_len', type=int, default=8)
+    parser.add_argument('--time_rope_aligned', type=int, default=0,
+                        help='1 = D.1 scheme: m_t and c_t share rotary '
+                             'position t (rotary index = physical // 2), '
+                             'restoring the pretrain positional geometry. '
+                             '0 = legacy parity positions. Baked into the '
+                             'ckpt as a buffer; inference auto-detects.')
     parser.add_argument('--moe_monitor_every_n_steps', type=int, default=0)
     parser.add_argument('--moe_monitor_n_samples', type=int, default=4)
     parser.add_argument('--dump_samples_dir', type=str, default=None)
@@ -226,6 +232,7 @@ if __name__ == '__main__':
         aux_loss_weight=args.aux_loss_weight,
         silence_augment_prob=args.silence_augment_prob,
         ctx_corrupt_prob=args.ctx_corrupt_prob,
+        time_rope_aligned=bool(args.time_rope_aligned),
         ctx_corrupt_len=args.ctx_corrupt_len,
         eos_loss_weight=args.eos_loss_weight,
         gate_init_bias=args.gate_init_bias,

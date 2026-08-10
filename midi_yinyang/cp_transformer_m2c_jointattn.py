@@ -66,15 +66,33 @@ from cp_transformer_m2c_moe import (
 # ---------------------------------------------------------------------------
 
 def _rope_freqs(seq_len: int, head_dim: int, device, dtype=torch.float32,
-                base: float = 10000.0):
+                base: float = 10000.0, time_aligned: bool = False):
     """Return (cos, sin) of shape [1, 1, seq_len, head_dim]. Values at the
     even and odd index of each (2i, 2i+1) pair are identical -- that's how
     the interleaved-pair convention is encoded as a single elementwise
-    multiplicand."""
+    multiplicand.
+
+    time_aligned=False (legacy): rotary index == physical index, so the
+    interleaved duet stream [m_0, c_0, m_1, c_1, ...] places m_t at
+    rotary 2t -- every musical distance is DOUBLED relative to the
+    single-stream pretrain, and a 384-frame sample spans rotary 0..767,
+    half of which the warm start never trained.
+
+    time_aligned=True (D.1 scheme): rotary index == physical index // 2,
+    so m_t and c_t share rotary position t. Musical distance == rotary
+    distance again: within-stream geometry matches the pretrain exactly
+    (t..t+383), and 'simultaneous' is honestly encoded as distance 0.
+    Stream identity must then be carried by content/type embeddings or
+    per-modality projections, not by position parity -- true for the
+    intra-cross-attn family, whose per-modality Q/K/V make parity
+    redundant."""
     assert head_dim % 2 == 0, 'head_dim must be even for RoPE'
     half = head_dim // 2
     inv_freq = 1.0 / (base ** (torch.arange(0, half, device=device).float() / half))
-    t = torch.arange(seq_len, device=device).float()
+    t = torch.arange(seq_len, device=device)
+    if time_aligned:
+        t = torch.div(t, 2, rounding_mode='floor')
+    t = t.float()
     freqs = torch.einsum('i,j->ij', t, inv_freq)                # [L, half]
     # Interleave: emb[:, 2i] = emb[:, 2i+1] = freqs[:, i]
     emb = freqs.repeat_interleave(2, dim=-1)                    # [L, head_dim]

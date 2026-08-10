@@ -85,6 +85,11 @@ VAL_CHECK_INTERVAL="${VAL_CHECK_INTERVAL:-500}"
 # behaviour unchanged). See the comment in cp_transformer_m2c_moe.loss.
 CTX_CORRUPT_PROB="${CTX_CORRUPT_PROB:-0.0}"
 CTX_CORRUPT_LEN="${CTX_CORRUPT_LEN:-8}"
+# D.1 scheme: 1 = time-aligned RoPE (m_t and c_t share rotary position
+# t, restoring the pretrain positional geometry). Baked into the ckpt;
+# use RUN_TAG (e.g. tar) so the run dir stays distinct from the legacy
+# parity-RoPE run. Default 0 = legacy.
+TIME_ROPE_ALIGNED="${TIME_ROPE_ALIGNED:-0}"
 # Optional run-name suffix. The run directory is derived from variant +
 # task + global batch, so two runs of the SAME task land in the SAME
 # dir and their checkpoints intermingle. That is silently dangerous:
@@ -233,6 +238,7 @@ if [[ "$NGPUS" -le 1 ]]; then
         --val_check_interval "$VAL_CHECK_INTERVAL" \
         --ctx_corrupt_prob "$CTX_CORRUPT_PROB" \
         --ctx_corrupt_len "$CTX_CORRUPT_LEN" \
+        --time_rope_aligned "$TIME_ROPE_ALIGNED" \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --moe_monitor_every_n_steps 500 \
@@ -255,6 +261,7 @@ else
         --val_check_interval "$VAL_CHECK_INTERVAL" \
         --ctx_corrupt_prob "$CTX_CORRUPT_PROB" \
         --ctx_corrupt_len "$CTX_CORRUPT_LEN" \
+        --time_rope_aligned "$TIME_ROPE_ALIGNED" \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --moe_monitor_every_n_steps 500 \

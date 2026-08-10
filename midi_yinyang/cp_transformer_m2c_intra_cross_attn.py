@@ -243,7 +243,7 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
     def __init__(self, *args, moe_num_experts=4, moe_topk=2,
                  moe_intermediate_size=None, global_num_layers=None,
                  global_dropout=0.0, preserve_program=True,
-                 gate_init_bias=-10.0, **kwargs):
+                 gate_init_bias=-10.0, time_rope_aligned=False, **kwargs):
         super().__init__(
             *args,
             moe_num_experts=moe_num_experts,
@@ -253,6 +253,22 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
             global_dropout=global_dropout,
             preserve_program=preserve_program,
             **kwargs,
+        )
+        # D.1 scheme -- time-aligned RoPE: m_t and c_t share rotary
+        # position t (rotary index = physical index // 2) instead of the
+        # legacy parity scheme (m_t at 2t, c_t at 2t+1). Restores the
+        # single-stream pretrain's positional geometry (within-stream
+        # distances and the 0..383 trained range) and halves the rotary
+        # distance of every musical dependency -- the candidate fix for
+        # the duet family's long-term-structure deficit. Stored as a
+        # buffer so the scheme travels inside the ckpt and inference
+        # auto-detects it (legacy ckpts lack the key; strict=False load
+        # keeps the 0 default). Same pattern as A.2's
+        # slot_rope_aligned_flag. Parameter-free: state dict shape is
+        # unchanged, so A.1-vs-D.1 is a pure geometry ablation.
+        self.register_buffer(
+            'time_rope_aligned_flag',
+            torch.tensor(1 if time_rope_aligned else 0, dtype=torch.long),
         )
         # Drop the inherited single-backbone global stack; we replace it
         # with our custom intra/cross-attn stack below.
@@ -293,6 +309,10 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
             self.token_type_embeddings.weight.zero_()
         self.token_type_embeddings.weight.requires_grad = False
 
+    @property
+    def time_rope_aligned(self):
+        return bool(self.time_rope_aligned_flag.item())
+
     def _assemble_sos(self, batch_size, device, dtype):
         sos_m = (self.global_sos + self.sos_offset_m).view(1, 1, -1)
         sos_c = (self.global_sos + self.sos_offset_c).view(1, 1, -1)
@@ -312,7 +332,8 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
         c = h[:, 1::2]
 
         head_dim = H // self.num_attention_heads
-        cos, sin = _rope_freqs(two_T, head_dim, device=h.device, dtype=h.dtype)
+        cos, sin = _rope_freqs(two_T, head_dim, device=h.device, dtype=h.dtype,
+                               time_aligned=self.time_rope_aligned)
 
         total_aux = torch.zeros((), device=h.device, dtype=h.dtype)
         for layer in self.global_layers:
@@ -396,6 +417,12 @@ if __name__ == '__main__':
                              'anti-exposure-bias augmentation for the '
                              'sparse stream')
     parser.add_argument('--ctx_corrupt_len', type=int, default=8)
+    parser.add_argument('--time_rope_aligned', type=int, default=0,
+                        help='1 = D.1 scheme: m_t and c_t share rotary '
+                             'position t (rotary index = physical // 2), '
+                             'restoring the pretrain positional geometry. '
+                             '0 = legacy parity positions. Baked into the '
+                             'ckpt as a buffer; inference auto-detects.')
     parser.add_argument('--moe_monitor_every_n_steps', type=int, default=0)
     parser.add_argument('--moe_monitor_n_samples', type=int, default=4)
     parser.add_argument('--dump_samples_dir', type=str, default=None,
@@ -465,6 +492,7 @@ if __name__ == '__main__':
         aux_loss_weight=args.aux_loss_weight,
         silence_augment_prob=args.silence_augment_prob,
         ctx_corrupt_prob=args.ctx_corrupt_prob,
+        time_rope_aligned=bool(args.time_rope_aligned),
         ctx_corrupt_len=args.ctx_corrupt_len,
         eos_loss_weight=args.eos_loss_weight,
         gate_init_bias=args.gate_init_bias,
