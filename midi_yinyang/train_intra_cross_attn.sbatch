@@ -36,7 +36,7 @@
 # state + activations rather than data duplication, so 240G is more
 # than enough now.
 #SBATCH --mem=240G
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:2
 #SBATCH -p cscc-gpu-p
 #SBATCH -q cscc-gpu-qos
 #SBATCH --time=12:00:00
