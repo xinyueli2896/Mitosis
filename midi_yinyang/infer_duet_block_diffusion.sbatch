@@ -75,7 +75,7 @@ N_SAMPLES="${N_SAMPLES:-1}"
 # Decode-schedule defaults (listening-test winner on the 98k v1.1 ckpt:
 # one refinement round, commit annealed to 0.9, 0.95 nucleus). Override
 # any of these on the sbatch line; A3_REFINE_STEPS=0 gives pure AR decode.
-export A3_REFINE_STEPS="${A3_REFINE_STEPS:-1}"
+export A3_REFINE_STEPS="${A3_REFINE_STEPS:-4}"
 export A3_FINAL_TEMP="${A3_FINAL_TEMP:-0.9}"
 export A3_TOP_P="${A3_TOP_P:-0.95}"
 
