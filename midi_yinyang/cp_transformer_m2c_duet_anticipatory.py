@@ -346,11 +346,18 @@ if __name__ == '__main__':
             ckpt_path_for_resume = args.checkpoint_path
         else:
             sd = loaded['state_dict'] if isinstance(loaded, dict) and 'state_dict' in loaded else loaded
+            # Drop incoming scheme-flag buffers: the CLI declares the
+            # scheme for a new run (see intra_cross_attn's identical
+            # guard for the rationale).
+            sd = dict(sd)
+            sd.pop('time_rope_aligned_flag', None)
             missing, unexpected = net.load_state_dict(sd, strict=False)
             if missing:
                 print(f'[init] {len(missing)} missing (first few: {missing[:3]})')
             if unexpected:
                 print(f'[init] {len(unexpected)} unexpected (first few: {unexpected[:3]})')
+    print(f'[scheme] effective time_rope_aligned={net.time_rope_aligned} '
+          '(after any warm-start load)')
 
     trainer.fit(net, train_set_loader, val_set_loader,
                 ckpt_path=ckpt_path_for_resume)

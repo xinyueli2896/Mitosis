@@ -617,6 +617,13 @@ if __name__ == '__main__':
                 print(f'[init] bare warm-start ckpt at {args.checkpoint_path}; '
                        'loading state_dict only (no Lightning metadata).')
             sd = loaded['state_dict'] if isinstance(loaded, dict) and 'state_dict' in loaded else loaded
+            # Scheme flags are buffers, so a warm-start state dict that
+            # carries one would silently OVERWRITE the value the CLI set
+            # (e.g. an init ckpt built at default flags flipping a
+            # --time_rope_aligned run back to legacy geometry). The CLI
+            # declares the scheme for a new run; drop incoming flags.
+            sd = dict(sd)
+            sd.pop('time_rope_aligned_flag', None)
             missing, unexpected = net.load_state_dict(sd, strict=False)
             if missing:
                 print(f'[init] {len(missing)} missing keys (fresh-init, '
@@ -624,6 +631,9 @@ if __name__ == '__main__':
             if unexpected:
                 print(f'[init] {len(unexpected)} unexpected keys (ignored, '
                        f'first few: {unexpected[:3]})')
+    print(f'[scheme] effective time_rope_aligned={net.time_rope_aligned} '
+          '(after any warm-start load; Lightning full-resume restores the '
+          'flag from the run being resumed)')
 
     trainer.fit(net, train_set_loader, val_set_loader,
                 ckpt_path=ckpt_path_for_resume)

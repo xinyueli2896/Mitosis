@@ -747,12 +747,23 @@ if __name__ == '__main__':
             else:
                 print(f'[init] bare warm-start ckpt at {args.checkpoint_path}')
             sd = loaded['state_dict'] if isinstance(loaded, dict) and 'state_dict' in loaded else loaded
+            # Drop incoming scheme-flag buffers: warm-starting from a
+            # ckpt trained under another rope scheme (e.g. an A.1 ckpt,
+            # or a v1.1 A.2 run via --fresh_schedule) must not silently
+            # override the scheme this run's CLI declared -- the
+            # [scheme] line above prints BEFORE this load and would lie.
+            sd = dict(sd)
+            sd.pop('time_rope_aligned_flag', None)
+            sd.pop('slot_rope_aligned_flag', None)
             missing, unexpected = net.load_state_dict(sd, strict=False)
             if missing:
                 # Expected: k_emb_m.weight, k_emb_c.weight (zero-init).
                 print(f'[init] {len(missing)} missing keys (first few: {missing[:3]})')
             if unexpected:
                 print(f'[init] {len(unexpected)} unexpected keys (first few: {unexpected[:3]})')
+    print(f'[scheme] effective: slot_rope_aligned={net.slot_rope_aligned} '
+          f'time_rope_aligned={net.time_rope_aligned} '
+          '(after any warm-start load)')
 
     trainer.fit(net, train_set_loader, val_set_loader,
                 ckpt_path=ckpt_path_for_resume)
