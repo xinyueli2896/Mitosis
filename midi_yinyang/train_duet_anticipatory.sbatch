@@ -93,6 +93,11 @@ CTX_CORRUPT_LEN="${CTX_CORRUPT_LEN:-8}"
 # use RUN_TAG (e.g. tar) so the run dir stays distinct from the legacy
 # parity-RoPE run. Default 0 = legacy.
 TIME_ROPE_ALIGNED="${TIME_ROPE_ALIGNED:-0}"
+# Optional run-name suffix, appended after the k segment (matches the
+# python side's default_name). Set it when re-running the same TASK
+# under changed settings so checkpoints never intermingle -- the
+# best-ckpt resolver picks the val minimum across a whole directory.
+RUN_TAG="${RUN_TAG:-}"
 MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
@@ -149,7 +154,7 @@ fi
 # the user didn't pass CKPT explicitly and last.ckpt exists there from a
 # prior submission, auto-resume.
 GLOBAL_BATCH=$((BATCH_SIZE * NGPUS))
-RUN_DIR="ckpt/m2c_duet_anticipatory_v1.0_large_gnl12_${TASK}_k${ANTICIPATION_FRAMES}_batch_${GLOBAL_BATCH}_schedule"
+RUN_DIR="ckpt/m2c_duet_anticipatory_v1.0_large_gnl12_${TASK}_k${ANTICIPATION_FRAMES}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
     CKPT="$RUN_DIR/last.ckpt"
     echo "[auto-resume] found $CKPT  (run dir: $RUN_DIR)"
@@ -241,6 +246,9 @@ export MASTER_PORT=$((20000 + RANDOM % 10000))
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 EXTRA_TRAIN_ARGS=()
+if [[ -n "$RUN_TAG" ]]; then
+    EXTRA_TRAIN_ARGS+=(--run_tag "$RUN_TAG")
+fi
 if [[ "$FRESH_SCHEDULE" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--fresh_schedule)
 fi
