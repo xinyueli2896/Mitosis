@@ -100,6 +100,11 @@ if [[ -z "${MAX_POLYPHONY:-}" ]]; then
 fi
 MIN_CHORD_TOKENS_BEFORE_EOS="${MIN_CHORD_TOKENS_BEFORE_EOS:-0}"
 MODES="${MODES:-co mel2chord chord2mel mel_only chord_only}"
+# Samples per (song, mode). 1 (default) keeps the 'duet' layout
+# (<song>/<mode>.mid); >1 switches to 'duet_multi'
+# (<song>/<mode>/sample_<i>_temp<T>.mid) -- tell build_eval_manifest
+# which when scoring.
+N_SAMPLES="${N_SAMPLES:-1}"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -116,7 +121,7 @@ echo "OUTPUT_DIR=$OUTPUT_DIR"
 echo "PROMPT_LENGTH=$PROMPT_LENGTH  GEN_LENGTH=$GEN_LENGTH"
 echo "TEMPERATURE=$TEMPERATURE  MAX_POLYPHONY=$MAX_POLYPHONY"
 echo "MIN_CHORD_TOKENS_BEFORE_EOS=$MIN_CHORD_TOKENS_BEFORE_EOS"
-echo "MODES=$MODES"
+echo "MODES=$MODES  N_SAMPLES=$N_SAMPLES"
 if [[ -n "${MAX_SONGS:-}" ]]; then echo "MAX_SONGS=$MAX_SONGS"; fi
 echo "----------------------------------------------------------------"
 nvidia-smi | head -n 20 || true
@@ -140,6 +145,7 @@ python cp_transformer_m2c_intra_cross_attn_combined.py \
     --model-size large \
     --moe-num-experts 4 --moe-topk 2 \
     --min-chord-tokens-before-eos "$MIN_CHORD_TOKENS_BEFORE_EOS" \
+    --n-samples "$N_SAMPLES" \
     "${EXTRA_ARGS[@]}"
 
 echo "================================================================"

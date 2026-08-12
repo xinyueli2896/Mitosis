@@ -66,6 +66,11 @@ TEMPERATURE="${TEMPERATURE:-1.0}"
 MAX_POLYPHONY="${MAX_POLYPHONY:-16}"
 MIN_CHORD_TOKENS_BEFORE_EOS="${MIN_CHORD_TOKENS_BEFORE_EOS:-0}"
 MODES="${MODES:-co mel2chord chord2mel mel_only chord_only}"
+# Samples per (song, mode). 1 (default) keeps the 'duet' layout
+# (<song>/<mode>.mid); >1 switches to 'duet_multi'
+# (<song>/<mode>/sample_<i>_temp<T>.mid) -- tell build_eval_manifest
+# which when scoring.
+N_SAMPLES="${N_SAMPLES:-1}"
 
 # Decode-schedule defaults (listening-test winner on the 98k v1.1 ckpt:
 # one refinement round, commit annealed to 0.9, 0.95 nucleus). Override
@@ -118,6 +123,7 @@ python cp_transformer_m2c_duet_block_diffusion_combined.py \
     --model-size large \
     --moe-num-experts 4 --moe-topk 2 \
     --min-chord-tokens-before-eos "$MIN_CHORD_TOKENS_BEFORE_EOS" \
+    --n-samples "$N_SAMPLES" \
     "${EXTRA_ARGS[@]}"
 
 echo "================================================================"
