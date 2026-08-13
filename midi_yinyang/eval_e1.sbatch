@@ -382,6 +382,16 @@ SRC_ARGS=()
 [[ -d "$A2_OUT" ]] && SRC_ARGS+=(--source "A.2:$DUET_LAYOUT:$A2_OUT")
 [[ -d "$A1_OUT" ]] && SRC_ARGS+=(--source "A.1:$DUET_LAYOUT:$A1_OUT")
 [[ -d "$B1_OUT" ]] && SRC_ARGS+=(--source "B.1:$DUET_LAYOUT:$B1_OUT")
+# Extra pre-generated systems (space-separated NAME:LAYOUT:PATH), e.g.
+# pipeline baselines: EXTRA_SOURCES="P-mc:duet_multi:temp/pipeline_.../final"
+for spec in ${EXTRA_SOURCES:-}; do
+    src_path="${spec##*:}"
+    if [[ -d "$src_path" ]]; then
+        SRC_ARGS+=(--source "$spec")
+    else
+        echo "[warn] EXTRA_SOURCES entry skipped (path missing): $spec"
+    fi
+done
 [[ -d "$S1_OUT" ]] && SRC_ARGS+=(--source "S1:single:$S1_OUT")
 [[ -d "$S0_OUT" ]] && SRC_ARGS+=(--source "S0:single:$S0_OUT")
 if [[ ${#SRC_ARGS[@]} -eq 0 ]]; then
