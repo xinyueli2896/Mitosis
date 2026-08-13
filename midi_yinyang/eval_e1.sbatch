@@ -21,6 +21,7 @@
 #   has val_loss-tagged siblings). Pass an explicit non-last
 #   filename to pin a specific epoch instead. All systems share
 #   this rule, so the comparison is best-val vs best-val.
+#   CKPT_A1       A.1 run dir or ckpt file        (optional)
 #   CKPT_B1       B.1 run dir or ckpt file        (optional)
 #   CKPT_S1       S1 ckpt file                    (melchord; optional)
 #   CKPT_S0       S0 pretrained ckpt              (optional)
@@ -78,6 +79,7 @@ REPO_DIR=/home/xinyue.li/Mitosis
 
 TASK="${TASK:-melchord}"
 CKPT_A2="${CKPT_A2:-}"
+CKPT_A1="${CKPT_A1:-}"
 CKPT_B1="${CKPT_B1:-}"
 CKPT_S1="${CKPT_S1:-}"
 CKPT_S0="${CKPT_S0:-ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt}"
@@ -122,6 +124,7 @@ echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "E1 CO-GENERATION EVALUATION   task=$TASK"
 echo "CKPT_A2 = ${CKPT_A2:-<unset: A.2 will be SKIPPED>}"
+echo "CKPT_A1 = ${CKPT_A1:-<unset: A.1 will be SKIPPED>}"
 echo "CKPT_B1 = ${CKPT_B1:-<unset: B.1 will be SKIPPED>}"
 echo "CKPT_S1 = ${CKPT_S1:-<unset: S1 will be SKIPPED>}"
 echo "CKPT_S0 = ${CKPT_S0:-<unset: S0 will be SKIPPED>}"
@@ -178,7 +181,7 @@ fi
 #    resolver skips unreadable files, so a warning here is survivable
 #    but tells you the picked ckpt may not be the best-val one.
 # ---------------------------------------------------------------------
-for _c in "$CKPT_A2" "$CKPT_B1" "$CKPT_S1" "$CKPT_S0"; do
+for _c in "$CKPT_A2" "$CKPT_A1" "$CKPT_B1" "$CKPT_S1" "$CKPT_S0"; do
     [[ -n "$_c" && -e "$_c" ]] && python check_ckpts.py "$_c" || true
 done
 echo "================================================================"
@@ -248,6 +251,7 @@ echo "[prompts] merged+tagged -> $EVAL_MERGED"
 # 2. inference
 # ---------------------------------------------------------------------
 A2_OUT="$OUT_ROOT/A.2"
+A1_OUT="$OUT_ROOT/A.1"
 B1_OUT="$OUT_ROOT/B.1"
 S1_OUT_NAME="e1_${TASK}_S1_${SLURM_JOB_ID:-local}"
 S0_OUT_NAME="e1_${TASK}_S0_${SLURM_JOB_ID:-local}"
@@ -277,17 +281,35 @@ else
         echo "[A.2] SKIPPED (CKPT_A2 unset)"
     fi
 
+    if [[ -n "$CKPT_A1" ]]; then
+        echo "--- A.1 co-generation (intra-cross-attn, --modes co) ---"
+        python cp_transformer_m2c_intra_cross_attn_combined.py \
+            --ckpt "$CKPT_A1" \
+            --mel-folder "$EVAL_MEL" --chord-folder "$EVAL_CHORD" \
+            --output-dir "$A1_OUT" \
+            --modes co \
+            --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
+            --temperature 1.0 --n-samples "$N_SAMPLES" \
+            --max-polyphony "$MAX_POLYPHONY_DUET" \
+            --model-size large --moe-num-experts 4 --moe-topk 2
+    else
+        echo "[A.1] SKIPPED (CKPT_A1 unset)"
+    fi
+
     if [[ -n "$CKPT_B1" ]]; then
         echo "--- B.1 co-generation (anticipatory, --mode co) ---"
         # --mode co prompts BOTH streams then generates both, honouring
         # the k-frame lead (auto-detected from the ckpt path's _k<N>_).
+        # --n-samples matters: without it B.1 wrote ONE sample in the
+        # flat 'duet' layout while every other system wrote N_SAMPLES in
+        # 'duet_multi', and the manifest scanner silently missed B.1.
         python cp_transformer_m2c_duet_anticipatory_inference.py \
             --ckpt "$CKPT_B1" \
             --mode co \
             --drum-folder "$EVAL_MEL" --nondrum-folder "$EVAL_CHORD" \
             --output-dir "$B1_OUT" \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
-            --temperature 1.0 \
+            --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$MAX_POLYPHONY_DUET" \
             --model-size large --moe-num-experts 4 --moe-topk 2
     else
@@ -326,7 +348,7 @@ if [[ -z "$PIANO_COPIES" ]]; then
 fi
 if [[ "$PIANO_COPIES" == "1" ]]; then
     PIANO_DIRS=()
-    for d in "$A2_OUT" "$B1_OUT" "$S1_OUT" "$S0_OUT"; do
+    for d in "$A2_OUT" "$A1_OUT" "$B1_OUT" "$S1_OUT" "$S0_OUT"; do
         [[ -d "$d" ]] && PIANO_DIRS+=("$d")
     done
     if [[ ${#PIANO_DIRS[@]} -gt 0 ]]; then
@@ -358,6 +380,7 @@ DUET_LAYOUT=duet
 
 SRC_ARGS=()
 [[ -d "$A2_OUT" ]] && SRC_ARGS+=(--source "A.2:$DUET_LAYOUT:$A2_OUT")
+[[ -d "$A1_OUT" ]] && SRC_ARGS+=(--source "A.1:$DUET_LAYOUT:$A1_OUT")
 [[ -d "$B1_OUT" ]] && SRC_ARGS+=(--source "B.1:$DUET_LAYOUT:$B1_OUT")
 [[ -d "$S1_OUT" ]] && SRC_ARGS+=(--source "S1:single:$S1_OUT")
 [[ -d "$S0_OUT" ]] && SRC_ARGS+=(--source "S0:single:$S0_OUT")
