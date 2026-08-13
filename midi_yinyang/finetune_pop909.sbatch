@@ -117,7 +117,11 @@ if [[ ! -f "$DATA" ]]; then
     echo "ERROR: $DATA missing (run preprocess_pop909_melchord.sbatch first)"
     exit 1
 fi
-if [[ -z "$RESUME" && ! -f "$PRETRAINED" ]]; then
+# FROM_SCRATCH=1: random init (S-scratch baseline) -- the pretrained
+# ckpt is neither required nor loaded, and the run dir stem becomes
+# pop909scratch so it can never be resolved in place of a finetune.
+FROM_SCRATCH="${FROM_SCRATCH:-0}"
+if [[ "$FROM_SCRATCH" != "1" && -z "$RESUME" && ! -f "$PRETRAINED" ]]; then
     echo "ERROR: $PRETRAINED missing"
     exit 1
 fi
@@ -125,6 +129,7 @@ fi
 EXTRA_ARGS=()
 [[ -n "$RESUME" ]] && EXTRA_ARGS+=(--resume "$RESUME")
 [[ -n "$RUN_TAG" ]] && EXTRA_ARGS+=(--run_tag "$RUN_TAG")
+[[ "$FROM_SCRATCH" == "1" ]] && EXTRA_ARGS+=(--from_scratch)
 
 python finetune_pop909.py \
     --data "$DATA" \

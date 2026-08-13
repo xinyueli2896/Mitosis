@@ -49,6 +49,12 @@ def main():
     p.add_argument('--max_lr', type=float, default=2e-5)
     p.add_argument('--lr_total_steps', type=int, default=20000)
     p.add_argument('--run_tag', default=None)
+    p.add_argument('--from_scratch', action='store_true', default=False,
+                   help='RANDOM init instead of loading --pretrained: the '
+                        'S-scratch baseline (same architecture and data as '
+                        'S1, minus the LA pretrain). Consider a higher '
+                        '--max_lr than the finetune default (e.g. 1e-4) -- '
+                        '2e-5 is tuned for warm-started weights.')
     p.add_argument('--save_top_k', type=int, default=5)
     p.add_argument('--val_check_interval', type=int, default=250)
     p.add_argument('--wandb_project',
@@ -63,18 +69,24 @@ def main():
 
     n_gpus = max(torch.cuda.device_count(), 1)
     tag = f'_{args.run_tag}' if args.run_tag else ''
-    model_name = (f'cp_transformer_v0.42_size{args.model_size}_pop909ft{tag}_'
+    # From-scratch runs get their own name stem so they can never be
+    # mistaken for (or resolved instead of) a warm-started finetune.
+    stem = 'pop909scratch' if args.from_scratch else 'pop909ft'
+    model_name = (f'cp_transformer_v0.42_size{args.model_size}_{stem}{tag}_'
                   f'batch_{args.batch_size * n_gpus}_schedule')
 
     net = RoFormerSymbolicTransformer(size=args.model_size, max_lr=args.max_lr)
 
     if args.resume is None:
-        if not os.path.exists(args.pretrained):
-            raise SystemExit(f'pretrained ckpt not found: {args.pretrained}')
-        ck = torch.load(args.pretrained, map_location='cpu', weights_only=False)
-        state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
-        net.load_state_dict(state, strict=True)
-        print(f'[init] loaded pretrained weights from {args.pretrained}')
+        if args.from_scratch:
+            print('[init] FROM SCRATCH (random init; --pretrained ignored)')
+        else:
+            if not os.path.exists(args.pretrained):
+                raise SystemExit(f'pretrained ckpt not found: {args.pretrained}')
+            ck = torch.load(args.pretrained, map_location='cpu', weights_only=False)
+            state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
+            net.load_state_dict(state, strict=True)
+            print(f'[init] loaded pretrained weights from {args.pretrained}')
 
     train_loader = DataLoader(
         FramedDataset(args.data, TRAIN_LENGTH, args.batch_size, split='train'),
