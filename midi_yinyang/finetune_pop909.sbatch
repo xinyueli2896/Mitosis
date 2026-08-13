@@ -93,10 +93,18 @@ if [[ ! -f "$DATA" && -f "$MITOSIS_DIR/$DATA" ]]; then
     echo "[setup] copied $DATA (+sidecars) from $MITOSIS_DIR"
 fi
 
+# FROM_SCRATCH=1: random init (S-scratch baseline). Defined BEFORE the
+# auto-resume derivation because the python side gives scratch runs a
+# different dir stem (pop909scratch) -- deriving with the finetune stem
+# would make a scratch resubmission miss its own last.ckpt, or worse,
+# resume from a FINETUNE run that shares the tag and batch.
+FROM_SCRATCH="${FROM_SCRATCH:-0}"
+STEM=pop909ft; [[ "$FROM_SCRATCH" == "1" ]] && STEM=pop909scratch
+
 # auto-resume if this exact run already has a last.ckpt
 NGPUS="${SLURM_GPUS_ON_NODE:-2}"
 TAG_SUFFIX=""; [[ -n "$RUN_TAG" ]] && TAG_SUFFIX="_${RUN_TAG}"
-RUN_DIR="ckpt/cp_transformer_v0.42_size1_pop909ft${TAG_SUFFIX}_batch_$((BATCH_SIZE * NGPUS))_schedule"
+RUN_DIR="ckpt/cp_transformer_v0.42_size1_${STEM}${TAG_SUFFIX}_batch_$((BATCH_SIZE * NGPUS))_schedule"
 if [[ -z "$RESUME" && -f "$RUN_DIR/last.ckpt" ]]; then
     RESUME="$RUN_DIR/last.ckpt"
     echo "[auto-resume] $RESUME"
@@ -117,10 +125,6 @@ if [[ ! -f "$DATA" ]]; then
     echo "ERROR: $DATA missing (run preprocess_pop909_melchord.sbatch first)"
     exit 1
 fi
-# FROM_SCRATCH=1: random init (S-scratch baseline) -- the pretrained
-# ckpt is neither required nor loaded, and the run dir stem becomes
-# pop909scratch so it can never be resolved in place of a finetune.
-FROM_SCRATCH="${FROM_SCRATCH:-0}"
 if [[ "$FROM_SCRATCH" != "1" && -z "$RESUME" && ! -f "$PRETRAINED" ]]; then
     echo "ERROR: $PRETRAINED missing"
     exit 1
