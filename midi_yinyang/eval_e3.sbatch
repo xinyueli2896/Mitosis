@@ -120,10 +120,12 @@ conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
 mkdir -p /home/xinyue.li/logs "$OUT_ROOT" results
 
-if [[ -z "$CKPT_A2" ]]; then
-    echo "ERROR: CKPT_A2 is required (E3's primary system)."
+if [[ -z "$CKPT_A2" && -z "$CKPT_C1" && -z "$CKPT_C2" && -z "$CKPT_B1" && -z "${Y_OUT:-}" ]]; then
+    echo "ERROR: nothing to evaluate -- set at least one of CKPT_A2,"
+    echo "       CKPT_C1, CKPT_C2, CKPT_B1, or Y_OUT."
     exit 1
 fi
+[[ -z "$CKPT_A2" ]] && echo "[note] CKPT_A2 unset: A.2 SKIPPED (C/Y-only conditional run)"
 
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
