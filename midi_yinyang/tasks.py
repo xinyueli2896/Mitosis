@@ -94,6 +94,21 @@ TASKS = {
         mod_a_default_program=24,
         mod_b_default_program=0,
     ),
+    'melchord_nottingham_rev': TaskConfig(
+        name='melchord_nottingham_rev',
+        mod_a_label='chord',
+        mod_b_label='mel',
+        # REVERSED direction for the conditional (C) models: they always
+        # condition on mod_a and generate mod_b, so chord->mel training
+        # means chord as mod_a. Same Nottingham data files as
+        # melchord_nottingham, same %10 val split (identical held-out
+        # songs), just swapped roles. Programs follow the streams
+        # (chord 0, melody 24).
+        mod_a_path=f'data/nottingham_chord_cp{MELCHORD_CP}_v2.pt',
+        mod_b_path=f'data/nottingham_melody_cp{MELCHORD_CP}_v2.pt',
+        mod_a_default_program=0,
+        mod_b_default_program=24,
+    ),
     'drumnondrum': TaskConfig(
         name='drumnondrum',
         mod_a_label='drum',
