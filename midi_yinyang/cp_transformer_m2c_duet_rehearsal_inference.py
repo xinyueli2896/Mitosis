@@ -237,28 +237,36 @@ def run_folder(model, args):
                         :, :drum_tokens.shape[1],
                     ]
 
-            mel_frames, chord_frames = drum_to_nondrum(
-                model, drum_tokens, nondrum_prompt_tokens,
-                gen_length=args.gen_length, temperature=args.temperature,
-            )
-
-            out_dir = os.path.join(args.output_dir, sid)
-            os.makedirs(out_dir, exist_ok=True)
-            out_path = os.path.join(out_dir, f'drum2nondrum_temp{args.temperature}.mid')
             output_tempo = _get_input_tempo(drum_path, default=120.0)
             print(f'[tempo] source={drum_path} -> tempo={output_tempo:.2f} BPM')
-            decode_m2c_frames(
-                mel_frames, chord_frames,
-                save_path=out_path,
-                tokenizer=model.tokenizer,
-                with_velocity=model.with_velocity,
-                tempo=output_tempo,
-                write_mel=True,
-                write_chord=True,
-                stream_names=(('CHORD', 'MELODY') if args.swap_stream_names
-                              else ('MELODY', 'CHORD')),
-            )
-            print(f'  wrote {out_path}')
+            for s in range(args.n_samples):
+                mel_frames, chord_frames = drum_to_nondrum(
+                    model, drum_tokens, nondrum_prompt_tokens,
+                    gen_length=args.gen_length, temperature=args.temperature,
+                )
+
+                out_dir = os.path.join(args.output_dir, sid)
+                if args.n_samples > 1:
+                    # 'duet_multi': <song>/drum2nondrum/sample_<i>_temp<T>.mid
+                    out_dir = os.path.join(out_dir, 'drum2nondrum')
+                    out_name = f'sample_{s}_temp{args.temperature}.mid'
+                else:
+                    # 'cond': <song>/drum2nondrum_temp<T>.mid (legacy layout)
+                    out_name = f'drum2nondrum_temp{args.temperature}.mid'
+                os.makedirs(out_dir, exist_ok=True)
+                out_path = os.path.join(out_dir, out_name)
+                decode_m2c_frames(
+                    mel_frames, chord_frames,
+                    save_path=out_path,
+                    tokenizer=model.tokenizer,
+                    with_velocity=model.with_velocity,
+                    tempo=output_tempo,
+                    write_mel=True,
+                    write_chord=True,
+                    stream_names=(('CHORD', 'MELODY') if args.swap_stream_names
+                                  else ('MELODY', 'CHORD')),
+                )
+                print(f'  wrote {out_path}')
         except Exception as e:
             print(f'  failed: {e!r}')
 
@@ -290,6 +298,10 @@ def main():
     p.add_argument('--moe-num-experts', type=int, default=4)
     p.add_argument('--moe-topk', type=int, default=2)
     p.add_argument('--min-chord-tokens-before-eos', type=int, default=0)
+    p.add_argument('--n-samples', dest='n_samples', type=int, default=1,
+                   help='independent samples per song. >1 switches the '
+                        "output to the 'duet_multi' layout "
+                        '(<song>/drum2nondrum/sample_<i>_temp<T>.mid).')
     p.add_argument('--swap-stream-names', action='store_true', default=False,
                    help='Name the mod_a track CHORD and the mod_b track '
                         'MELODY. Required when scoring a REVERSED melchord '

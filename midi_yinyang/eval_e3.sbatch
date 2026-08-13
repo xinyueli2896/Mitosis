@@ -251,26 +251,28 @@ else
 
     # C.1/C.2: purpose-built conditional models (mod_a given -> mod_b
     # generated; the ckpt's task decides which stream is which, and
-    # DIRECTION must match it). One sample per song.
+    # DIRECTION must match it).
     if [[ -n "$CKPT_C1" ]]; then
-        echo "--- C.1 rehearsal conditional ($DIRECTION, 1 sample/song) ---"
+        echo "--- C.1 rehearsal conditional ($DIRECTION, $N_SAMPLES sample(s)/song) ---"
         python cp_transformer_m2c_duet_rehearsal_inference.py \
             --ckpt "$CKPT_C1" \
             --drum-folder "$MODA_FOLDER" --nondrum-folder "$MODB_FOLDER" \
             --output-dir "$C1_OUT" \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
-            --temperature 1.0 --max-polyphony "$MAX_POLYPHONY" \
+            --temperature 1.0 --n-samples "$N_SAMPLES" \
+            --max-polyphony "$MAX_POLYPHONY" \
             --model-size large --moe-num-experts 4 --moe-topk 2 \
             "${SWAP_ARGS[@]}"
     fi
     if [[ -n "$CKPT_C2" ]]; then
-        echo "--- C.2 prefix conditional ($DIRECTION, 1 sample/song) ---"
+        echo "--- C.2 prefix conditional ($DIRECTION, $N_SAMPLES sample(s)/song) ---"
         python cp_transformer_m2c_duet_prefix_inference.py \
             --ckpt "$CKPT_C2" \
             --drum-folder "$MODA_FOLDER" --nondrum-folder "$MODB_FOLDER" \
             --output-dir "$C2_OUT" \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
-            --temperature 1.0 --max-polyphony "$MAX_POLYPHONY" \
+            --temperature 1.0 --n-samples "$N_SAMPLES" \
+            --max-polyphony "$MAX_POLYPHONY" \
             --model-size large --moe-num-experts 4 --moe-topk 2 \
             "${SWAP_ARGS[@]}"
     fi
@@ -294,8 +296,11 @@ fi
 # ---------------------------------------------------------------------
 # scoring
 # ---------------------------------------------------------------------
-if [[ "$N_SAMPLES" -gt 1 ]]; then A2_LAYOUT=duet_multi; B1_LAYOUT=duet_multi
-else                              A2_LAYOUT=duet;       B1_LAYOUT=cond; fi
+if [[ "$N_SAMPLES" -gt 1 ]]; then
+    A2_LAYOUT=duet_multi; B1_LAYOUT=duet_multi; C_LAYOUT=duet_multi
+else
+    A2_LAYOUT=duet;       B1_LAYOUT=cond;       C_LAYOUT=cond
+fi
 
 RSUF="p${PROMPT_LENGTH}${RESULT_TAG:+_${RESULT_TAG}}"
 MANIFEST="results/e3_${TASK}_${RSUF}_manifest.tsv"
@@ -311,8 +316,8 @@ SRC_ARGS=()
 [[ -d "$A2_OUT" ]] && SRC_ARGS+=(--source "A.2:${A2_LAYOUT}:${A2_OUT}")
 [[ -n "$Y_OUT" && -d "$Y_OUT" ]] && SRC_ARGS+=(--source "Y:duet_multi:${Y_OUT}")
 [[ -d "$B1_OUT" ]] && SRC_ARGS+=(--source "B.1:${B1_LAYOUT}:${B1_OUT}")
-[[ -d "$C1_OUT" ]] && SRC_ARGS+=(--source "C.1:cond:${C1_OUT}")
-[[ -d "$C2_OUT" ]] && SRC_ARGS+=(--source "C.2:cond:${C2_OUT}")
+[[ -d "$C1_OUT" ]] && SRC_ARGS+=(--source "C.1:${C_LAYOUT}:${C1_OUT}")
+[[ -d "$C2_OUT" ]] && SRC_ARGS+=(--source "C.2:${C_LAYOUT}:${C2_OUT}")
 
 python build_eval_manifest.py "${SRC_ARGS[@]}" \
     --songs $SONG_IDS \
@@ -353,6 +358,5 @@ echo "    system achieves WITHOUT the partner given. Conditioning must"
 echo "    beat it to mean anything."
 echo "  * The GIVEN stream's rows (_a in mel2chord) are the copied real"
 echo "    stream -- reference values, not generation quality."
-echo "  * C.1/C.2 rows rest on 1 sample/song vs $N_SAMPLES for A.2/B.1:"
-echo "    noisier means, disclosed here rather than hidden."
+echo "  * All systems drew $N_SAMPLES sample(s) per song."
 echo "================================================================"
