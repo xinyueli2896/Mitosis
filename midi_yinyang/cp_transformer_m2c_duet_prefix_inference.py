@@ -247,6 +247,8 @@ def run_folder(model, args):
                 tempo=output_tempo,
                 write_mel=True,
                 write_chord=True,
+                stream_names=(('CHORD', 'MELODY') if args.swap_stream_names
+                              else ('MELODY', 'CHORD')),
             )
             print(f'  wrote {out_path}')
         except Exception as e:
@@ -271,6 +273,13 @@ def main():
     p.add_argument('--moe-num-experts', type=int, default=4)
     p.add_argument('--moe-topk', type=int, default=2)
     p.add_argument('--min-chord-tokens-before-eos', type=int, default=0)
+    p.add_argument('--swap-stream-names', action='store_true', default=False,
+                   help='Name the mod_a track CHORD and the mod_b track '
+                        'MELODY. Required when scoring a REVERSED melchord '
+                        'ckpt (task melchord_*_rev: mod_a=chord conditioning, '
+                        'mod_b=melody generated) -- the default naming is by '
+                        'stream position and would label the streams '
+                        'backwards for the scorer.')
     p.add_argument('--max-songs', type=int, default=None)
     args = p.parse_args()
 

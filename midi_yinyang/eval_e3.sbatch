@@ -160,12 +160,15 @@ print(f'[gpu] {torch.cuda.device_count()} visible; {torch.cuda.get_device_name(0
     exit 1
 fi
 
-CKPT_ARGS=("$CKPT_A2")
+CKPT_ARGS=()
+[[ -n "$CKPT_A2" ]] && CKPT_ARGS+=("$CKPT_A2")
 [[ -n "$CKPT_B1" ]] && CKPT_ARGS+=("$CKPT_B1")
 [[ -n "$CKPT_C1" ]] && CKPT_ARGS+=("$CKPT_C1")
 [[ -n "$CKPT_C2" ]] && CKPT_ARGS+=("$CKPT_C2")
-python check_ckpts.py "${CKPT_ARGS[@]}" || {
-    echo "ERROR: unreadable checkpoint(s) -- see above."; exit 1; }
+if [[ ${#CKPT_ARGS[@]} -gt 0 ]]; then
+    python check_ckpts.py "${CKPT_ARGS[@]}" || {
+        echo "ERROR: unreadable checkpoint(s) -- see above."; exit 1; }
+fi
 
 for d in "$MEL_FOLDER" "$CHORD_FOLDER"; do
     [[ -d "$d" ]] || { echo "ERROR: $d not found"; exit 1; }
@@ -184,6 +187,29 @@ B1_OUT="$OUT_ROOT/B.1"
 C1_OUT="$OUT_ROOT/C.1"
 C2_OUT="$OUT_ROOT/C.2"
 
+# ---------------------------------------------------------------------
+# Conditional DIRECTION for the B/C systems (melchord):
+#   mel2chord (default)  forward ckpts (task melchord_*): mod_a = melody
+#   chord2mel            REVERSED ckpts (task melchord_*_rev): mod_a =
+#                        chord conditioning, melody generated. Feeds the
+#                        chord folder to the mod_a side, swaps the
+#                        decoded track names (decode names by stream
+#                        position), and relabels the manifest mode.
+# A.2 is direction-agnostic (runs both modes natively) and unaffected.
+# On drumnondrum the default mapping is the existing behaviour.
+# ---------------------------------------------------------------------
+DIRECTION="${DIRECTION:-mel2chord}"
+case "$DIRECTION" in
+    mel2chord)
+        MODA_FOLDER="$MEL_FOLDER"; MODB_FOLDER="$CHORD_FOLDER"
+        SWAP_ARGS=(); NORM_MODE=mel2chord ;;
+    chord2mel)
+        MODA_FOLDER="$CHORD_FOLDER"; MODB_FOLDER="$MEL_FOLDER"
+        SWAP_ARGS=(--swap-stream-names); NORM_MODE=chord2mel ;;
+    *) echo "ERROR: DIRECTION must be mel2chord or chord2mel"; exit 1 ;;
+esac
+echo "DIRECTION=$DIRECTION (B/C conditioning side: ${MODA_FOLDER})"
+
 if [[ "$SKIP_INFER" == "1" ]]; then
     echo "[infer] SKIP_INFER=1 -- reusing existing outputs"
 else
@@ -191,50 +217,62 @@ else
     # A.2 conditional modes. mel2chord = mod_a given, mod_b generated
     # (drum->nondrum on the drumnondrum task); chord2mel the reverse.
     # -----------------------------------------------------------------
-    echo "--- A.2 mel2chord + chord2mel ---"
-    python cp_transformer_m2c_duet_block_diffusion_combined.py \
-        --ckpt "$CKPT_A2" \
-        --mel-folder "$MEL_FOLDER" --chord-folder "$CHORD_FOLDER" \
-        --output-dir "$A2_OUT" \
-        --modes mel2chord chord2mel \
-        --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
-        --temperature 1.0 --n-samples "$N_SAMPLES" \
-        --max-polyphony "$MAX_POLYPHONY" \
-        --model-size large --moe-num-experts 4 --moe-topk 2
-
-    if [[ -n "$CKPT_B1" ]]; then
-        echo "--- B.1 drum2nondrum (leader given, its native mode) ---"
-        python cp_transformer_m2c_duet_anticipatory_inference.py \
-            --ckpt "$CKPT_B1" --mode drum2nondrum \
-            --drum-folder "$MEL_FOLDER" --nondrum-folder "$CHORD_FOLDER" \
-            --output-dir "$B1_OUT" \
+    if [[ -n "$CKPT_A2" ]]; then
+        echo "--- A.2 mel2chord + chord2mel ---"
+        python cp_transformer_m2c_duet_block_diffusion_combined.py \
+            --ckpt "$CKPT_A2" \
+            --mel-folder "$MEL_FOLDER" --chord-folder "$CHORD_FOLDER" \
+            --output-dir "$A2_OUT" \
+            --modes mel2chord chord2mel \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
             --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$MAX_POLYPHONY" \
             --model-size large --moe-num-experts 4 --moe-topk 2
+    else
+        echo "[A.2] SKIPPED (CKPT_A2 unset)"
     fi
 
-    # C.1/C.2: purpose-built conditional models, drumnondrum only.
-    # Their scripts emit exactly one sample per song (no sampling flag).
+    if [[ -n "$CKPT_B1" ]]; then
+        if [[ "$DIRECTION" == "chord2mel" ]]; then
+            echo "[B.1] SKIPPED: its inference has no reversed mode/naming;"
+            echo "      evaluate B.1 in a DIRECTION=mel2chord run."
+        else
+            echo "--- B.1 drum2nondrum (leader given, its native mode) ---"
+            python cp_transformer_m2c_duet_anticipatory_inference.py \
+                --ckpt "$CKPT_B1" --mode drum2nondrum \
+                --drum-folder "$MODA_FOLDER" --nondrum-folder "$MODB_FOLDER" \
+                --output-dir "$B1_OUT" \
+                --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
+                --temperature 1.0 --n-samples "$N_SAMPLES" \
+                --max-polyphony "$MAX_POLYPHONY" \
+                --model-size large --moe-num-experts 4 --moe-topk 2
+        fi
+    fi
+
+    # C.1/C.2: purpose-built conditional models (mod_a given -> mod_b
+    # generated; the ckpt's task decides which stream is which, and
+    # DIRECTION must match it). One sample per song.
     if [[ -n "$CKPT_C1" ]]; then
-        echo "--- C.1 rehearsal drum2nondrum (1 sample/song) ---"
+        echo "--- C.1 rehearsal conditional ($DIRECTION, 1 sample/song) ---"
         python cp_transformer_m2c_duet_rehearsal_inference.py \
             --ckpt "$CKPT_C1" \
-            --drum-folder "$MEL_FOLDER" --nondrum-folder "$CHORD_FOLDER" \
+            --drum-folder "$MODA_FOLDER" --nondrum-folder "$MODB_FOLDER" \
             --output-dir "$C1_OUT" \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
             --temperature 1.0 --max-polyphony "$MAX_POLYPHONY" \
-            --model-size large --moe-num-experts 4 --moe-topk 2
+            --model-size large --moe-num-experts 4 --moe-topk 2 \
+            "${SWAP_ARGS[@]}"
     fi
     if [[ -n "$CKPT_C2" ]]; then
-        echo "--- C.2 prefix drum2nondrum (1 sample/song) ---"
+        echo "--- C.2 prefix conditional ($DIRECTION, 1 sample/song) ---"
         python cp_transformer_m2c_duet_prefix_inference.py \
             --ckpt "$CKPT_C2" \
-            --drum-folder "$MEL_FOLDER" --nondrum-folder "$CHORD_FOLDER" \
+            --drum-folder "$MODA_FOLDER" --nondrum-folder "$MODB_FOLDER" \
             --output-dir "$C2_OUT" \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
             --temperature 1.0 --max-polyphony "$MAX_POLYPHONY" \
-            --model-size large --moe-num-experts 4 --moe-topk 2
+            --model-size large --moe-num-experts 4 --moe-topk 2 \
+            "${SWAP_ARGS[@]}"
     fi
 fi
 
@@ -269,7 +307,8 @@ TABLE="results/e3_${TASK}_${RSUF}_table.md"
 # dirs use the same direction labels, so the rows land in the same
 # table sections; BASELINE=Y then gives paired tests vs YinYang.
 Y_OUT="${Y_OUT:-}"
-SRC_ARGS=(--source "A.2:${A2_LAYOUT}:${A2_OUT}")
+SRC_ARGS=()
+[[ -d "$A2_OUT" ]] && SRC_ARGS+=(--source "A.2:${A2_LAYOUT}:${A2_OUT}")
 [[ -n "$Y_OUT" && -d "$Y_OUT" ]] && SRC_ARGS+=(--source "Y:duet_multi:${Y_OUT}")
 [[ -d "$B1_OUT" ]] && SRC_ARGS+=(--source "B.1:${B1_LAYOUT}:${B1_OUT}")
 [[ -d "$C1_OUT" ]] && SRC_ARGS+=(--source "C.1:cond:${C1_OUT}")
@@ -280,10 +319,11 @@ python build_eval_manifest.py "${SRC_ARGS[@]}" \
     --modes mel2chord chord2mel drum2nondrum \
     --out "$MANIFEST"
 
-# Normalize the direction label so every system's drum->nondrum rows
-# land in ONE table section: B.1/C.1/C.2 write 'drum2nondrum', A.2's
-# same direction is 'mel2chord' (mod_a given -> mod_b generated).
-sed -i $'s/\tdrum2nondrum\t/\tmel2chord\t/g' "$MANIFEST"
+# Normalize the direction label so every system's rows land in ONE
+# table section: B.1/C.1/C.2 write 'drum2nondrum' regardless of task;
+# relabel it to the run's DIRECTION (mel2chord, or chord2mel for
+# reversed-ckpt runs) to match A.2's/Y's native mode labels.
+sed -i $'s/\tdrum2nondrum\t/\t'"$NORM_MODE"$'\t/g' "$MANIFEST"
 
 python eval_metrics.py --task "$TASK" \
     --manifest "$MANIFEST" \
