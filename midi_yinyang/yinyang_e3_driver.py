@@ -50,8 +50,30 @@ from glob import glob
 import mido
 import torch
 
+from cp_transformer_fine_tune import RoFormerSymbolicTransformerInjected
 from cp_transformer_yinyang import RoformerYinyang
 from cp_transformer_yinyang_inference import cond_continuation
+
+# --- peft compatibility shim -------------------------------------------
+# Recent peft versions duck-type a ZERO-ARG `get_base_model()` on the
+# model they wrap (tied-embedding check in inject_adapter). The CP
+# lineage defines an unrelated `get_base_model(config)` (builds the HF
+# RoFormer backbone), so peft's call crashes with a missing-argument
+# TypeError. Upstream YinYang ran an older peft without the check.
+# Shim: zero-arg calls return the module itself (what peft expects of a
+# raw base model); explicit config calls keep the original behaviour.
+_orig_get_base_model = RoFormerSymbolicTransformerInjected.get_base_model
+
+
+def _peft_compatible_get_base_model(self, config=None):
+    if config is None:
+        return self
+    return _orig_get_base_model(self, config)
+
+
+RoFormerSymbolicTransformerInjected.get_base_model = (
+    _peft_compatible_get_base_model
+)
 
 PRESETS = {
     ('melchord', 'mel2chord'): dict(
