@@ -25,6 +25,12 @@
 #   CKPT_B1       B.1 run dir or ckpt file        (optional)
 #   CKPT_S1       S1 ckpt file                    (melchord; optional)
 #   CKPT_S0       S0 pretrained ckpt              (optional)
+#   CKPT_SSCRATCH S-scratch run dir (from-scratch on merged POP909;
+#                 optional -- the no-pretrain baseline)
+#   EXTRA_SOURCES space-separated NAME:LAYOUT:PATH triplets of
+#                 pre-generated systems to score alongside, e.g. the
+#                 pipeline baselines:
+#                 "P-mc:duet_multi:temp/pipeline_P-mc_<id>/final"
 #   MEL_FOLDER    full melody/drum midis  (prompts AND scoring references)
 #   CHORD_FOLDER  full chord/nondrum midis
 #                 melchord defaults: input/pop909_split/{melody,chord}
@@ -83,6 +89,10 @@ CKPT_A1="${CKPT_A1:-}"
 CKPT_B1="${CKPT_B1:-}"
 CKPT_S1="${CKPT_S1:-}"
 CKPT_S0="${CKPT_S0:-ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt}"
+# S-scratch: same architecture and merged data as S1, trained from
+# RANDOM init (no LA pretrain) -- the no-pretrain baseline. Same
+# single-stream inference path as S1/S0.
+CKPT_SSCRATCH="${CKPT_SSCRATCH:-}"
 N_SAMPLES="${N_SAMPLES:-3}"
 PROMPT_LENGTH="${PROMPT_LENGTH:-64}"
 GEN_LENGTH="${GEN_LENGTH:-384}"
@@ -128,6 +138,8 @@ echo "CKPT_A1 = ${CKPT_A1:-<unset: A.1 will be SKIPPED>}"
 echo "CKPT_B1 = ${CKPT_B1:-<unset: B.1 will be SKIPPED>}"
 echo "CKPT_S1 = ${CKPT_S1:-<unset: S1 will be SKIPPED>}"
 echo "CKPT_S0 = ${CKPT_S0:-<unset: S0 will be SKIPPED>}"
+echo "CKPT_SSCRATCH = ${CKPT_SSCRATCH:-<unset: S-scratch will be SKIPPED>}"
+echo "EXTRA_SOURCES = ${EXTRA_SOURCES:-<none>}"
 echo "MEL_FOLDER=$MEL_FOLDER  CHORD_FOLDER=$CHORD_FOLDER"
 echo "SONGS=${SONGS:-<all>}"
 echo "OUT_ROOT=$OUT_ROOT   BASELINE=$BASELINE"
@@ -181,7 +193,7 @@ fi
 #    resolver skips unreadable files, so a warning here is survivable
 #    but tells you the picked ckpt may not be the best-val one.
 # ---------------------------------------------------------------------
-for _c in "$CKPT_A2" "$CKPT_A1" "$CKPT_B1" "$CKPT_S1" "$CKPT_S0"; do
+for _c in "$CKPT_A2" "$CKPT_A1" "$CKPT_B1" "$CKPT_S1" "$CKPT_S0" "$CKPT_SSCRATCH"; do
     [[ -n "$_c" && -e "$_c" ]] && python check_ckpts.py "$_c" || true
 done
 echo "================================================================"
@@ -255,8 +267,10 @@ A1_OUT="$OUT_ROOT/A.1"
 B1_OUT="$OUT_ROOT/B.1"
 S1_OUT_NAME="e1_${TASK}_S1_${SLURM_JOB_ID:-local}"
 S0_OUT_NAME="e1_${TASK}_S0_${SLURM_JOB_ID:-local}"
+SSCRATCH_OUT_NAME="e1_${TASK}_Sscratch_${SLURM_JOB_ID:-local}"
 S1_OUT="temp/$S1_OUT_NAME"
 S0_OUT="temp/$S0_OUT_NAME"
+SSCRATCH_OUT="temp/$SSCRATCH_OUT_NAME"
 
 if [[ "$SKIP_INFER" == "1" ]]; then
     echo "[infer] SKIP_INFER=1 -- reusing existing outputs"
@@ -316,7 +330,7 @@ else
         echo "[B.1] SKIPPED (CKPT_B1 unset)"
     fi
 
-    for spec in "S1:$CKPT_S1:$S1_OUT_NAME" "S0:$CKPT_S0:$S0_OUT_NAME"; do
+    for spec in "S1:$CKPT_S1:$S1_OUT_NAME" "S0:$CKPT_S0:$S0_OUT_NAME" "S-scratch:$CKPT_SSCRATCH:$SSCRATCH_OUT_NAME"; do
         sys="${spec%%:*}"; rest="${spec#*:}"
         ckpt="${rest%%:*}"; name="${rest##*:}"
         if [[ -z "$ckpt" ]]; then echo "[$sys] SKIPPED (ckpt unset)"; continue; fi
@@ -348,7 +362,7 @@ if [[ -z "$PIANO_COPIES" ]]; then
 fi
 if [[ "$PIANO_COPIES" == "1" ]]; then
     PIANO_DIRS=()
-    for d in "$A2_OUT" "$A1_OUT" "$B1_OUT" "$S1_OUT" "$S0_OUT"; do
+    for d in "$A2_OUT" "$A1_OUT" "$B1_OUT" "$S1_OUT" "$S0_OUT" "$SSCRATCH_OUT"; do
         [[ -d "$d" ]] && PIANO_DIRS+=("$d")
     done
     if [[ ${#PIANO_DIRS[@]} -gt 0 ]]; then
@@ -394,6 +408,7 @@ for spec in ${EXTRA_SOURCES:-}; do
 done
 [[ -d "$S1_OUT" ]] && SRC_ARGS+=(--source "S1:single:$S1_OUT")
 [[ -d "$S0_OUT" ]] && SRC_ARGS+=(--source "S0:single:$S0_OUT")
+[[ -d "$SSCRATCH_OUT" ]] && SRC_ARGS+=(--source "S-scratch:single:$SSCRATCH_OUT")
 if [[ ${#SRC_ARGS[@]} -eq 0 ]]; then
     echo "ERROR: no inference outputs found to score."
     exit 1
