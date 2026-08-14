@@ -63,6 +63,21 @@ TASKS = {
         mod_a_default_program=24,
         mod_b_default_program=0,
     ),
+    'melchord_rev': TaskConfig(
+        name='melchord_rev',
+        mod_a_label='chord',
+        mod_b_label='mel',
+        # REVERSED POP909 melchord for conditional (C) models: they
+        # condition on mod_a and generate mod_b, so chord->mel training
+        # means chord as mod_a. Same POP909 files and same index-mod-10
+        # split as 'melchord', roles swapped. Used for the IN-DOMAIN
+        # chord->mel cascade stage B (the published YinYang conditional
+        # is Nottingham-trained, hence out of domain on POP909).
+        mod_a_path=f'data/pop909_chord_cp{MELCHORD_CP}_v2.pt',
+        mod_b_path=f'data/pop909_melody_cp{MELCHORD_CP}_v2.pt',
+        mod_a_default_program=0,
+        mod_b_default_program=24,
+    ),
     'melchord_nottingham': TaskConfig(
         name='melchord_nottingham',
         mod_a_label='mel',

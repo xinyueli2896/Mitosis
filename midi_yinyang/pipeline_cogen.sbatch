@@ -32,8 +32,15 @@
 #   PIPELINE      P-mc (default) or P-cm
 #   CKPT_SPEC     REQUIRED: the specialist run dir/ckpt
 #                 (S-mel for P-mc, S-chord for P-cm)
-#   CKPT_Y        REQUIRED: YinYang ckpt name/path for the direction
+#   STAGE_B       y (default) | c1 | c2 -- who writes the partner stream.
+#                 y  = published YinYang ckpt (Nottingham-trained: OUT
+#                      OF DOMAIN on POP909, disclose it)
+#                 c1/c2 = in-domain conditional trained on the same
+#                      corpus as the specialists (the strong foil)
+#   CKPT_Y        required when STAGE_B=y: YinYang ckpt for the direction
 #                 (_rev = mel2chord for P-mc; non-rev = chord2mel)
+#   CKPT_COND     required when STAGE_B=c1/c2: the in-domain conditional
+#                 run dir (task melchord for P-mc, melchord_rev for P-cm)
 #   MEL_FOLDER    default input/pop909_split/melody
 #   CHORD_FOLDER  default input/pop909_split/chord
 #   PROMPT_LENGTH default 96.  GEN_LENGTH default 416 (TOTAL).
@@ -64,6 +71,15 @@ REPO_DIR=/home/xinyue.li/Mitosis
 PIPELINE="${PIPELINE:-P-mc}"
 CKPT_SPEC="${CKPT_SPEC:-}"
 CKPT_Y="${CKPT_Y:-}"
+# Stage B: which conditional model writes the partner stream.
+#   y  (default) the published YinYang ckpt -- Nottingham-trained, so
+#      OUT OF DOMAIN on POP909; keep as the published-baseline row.
+#   c1 / c2      an IN-DOMAIN conditional (C.1 rehearsal / C.2 prefix)
+#      trained on the same corpus as the specialists -- the strong foil,
+#      where "no mutual conditioning" is the ONLY difference from the
+#      duet models. Needs CKPT_COND.
+STAGE_B="${STAGE_B:-y}"
+CKPT_COND="${CKPT_COND:-}"
 MEL_FOLDER="${MEL_FOLDER:-input/pop909_split/melody}"
 CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"
 PROMPT_LENGTH="${PROMPT_LENGTH:-96}"
@@ -100,16 +116,31 @@ conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
 mkdir -p /home/xinyue.li/logs "$OUT_ROOT"
 
-if [[ -z "$CKPT_SPEC" || -z "$CKPT_Y" ]]; then
-    echo "ERROR: CKPT_SPEC and CKPT_Y are both required."
-    exit 1
+if [[ -z "$CKPT_SPEC" ]]; then
+    echo "ERROR: CKPT_SPEC is required."; exit 1
 fi
+case "$STAGE_B" in
+    y)  [[ -n "$CKPT_Y" ]] || { echo "ERROR: STAGE_B=y needs CKPT_Y."; exit 1; }
+        COND_LABEL="YinYang $CKPT_Y (published, Nottingham-trained)" ;;
+    c1) [[ -n "$CKPT_COND" ]] || { echo "ERROR: STAGE_B=c1 needs CKPT_COND."; exit 1; }
+        COND_SCRIPT=cp_transformer_m2c_duet_rehearsal_inference.py
+        COND_LABEL="C.1 rehearsal $CKPT_COND (in-domain)" ;;
+    c2) [[ -n "$CKPT_COND" ]] || { echo "ERROR: STAGE_B=c2 needs CKPT_COND."; exit 1; }
+        COND_SCRIPT=cp_transformer_m2c_duet_prefix_inference.py
+        COND_LABEL="C.2 prefix $CKPT_COND (in-domain)" ;;
+    *)  echo "ERROR: STAGE_B must be y, c1, or c2"; exit 1 ;;
+esac
+# Reversed direction (chord->mel): the C decoders name output tracks by
+# stream POSITION, so the names must be swapped or the scorer reads the
+# streams backwards.
+SWAP_ARGS=()
+[[ "$DIRECTION" == "chord2mel" && "$STAGE_B" != "y" ]] && SWAP_ARGS=(--swap-stream-names)
 
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "PIPELINE CO-GENERATION BASELINE  $PIPELINE"
 echo "stage A: $CKPT_SPEC continues $GENERATED_ROLE from $GEN_FOLDER"
-echo "stage B: $CKPT_Y ($DIRECTION) conditioned on it"
+echo "stage B: $COND_LABEL, direction=$DIRECTION"
 echo "partner prompts from $PARTNER_FOLDER"
 echo "PROMPT_LENGTH=$PROMPT_LENGTH GEN_LENGTH=$GEN_LENGTH N_SAMPLES=$N_SAMPLES"
 echo "OUT_ROOT=$OUT_ROOT"
@@ -130,22 +161,43 @@ python cp_transformer_inference.py \
     --max-polyphony "$MAX_POLYPHONY" --no-split-tracks \
     --save-name "$STAGEA_SAVE_NAME"
 
-echo "--- stage B: hybrid = generated $GENERATED_ROLE + partner prompt ---"
-python build_pipeline_hybrids.py build \
-    --gen-folder "$STAGEA_DIR" \
-    --partner-folder "$PARTNER_FOLDER" \
-    --generated-role "$GENERATED_ROLE" \
-    --prompt-frames "$PROMPT_LENGTH" --temperature 1.0 \
-    --out "$HYBRIDS"
+if [[ "$STAGE_B" == "y" ]]; then
+    echo "--- stage B: hybrid = generated $GENERATED_ROLE + partner prompt ---"
+    python build_pipeline_hybrids.py build \
+        --gen-folder "$STAGEA_DIR" \
+        --partner-folder "$PARTNER_FOLDER" \
+        --generated-role "$GENERATED_ROLE" \
+        --prompt-frames "$PROMPT_LENGTH" --temperature 1.0 \
+        --out "$HYBRIDS"
 
-echo "--- stage C: YinYang conditional on the generated stream ---"
-python yinyang_e3_driver.py \
-    --ckpt "$CKPT_Y" \
-    --midi-folder "$HYBRIDS" \
-    --task melchord --direction "$DIRECTION" \
-    --output-dir "$Y_TREE" \
-    --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
-    --temperature 1.0 --n-samples 1
+    echo "--- stage C: YinYang conditional on the generated stream ---"
+    python yinyang_e3_driver.py \
+        --ckpt "$CKPT_Y" \
+        --midi-folder "$HYBRIDS" \
+        --task melchord --direction "$DIRECTION" \
+        --output-dir "$Y_TREE" \
+        --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
+        --temperature 1.0 --n-samples 1
+else
+    echo "--- stage B: pair generated $GENERATED_ROLE with partner prompts ---"
+    python build_pipeline_hybrids.py build-cond \
+        --gen-folder "$STAGEA_DIR" \
+        --partner-folder "$PARTNER_FOLDER" \
+        --temperature 1.0 \
+        --out-cond "$HYBRIDS/conditioning" \
+        --out-prompt "$HYBRIDS/target_prompt"
+
+    echo "--- stage C: in-domain conditional ($STAGE_B) ---"
+    python "$COND_SCRIPT" \
+        --ckpt "$CKPT_COND" \
+        --drum-folder "$HYBRIDS/conditioning" \
+        --nondrum-folder "$HYBRIDS/target_prompt" \
+        --output-dir "$Y_TREE" \
+        --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
+        --temperature 1.0 --max-polyphony "$MAX_POLYPHONY" \
+        --model-size large --moe-num-experts 4 --moe-topk 2 \
+        "${SWAP_ARGS[@]}"
+fi
 
 echo "--- stage D: assemble duet_multi layout ---"
 python build_pipeline_hybrids.py assemble \

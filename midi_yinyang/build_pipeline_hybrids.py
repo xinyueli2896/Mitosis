@@ -147,22 +147,76 @@ def build(args):
             '  (also check --temperature matches the stage-A filenames)')
 
 
-def assemble(args):
-    hybrids = sorted(glob(os.path.join(args.ydriver_out, '*', args.direction)))
-    if not hybrids:
+def build_cond(args):
+    """Stage-B variant for an IN-DOMAIN conditional (C.1/C.2) instead of
+    the two-track YinYang driver. Those scripts take two FOLDERS of
+    single-stream midis paired by filename -- conditioning (mod_a) and
+    the target's prompt (mod_b) -- so no hybrid files are needed: the
+    stage-A continuation is already a single-stream midi, and the
+    partner ground truth is copied under the matching name (the C
+    inference caps it to --prompt-length itself)."""
+    files = sorted(glob(os.path.join(args.gen_folder, '*_continuation_*.mid')))
+    if not files:
+        raise SystemExit(f'no stage-A continuations in {args.gen_folder}')
+    os.makedirs(args.out_cond, exist_ok=True)
+    os.makedirs(args.out_prompt, exist_ok=True)
+    n, missing = 0, []
+    for f in files:
+        m = CONT_RE.match(os.path.basename(f))
+        if not m or float(m.group('temp')) != args.temperature:
+            continue
+        song = m.group('song')
+        if song.lower().endswith('.mid'):
+            song = song[:-4]
+        idx = int(m.group('idx'))
+        partner = None
+        for ext in ('.mid', '.MID'):
+            cand = os.path.join(args.partner_folder, song + ext)
+            if os.path.exists(cand):
+                partner = cand
+                break
+        if partner is None:
+            print(f'[skip] {song}: no {song}.mid in {args.partner_folder}')
+            missing.append(song)
+            continue
+        stem = f'{song}__s{idx}.mid'
+        shutil.copyfile(f, os.path.join(args.out_cond, stem))
+        shutil.copyfile(partner, os.path.join(args.out_prompt, stem))
+        n += 1
+    print(f'paired {n} (conditioning, prompt) file(s) -> '
+          f'{args.out_cond} , {args.out_prompt}')
+    if n == 0:
         raise SystemExit(
-            f'no {args.direction} outputs under {args.ydriver_out}')
+            f'nothing paired. stage-A files: {len(files)}; '
+            f'songs without partner: {missing[:5]}')
+
+
+def assemble(args):
+    # Two producer layouts land here:
+    #   Y driver      <root>/<song>__s<i>/<direction>/sample_0_temp<T>.mid
+    #   C.1/C.2 (1 sample)  <root>/<song>__s<i>/drum2nondrum_temp<T>.mid
+    run_dirs = sorted(d for d in glob(os.path.join(args.ydriver_out, '*'))
+                      if os.path.isdir(d))
+    if not run_dirs:
+        raise SystemExit(f'no per-song dirs under {args.ydriver_out}')
     n = 0
-    for mode_dir in hybrids:
-        hybrid_name = os.path.basename(os.path.dirname(mode_dir))
+    for run_dir in run_dirs:
+        hybrid_name = os.path.basename(run_dir)
         m = HYBRID_RE.match(hybrid_name)
         if not m:
             print(f'[skip] {hybrid_name}: not a <song>__s<i> name')
             continue
         song, idx = m.group('song'), int(m.group('idx'))
-        src = os.path.join(mode_dir, f'sample_0_temp{args.temperature}.mid')
-        if not os.path.exists(src):
-            print(f'[warn] missing {src}')
+        candidates = [
+            os.path.join(run_dir, args.direction,
+                         f'sample_0_temp{args.temperature}.mid'),
+            os.path.join(run_dir,
+                         f'drum2nondrum_temp{args.temperature}.mid'),
+        ]
+        src = next((c for c in candidates if os.path.exists(c)), None)
+        if src is None:
+            print(f'[warn] no output for {hybrid_name} '
+                  f'(looked for {[os.path.basename(c) for c in candidates]})')
             continue
         dst_dir = os.path.join(args.final, song, 'co')
         os.makedirs(dst_dir, exist_ok=True)
@@ -190,6 +244,15 @@ def main():
     b.add_argument('--temperature', type=float, default=1.0)
     b.add_argument('--out', required=True)
 
+    c = sub.add_parser('build-cond')
+    c.add_argument('--gen-folder', required=True)
+    c.add_argument('--partner-folder', required=True)
+    c.add_argument('--temperature', type=float, default=1.0)
+    c.add_argument('--out-cond', required=True,
+                   help='folder for the generated CONDITIONING stream')
+    c.add_argument('--out-prompt', required=True,
+                   help="folder for the target's ground-truth prompt")
+
     a = sub.add_parser('assemble')
     a.add_argument('--ydriver-out', required=True)
     a.add_argument('--direction', required=True,
@@ -198,7 +261,7 @@ def main():
     a.add_argument('--final', required=True)
 
     args = p.parse_args()
-    (build if args.cmd == 'build' else assemble)(args)
+    {'build': build, 'build-cond': build_cond, 'assemble': assemble}[args.cmd](args)
 
 
 if __name__ == '__main__':
