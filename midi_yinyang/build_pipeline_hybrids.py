@@ -69,11 +69,19 @@ def build(args):
         raise SystemExit(f'no stage-A continuations in {args.gen_folder}')
     os.makedirs(args.out, exist_ok=True)
     n = 0
+    missing = []
     for f in files:
         m = CONT_RE.match(os.path.basename(f))
         if not m or float(m.group('temp')) != args.temperature:
             continue
-        song, idx = m.group('song'), int(m.group('idx'))
+        # cp_transformer_inference names outputs from the basename WITH
+        # its extension ('001.mid_temp1.0_continuation_0.mid'), so the
+        # captured song still carries '.mid'. Strip it, or every partner
+        # lookup asks for '001.mid.mid' and silently finds nothing.
+        song = m.group('song')
+        if song.lower().endswith('.mid'):
+            song = song[:-4]
+        idx = int(m.group('idx'))
         partner = None
         for ext in ('.mid', '.MID'):
             cand = os.path.join(args.partner_folder, song + ext)
@@ -81,7 +89,8 @@ def build(args):
                 partner = cand
                 break
         if partner is None:
-            print(f'[skip] {song}: no partner file in {args.partner_folder}')
+            print(f'[skip] {song}: no {song}.mid in {args.partner_folder}')
+            missing.append(song)
             continue
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
@@ -97,7 +106,7 @@ def build(args):
         # generated file's grid by frame index so tempi need not match.
         cutoff = args.prompt_frames * part_step
         partner_inst = pretty_midi.Instrument(
-            program=(0 if args.generated_role == 'mel' else 0),
+            program=0,
             name=('CHORD' if args.generated_role == 'mel' else 'MELODY'))
         for note in _all_notes(part_pm):
             if note.start >= cutoff:
@@ -128,7 +137,14 @@ def build(args):
         n += 1
     print(f'built {n} hybrid file(s) -> {args.out}')
     if n == 0:
-        raise SystemExit('no hybrids built -- check --temperature and folders')
+        have = sorted(os.path.basename(p) for p in
+                      glob(os.path.join(args.partner_folder, '*.mid')))[:5]
+        raise SystemExit(
+            'no hybrids built.\n'
+            f'  stage-A files seen : {len(files)} in {args.gen_folder}\n'
+            f'  songs without partner: {missing[:5]}\n'
+            f'  partner folder holds : {have}\n'
+            '  (also check --temperature matches the stage-A filenames)')
 
 
 def assemble(args):

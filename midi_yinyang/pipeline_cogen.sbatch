@@ -22,7 +22,7 @@
 #      <OUT>/<song>/co/sample_<i>_temp<T>.mid, tracks MELODY/CHORD.
 #
 # Score in E1 via the EXTRA_SOURCES knob, e.g.:
-#   EXTRA_SOURCES="P-mc:duet_multi:temp/pipeline_mc/final"
+#   EXTRA_SOURCES="P-mc:duet_multi:temp/cascade_P-mc_<jobid>/4_final"
 #
 # DISCLOSED CAVEAT: Y is Nottingham-trained; on POP909 prompts it runs
 # out of domain. The pipeline uses the strongest available conditional
@@ -38,7 +38,10 @@
 #   CHORD_FOLDER  default input/pop909_split/chord
 #   PROMPT_LENGTH default 96.  GEN_LENGTH default 416 (TOTAL).
 #   N_SAMPLES     default 3.   MAX_POLYPHONY default 4 (specialist cp).
-#   OUT_ROOT      default temp/pipeline_<PIPELINE>_<jobid>
+#   OUT_ROOT      default temp/cascade_<PIPELINE>_<jobid>. MUST be under
+#                 temp/ (stage A can only write there). The run tree is
+#                 1_stageA_specialist / 2_hybrids / 3_y_conditional /
+#                 4_final -- score 4_final.
 
 #SBATCH --job-name=pipeline_cogen
 #SBATCH --output=/home/xinyue.li/logs/%x_%j.out
@@ -76,11 +79,22 @@ case "$PIPELINE" in
     *) echo "ERROR: PIPELINE must be P-mc or P-cm"; exit 1 ;;
 esac
 
-OUT_ROOT="${OUT_ROOT:-temp/pipeline_${PIPELINE}_${SLURM_JOB_ID:-local}}"
-STAGEA_NAME="pipeA_${PIPELINE}_${SLURM_JOB_ID:-local}"
-HYBRIDS="$OUT_ROOT/hybrids"
-Y_TREE="$OUT_ROOT/y"
-FINAL="$OUT_ROOT/final"
+# Everything for one cascade run lives under ONE root, in numbered
+# stage order. cp_transformer_inference can only write under temp/
+# (it builds temp/<save_name>/...), so the stage-A save name is the
+# root's path relative to temp/ -- which keeps its output inside the
+# run root instead of in a confusing sibling directory.
+OUT_ROOT="${OUT_ROOT:-temp/cascade_${PIPELINE}_${SLURM_JOB_ID:-local}}"
+if [[ "$OUT_ROOT" != temp/* ]]; then
+    echo "ERROR: OUT_ROOT must start with temp/ (stage A can only write"
+    echo "       under temp/). Got: $OUT_ROOT"
+    exit 1
+fi
+STAGEA_SAVE_NAME="${OUT_ROOT#temp/}/1_stageA_specialist"
+STAGEA_DIR="$OUT_ROOT/1_stageA_specialist"
+HYBRIDS="$OUT_ROOT/2_hybrids"
+Y_TREE="$OUT_ROOT/3_y_conditional"
+FINAL="$OUT_ROOT/4_final"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -107,18 +121,18 @@ assert torch.cuda.is_available(), 'no CUDA device'
 print(f'[gpu] {torch.cuda.get_device_name(0)}')
 EOF
 
-echo "--- stage A: specialist continuation ---"
+echo "--- stage A: specialist continues the $GENERATED_ROLE stream ---"
 python cp_transformer_inference.py \
     --ckpt "$CKPT_SPEC" \
     --midi-folder "$GEN_FOLDER" \
     --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
     --temperature 1.0 --n-samples "$N_SAMPLES" \
     --max-polyphony "$MAX_POLYPHONY" --no-split-tracks \
-    --save-name "$STAGEA_NAME"
+    --save-name "$STAGEA_SAVE_NAME"
 
-echo "--- stage B: build hybrids ---"
+echo "--- stage B: hybrid = generated $GENERATED_ROLE + partner prompt ---"
 python build_pipeline_hybrids.py build \
-    --gen-folder "temp/$STAGEA_NAME" \
+    --gen-folder "$STAGEA_DIR" \
     --partner-folder "$PARTNER_FOLDER" \
     --generated-role "$GENERATED_ROLE" \
     --prompt-frames "$PROMPT_LENGTH" --temperature 1.0 \
@@ -140,8 +154,13 @@ python build_pipeline_hybrids.py assemble \
     --final "$FINAL"
 
 echo "================================================================"
-echo "$PIPELINE complete."
-echo "  final outputs: $FINAL   (duet_multi, mode=co, MELODY/CHORD named)"
-echo "Score in E1 with:"
+echo "$PIPELINE complete. Run tree:"
+echo "  $OUT_ROOT/"
+echo "    1_stageA_specialist/  specialist continuations (raw, single stream)"
+echo "    2_hybrids/            two-track inputs handed to YinYang"
+echo "    3_y_conditional/      YinYang raw output tree"
+echo "    4_final/              <-- SCORE THIS (duet_multi, mode=co)"
+echo ""
+echo "Score in E1 by adding to the export list:"
 echo "  EXTRA_SOURCES=\"$PIPELINE:duet_multi:$FINAL\""
 echo "================================================================"
