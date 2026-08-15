@@ -168,6 +168,14 @@ def main():
                         'initial tempo (so the result plays at the song\'s '
                         'real speed). Pass a number to force one tempo for '
                         'every song, as the upstream demo driver does.')
+    p.add_argument('--reuse-cache', action='store_true', default=False,
+                   help="keep upstream's skip-if-output-exists behaviour. "
+                        'OFF by default: that cache is keyed only on '
+                        '(prompt_length, ckpt, source filename, '
+                        'temperature, ins_ids), so it silently returns '
+                        'stale files when output tempo, gen length, the '
+                        'output dir, or -- for cascade hybrids -- the '
+                        'upstream stage changed.')
     p.add_argument('--max-songs', type=int, default=None)
     args = p.parse_args()
 
@@ -196,6 +204,17 @@ def main():
         base = os.path.basename(f)
         sid = os.path.splitext(base)[0]
         print(f'=== [{i + 1}/{len(files)}] {sid}')
+        # Purge upstream's cached outputs for this source file unless
+        # explicitly reusing them (see --reuse-cache). Bracketed
+        # ins_ids in the names make glob unsafe here, so match by prefix.
+        if not args.reuse_cache and os.path.isdir(src_dir):
+            prefix = f'{base}_temp{args.temperature}_continuation_'
+            stale = [n for n in os.listdir(src_dir) if n.startswith(prefix)]
+            for n in stale:
+                os.remove(os.path.join(src_dir, n))
+            if stale:
+                print(f'  [cache] cleared {len(stale)} stale file(s)')
+
         try:
             out_bpm = (args.output_bpm if args.output_bpm is not None
                        else source_tempo(f))

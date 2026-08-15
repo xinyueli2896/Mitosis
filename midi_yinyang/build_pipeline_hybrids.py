@@ -112,10 +112,15 @@ def build(args):
             if note.start >= cutoff:
                 continue
             scale = gen_step / part_step
+            # Keep the note's real end: cond_continuation truncates the
+            # target stream by FRAME (x2[:, :prompt_length]) anyway, so
+            # clipping durations here only shortened the prompt's last
+            # chord -- and made this path disagree with build-cond, which
+            # copies the partner file untouched.
             partner_inst.notes.append(pretty_midi.Note(
                 velocity=note.velocity, pitch=note.pitch,
                 start=note.start * scale,
-                end=min(note.end, cutoff) * scale,
+                end=note.end * scale,
             ))
 
         gen_inst = pretty_midi.Instrument(
