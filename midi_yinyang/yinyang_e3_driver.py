@@ -48,6 +48,7 @@ import shutil
 from glob import glob
 
 import mido
+import pretty_midi
 import torch
 
 from cp_transformer_fine_tune import RoFormerSymbolicTransformerInjected
@@ -89,6 +90,23 @@ PRESETS = {
         ins_ids=['nondrum', 'drum'], fixed_program=[None, None],
         cond_name=None, target_name=None),
 }
+
+
+def source_tempo(path, default=120.0):
+    """Initial tempo of the source midi. cond_continuation renders BOTH
+    streams on the frame grid at output_bpm, so passing the source's own
+    tempo keeps the result at the song's real speed; the upstream default
+    (150, or the 120 this driver used to hardcode) plays every song at
+    one fixed tempo. Scoring is unaffected either way -- eval_metrics
+    frames each file by its own tempo -- but listening is not."""
+    try:
+        pm = pretty_midi.PrettyMIDI(path)
+        _, tempi = pm.get_tempo_changes()
+        t = float(tempi[0]) if len(tempi) else default
+        return t if t > 0 else default
+    except Exception as e:
+        print(f'[tempo] failed to read {path}: {e!r}; using {default}')
+        return default
 
 
 def load_yinyang(ckpt):
@@ -145,6 +163,11 @@ def main():
     p.add_argument('--gen-length', type=int, default=384)
     p.add_argument('--temperature', type=float, default=1.0)
     p.add_argument('--n-samples', type=int, default=3)
+    p.add_argument('--output-bpm', type=float, default=None,
+                   help='render tempo. Default: each source file\'s own '
+                        'initial tempo (so the result plays at the song\'s '
+                        'real speed). Pass a number to force one tempo for '
+                        'every song, as the upstream demo driver does.')
     p.add_argument('--max-songs', type=int, default=None)
     args = p.parse_args()
 
@@ -174,6 +197,9 @@ def main():
         sid = os.path.splitext(base)[0]
         print(f'=== [{i + 1}/{len(files)}] {sid}')
         try:
+            out_bpm = (args.output_bpm if args.output_bpm is not None
+                       else source_tempo(f))
+            print(f'  [tempo] output_bpm={out_bpm:.2f}')
             cond_continuation(
                 model, f,
                 prompt_length=args.prompt_length,
@@ -182,7 +208,7 @@ def main():
                 n_samples=args.n_samples,
                 ins_ids=preset['ins_ids'],
                 fixed_program=preset['fixed_program'],
-                output_bpm=120,
+                output_bpm=out_bpm,
             )
         except Exception as e:
             print(f'  failed: {e!r}')
