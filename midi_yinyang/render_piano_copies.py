@@ -28,14 +28,47 @@ import os
 import mido
 
 
-def pianoize_file(src, dst, program):
+def _track_role(track, chord_programs=(48,)):
+    """MELODY / CHORD / None for one track. Track NAME wins (duet and
+    cascade outputs carry them); otherwise fall back to program, which
+    is how the merged single-stream files mark their chord stream."""
+    name = (track.name or '').strip().upper()
+    if name in ('MELODY', 'CHORD'):
+        return name
+    prog = None
+    for msg in track:
+        if msg.type == 'program_change':
+            prog = msg.program
+            break
+    if prog is None:
+        return None
+    return 'CHORD' if prog in chord_programs else 'MELODY'
+
+
+def pianoize_file(src, dst, program, mel_program=None, chord_program=None):
+    """Rewrite program_change events. Default: one program for every
+    non-drum track. With mel_program/chord_program set, assign BY ROLE
+    so different systems' outputs render with the same two timbres --
+    the duets write melody 24 / chord 0, the merged models melody 0 /
+    chord 48, the YinYang path melody 64 / chord 0, so auditioning them
+    side by side otherwise compares timbres as much as music."""
     mid = mido.MidiFile(src)
+    by_role = mel_program is not None or chord_program is not None
     out = mido.MidiFile(ticks_per_beat=mid.ticks_per_beat, type=mid.type)
     for track in mid.tracks:
+        target = program
+        if by_role:
+            role = _track_role(track)
+            if role == 'CHORD' and chord_program is not None:
+                target = chord_program
+            elif role == 'MELODY' and mel_program is not None:
+                target = mel_program
+            elif role is None:
+                target = program
         t = mido.MidiTrack()
         for msg in track:
             if msg.type == 'program_change' and msg.channel != 9:
-                t.append(msg.copy(program=program))
+                t.append(msg.copy(program=target))
             else:
                 t.append(msg.copy())
         out.tracks.append(t)
@@ -50,6 +83,13 @@ def main():
     p.add_argument('--program', type=int, default=0,
                    help='GM program for every non-drum track (default 0, '
                         'Acoustic Grand Piano)')
+    p.add_argument('--mel-program', type=int, default=None,
+                   help='program for MELODY tracks (role decided by track '
+                        'name, else by program). Set together with '
+                        '--chord-program to render every system with the '
+                        'SAME two timbres, e.g. 0 (piano) and 48 (strings).')
+    p.add_argument('--chord-program', type=int, default=None,
+                   help='program for CHORD tracks; see --mel-program.')
     p.add_argument('--suffix', default='_piano',
                    help="suffix for the copy folder (default '_piano')")
     args = p.parse_args()
@@ -70,7 +110,9 @@ def main():
                 rel = os.path.relpath(src, folder)
                 try:
                     pianoize_file(src, os.path.join(dst_root, rel),
-                                  args.program)
+                                  args.program,
+                                  mel_program=args.mel_program,
+                                  chord_program=args.chord_program)
                     n += 1
                 except Exception as e:
                     print(f'  [fail] {src}: {e!r}')
