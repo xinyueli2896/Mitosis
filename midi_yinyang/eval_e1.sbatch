@@ -58,6 +58,11 @@
 #                 different prompt length no longer overwrites the last
 #                 one; use RESULT_TAG to separate runs that share it.
 #   SKIP_INFER=1  reuse existing outputs under OUT_ROOT, score only
+#   S1_OUT_NAME / S0_OUT_NAME / SSCRATCH_OUT_NAME
+#                 override the temp/<name> dirs of the single-stream
+#                 systems (they default to job-id-scoped names, which a
+#                 later rescoring job cannot find). Use with
+#                 SKIP_INFER=1 to add one system to an existing run.
 #
 # Example:
 #   sbatch --export=ALL,\
@@ -265,9 +270,15 @@ echo "[prompts] merged+tagged -> $EVAL_MERGED"
 A2_OUT="$OUT_ROOT/A.2"
 A1_OUT="$OUT_ROOT/A.1"
 B1_OUT="$OUT_ROOT/B.1"
-S1_OUT_NAME="e1_${TASK}_S1_${SLURM_JOB_ID:-local}"
-S0_OUT_NAME="e1_${TASK}_S0_${SLURM_JOB_ID:-local}"
-SSCRATCH_OUT_NAME="e1_${TASK}_Sscratch_${SLURM_JOB_ID:-local}"
+# Single-stream outputs live in temp/<name>/, named by JOB ID so
+# concurrent runs never collide. That makes them unfindable on a LATER
+# job, so each name is overridable: with SKIP_INFER=1 you can point a
+# rescoring run at an earlier run's dirs (and at a system generated
+# separately by infer_singlestream_e1.sbatch) instead of regenerating
+# every system to add one column.
+S1_OUT_NAME="${S1_OUT_NAME:-e1_${TASK}_S1_${SLURM_JOB_ID:-local}}"
+S0_OUT_NAME="${S0_OUT_NAME:-e1_${TASK}_S0_${SLURM_JOB_ID:-local}}"
+SSCRATCH_OUT_NAME="${SSCRATCH_OUT_NAME:-e1_${TASK}_Sscratch_${SLURM_JOB_ID:-local}}"
 S1_OUT="temp/$S1_OUT_NAME"
 S0_OUT="temp/$S0_OUT_NAME"
 SSCRATCH_OUT="temp/$SSCRATCH_OUT_NAME"
