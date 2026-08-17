@@ -65,6 +65,44 @@ if [[ "$N_MID" -eq 0 ]]; then
     exit 1
 fi
 
+# GUARD: the single-stream tokenizer separates melody from chord by
+# PROGRAM ALONE. Building from a folder whose two streams share a
+# program silently produces a dataset in which they are fused beyond
+# recovery -- every model trained on it (S1 and S-scratch alike) then
+# emits one program and cannot maintain two streams, which looks like a
+# model failure but is a data-prep one. Refuse unless FORCE_UNTAGGED=1.
+python - "$COMBINED_DIR" <<'PYEOF'
+import glob, os, sys, warnings
+import pretty_midi
+folder = sys.argv[1]
+files = sorted(glob.glob(os.path.join(folder, '*.mid')))[:20]
+progs = set()
+for f in files:
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        pm = pretty_midi.PrettyMIDI(f)
+    progs |= {i.program for i in pm.instruments if not i.is_drum and i.notes}
+print(f'[guard] non-drum programs across {len(files)} sampled midis: '
+      f'{sorted(progs)}')
+sys.exit(0 if len(progs) > 1 else 3)
+PYEOF
+rc=$?
+if [[ "$rc" -eq 3 && "${FORCE_UNTAGGED:-0}" != "1" ]]; then
+    echo "ERROR: $COMBINED_DIR has melody and chord on ONE program."
+    echo "  The merged tokenizer keys streams on program, so this would"
+    echo "  build a dataset with the streams FUSED (and any model trained"
+    echo "  on it can only ever emit one program). Build the tagged"
+    echo "  folder first:"
+    echo "    python merge_melody_chord.py \\"
+    echo "        --melody POP909-Dataset/POP909-melody \\"
+    echo "        --chord  POP909-Dataset/POP909-chord \\"
+    echo "        --dst    POP909-Dataset/POP909-melody-chord-tagged \\"
+    echo "        --chord-program 48"
+    echo "  then rerun with COMBINED_DIR=POP909-Dataset/POP909-melody-chord-tagged"
+    echo "  (FORCE_UNTAGGED=1 overrides, for a deliberate fused-data ablation)."
+    exit 1
+fi
+
 POP909_COMBINED_PATH="$COMBINED_DIR" \
 POP909_MELCHORD_DATASET="$DATASET_NAME" \
     python preprocess_large_midi_dataset.py pop909_melchord
