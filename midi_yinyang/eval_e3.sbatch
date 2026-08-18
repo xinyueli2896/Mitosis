@@ -339,7 +339,16 @@ python eval_metrics.py --task "$TASK" \
 python aggregate_eval_results.py --csv "$METRICS" \
     --task "$TASK" --baseline "$BASELINE" \
     --complete-cases \
+    --given-stream auto \
     --out-md "$TABLE"
+
+# Why so many rows read the same for every system: the conditioning
+# stream is copied verbatim into every system's output, so every metric
+# on it is identical by construction. This separates that (expected)
+# from two real bugs -- systems sharing output paths, and systems
+# generating identical notes.
+echo "----------------------------------------------------------------"
+python check_e3_identical.py --csv "$METRICS" --manifest "$MANIFEST" || true
 
 echo "================================================================"
 echo "E3 evaluation complete."
@@ -348,6 +357,12 @@ echo "  manifest        : $MANIFEST   (drum2nondrum relabeled mel2chord)"
 echo "  per-sample CSV  : $METRICS"
 echo "  table           : $TABLE"
 echo "Reading guide:"
+echo "  * Rows marked (=) measure the GIVEN stream -- the real partner,"
+echo "    copied verbatim into every system's output. They are the same"
+echo "    music in every column BY CONSTRUCTION (about 9 of the ~20 rows"
+echo "    in mel2chord: the whole _a family, mel_stepwise_delta,"
+echo "    mel_poly_rate, chord_tone_cov_ref) and are left untested."
+echo "    They are not a bug and not evidence about any model."
 echo "  * mel2chord section = partner GIVEN, target generated: read the"
 echo "    TARGET stream's metrics (_b rows) plus the cross metrics"
 echo "    (harmonic_rhythm_jsd, chord_tone_cov_delta) -- fit to a real"

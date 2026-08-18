@@ -30,7 +30,7 @@ import csv
 import math
 from collections import defaultdict
 
-from eval_metrics import H_GROUPS, PRIMARY
+from eval_metrics import (GIVEN_STREAM_BY_MODE, H_GROUPS, PRIMARY, STREAM_OF)
 
 
 def _try_float(v):
@@ -65,6 +65,21 @@ def metric_target(metric):
         # fraction of active bars; the reference continuation is ~1.0
         return 1.0
     return None
+
+
+def given_stream(mode, given_arg):
+    """Which stream is copied ground truth in this mode, or None.
+
+    'auto' reads it from the mode label, which is where the direction
+    actually lives -- eval_e3 normalizes B.1/C.1/C.2's drum2nondrum to the
+    run's DIRECTION before scoring, so every row's mode already names its
+    conditioning direction.
+    """
+    if given_arg == 'none':
+        return None
+    if given_arg == 'auto':
+        return GIVEN_STREAM_BY_MODE.get(mode)
+    return given_arg
 
 
 def wilcoxon_signed_rank(diffs, alternative='two-sided'):
@@ -189,6 +204,20 @@ def main():
                         'makes rows comparable. n becomes equal across '
                         'systems, but equal to the MINIMUM -- it cannot '
                         'raise a system that produced empty streams.')
+    p.add_argument('--given-stream', default='auto',
+                   choices=['auto', 'none', 'a', 'b'],
+                   help='E3: which stream is GIVEN (copied ground truth). '
+                        'Every conditional decoder copies the conditioning '
+                        'stream into its output verbatim, so metrics on that '
+                        'stream are IDENTICAL for every system by '
+                        'construction -- ~9 of the ~20 rows. Marking them '
+                        'stops the table from reading as "all models produce '
+                        'the same output". Marked rows print no p-value: a '
+                        'paired test of one copy of the reference against '
+                        'another copy of the same reference is not a test of '
+                        'anything. "auto" (default) reads the direction from '
+                        'each row\'s mode label; "none" restores the old '
+                        'undifferentiated table.')
     args = p.parse_args()
 
     per_song = load(args.csv)
@@ -214,12 +243,21 @@ def main():
         if args.baseline not in systems:
             print(f'\n[{mode}] baseline {args.baseline!r} absent '
                   f'(systems: {systems}) -- printing means only')
+        given = given_stream(mode, args.given_stream)
         header = f'\n=============== mode={mode} (baseline={args.baseline}) ==============='
         print(header)
         md_lines.append(f'\n### mode={mode} (baseline={args.baseline})\n')
+        if given:
+            which = ('melody/drum' if given == 'a' else 'chord/nondrum')
+            note = (f'GIVEN stream = {given} ({which}): copied ground truth, '
+                    f'identical in every system\'s output. Rows marked (=) '
+                    f'measure that copy, not generation -- read the other '
+                    f'rows.')
+            print(f'[{mode}] {note}')
+            md_lines.append(f'> {note}\n')
 
         cols = [s for s in systems]
-        print('metric'.ljust(26) + ''.join(c.ljust(30) for c in cols))
+        print('metric'.ljust(26) + ''.join(c.ljust(34) for c in cols))
         md_lines.append('| metric | ' + ' | '.join(cols) + ' |')
         md_lines.append('|' + '---|' * (len(cols) + 1))
 
@@ -252,7 +290,20 @@ def main():
                         print(f'    [complete-cases] {metric}: keeping '
                               f'{len(common_all)} song(s); dropped ' +
                               ', '.join(f'{s}:{n}' for s, n in sorted(dropped.items())))
+                # A metric on the given stream (or a reference-only one)
+                # is the same copied ground truth for every system: report
+                # it as such and do not test it.
+                is_given = (given is not None
+                            and STREAM_OF.get(metric, 'unknown')
+                            in (given, 'ref'))
                 star = '*' if metric in PRIMARY[args.task][h] else ' '
+                if is_given and star == '*':
+                    print(f'    [given-stream] {metric} is the PRIMARY {h} '
+                          f'endpoint but measures the GIVEN stream in '
+                          f'mode={mode} -- it cannot discriminate systems '
+                          f'here. Read this direction on the other '
+                          f'hypotheses, or score {h} in the opposite '
+                          f'direction.')
                 line = (star + metric).ljust(26)
                 md_cells = []
                 base_songs = None
@@ -275,7 +326,10 @@ def main():
                     sd = (sum((v - mean) ** 2 for v in vals) / (len(vals) - 1)) ** 0.5 \
                         if len(vals) > 1 else 0.0
                     cell = f'{mean:+.3f}±{sd:.3f}'
-                    if (base_songs is not None and s != args.baseline):
+                    if is_given:
+                        cell += ' (=)'
+                    if (base_songs is not None and s != args.baseline
+                            and not is_given):
                         common = sorted(songs & base_songs)
                         if len(common) >= 2:
                             target = metric_target(metric) if args.one_sided else None
@@ -298,15 +352,29 @@ def main():
                             if not math.isnan(pval):
                                 tag = '' if alt == 'two-sided' else '>'
                                 cell += f' p{tag}={pval:.3f}(n={n_used})'
-                    line += cell.ljust(30)
+                    line += cell.ljust(34)
                     md_cells.append(cell)
                 print(line)
-                md_lines.append(f'| {star}`{metric}` | ' + ' | '.join(md_cells) + ' |')
+                md_lines.append(f'| {star}`{metric}`' + (' (=)' if is_given else '')
+                                + ' | ' + ' | '.join(md_cells) + ' |')
 
     print('\n* = pre-registered primary endpoint. Deltas/JSD: closer to 0 is '
           'better; ratios: closer to 1. p = two-sided Wilcoxon signed-rank on '
           'per-song paired differences vs the baseline (n = songs with both '
           'systems present, zero-differences dropped).')
+    if args.given_stream != 'none':
+        print('(=) = metric on the GIVEN stream (or a reference-only '
+              'statistic). The conditioning stream is copied verbatim into '
+              'every system\'s output, so these rows are identical across '
+              'columns BY CONSTRUCTION and carry no information about any '
+              'model; they are left untested. Rows without (=) are the '
+              'comparison.')
+    if args.given_stream != 'none':
+        md_lines.append(
+            '\n`(=)` = metric on the GIVEN stream (or a reference-only '
+            'statistic). The conditioning stream is copied verbatim into '
+            "every system's output, so these rows are identical across "
+            'columns by construction and are left untested.')
     if args.out_md:
         import os
         os.makedirs(os.path.dirname(args.out_md) or '.', exist_ok=True)

@@ -372,6 +372,27 @@ faithful conditional decoding, and scoring its co-generation against a
 partner it never saw is a cross-architecture construct that adds noise
 without information.
 
+**Reading an E3 table: which rows can discriminate.** Every conditional
+decoder writes the conditioning stream into its output *verbatim* (A.2
+returns `('given', condition[:, t, :])` at every frame; C.1/C.2 set
+`m_tokens = drum_tokens[:, t, :]` inside the AR loop). So every metric
+computed on the given stream is the same copied ground truth in every
+system's output, identical across columns **by construction** — about
+nine of the twenty rows in `mel2chord` (the whole `_a` family plus
+`mel_stepwise_delta`, `mel_poly_rate`, `chord_tone_cov_ref`). This is
+the experiment's design, not a bug in the eval;
+`aggregate_eval_results.py --given-stream auto` marks those rows `(=)`
+and leaves them untested, and `check_e3_identical.py` separates them
+from the two failure modes that look the same in the table (systems
+sharing output paths; systems generating identical notes).
+
+The consequence for hypothesis reading: **in `chord2mel` the H3 primary
+`harmonic_rhythm_jsd` is computed on the GIVEN chord stream and cannot
+discriminate.** Read H3 for that direction from the melody-side rows
+(`onset_grid_jsd_a`, `duration_jsd_a`, `mel_stepwise_delta`), or take
+H3 from the `mel2chord` direction, where the chord stream is the one
+generated.
+
 **Conditioning-horizon spectrum (drum → nondrum).** The systems form
 an ordered spectrum in how much FUTURE of the conditioning stream the
 target stream can attend:

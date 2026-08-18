@@ -364,6 +364,49 @@ H_GROUPS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Which stream each metric describes.
+#
+# E3 needs this. In a conditional run the partner stream is GIVEN, and every
+# conditional decoder copies it into the output verbatim -- A.2's
+# make_actions_conditional returns ('given', condition[:, t, :]) for every
+# frame, C.1/C.2 set m_tokens = drum_tokens[:, t, :] inside the AR loop. So a
+# metric computed on the given stream measures the same copied ground truth
+# for every system: those rows are IDENTICAL across systems by construction
+# and say nothing about any model. Without this map the E3 table prints ~9 of
+# its ~20 rows identical for every column, which reads as "the eval is
+# broken" when it is the experiment's design.
+#
+#   'a'   melody / drum stream
+#   'b'   chord / nondrum stream
+#   'ref' reference-only statistic (identical for every system in any run)
+#   None  cross-stream: depends on both, so the generated side moves it
+# ---------------------------------------------------------------------------
+STREAM_OF = {
+    'harmonic_rhythm_jsd': 'b',
+    'mel_stepwise_delta': 'a',
+    'onset_grid_jsd_a': 'a', 'onset_grid_jsd_b': 'b',
+    'duration_jsd_a': 'a', 'duration_jsd_b': 'b',
+    'chord_tone_cov': None, 'chord_tone_cov_delta': None,
+    'chord_tone_cov_ref': 'ref',
+    'onset_sync': None, 'onset_sync_delta': None, 'onset_sync_ref': 'ref',
+    'survival_min': None, 'survival_a': 'a', 'survival_b': 'b',
+    'mel_poly_rate': 'a',
+    'density_ratio_a': 'a', 'density_ratio_b': 'b',
+    'density_drift_a': 'a', 'density_drift_b': 'b',
+    'empty_rate_a': 'a', 'empty_rate_b': 'b',
+    'register_overlap_delta': None,
+}
+
+# Which stream is GIVEN in each conditional mode. 'co' (E1) gives neither.
+# drum2nondrum is B.1/C.1/C.2's own label for the mel2chord direction.
+GIVEN_STREAM_BY_MODE = {
+    'mel2chord': 'a',
+    'drum2nondrum': 'a',
+    'chord2mel': 'b',
+}
+
+
 def score_pair(gen_paths, ref_paths, args):
     lo, hi = args.prompt_frames, args.total_frames
     gen_a, gen_b = load_streams(gen_paths, args.task,
