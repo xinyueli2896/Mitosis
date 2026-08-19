@@ -139,7 +139,13 @@ DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_block_diffusion_${
 # (cp4 retired -- seventh chords are 5 notes and cp4 dropped the seventh).
 if [[ -z "${MAX_POLYPHONY:-}" ]]; then
     case "$TASK" in
-        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=8 ;;
+        # melchord* -- every variant INCLUDING the _rev tasks, which
+        # only swap mod_a/mod_b roles and read the SAME cp8 files.
+        # Must stay in step with the melchord* pattern that exports
+        # MELCHORD_CP below: an explicit list here missed _rev, so a
+        # reverse run took MAX_POLYPHONY=16 and then exported
+        # MELCHORD_CP=16, sending tasks.py to cp16 data paths.
+        melchord*) MAX_POLYPHONY=8 ;;
         *)        MAX_POLYPHONY=16 ;;
     esac
 fi

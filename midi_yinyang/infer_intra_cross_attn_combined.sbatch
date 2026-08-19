@@ -94,8 +94,14 @@ TEMPERATURE="${TEMPERATURE:-1.0}"
 # pass MAX_POLYPHONY=4 for pre-migration cp4-trained ckpts.
 if [[ -z "${MAX_POLYPHONY:-}" ]]; then
     case "$TASK" in
-        melchord|melchord_nottingham|melchord_pop909_nottingham) MAX_POLYPHONY=8 ;;
-        *)                                                       MAX_POLYPHONY=16 ;;
+        # melchord* -- every variant INCLUDING the _rev tasks, which
+        # only swap mod_a/mod_b roles and read the SAME cp8 files.
+        # Must stay in step with the melchord* pattern that exports
+        # MELCHORD_CP below: an explicit list here missed _rev, so a
+        # reverse run took MAX_POLYPHONY=16 and then exported
+        # MELCHORD_CP=16, sending tasks.py to cp16 data paths.
+        melchord*) MAX_POLYPHONY=8 ;;
+        *)         MAX_POLYPHONY=16 ;;
     esac
 fi
 MIN_CHORD_TOKENS_BEFORE_EOS="${MIN_CHORD_TOKENS_BEFORE_EOS:-0}"

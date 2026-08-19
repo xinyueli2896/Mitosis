@@ -109,6 +109,20 @@ TASKS = {
         mod_a_default_program=24,
         mod_b_default_program=0,
     ),
+    'melchord_pop909_nottingham_rev': TaskConfig(
+        name='melchord_pop909_nottingham_rev',
+        mod_a_label='chord',
+        mod_b_label='mel',
+        # REVERSED combined corpus, for the chord->mel arm of the C
+        # models. Same two files as melchord_pop909_nottingham and the
+        # same index-mod-10 split -- identical held-out songs -- with the
+        # roles swapped, so a forward/reverse pair trained from these two
+        # tasks differs ONLY in direction.
+        mod_a_path=f'data/melchord_pop909_nottingham_chord_cp{MELCHORD_CP}_v2.pt',
+        mod_b_path=f'data/melchord_pop909_nottingham_melody_cp{MELCHORD_CP}_v2.pt',
+        mod_a_default_program=0,
+        mod_b_default_program=24,
+    ),
     'melchord_nottingham_rev': TaskConfig(
         name='melchord_nottingham_rev',
         mod_a_label='chord',
