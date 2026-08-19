@@ -378,7 +378,13 @@ if [[ -z "$PIANO_COPIES" ]]; then
 fi
 if [[ "$PIANO_COPIES" == "1" ]]; then
     PIANO_DIRS=()
-    for d in "$A2_OUT" "$B1_OUT"; do [[ -d "$d" ]] && PIANO_DIRS+=("$d"); done
+    # Every duet system, not just A.2/B.1: render_piano_copies walks the
+    # tree and keys on track NAME, so the C.1/C.2 layouts work the same.
+    # Leaving them out meant a C-only run (A.2 and B.1 both skipped)
+    # produced no listening copies at all.
+    for d in "$A2_OUT" "$B1_OUT" "$C1_OUT" "$C2_OUT"; do
+        [[ -d "$d" ]] && PIANO_DIRS+=("$d")
+    done
     [[ ${#PIANO_DIRS[@]} -gt 0 ]] && {
         echo "--- piano listening copies ---"
         python render_piano_copies.py "${PIANO_DIRS[@]}"; }
