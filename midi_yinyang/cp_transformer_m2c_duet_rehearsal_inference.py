@@ -142,21 +142,40 @@ def drum_to_nondrum(model, drum_tokens, nondrum_prompt_tokens, gen_length,
     h_drum = torch.cat(h_drum_frames, dim=1).to(dtype=dtype)   # [1, T_target, H]
     print(f'[rehearsal] encoded drum prefix: T_target={T_target}')
 
-    # 2. Iterative AR over the interleaved suffix.
+    # 2. Iterative AR over the interleaved suffix. The commit order must
+    #    mirror the shift the ckpt was TRAINED with (model.suffix_shift1),
+    #    or the slot the model reads holds a different frame than it did in
+    #    training:
+    #      shift-2: suffix = [sos_m, sos_c] + committed pairs. Slot 2t+1
+    #               (which predicts nondrum_t) holds nondrum_{t-1}; drum_t
+    #               is NOT in the suffix at all and reaches the model only
+    #               through the prefix.
+    #      shift-1: suffix = [sos_m] + committed frames. Slot 2t+1 holds
+    #               drum_t itself, so drum_t must be committed BEFORE
+    #               nondrum_t is sampled -- the correct teacher forcing for
+    #               a conditional model, where drum is given.
+    shift1 = bool(getattr(model, 'suffix_shift1', False))
+    print(f'[rehearsal] suffix_shift1={shift1}  '
+          f'prefix_stride2={bool(getattr(model, "prefix_stride2", False))}')
     h_suffix_buffer = torch.zeros(B, 0, H, device=device, dtype=dtype)
     mel_frames = []
     chord_frames = []
     suffix_total_len = 2 * T_target
+    sos = (model._assemble_sos1(B, device, dtype) if shift1
+           else model._assemble_sos(B, device, dtype))   # [1, 1 or 2, H]
 
     for t in range(gen_length):
         if t % 10 == 0:
             print(f'[gen] step {t}/{gen_length}')
 
-        # Build the suffix portion of the global-stack input. Standard
-        # DuetAttn shift: starts with [sos_m, sos_c], then committed
-        # (drum, nondrum) pairs, then zero-pad up to length 2*T_target.
-        sos = model._assemble_sos(B, device, dtype)   # [1, 2, H]
-        committed = torch.cat([sos, h_suffix_buffer], dim=1)   # [1, 2+2t, H]
+        # Drum is given: teacher-force it from the prompt either way.
+        m_tokens = drum_tokens[:, t, :]   # [1, subseq]
+        if shift1:
+            # Commit drum_t FIRST so it lands in the query slot 2t+1.
+            m_h = model._encode_frame(m_tokens, 0).to(dtype=dtype)
+            h_suffix_buffer = torch.cat([h_suffix_buffer, m_h], dim=1)
+
+        committed = torch.cat([sos, h_suffix_buffer], dim=1)
         if committed.shape[1] < suffix_total_len:
             pad_len = suffix_total_len - committed.shape[1]
             pad = torch.zeros(B, pad_len, H, device=device, dtype=dtype)
@@ -167,15 +186,9 @@ def drum_to_nondrum(model, drum_tokens, nondrum_prompt_tokens, gen_length,
         h_in = torch.cat([h_drum, suffix_full], dim=1)   # [1, 3*T_target, H]
         h_global, _ = model._run_global_stack(h_in, T=T_target)
 
-        # Predictions at suffix positions 2t (drum) and 2t+1 (nondrum) under
-        # the shift. In h_global these live at T_target + 2t and T_target + 2t+1.
-        h_m_pred = h_global[:, T_target + 2 * t]       # [1, H]
+        # Slot 2t+1 predicts nondrum_t under BOTH shifts; only what that
+        # slot HOLDS differs. In h_global it lives at T_target + 2t + 1.
         h_c_pred = h_global[:, T_target + 2 * t + 1]   # [1, H]
-
-        # Drum: teacher-force from the prompt (model has the answer in
-        # the prefix anyway; this just matches the conditional drum->nondrum
-        # use case where drum is given).
-        m_tokens = drum_tokens[:, t, :]   # [1, subseq]
 
         # Nondrum: use prompt frames if available, else sample.
         if t < P_nondrum:
@@ -189,10 +202,12 @@ def drum_to_nondrum(model, drum_tokens, nondrum_prompt_tokens, gen_length,
         mel_frames.append(m_tokens)
         chord_frames.append(c_tokens)
 
-        # Commit: encode and append to suffix buffer.
-        m_h = model._encode_frame(m_tokens, 0).to(dtype=dtype)
         c_h = model._encode_frame(c_tokens, 1).to(dtype=dtype)
-        h_suffix_buffer = torch.cat([h_suffix_buffer, m_h, c_h], dim=1)
+        if shift1:
+            h_suffix_buffer = torch.cat([h_suffix_buffer, c_h], dim=1)
+        else:
+            m_h = model._encode_frame(m_tokens, 0).to(dtype=dtype)
+            h_suffix_buffer = torch.cat([h_suffix_buffer, m_h, c_h], dim=1)
 
     return mel_frames, chord_frames
 

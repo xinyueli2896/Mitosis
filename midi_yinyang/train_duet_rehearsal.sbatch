@@ -45,6 +45,14 @@ RECON_WEIGHT="${RECON_WEIGHT:-1.0}"
 # collapse early and dilute the conditional signal. val_ce_loss_nondrum
 # selects on the task this model is actually evaluated on.
 MONITOR="${MONITOR:-val_loss}"
+# Geometry (see the model docstring). PREFIX_STRIDE2=1 counts the drum
+# prefix in the same half-frame units as the interleaved suffix, making
+# the rehearsal distance constant instead of growing with k -- the
+# recommended setting for new runs. SUFFIX_SHIFT1=1 is EXPERIMENTAL: it
+# gives nondrum_k its own frame's drum, at the cost of the per-modality
+# projection bookkeeping. Both default OFF so existing runs are unchanged.
+PREFIX_STRIDE2="${PREFIX_STRIDE2:-0}"
+SUFFIX_SHIFT1="${SUFFIX_SHIFT1:-0}"
 TASK="${TASK:-drumnondrum}"
 # Data max_polyphony, auto-set from TASK (override with MAX_POLYPHONY).
 # The melchord datasets are cp8 (16-token frames; cp4 retired -- seventh
@@ -111,6 +119,7 @@ echo "Task:    $TASK"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS   recon_weight: $RECON_WEIGHT"
 echo "Checkpoint selection: monitor=$MONITOR"
+echo "Geometry: prefix_stride2=$PREFIX_STRIDE2  suffix_shift1=$SUFFIX_SHIFT1"
 if [[ -n "$CKPT" ]]; then
     echo "Mode: RESUME from CKPT=$CKPT (skip init)"
 else
@@ -178,6 +187,8 @@ if [[ "$NGPUS" -le 1 ]]; then
         --gate_init_bias "$GATE_INIT_BIAS" \
         --recon_weight "$RECON_WEIGHT" \
         --monitor "$MONITOR" \
+        --prefix_stride2 "$PREFIX_STRIDE2" \
+        --suffix_shift1 "$SUFFIX_SHIFT1" \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
 else
@@ -201,6 +212,8 @@ else
         --gate_init_bias "$GATE_INIT_BIAS" \
         --recon_weight "$RECON_WEIGHT" \
         --monitor "$MONITOR" \
+        --prefix_stride2 "$PREFIX_STRIDE2" \
+        --suffix_shift1 "$SUFFIX_SHIFT1" \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
 fi

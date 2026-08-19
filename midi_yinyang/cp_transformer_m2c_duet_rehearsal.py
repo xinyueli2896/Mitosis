@@ -45,32 +45,49 @@ prefix buffer of committed drum frames separately from the suffix's
 shift-trick buffer. See IMPLEMENTATION_REPORT.md outstanding-work
 table.
 
-RoPE GEOMETRY -- two consequences of the segment-wise indexing in
-_run_global_stack (prefix -> 0..T-1, suffix -> 0..2T-1). Both are
-design properties, not bugs, but they bound what the rehearsal can do:
+GEOMETRY FLAGS (both default OFF -- existing ckpts keep their trained
+scheme, and the flags ride in the state_dict so inference follows the
+checkpoint without being told).
 
-  1. The rehearsal signal WEAKENS OVER TIME. nondrum_k's query slot sits
-     at rotary 2k+1; its own drum frame in the prefix sits at rotary k,
-     so the relative distance is k+1 -- one frame at the start of the
-     sequence, T frames at the end. The corresponding drum in the SUFFIX
-     stays at distance 1 throughout. So exactly where the rehearsal is
-     supposed to pay off (late frames, where future drum is far away),
-     RoPE places the answer furthest from the question. If C.1's
-     conditional fit decays across the sequence, this is the first place
-     to look; the fix is to index the prefix so drum_k lands near
-     nondrum_k's slot rather than at its own 0-based origin.
+--prefix_stride2 -- FIXES A UNIT MISMATCH. The interleaved suffix
+    advances TWO rotary units per musical frame; the drum-only prefix
+    advanced ONE. The same frame k therefore had two rotary coordinates
+    (k in the prefix, 2k+2 in the suffix) that drift apart, and the
+    distance from nondrum_k's query slot to drum_k in the prefix grew as
+    k+1 -- 1 frame at the start of the sequence, T at the end. Exactly
+    where the rehearsal should pay off (late frames, distant future
+    drum), RoPE placed the answer furthest from the question. Counting
+    the prefix in half-frames makes that distance a constant 1. This is
+    a straightforward correction and the recommended setting for new
+    runs.
 
-  2. PREFIX AND SUFFIX SHARE ROTARY INDICES. local_pos maps prefix slot
-     j and suffix slot j to the same rotation, so a drum query cannot
-     tell prefix drum_j from the suffix slot at the same index by
-     position alone -- only by content. Deliberate (it keeps the
-     pretrained backbone's RoPE phase on the suffix, which is what the
-     warm start needs), but it means the model has to learn that
-     distinction from the hidden states.
+--suffix_shift1 -- CORRECT TEACHER FORCING FOR A CONDITIONAL MODEL, but
+    it trades against this family's per-modality bookkeeping, so it is
+    offered as an experiment rather than a fix.
+      Under the inherited shift-2, the slot predicting nondrum_k holds
+      nondrum_{k-1}, and drum_k sits at slot 2k+2 -- the slot's masked
+      future. Both streams at frame k are predicted from strictly
+      earlier frames: a symmetric CO-GENERATION shift. For a conditional
+      model, where drum is GIVEN, that is the wrong target: nondrum_k
+      cannot see the very frame it is conditioned on except by reaching
+      into the prefix. Shift-1 puts drum_k in the query slot itself.
+      THE COST: with shift-2 the content at slot i and the frame slot i
+      predicts share parity, so the per-modality Q/K/V/O and the
+      intra/cross mask split agree with the content they act on. Under
+      shift-1 they no longer do -- odd (mod-b) slots hold drum content,
+      so nondrum queries project drum content through the chord
+      weights and the intra pass attends keys holding the other
+      stream. The modality decomposition that is the core of this
+      architecture gets scrambled, and the warm start (mod-a weights
+      initialised for drum content) no longer lines up.
+      A.2/DuetBlock solves the same-instant problem the other way --
+      appended query slots -- without disturbing the shift. If what you
+      want is "nondrum_k sees drum_k", that route is the tested one.
 
-M2CDuetPrefix (C.2) has neither property: its nondrum_t and drum_t are a
-constant T apart, so its conditioning geometry is uniform over the
-sequence. Worth remembering when the two are compared.
+M2CDuetPrefix (C.2) needs neither flag: both of its blocks are
+single-stream, so it already advances one rotary unit per frame
+(nondrum_t and drum_t a constant T apart) and already shifts by one over
+a pure nondrum block.
 
 val_loss IS NOT COMPARABLE TO M2CDuetPrefix's. Here it averages CE over
 BOTH streams and adds recon_weight * the Brier drum term; the drum side
@@ -336,7 +353,8 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
     def __init__(self, *args, moe_num_experts=4, moe_topk=2,
                  moe_intermediate_size=None, global_num_layers=None,
                  global_dropout=0.0, preserve_program=True,
-                 gate_init_bias=-10.0, recon_weight=1.0, **kwargs):
+                 gate_init_bias=-10.0, recon_weight=1.0,
+                 prefix_stride2=False, suffix_shift1=False, **kwargs):
         super().__init__(
             *args,
             moe_num_experts=moe_num_experts,
@@ -378,17 +396,67 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         self.sos_offset_m = nn.Parameter(torch.zeros(self.hidden_size))
         self.sos_offset_c = nn.Parameter(torch.zeros(self.hidden_size))
 
+        # Geometry flags ride in the state_dict so a checkpoint decodes
+        # under the scheme it was TRAINED with, no CLI needed at inference
+        # (same pattern as A.1's time_rope_aligned_flag).
+        self.register_buffer(
+            'prefix_stride2_flag',
+            torch.tensor(1 if prefix_stride2 else 0, dtype=torch.long),
+            persistent=True,
+        )
+        self.register_buffer(
+            'suffix_shift1_flag',
+            torch.tensor(1 if suffix_shift1 else 0, dtype=torch.long),
+            persistent=True,
+        )
+
         # Modality info carried by per-modality QKVO; freeze token type
         # embedding as a no-op.
         with torch.no_grad():
             self.token_type_embeddings.weight.zero_()
         self.token_type_embeddings.weight.requires_grad = False
 
+    @property
+    def prefix_stride2(self):
+        return bool(self.prefix_stride2_flag.item())
+
+    @property
+    def suffix_shift1(self):
+        return bool(self.suffix_shift1_flag.item())
+
     def _assemble_sos(self, batch_size, device, dtype):
         sos_m = (self.global_sos + self.sos_offset_m).view(1, 1, -1)
         sos_c = (self.global_sos + self.sos_offset_c).view(1, 1, -1)
         sos = torch.cat([sos_m, sos_c], dim=1).expand(batch_size, -1, -1)
         return sos.to(device=device, dtype=dtype)
+
+    def _assemble_sos1(self, batch_size, device, dtype):
+        """Single SOS for the shift-by-1 suffix. Suffix slot 0 predicts
+        drum_0, so the one prepended token is the mod-a SOS."""
+        sos_m = (self.global_sos + self.sos_offset_m).view(1, 1, -1)
+        return sos_m.expand(batch_size, 1, -1).to(device=device, dtype=dtype)
+
+    def build_suffix(self, h):
+        """h: [B, 2T, H] encoded interleaved frames -> the shifted suffix.
+
+        shift-2 (legacy): [sos_m, sos_c, x_0 .. x_{2T-3}]. Slot i predicts
+            x_i and HOLDS x_{i-2}, so the slot predicting nondrum_k holds
+            nondrum_{k-1} and drum_k -- which sits at slot 2k+2 -- is in
+            the slot's future and therefore masked. Both streams at frame
+            k are predicted from strictly earlier frames: a symmetric
+            CO-GENERATION shift, which is what this variant inherited.
+        shift-1: [sos_m, x_0 .. x_{2T-2}]. Slot i predicts x_i and HOLDS
+            x_{i-1}, so the slot predicting nondrum_k holds drum_k itself.
+            That is the correct teacher forcing for a CONDITIONAL model,
+            where drum is given: the frame being conditioned on is in the
+            query slot rather than an unreachable future position.
+        """
+        B = h.shape[0]
+        if self.suffix_shift1:
+            sos = self._assemble_sos1(B, h.device, h.dtype)
+            return torch.cat([sos, h[:, :-1]], dim=1)
+        sos = self._assemble_sos(B, h.device, h.dtype)
+        return torch.cat([sos, h[:, :-2]], dim=1)
 
     def _run_global_stack(self, h_full, T):
         """h_full: [B, 3T, H] prefix + shifted suffix. Returns (h_global, aux).
@@ -405,12 +473,26 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         assert L == 3 * T
         head_dim = H // self.num_attention_heads
         # Base RoPE table for up to 2T positions (max length of any segment).
+        # 2T covers the suffix (0..2T-1) and, under prefix_stride2, the
+        # prefix's widened range (0..2T-2).
         cos_base, sin_base = _rope_freqs(
             2 * T, head_dim, device=h_full.device, dtype=h_full.dtype,
         )
         # Build per-position local index: prefix -> pos; suffix -> pos - T.
+        #
+        # prefix_stride2 fixes a UNIT MISMATCH. The suffix interleaves two
+        # streams, so it advances TWO rotary units per musical frame, while
+        # the drum-only prefix advances one. Same frame k therefore had two
+        # rotary coordinates (k in the prefix, 2k+2 in the suffix) that
+        # drift apart, and the distance from nondrum_k's query slot to
+        # drum_k in the prefix grew as k+1 -- one frame at the start of the
+        # sequence, T at the end. Exactly where the rehearsal is supposed
+        # to pay off (late frames, distant future drum), RoPE placed the
+        # answer furthest from the question. Counting the prefix in
+        # half-frames too makes that distance a constant 1.
         positions = torch.arange(L, device=h_full.device)
-        local_pos = torch.where(positions < T, positions, positions - T)
+        prefix_pos = positions * 2 if self.prefix_stride2 else positions
+        local_pos = torch.where(positions < T, prefix_pos, positions - T)
         cos = cos_base[:, :, local_pos]   # [1, 1, L, head_dim]
         sin = sin_base[:, :, local_pos]
         total_aux = torch.zeros((), device=h_full.device, dtype=h_full.dtype)
@@ -447,8 +529,7 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         # Drum prefix: T_full positions, no shift.
         h_drum = h[:, 0::2]                          # [B, T_full, H]
         # Suffix: standard DuetAttn shifted interleaved.
-        sos = self._assemble_sos(batch_size, h.device, h.dtype)
-        h_suffix = torch.cat([sos, h[:, :-2]], dim=1)   # [B, 2T_full, H]
+        h_suffix = self.build_suffix(h)                 # [B, 2T_full, H]
 
         # Concat.
         h_full = torch.cat([h_drum, h_suffix], dim=1)   # [B, 3T_full, H]
@@ -665,6 +746,32 @@ if __name__ == '__main__':
                              'reconstruction loss applied to suffix-drum '
                              'logits. Total loss = CE + recon_weight * '
                              'MSE_drum + aux_loss_weight * aux.')
+    parser.add_argument('--prefix_stride2', type=int, default=0,
+                        help='1 = count the drum prefix in HALF-FRAMES, the '
+                             'same unit the interleaved suffix uses. The '
+                             'suffix advances 2 rotary units per musical '
+                             'frame and the drum-only prefix advanced 1, so '
+                             "drum_k's distance from nondrum_k's query grew "
+                             'as k+1 -- the rehearsal signal decayed across '
+                             'the sequence. With this on it is a constant 1. '
+                             'Changes the geometry, so it is 0 by default: '
+                             'existing ckpts keep their trained scheme.')
+    parser.add_argument('--suffix_shift1', type=int, default=0,
+                        help='1 = shift the interleaved suffix by ONE slot '
+                             '(single SOS) instead of two. Under shift-2 the '
+                             'slot predicting nondrum_k holds nondrum_{k-1} '
+                             'and drum_k sits in that slot\'s masked future '
+                             '-- correct teacher forcing for symmetric '
+                             'CO-GENERATION, wrong for a CONDITIONAL model '
+                             'where drum is given. Shift-1 puts drum_k in '
+                             'the query slot itself. 0 by default, and '
+                             'EXPERIMENTAL: it scrambles the per-modality '
+                             'bookkeeping (odd/mod-b slots come to hold drum '
+                             'content, so nondrum queries project drum '
+                             'through the chord weights and the intra pass '
+                             'attends the other stream). See the module '
+                             'docstring; A.2/DuetBlock solves same-instant '
+                             'coupling without disturbing the shift.')
     parser.add_argument('--fresh_schedule', action='store_true', default=False)
     args = parser.parse_args()
 
@@ -678,12 +785,21 @@ if __name__ == '__main__':
     mod_b_path = args.path_to_dataset if args.path_to_dataset is not None else task.mod_b_path
 
     tag = f'_{args.run_tag}' if args.run_tag else ''
+    # Geometry in the run name: resolve_best_ckpt scans a directory, so two
+    # schemes sharing one dir would be silently interchangeable.
+    geo = ''
+    if args.prefix_stride2:
+        geo += '_ps2'
+    if args.suffix_shift1:
+        geo += '_sh1'
     default_name = (f"m2c_duet_rehearsal_v1.0_{args.model_size}_"
-                    f"gnl{gnl}_{task.name}{tag}_"
+                    f"gnl{gnl}_{task.name}{geo}{tag}_"
                     f"batch_{args.batch_size * n_gpus}_schedule")
     model_name = args.model_name if args.model_name is not None else default_name
 
     print(f'[task] {task.name}  mod_a={task.mod_a_label}  mod_b={task.mod_b_label}')
+    print(f'[scheme] prefix_stride2={bool(args.prefix_stride2)} '
+          f'suffix_shift1={bool(args.suffix_shift1)}')
 
     net = M2CDuetRehearsal(
         large=(args.model_size == 'large'),
@@ -704,6 +820,8 @@ if __name__ == '__main__':
         ctx_corrupt_len=args.ctx_corrupt_len,
         gate_init_bias=args.gate_init_bias,
         recon_weight=args.recon_weight,
+        prefix_stride2=bool(args.prefix_stride2),
+        suffix_shift1=bool(args.suffix_shift1),
     )
     print(f'Architecture: M2CDuetRehearsal  drum-prefix (T pos, bidirectional) + '
           f'interleaved AR suffix (2T pos) + per-mod Q/K/V/O + cross gate + shared MoE FFN '
@@ -822,11 +940,24 @@ if __name__ == '__main__':
             ckpt_path_for_resume = args.checkpoint_path
         else:
             sd = loaded['state_dict'] if isinstance(loaded, dict) and 'state_dict' in loaded else loaded
+            # The geometry flags are buffers, so they ride in the state
+            # dict -- a warm-start ckpt built under the old scheme would
+            # silently reset a --prefix_stride2 / --suffix_shift1 run back
+            # to legacy geometry. The CLI wins on a fresh init.
+            sd = dict(sd)
+            sd.pop('prefix_stride2_flag', None)
+            sd.pop('suffix_shift1_flag', None)
             missing, unexpected = net.load_state_dict(sd, strict=False)
             if missing:
                 print(f'[init] {len(missing)} missing (first few: {missing[:3]})')
             if unexpected:
                 print(f'[init] {len(unexpected)} unexpected (first few: {unexpected[:3]})')
+
+    # Effective values, not the CLI's: a Lightning RESUME restores the
+    # buffers from the ckpt, which is correct (continue the same geometry)
+    # but means args no longer describe what is running.
+    print(f'[scheme] effective prefix_stride2={net.prefix_stride2} '
+          f'suffix_shift1={net.suffix_shift1}')
 
     trainer.fit(net, train_set_loader, val_set_loader,
                 ckpt_path=ckpt_path_for_resume)
