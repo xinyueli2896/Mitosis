@@ -45,9 +45,9 @@ prefix buffer of committed drum frames separately from the suffix's
 shift-trick buffer. See IMPLEMENTATION_REPORT.md outstanding-work
 table.
 
-GEOMETRY FLAGS (both default OFF -- existing ckpts keep their trained
-scheme, and the flags ride in the state_dict so inference follows the
-checkpoint without being told).
+GEOMETRY FLAGS. Both ride in the state_dict, so a checkpoint decodes
+under the scheme it was TRAINED with and inference needs no CLI --
+existing ckpts are unaffected by these defaults.
 
 --prefix_stride2 -- FIXES A UNIT MISMATCH. The interleaved suffix
     advances TWO rotary units per musical frame; the drum-only prefix
@@ -57,9 +57,14 @@ checkpoint without being told).
     k+1 -- 1 frame at the start of the sequence, T at the end. Exactly
     where the rehearsal should pay off (late frames, distant future
     drum), RoPE placed the answer furthest from the question. Counting
-    the prefix in half-frames makes that distance a constant 1. This is
-    a straightforward correction and the recommended setting for new
-    runs.
+    the prefix in half-frames makes that distance a constant 1.
+    ON BY DEFAULT: the old behaviour mixed units, which is a defect
+    rather than a trade-off. The segment-wise rationale it came from
+    ("give the prefix a self-consistent 0-indexed RoPE so it can learn
+    prefix-INTERNAL relative time") is fully preserved under stride-2,
+    which merely scales those internal distances by 2 -- so stride-2
+    gives up nothing that choice was protecting. Pass 0 only to
+    reproduce a pre-fix run.
 
 --suffix_shift1 -- CORRECT TEACHER FORCING FOR A CONDITIONAL MODEL, but
     it trades against this family's per-modality bookkeeping, so it is
@@ -746,7 +751,7 @@ if __name__ == '__main__':
                              'reconstruction loss applied to suffix-drum '
                              'logits. Total loss = CE + recon_weight * '
                              'MSE_drum + aux_loss_weight * aux.')
-    parser.add_argument('--prefix_stride2', type=int, default=0,
+    parser.add_argument('--prefix_stride2', type=int, default=1,
                         help='1 = count the drum prefix in HALF-FRAMES, the '
                              'same unit the interleaved suffix uses. The '
                              'suffix advances 2 rotary units per musical '
@@ -754,8 +759,15 @@ if __name__ == '__main__':
                              "drum_k's distance from nondrum_k's query grew "
                              'as k+1 -- the rehearsal signal decayed across '
                              'the sequence. With this on it is a constant 1. '
-                             'Changes the geometry, so it is 0 by default: '
-                             'existing ckpts keep their trained scheme.')
+                             'ON by default: the old behaviour was a unit '
+                             'inconsistency, not a trade-off -- stride-2 '
+                             'preserves prefix-internal relative time just '
+                             'as well (scaled by 2), which is all the '
+                             'original segment-wise rationale protected. '
+                             'Pass 0 only to reproduce a pre-fix run. '
+                             'Existing ckpts are unaffected either way: the '
+                             'flag is a buffer, so they decode under the '
+                             'scheme they were trained with.')
     parser.add_argument('--suffix_shift1', type=int, default=0,
                         help='1 = shift the interleaved suffix by ONE slot '
                              '(single SOS) instead of two. Under shift-2 the '

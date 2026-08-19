@@ -45,13 +45,16 @@ RECON_WEIGHT="${RECON_WEIGHT:-1.0}"
 # collapse early and dilute the conditional signal. val_ce_loss_nondrum
 # selects on the task this model is actually evaluated on.
 MONITOR="${MONITOR:-val_loss}"
-# Geometry (see the model docstring). PREFIX_STRIDE2=1 counts the drum
+# Geometry (see the model docstring). PREFIX_STRIDE2 counts the drum
 # prefix in the same half-frame units as the interleaved suffix, making
-# the rehearsal distance constant instead of growing with k -- the
-# recommended setting for new runs. SUFFIX_SHIFT1=1 is EXPERIMENTAL: it
-# gives nondrum_k its own frame's drum, at the cost of the per-modality
-# projection bookkeeping. Both default OFF so existing runs are unchanged.
-PREFIX_STRIDE2="${PREFIX_STRIDE2:-0}"
+# the rehearsal distance constant instead of growing with k. ON by
+# default -- the old behaviour mixed units and was a defect, not a
+# trade-off. Set 0 only to reproduce a pre-fix run.
+# SUFFIX_SHIFT1=1 is EXPERIMENTAL and OFF by default: it gives nondrum_k
+# its own frame's drum, at the cost of the per-modality projection
+# bookkeeping. Existing ckpts are unaffected by either default -- the
+# flags are buffers, so they decode under their trained scheme.
+PREFIX_STRIDE2="${PREFIX_STRIDE2:-1}"
 SUFFIX_SHIFT1="${SUFFIX_SHIFT1:-0}"
 TASK="${TASK:-drumnondrum}"
 # Data max_polyphony, auto-set from TASK (override with MAX_POLYPHONY).
