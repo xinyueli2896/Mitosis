@@ -64,6 +64,10 @@
 #                 scores are therefore noisier (disclosed, not hidden).
 #   RESULT_TAG    extra suffix on result filenames
 #   SKIP_INFER=1  reuse existing outputs under OUT_ROOT, score only
+#   ALLOW_PARTIAL_LOAD=1  let C.1/C.2 load a ckpt that is missing
+#                 parameters they define. OFF by default -- a missing key
+#                 stays at random init and the run still writes midi, so a
+#                 mis-matched ckpt reads as a weak model, not a failed load.
 #   PIANO_COPIES  1/0; default 1 for melchord (listening copies)
 #
 # Example (melchord):
@@ -106,6 +110,13 @@ PROMPT_LENGTH="${PROMPT_LENGTH:-64}"
 GEN_LENGTH="${GEN_LENGTH:-384}"
 SKIP_INFER="${SKIP_INFER:-0}"
 RESULT_TAG="${RESULT_TAG:-}"
+# C.1/C.2 refuse a checkpoint missing parameters they define, because a
+# missing key stays at RANDOM INIT and the run still writes midi -- a
+# mis-matched ckpt reads as a weak model, not a failed load. Set to 1
+# only for a ckpt you know predates a parameter.
+ALLOW_PARTIAL_LOAD="${ALLOW_PARTIAL_LOAD:-0}"
+PARTIAL_ARGS=()
+[[ "$ALLOW_PARTIAL_LOAD" == "1" ]] && PARTIAL_ARGS+=(--allow-partial-load)
 
 case "$TASK" in
     melchord)
@@ -352,7 +363,7 @@ else
             --max-polyphony "$MAX_POLYPHONY" \
             --model-size large --moe-num-experts 4 --moe-topk 2 \
             --mode-name "$MODE_NAME" \
-            "${SWAP_ARGS[@]}"
+            "${PARTIAL_ARGS[@]}" "${SWAP_ARGS[@]}"
     fi
     if [[ -n "$CKPT_C2" ]]; then
         echo "--- C.2 prefix conditional ($DIRECTION, $N_SAMPLES sample(s)/song) ---"
@@ -365,7 +376,7 @@ else
             --max-polyphony "$MAX_POLYPHONY" \
             --model-size large --moe-num-experts 4 --moe-topk 2 \
             --mode-name "$MODE_NAME" \
-            "${SWAP_ARGS[@]}"
+            "${PARTIAL_ARGS[@]}" "${SWAP_ARGS[@]}"
     fi
 fi
 

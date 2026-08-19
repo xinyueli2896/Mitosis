@@ -45,12 +45,14 @@ from cp_transformer_m2c_jointattn_inference import (
 from cp_transformer_m2c_moe_inference import _load_prompt_tokens
 from cp_transformer_m2c_moe import TRAIN_LENGTH
 
+_VARIANT = 'M2CDuetRehearsal (C.1)'
+
 
 def load_model(ckpt_path, model_size='large', with_velocity=False,
                moe_num_experts=4, moe_topk=2, moe_intermediate_size=None,
                global_num_layers=None, preserve_program=True,
                min_acc_tokens_before_eos=0, gate_init_bias=-10.0,
-               recon_weight=1.0):
+               recon_weight=1.0, allow_partial_load=False):
     ckpt_path = resolve_best_ckpt(ckpt_path)
     ck = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     if global_num_layers is None:
@@ -73,12 +75,34 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
     )
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)
-    if missing:
-        print(f'[load_model] missing keys ({len(missing)}): {missing[:5]}'
-              f'{"..." if len(missing) > 5 else ""}')
     if unexpected:
         print(f'[load_model] unexpected keys ({len(unexpected)}): {unexpected[:5]}'
               f'{"..." if len(unexpected) > 5 else ""}')
+    if missing:
+        # A missing key means that tensor keeps its RANDOM INIT. The model
+        # still runs and still writes midi -- it just generates from partly
+        # untrained weights, which sounds like a weak model rather than a
+        # broken load. Refuse by default; the old permissive behaviour is
+        # one flag away for the case where you know the ckpt predates a
+        # parameter and you accept the consequence.
+        print(f'[load_model] missing keys ({len(missing)}): {missing[:8]}'
+              f'{"..." if len(missing) > 8 else ""}')
+        if not allow_partial_load:
+            raise SystemExit(
+                f'[load_model] ABORT: {len(missing)} parameter(s) absent from '
+                f'{ckpt_path}\n'
+                f'  They would stay at random init and the run would produce '
+                f'plausible-sounding but meaningless output.\n'
+                f'  Usual causes:\n'
+                f'    - the ckpt is a DIFFERENT variant ({_VARIANT} was '
+                f'expected; A.1/A.2/B.1 and the sibling C model all have '
+                f'their own layer names)\n'
+                f'    - global_num_layers mis-detected: pass '
+                f'--global-num-layers explicitly\n'
+                f'    - model_size/moe settings differ from training\n'
+                f'  Pass --allow-partial-load to proceed anyway.')
+        print('[load_model] --allow-partial-load: proceeding with '
+              'randomly-initialised tensors for the keys above.')
     return net
 
 
@@ -318,6 +342,14 @@ def main():
                         'mod_b=melody generated) -- the default naming is by '
                         'stream position and would label the streams '
                         'backwards for the scorer.')
+    p.add_argument('--allow-partial-load', dest='allow_partial_load',
+                   action='store_true', default=False,
+                   help='proceed even when the ckpt is missing parameters '
+                        'the model defines. OFF by default: a missing key '
+                        'leaves that tensor at RANDOM INIT and the run still '
+                        'writes midi, so a mis-matched checkpoint reads as a '
+                        'weak model rather than a failed load. Turn this on '
+                        'only for a ckpt you know predates a parameter.')
     p.add_argument('--max-songs', type=int, default=None)
     args = p.parse_args()
 
@@ -327,6 +359,7 @@ def main():
         moe_num_experts=args.moe_num_experts,
         moe_topk=args.moe_topk,
         min_acc_tokens_before_eos=args.min_chord_tokens_before_eos,
+        allow_partial_load=args.allow_partial_load,
     )
     model = model.cuda().eval()
     model.save_name = os.path.basename(os.path.dirname(args.ckpt))
