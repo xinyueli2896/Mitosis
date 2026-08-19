@@ -310,15 +310,16 @@ def run_folder(model, args):
                     )
 
                 out_dir = os.path.join(args.output_dir, sid)
+                label = 'co' if args.mode == 'co' else args.mode_name
                 if args.n_samples > 1:
-                    # 'duet_multi': <song>/<mode>/sample_<i>_temp<T>.mid
-                    out_dir = os.path.join(out_dir, args.mode)
+                    # 'duet_multi': <song>/<mode-name>/sample_<i>_temp<T>.mid
+                    out_dir = os.path.join(out_dir, label)
                     out_name = f'sample_{s}_temp{args.temperature}.mid'
                 else:
                     # 'duet': 'co' writes <song>/co.mid so the output matches
                     # the layout the eval manifest builder scans.
                     out_name = ('co.mid' if args.mode == 'co'
-                                else f'drum2nondrum_temp{args.temperature}.mid')
+                                else f'{label}_temp{args.temperature}.mid')
                 os.makedirs(out_dir, exist_ok=True)
                 out_path = os.path.join(out_dir, out_name)
                 output_tempo = _get_input_tempo(drum_path, default=120.0)
@@ -370,6 +371,15 @@ def main():
     p.add_argument('--moe-num-experts', type=int, default=4)
     p.add_argument('--moe-topk', type=int, default=2)
     p.add_argument('--min-chord-tokens-before-eos', type=int, default=0)
+    p.add_argument('--mode-name', dest='mode_name', default='drum2nondrum',
+                   help='LABEL used for the output folder/file (the eval '
+                        "manifest reads the mode from it). Purely cosmetic "
+                        'to the model -- the conditioning is always mod_a '
+                        'given -> mod_b generated -- but on the MELCHORD '
+                        'task the drum/nondrum wording is wrong: pass '
+                        'mel2chord (or chord2mel for a reversed ckpt) so the '
+                        'outputs on disk name the direction they actually '
+                        'contain. Default keeps the drumnondrum name.')
     p.add_argument('--max-songs', type=int, default=None)
     p.add_argument('--anticipation-frames', type=int, default=None,
                    help='Drum lookahead k used at TRAINING time. Default: '

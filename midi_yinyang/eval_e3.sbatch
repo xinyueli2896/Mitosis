@@ -22,11 +22,23 @@
 # A conditional system earns its keep by beating those numbers; no extra
 # runs are needed for the floor.
 #
-# Mode-label normalization: A.2's drum->nondrum direction is labeled
-# `mel2chord` by the 5-mode script (mod_a=mel/drum), while B.1/C.1/C.2
-# write `drum2nondrum`. The manifest's mode column is rewritten
-# drum2nondrum -> mel2chord after building, so every system's
-# same-direction rows share one table section.
+# DRUM/NONDRUM NAMING ON THE MELCHORD TASK. B.1/C.1/C.2 were written for
+# drumnondrum and their CLI still says --drum-folder / --nondrum-folder.
+# Those are mod_a (conditioning) and mod_b (generated) SLOTS, not drum
+# semantics: nothing downstream of the argument looks at is_drum, and the
+# decoder names the output tracks MELODY / CHORD either way, which is
+# what eval_metrics splits on. On melchord this script passes
+# --mode-name mel2chord (or chord2mel) so the OUTPUT TREE names the
+# direction it actually holds instead of writing drum2nondrum folders
+# full of melody and chords. Older output trees still say drum2nondrum;
+# the manifest's mode column is rewritten after building, so both score
+# into the same table section.
+#
+# PROMPT LENGTH IS THE TARGET TRACK'S SEED. The conditioning stream is
+# given in FULL for all GEN_LENGTH frames in every system. PROMPT_LENGTH
+# is how much of the GENERATED track the model hears before it has to
+# invent -- 64 frames = 4 bars, the E3 default. eval_metrics scores from
+# that frame on, so the seeded bars never enter the numbers.
 #
 # Env knobs (--export=ALL,KEY=val):
 #   TASK          melchord (default) | drumnondrum
@@ -37,7 +49,11 @@
 #   BASELINE      system id for paired tests; default Y-mc/Y-dn (absent
 #                 in the table -> means-only, by design)
 #   MEL_FOLDER / CHORD_FOLDER   same task defaults as eval_e1
-#   PROMPT_LENGTH default 64; GEN_LENGTH default 384 (TOTAL frames)
+#   PROMPT_LENGTH frames of the GENERATED track to seed before sampling.
+#                 Default 64 = 4 bars. Must be a whole number of bars;
+#                 does NOT shorten the conditioning stream, which is
+#                 always given in full.
+#   GEN_LENGTH    default 384 (TOTAL frames)
 #   N_SAMPLES     default 3 -- honoured by A.2 and B.1. C.1/C.2 have no
 #                 sampling flag and emit 1 sample each; their per-song
 #                 scores are therefore noisier (disclosed, not hidden).
@@ -182,6 +198,37 @@ fi
 SONG_IDS=$(ls "$MEL_FOLDER" | sed 's/\.[Mm][Ii][Dd]$//' | tr '\n' ' ')
 echo "[prompts] $N_MEL songs: $SONG_IDS"
 
+# TASK vs prompt content. The B/C CLI says --drum-folder / --nondrum-folder
+# on every task, so pointing a melchord run at the RWC drum prompts (or a
+# drumnondrum run at POP909) raises no error anywhere -- it just scores
+# nonsense. Drums are the one thing that separates the two corpora
+# unambiguously, so check for them.
+python - "$TASK" "$MEL_FOLDER" "$CHORD_FOLDER" <<'PYEOF'
+import glob, os, sys, warnings
+import pretty_midi
+task, mel_dir, chord_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+n_drum = n_files = 0
+for d in (mel_dir, chord_dir):
+    for f in sorted(glob.glob(os.path.join(d, '*.mid')))[:5]:
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            pm = pretty_midi.PrettyMIDI(f)
+        n_files += 1
+        if any(i.is_drum and i.notes for i in pm.instruments):
+            n_drum += 1
+if not n_files:
+    sys.exit('no midis sampled from the prompt folders')
+print(f'  sampled {n_files} prompt file(s); {n_drum} carry drum tracks')
+if task == 'melchord' and n_drum:
+    sys.exit(f'TASK=melchord but {n_drum}/{n_files} sampled prompts have '
+             f'drum tracks -- MEL_FOLDER/CHORD_FOLDER point at a '
+             f'drumnondrum corpus.')
+if task == 'drumnondrum' and n_drum == 0:
+    sys.exit(f'TASK=drumnondrum but none of the {n_files} sampled prompts '
+             f'has a drum track -- the folders look like melchord.')
+print(f'  prompt content matches TASK={task}.')
+PYEOF
+
 A2_OUT="$OUT_ROOT/A.2"
 B1_OUT="$OUT_ROOT/B.1"
 C1_OUT="$OUT_ROOT/C.1"
@@ -208,7 +255,43 @@ case "$DIRECTION" in
         SWAP_ARGS=(--swap-stream-names); NORM_MODE=chord2mel ;;
     *) echo "ERROR: DIRECTION must be mel2chord or chord2mel"; exit 1 ;;
 esac
-echo "DIRECTION=$DIRECTION (B/C conditioning side: ${MODA_FOLDER})"
+
+# The B/C scripts were written for drumnondrum and their CLI still says
+# --drum-folder / --nondrum-folder. Those names are positional only: the
+# argument is the mod_a (conditioning) stream and mod_b (generated)
+# stream whatever the task. On melchord they carry melody and chord, and
+# --mode-name makes the OUTPUT say so, instead of writing drum2nondrum
+# folders full of melody and chords. On drumnondrum the label stays
+# drum2nondrum, matching every existing output tree.
+if [[ "$TASK" == "melchord" ]]; then
+    MODE_NAME="$NORM_MODE"
+else
+    MODE_NAME=drum2nondrum
+fi
+echo "DIRECTION=$DIRECTION   conditioning (mod_a, GIVEN in full) = $MODA_FOLDER"
+echo "                       target       (mod_b, GENERATED)     = $MODB_FOLDER"
+echo "B/C output mode label = $MODE_NAME  (--drum-folder/--nondrum-folder"
+echo "                       are mod_a/mod_b slots, not drum semantics)"
+
+# PROMPT_LENGTH seeds the GENERATED stream only -- the conditioning
+# stream is given in FULL for all GEN_LENGTH frames, in every system
+# (A.2's make_actions_conditional returns ('given', ...) at every frame;
+# B.1/C.1/C.2 teacher-force mod_a from the prompt inside the AR loop).
+# So this is the number of bars of the target track the model hears
+# before it has to invent: 64 frames = 4 bars, the E3 default.
+if (( PROMPT_LENGTH % 16 != 0 )); then
+    echo "ERROR: PROMPT_LENGTH=$PROMPT_LENGTH is not a whole number of bars"
+    echo "       (16 frames/bar). Use 64 for 4 bars."
+    exit 1
+fi
+if (( PROMPT_LENGTH >= GEN_LENGTH )); then
+    echo "ERROR: PROMPT_LENGTH ($PROMPT_LENGTH) >= GEN_LENGTH ($GEN_LENGTH):"
+    echo "       nothing would be generated, and eval_metrics would score"
+    echo "       an empty frame range."
+    exit 1
+fi
+echo "target-track seed = $PROMPT_LENGTH frames ($((PROMPT_LENGTH / 16)) bars);"
+echo "                    conditioning track given in full ($GEN_LENGTH frames)"
 
 if [[ "$SKIP_INFER" == "1" ]]; then
     echo "[infer] SKIP_INFER=1 -- reusing existing outputs"
@@ -245,7 +328,8 @@ else
                 --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
                 --temperature 1.0 --n-samples "$N_SAMPLES" \
                 --max-polyphony "$MAX_POLYPHONY" \
-                --model-size large --moe-num-experts 4 --moe-topk 2
+                --model-size large --moe-num-experts 4 --moe-topk 2 \
+                --mode-name "$MODE_NAME"
         fi
     fi
 
@@ -262,6 +346,7 @@ else
             --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$MAX_POLYPHONY" \
             --model-size large --moe-num-experts 4 --moe-topk 2 \
+            --mode-name "$MODE_NAME" \
             "${SWAP_ARGS[@]}"
     fi
     if [[ -n "$CKPT_C2" ]]; then
@@ -274,6 +359,7 @@ else
             --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$MAX_POLYPHONY" \
             --model-size large --moe-num-experts 4 --moe-topk 2 \
+            --mode-name "$MODE_NAME" \
             "${SWAP_ARGS[@]}"
     fi
 fi
@@ -324,11 +410,15 @@ python build_eval_manifest.py "${SRC_ARGS[@]}" \
     --modes mel2chord chord2mel drum2nondrum \
     --out "$MANIFEST"
 
-# Normalize the direction label so every system's rows land in ONE
-# table section: B.1/C.1/C.2 write 'drum2nondrum' regardless of task;
-# relabel it to the run's DIRECTION (mel2chord, or chord2mel for
-# reversed-ckpt runs) to match A.2's/Y's native mode labels.
-sed -i $'s/\tdrum2nondrum\t/\t'"$NORM_MODE"$'\t/g' "$MANIFEST"
+# Normalize the direction label so every system's rows land in ONE table
+# section. New runs already write the right label (--mode-name above),
+# so this is a no-op for them; it still rescues OLDER output trees, and
+# SKIP_INFER=1 reruns over them, where B.1/C.1/C.2 wrote 'drum2nondrum'
+# regardless of task.
+if grep -q $'\tdrum2nondrum\t' "$MANIFEST" && [[ "$NORM_MODE" != drum2nondrum ]]; then
+    echo "[manifest] relabeling legacy drum2nondrum rows -> $NORM_MODE"
+    sed -i $'s/\tdrum2nondrum\t/\t'"$NORM_MODE"$'\t/g' "$MANIFEST"
+fi
 
 python eval_metrics.py --task "$TASK" \
     --manifest "$MANIFEST" \

@@ -239,12 +239,12 @@ def run_folder(model, args):
 
                 out_dir = os.path.join(args.output_dir, sid)
                 if args.n_samples > 1:
-                    # 'duet_multi': <song>/drum2nondrum/sample_<i>_temp<T>.mid
-                    out_dir = os.path.join(out_dir, 'drum2nondrum')
+                    # 'duet_multi': <song>/<mode-name>/sample_<i>_temp<T>.mid
+                    out_dir = os.path.join(out_dir, args.mode_name)
                     out_name = f'sample_{s}_temp{args.temperature}.mid'
                 else:
-                    # 'cond': <song>/drum2nondrum_temp<T>.mid (legacy layout)
-                    out_name = f'drum2nondrum_temp{args.temperature}.mid'
+                    # 'cond': <song>/<mode-name>_temp<T>.mid (legacy layout)
+                    out_name = f'{args.mode_name}_temp{args.temperature}.mid'
                 os.makedirs(out_dir, exist_ok=True)
                 out_path = os.path.join(out_dir, out_name)
                 decode_m2c_frames(
@@ -285,6 +285,15 @@ def main():
                    help='independent samples per song. >1 switches the '
                         "output to the 'duet_multi' layout "
                         '(<song>/drum2nondrum/sample_<i>_temp<T>.mid).')
+    p.add_argument('--mode-name', dest='mode_name', default='drum2nondrum',
+                   help='LABEL used for the output folder/file (the eval '
+                        "manifest reads the mode from it). Purely cosmetic "
+                        'to the model -- the conditioning is always mod_a '
+                        'given -> mod_b generated -- but on the MELCHORD '
+                        'task the drum/nondrum wording is wrong: pass '
+                        'mel2chord (or chord2mel for a reversed ckpt) so the '
+                        'outputs on disk name the direction they actually '
+                        'contain. Default keeps the drumnondrum name.')
     p.add_argument('--swap-stream-names', action='store_true', default=False,
                    help='Name the mod_a track CHORD and the mod_b track '
                         'MELODY. Required when scoring a REVERSED melchord '
