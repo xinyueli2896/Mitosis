@@ -40,6 +40,11 @@ MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
 RECON_WEIGHT="${RECON_WEIGHT:-1.0}"
+# Checkpoint selection metric. val_loss averages CE over BOTH streams
+# and adds the Brier drum term; drum is copied from the prefix, so both
+# collapse early and dilute the conditional signal. val_ce_loss_nondrum
+# selects on the task this model is actually evaluated on.
+MONITOR="${MONITOR:-val_loss}"
 TASK="${TASK:-drumnondrum}"
 # Data max_polyphony, auto-set from TASK (override with MAX_POLYPHONY).
 # The melchord datasets are cp8 (16-token frames; cp4 retired -- seventh
@@ -99,6 +104,7 @@ echo "Variant: m2c_duet_rehearsal  (drum-prefix + interleaved AR suffix)"
 echo "Task:    $TASK"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS   recon_weight: $RECON_WEIGHT"
+echo "Checkpoint selection: monitor=$MONITOR"
 if [[ -n "$CKPT" ]]; then
     echo "Mode: RESUME from CKPT=$CKPT (skip init)"
 else
@@ -165,6 +171,7 @@ if [[ "$NGPUS" -le 1 ]]; then
         --dump_samples_dir "$DUMP_SAMPLES_DIR" \
         --gate_init_bias "$GATE_INIT_BIAS" \
         --recon_weight "$RECON_WEIGHT" \
+        --monitor "$MONITOR" \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
 else
@@ -187,6 +194,7 @@ else
         --dump_samples_dir "$DUMP_SAMPLES_DIR" \
         --gate_init_bias "$GATE_INIT_BIAS" \
         --recon_weight "$RECON_WEIGHT" \
+        --monitor "$MONITOR" \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
 fi

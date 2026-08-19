@@ -39,6 +39,22 @@ Loss = CE on the T nondrum predictions + lambda_aux * MoE aux.
 No silence augmentation. No co-generation training (this variant is
 one-way drum→nondrum by design; reverse-direction needs a separate
 model or a swap-augmented training scheme).
+
+The drum block carries no targets, so mel_loss_weight has nothing to
+weight and acc_loss_weight would only rescale the whole loss (an LR
+change in disguise). Both are accepted by the parser for parity with
+the sibling variants and warned about at startup.
+
+RoPE geometry: positions are flat 0..2T-1 across the two blocks, so
+nondrum_t (position T+t) and drum_t (position t) are a CONSTANT T apart
+for every t. The conditioning geometry is therefore uniform over the
+sequence -- unlike M2CDuetRehearsal, whose segment-wise indexing puts
+nondrum_k at distance k+1 from its own drum frame in the prefix.
+
+val_loss here is nondrum CE alone, so it is NOT comparable to
+M2CDuetRehearsal's val_loss (CE over both streams plus a drum Brier
+term, both of which collapse early because drum is copied). Compare
+against that model's val_ce_loss_nondrum.
 """
 
 from __future__ import annotations
@@ -545,6 +561,17 @@ if __name__ == '__main__':
     print(f'Architecture: M2CDuetPrefix  prefix-LM (drum bidirectional + '
           f'causal nondrum reading drum) + per-mod cross gate + shared MoE FFN '
           f'({args.moe_num_experts}E, topk={args.moe_topk})')
+    # Only the nondrum stream is predicted here, so the two-stream loss
+    # weights this parser inherits from its siblings have nowhere to act:
+    # mel_loss_weight has no mel term at all, and acc_loss_weight would be
+    # a scalar on the entire loss (an LR rescale, not a rebalance). Say so
+    # rather than accepting the flag and ignoring it.
+    if args.mel_loss_weight != 1.0 or args.acc_loss_weight != 1.0:
+        print(f'[warn] mel_loss_weight={args.mel_loss_weight} '
+              f'acc_loss_weight={args.acc_loss_weight} are IGNORED by this '
+              f'variant: its loss is CE on the nondrum stream only, so there '
+              f'is no second term to weight against. Use --max_lr to change '
+              f'the effective step size.')
     print(f'Global depth: {gnl}   gate_init_bias: {args.gate_init_bias}')
 
     train_set = FramedDataset(mod_b_path, TRAIN_LENGTH,

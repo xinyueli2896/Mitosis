@@ -44,6 +44,40 @@ Inference: deferred. Generation needs a custom loop that maintains a
 prefix buffer of committed drum frames separately from the suffix's
 shift-trick buffer. See IMPLEMENTATION_REPORT.md outstanding-work
 table.
+
+RoPE GEOMETRY -- two consequences of the segment-wise indexing in
+_run_global_stack (prefix -> 0..T-1, suffix -> 0..2T-1). Both are
+design properties, not bugs, but they bound what the rehearsal can do:
+
+  1. The rehearsal signal WEAKENS OVER TIME. nondrum_k's query slot sits
+     at rotary 2k+1; its own drum frame in the prefix sits at rotary k,
+     so the relative distance is k+1 -- one frame at the start of the
+     sequence, T frames at the end. The corresponding drum in the SUFFIX
+     stays at distance 1 throughout. So exactly where the rehearsal is
+     supposed to pay off (late frames, where future drum is far away),
+     RoPE places the answer furthest from the question. If C.1's
+     conditional fit decays across the sequence, this is the first place
+     to look; the fix is to index the prefix so drum_k lands near
+     nondrum_k's slot rather than at its own 0-based origin.
+
+  2. PREFIX AND SUFFIX SHARE ROTARY INDICES. local_pos maps prefix slot
+     j and suffix slot j to the same rotation, so a drum query cannot
+     tell prefix drum_j from the suffix slot at the same index by
+     position alone -- only by content. Deliberate (it keeps the
+     pretrained backbone's RoPE phase on the suffix, which is what the
+     warm start needs), but it means the model has to learn that
+     distinction from the hidden states.
+
+M2CDuetPrefix (C.2) has neither property: its nondrum_t and drum_t are a
+constant T apart, so its conditioning geometry is uniform over the
+sequence. Worth remembering when the two are compared.
+
+val_loss IS NOT COMPARABLE TO M2CDuetPrefix's. Here it averages CE over
+BOTH streams and adds recon_weight * the Brier drum term; the drum side
+is copied from the prefix, so both collapse early and drag the number
+well below a nondrum-only loss. M2CDuetPrefix reports nondrum CE alone.
+Compare val_ce_loss_nondrum against its val_ce_loss instead, and see
+--monitor for selecting checkpoints on that quantity.
 """
 
 from __future__ import annotations
@@ -595,6 +629,17 @@ if __name__ == '__main__':
     parser.add_argument('--hardcode_program', dest='preserve_program',
                         action='store_false')
     parser.add_argument('--wandb_dir', type=str, default='/tmp/wandb')
+    parser.add_argument('--monitor', type=str, default='val_loss',
+                        help='metric ModelCheckpoint selects on. NOTE what '
+                             "val_loss is for THIS variant: CE averaged over "
+                             'BOTH streams plus recon_weight * the Brier drum '
+                             'term. The drum side is a copy of the prefix, so '
+                             'both of those collapse to ~0 early and dilute '
+                             'the only quantity the model is evaluated on -- '
+                             'nondrum CE. Use val_ce_loss_nondrum to select '
+                             'on the conditional task itself. Default is left '
+                             'at val_loss so resuming an existing run keeps '
+                             'its selection rule.')
     parser.add_argument('--save_top_k', type=int, default=2)
     parser.add_argument('--ckpt_dir', type=str, default=None)
     parser.add_argument('--max_lr', type=float, default=1e-4)
@@ -686,11 +731,19 @@ if __name__ == '__main__':
 
     ckpt_dir = args.ckpt_dir or f'ckpt/{model_name}'
     checkpoint_callback = L.callbacks.ModelCheckpoint(
-        monitor='val_loss', save_top_k=args.save_top_k, save_last=True,
+        monitor=args.monitor, save_top_k=args.save_top_k, save_last=True,
         enable_version_counter=False,
         dirpath=ckpt_dir,
-        filename=model_name + '.{epoch:02d}.{val_loss:.5f}',
+        filename=model_name + '.{epoch:02d}.{' + args.monitor + ':.5f}',
     )
+    print(f'[select] checkpointing on {args.monitor}')
+    if args.monitor == 'val_loss':
+        print('[select] NOTE: val_loss here = CE over BOTH streams + '
+              f'{args.recon_weight} * Brier(drum). The drum side is copied '
+              'from the prefix, so those terms collapse early and the number '
+              'is NOT comparable to M2CDuetPrefix\'s val_loss, which is '
+              'nondrum CE alone. --monitor val_ce_loss_nondrum selects on '
+              'the conditional task itself.')
 
     if n_gpus > 1:
         import pytorch_lightning.strategies as strategies
