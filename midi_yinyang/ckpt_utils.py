@@ -17,13 +17,20 @@ import zipfile
 
 def resolve_best_ckpt(path):
     """Resolve a ckpt argument into an actual file path, preferring the
-    val_loss-tagged ckpt with the smallest val_loss over `last.ckpt`.
+    metric-tagged ckpt with the smallest value over `last.ckpt`.
+
+    The tag is whatever metric the run was CHECKPOINTED on (Lightning
+    names the file after ModelCheckpoint's `monitor`), so it is
+    'val_loss' for most runs but e.g. 'val_ce_loss_nondrum' for a C.1
+    run trained with --monitor.
 
     Behaviour:
-      * If `path` is a directory, scan for `*.val_loss=*.ckpt` files in it,
-        pick the one with the smallest val_loss. Fall back to `last.ckpt`
-        in the same directory if no val_loss-tagged ckpts are present.
-      * If `path` is a file named `last.ckpt` AND there are val_loss-tagged
+      * If `path` is a directory, scan for `*.<val_metric>=*.ckpt` files in
+        it, pick the one with the smallest value. Fall back to `last.ckpt`
+        in the same directory if no metric-tagged ckpts are present.
+        Raises if the directory mixes TWO different monitored metrics,
+        whose values are not on a common scale.
+      * If `path` is a file named `last.ckpt` AND there are metric-tagged
         siblings in the same directory, prefer the best of those.
       * Otherwise honor the exact file path passed.
 
@@ -44,15 +51,21 @@ def resolve_best_ckpt(path):
             f'[resolve_best_ckpt] {path!r} is neither a file nor a directory'
         )
 
-    pattern = re.compile(r'val_loss=([0-9.]+)\.ckpt$')
-    candidates = []
+    # Lightning names the file after the MONITORED metric, so the tag is
+    # not always 'val_loss': a run trained with
+    # --monitor val_ce_loss_nondrum writes '...val_ce_loss_nondrum=1.234'.
+    # Matching 'val_loss=' literally missed those entirely and fell back to
+    # last.ckpt -- silently reintroducing the exact best-vs-last bias this
+    # module exists to prevent.
+    pattern = re.compile(r'\.(val[A-Za-z0-9_]*)=([0-9.]+)\.ckpt$')
+    by_tag = {}
     try:
         for fname in os.listdir(directory):
             m = pattern.search(fname)
             if m:
                 try:
-                    val_loss = float(m.group(1))
-                    candidates.append((val_loss, fname))
+                    by_tag.setdefault(m.group(1), []).append(
+                        (float(m.group(2)), fname))
                 except ValueError:
                     continue
     except OSError as e:
@@ -60,14 +73,29 @@ def resolve_best_ckpt(path):
             f'[resolve_best_ckpt] could not list {directory!r}: {e!r}'
         )
 
+    # Two different monitored metrics in one directory are not on a common
+    # scale, so "smallest number wins" would pick across runs by accident.
+    # Refuse rather than choose wrong -- a silent bad pick here contaminates
+    # every downstream evaluation.
+    if len(by_tag) > 1:
+        raise FileNotFoundError(
+            f'[resolve_best_ckpt] {directory!r} holds ckpts tagged with '
+            f'DIFFERENT monitored metrics: {sorted(by_tag)}. Their values '
+            f'are not comparable, so the best-of cannot be resolved. Pass an '
+            f'explicit ckpt file, or keep one monitor per run directory '
+            f'(RUN_TAG= gives a rerun its own dir).'
+        )
+    metric = next(iter(by_tag), 'val_loss')
+    candidates = by_tag.get(metric, [])
+
     if not candidates:
         last_path = os.path.join(directory, 'last.ckpt')
         if os.path.exists(last_path):
-            print(f'[ckpt] no val_loss-tagged ckpts in {directory}; '
+            print(f'[ckpt] no metric-tagged ckpts in {directory}; '
                   f'using last.ckpt')
             return last_path
         raise FileNotFoundError(
-            f'[resolve_best_ckpt] no ckpt files (val_loss or last.ckpt) '
+            f'[resolve_best_ckpt] no ckpt files (metric-tagged or last.ckpt) '
             f'found in {directory!r}'
         )
 
@@ -85,15 +113,15 @@ def resolve_best_ckpt(path):
                 print(f'[ckpt] WARNING: skipped {len(skipped)} unreadable '
                       f'ckpt(s) before this one: ' +
                       '; '.join(f'{n} ({why})' for n, why in skipped))
-            print(f'[ckpt] auto-selected {fname} (val_loss={val_loss:.5f}) '
-                  f'from {len(candidates)} val_loss-tagged ckpt(s) in '
+            print(f'[ckpt] auto-selected {fname} ({metric}={val_loss:.5f}) '
+                  f'from {len(candidates)} {metric}-tagged ckpt(s) in '
                   f'{directory}')
             return path_i
         skipped.append((fname, problem))
 
     last_path = os.path.join(directory, 'last.ckpt')
     if os.path.exists(last_path) and _ckpt_problem(last_path, deep=deep) is None:
-        print(f'[ckpt] WARNING: all {len(candidates)} val_loss-tagged ckpt(s) '
+        print(f'[ckpt] WARNING: all {len(candidates)} {metric}-tagged ckpt(s) '
               f'in {directory} are unreadable (' +
               '; '.join(f'{n}: {why}' for n, why in skipped) +
               '); falling back to last.ckpt')
