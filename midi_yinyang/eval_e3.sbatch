@@ -42,7 +42,12 @@
 #
 # Env knobs (--export=ALL,KEY=val):
 #   TASK          melchord (default) | drumnondrum
-#   CKPT_A2       A.2 run dir or ckpt file            (required)
+#   CKPT_A2       A.2 run dir or ckpt file. OPTIONAL, like every other
+#                 system: leave it unset to run E3 WITHOUT A.2. At least
+#                 one of CKPT_A2/CKPT_B1/CKPT_C1/CKPT_C2/Y_OUT must be
+#                 set, and BASELINE must name a system that is in the
+#                 run -- with A.2 skipped, BASELINE=A.2 gives a
+#                 means-only table with no paired tests.
 #   CKPT_B1       optional (its native conditional mode)
 #   CKPT_C1       optional, drumnondrum only (rehearsal)
 #   CKPT_C2       optional, drumnondrum only (prefix)
@@ -404,6 +409,32 @@ SRC_ARGS=()
 [[ -d "$B1_OUT" ]] && SRC_ARGS+=(--source "B.1:${B1_LAYOUT}:${B1_OUT}")
 [[ -d "$C1_OUT" ]] && SRC_ARGS+=(--source "C.1:${C_LAYOUT}:${C1_OUT}")
 [[ -d "$C2_OUT" ]] && SRC_ARGS+=(--source "C.2:${C_LAYOUT}:${C2_OUT}")
+
+# Every system is optional, so it is possible to reach here with nothing
+# to score -- e.g. A.2 skipped and the only other ckpt was B.1 in a
+# chord2mel run (B.1 has no reversed mode), or SKIP_INFER=1 pointed at
+# an OUT_ROOT that holds no system dirs. build_eval_manifest would fail
+# with a bare argparse error; say what actually happened instead.
+if [[ ${#SRC_ARGS[@]} -eq 0 ]]; then
+    echo "ERROR: no system produced output under $OUT_ROOT -- nothing to score."
+    echo "  looked for: $A2_OUT (A.2), $B1_OUT (B.1), $C1_OUT (C.1), $C2_OUT (C.2)"
+    [[ -n "$Y_OUT" ]] && echo "              $Y_OUT (Y)"
+    echo "  Check that the ckpt(s) you passed match DIRECTION=$DIRECTION:"
+    echo "  B.1 is skipped entirely in a chord2mel run, and C.1/C.2 need"
+    echo "  reversed (melchord_*_rev) checkpoints for that direction."
+    exit 1
+fi
+
+SYSTEMS=()
+for a in "${SRC_ARGS[@]}"; do
+    [[ "$a" == "--source" ]] || SYSTEMS+=("${a%%:*}")
+done
+echo "[systems] scoring: ${SYSTEMS[*]}"
+if [[ ! " ${SYSTEMS[*]} " == *" $BASELINE "* ]]; then
+    echo "[baseline] $BASELINE is NOT among the systems above: the table"
+    echo "           prints means only, with no paired tests. Set BASELINE"
+    echo "           to one of ${SYSTEMS[*]} to get p-values."
+fi
 
 python build_eval_manifest.py "${SRC_ARGS[@]}" \
     --songs $SONG_IDS \
