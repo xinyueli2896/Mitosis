@@ -99,7 +99,7 @@ BOTH streams and adds recon_weight * the Brier drum term; the drum side
 is copied from the prefix, so both collapse early and drag the number
 well below a nondrum-only loss. M2CDuetPrefix reports nondrum CE alone.
 Compare val_ce_loss_nondrum against its val_ce_loss instead, and see
---monitor for selecting checkpoints on that quantity.
+--ckpt_monitor for selecting checkpoints on that quantity.
 """
 
 from __future__ import annotations
@@ -715,8 +715,17 @@ if __name__ == '__main__':
     parser.add_argument('--hardcode_program', dest='preserve_program',
                         action='store_false')
     parser.add_argument('--wandb_dir', type=str, default='/tmp/wandb')
-    parser.add_argument('--monitor', type=str, default='val_loss',
-                        help='metric ModelCheckpoint selects on. NOTE what '
+    parser.add_argument('--ckpt_monitor', '--monitor', dest='monitor',
+                        type=str, default='val_loss',
+                        help='metric ModelCheckpoint selects on. NAMED '
+                             '--ckpt_monitor because torchrun parses the '
+                             'multi-GPU command line first and abbreviation-'
+                             'matches a bare --monitor against its own '
+                             '--monitor-interval / --monitor_interval, '
+                             'failing with "ambiguous option" before the '
+                             'trainer ever sees it. --monitor still works '
+                             'for single-GPU runs, which invoke python '
+                             'directly. NOTE what '
                              "val_loss is for THIS variant: CE averaged over "
                              'BOTH streams plus recon_weight * the Brier drum '
                              'term. The drum side is a copy of the prefix, so '

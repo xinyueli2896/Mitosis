@@ -40,8 +40,11 @@ MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
 RECON_WEIGHT="${RECON_WEIGHT:-1.0}"
-# Checkpoint selection metric. val_loss averages CE over BOTH streams
-# and adds the Brier drum term; drum is copied from the prefix, so both
+# Checkpoint selection metric. Passed as --ckpt_monitor: torchrun parses
+# the multi-GPU command line first and abbreviation-matches a bare
+# --monitor against its own --monitor-interval, dying with "ambiguous
+# option" before the trainer is ever reached.
+# val_loss averages CE over BOTH streams and adds the Brier drum term; drum is copied from the prefix, so both
 # collapse early and dilute the conditional signal. val_ce_loss_nondrum
 # selects on the task this model is actually evaluated on.
 MONITOR="${MONITOR:-val_loss}"
@@ -189,7 +192,7 @@ if [[ "$NGPUS" -le 1 ]]; then
         --dump_samples_dir "$DUMP_SAMPLES_DIR" \
         --gate_init_bias "$GATE_INIT_BIAS" \
         --recon_weight "$RECON_WEIGHT" \
-        --monitor "$MONITOR" \
+        --ckpt_monitor "$MONITOR" \
         --prefix_stride2 "$PREFIX_STRIDE2" \
         --suffix_shift1 "$SUFFIX_SHIFT1" \
         --checkpoint_path "$TRAIN_CKPT" \
@@ -214,7 +217,7 @@ else
         --dump_samples_dir "$DUMP_SAMPLES_DIR" \
         --gate_init_bias "$GATE_INIT_BIAS" \
         --recon_weight "$RECON_WEIGHT" \
-        --monitor "$MONITOR" \
+        --ckpt_monitor "$MONITOR" \
         --prefix_stride2 "$PREFIX_STRIDE2" \
         --suffix_shift1 "$SUFFIX_SHIFT1" \
         --checkpoint_path "$TRAIN_CKPT" \
