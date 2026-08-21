@@ -33,12 +33,14 @@ CONDA_ENV=mitosis
 REPO_DIR=/home/xinyue.li/Mitosis
 
 PRETRAINED=ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt
-INIT_CKPT=ckpt/m2c_duet_rehearsal_init/m2c_duet_rehearsal_init.ckpt
+# INIT_CKPT is derived below and KEYED ON GATE_INIT_BIAS: the bias is
+# baked into the warm-start weights, and this script skips the init step
+# whenever the file already exists -- so a single fixed path meant that
+# changing GATE_INIT_BIAS silently reused an init built with the old one.
 
 CKPT="${CKPT:-}"
 MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
-GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
 RECON_WEIGHT="${RECON_WEIGHT:-1.0}"
 # Checkpoint selection metric. Passed as --ckpt_monitor: torchrun parses
 # the multi-GPU command line first and abbreviation-matches a bare
@@ -63,6 +65,23 @@ MONITOR="${MONITOR:-val_loss}"
 PREFIX_STRIDE2="${PREFIX_STRIDE2:-1}"
 SUFFIX_SHIFT1="${SUFFIX_SHIFT1:-1}"
 TARGET_ONLY_LOSS="${TARGET_ONLY_LOSS:-1}"
+# Cross-gate bias at init. The default DEPENDS ON THE SHIFT, because
+# what the gated cross path carries depends on it:
+#   shift-2: the intra path already carries mod_b's own history, so the
+#            cross path is auxiliary (it brings in mod_a). -10 keeps it
+#            silent at step 0, which is the warm-start trick -- the model
+#            starts as a clean single-stream LM over mod_b.
+#   shift-1: the slot predicting b_k HOLDS a_k, so the intra path
+#            (same-parity slots) carries mod_a, and mod_b's OWN HISTORY
+#            moves onto the cross path along with the prefix. Leaving the
+#            gate at -10 would start the model with no access to its own
+#            autoregressive history at all. 0.0 -> sigmoid = 0.5, both
+#            paths live from step 0.
+# Override explicitly to pin a value regardless of shift.
+if [[ -z "${GATE_INIT_BIAS:-}" ]]; then
+    if [[ "$SUFFIX_SHIFT1" == "1" ]]; then GATE_INIT_BIAS=0.0
+    else                                        GATE_INIT_BIAS=-10.0; fi
+fi
 TASK="${TASK:-drumnondrum}"
 # Data max_polyphony, auto-set from TASK (override with MAX_POLYPHONY).
 # The melchord datasets are cp8 (16-token frames; cp4 retired -- seventh
@@ -100,6 +119,11 @@ CTX_CORRUPT_LEN="${CTX_CORRUPT_LEN:-8}"
 # where resolve_best_ckpt would otherwise pick across both runs.
 RUN_TAG="${RUN_TAG:-}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_rehearsal_${SLURM_JOB_ID}}"
+# Key the warm-start file on the gate bias (m=minus, p=point) so a
+# different bias builds its own init instead of silently reusing another.
+GATE_TAG=$(echo "$GATE_INIT_BIAS" | sed 's/-/m/g; s/\./p/g')
+INIT_CKPT="${INIT_CKPT:-ckpt/m2c_duet_rehearsal_init/m2c_duet_rehearsal_init_gate${GATE_TAG}.ckpt}"
+mkdir -p "$(dirname "$INIT_CKPT")"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -128,6 +152,7 @@ echo "Variant: m2c_duet_rehearsal  (drum-prefix + interleaved AR suffix)"
 echo "Task:    $TASK"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS   recon_weight: $RECON_WEIGHT"
+echo "Warm start: $INIT_CKPT"
 echo "Checkpoint selection: monitor=$MONITOR"
 echo "Conditional scheme: prefix_stride2=$PREFIX_STRIDE2  suffix_shift1=$SUFFIX_SHIFT1  target_only_loss=$TARGET_ONLY_LOSS"
 if [[ -n "$CKPT" ]]; then
@@ -142,6 +167,8 @@ echo "================================================================"
 if [[ -z "$CKPT" ]]; then
     if [[ -f "$INIT_CKPT" ]]; then
         echo "[init] $INIT_CKPT already exists; skipping warm-start step."
+        echo "       (it was built with gate_init_bias=$GATE_INIT_BIAS -- the"
+        echo "        filename is keyed on that, so this is the right file)"
     else
         if [[ ! -f "$PRETRAINED" ]]; then
             echo "[init] ERROR: pretrained ckpt not found at $PRETRAINED"

@@ -69,11 +69,22 @@ generated -- three of those inherited choices were wrong:
     back into the prefix. Shift-1 (single SOS) puts mod_a[k] in the query
     slot itself, so in the interleaved [a, b, a, b, ...] region every b
     is conditioned on its own a.
-    The per-modality projections stay coherent: under shift-1 odd slots
-    ALWAYS hold mod_a content and even slots ALWAYS mod_b, so the
-    assignment is consistent, and the warm start replicates the SAME
-    pretrained q/k/v into both branches (init_pretrained_into_jointattn
-    _map_global_key), so there is no init mismatch to break.
+    THE GATE MUST BE OPENED TO MATCH. The intra/cross split is keyed on
+    SLOT parity, and under shift-1 slot parity is the opposite of content
+    parity: odd ("mod-b") slots hold mod_a, even ("mod-a") slots hold
+    mod_b. So for the slot predicting b_k the intra path reaches mod_a,
+    and mod_b's OWN AUTOREGRESSIVE HISTORY moves onto the cross path --
+    together with the prefix. With the inherited gate_init_bias of -10
+    (sigmoid ~ 4.5e-5) the model would start with no access to its own
+    history at all. train_duet_rehearsal.sbatch therefore defaults
+    GATE_INIT_BIAS to 0.0 (sigmoid = 0.5) whenever SUFFIX_SHIFT1=1, and
+    keeps -10 for shift-2, where the intra path already carries mod_b and
+    the closed gate is the intended warm-start trick.
+    The projections themselves are fine either way: the assignment is
+    consistent (odd always mod_a, even always mod_b), and the warm start
+    replicates the SAME pretrained q/k/v into both branches
+    (init_pretrained_into_jointattn._map_global_key), so neither branch
+    is initialised for a role it does not get.
 
 --target_only_loss  CE on the mod_b slots only. mod_a is GIVEN, so
     scoring the model on reproducing it teaches nothing -- the drum-side
