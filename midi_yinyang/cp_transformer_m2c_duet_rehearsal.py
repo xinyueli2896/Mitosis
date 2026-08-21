@@ -79,16 +79,27 @@ generated -- three of those inherited choices were wrong:
 
 --prefix_stride2  Fixes a UNIT MISMATCH. The interleaved suffix advances
     TWO rotary units per musical frame; the mod_a-only prefix advanced
-    ONE. The same frame k carried two rotary coordinates -- k in the
-    prefix, 2k+2 in the suffix -- that drift apart, so the distance from
-    mod_b[k]'s query to mod_a[k] in the prefix grew as k+1: one frame at
-    the start of the sequence, T at the end. Exactly where the rehearsal
-    should pay off (late frames, distant future mod_a), RoPE placed the
-    answer furthest from the question. Counting the prefix in half-frames
-    makes that distance a constant 1. The rationale this came from
-    ("give the prefix a self-consistent 0-indexed RoPE for
-    prefix-INTERNAL relative time") is preserved under stride-2, which
-    only scales those internal distances by 2.
+    ONE. The same frame carried two rotary coordinates that drift apart,
+    so the distance from mod_b[k]'s query to mod_a[k] in the prefix grew
+    as k+1: one frame at the start of the sequence, T at the end. Exactly
+    where the rehearsal should pay off (late frames, distant future
+    mod_a), RoPE placed the answer furthest from the question.
+    The rule: the prefix copy of frame j takes THE SAME ROTARY INDEX AS
+    THE SUFFIX SLOT THAT HOLDS IT, so one musical event has one rotary
+    coordinate. That slot depends on the shift -- 2j+1 under shift-1,
+    2j+2 under shift-2 -- so the offset tracks suffix_shift1 rather than
+    being a fixed constant. A bare 2j is NOT equivalent: under shift-1 it
+    lands on the even suffix slots, which hold mod_b, making the prefix
+    copy of mod_a[j] positionally indistinguishable from the suffix slot
+    holding mod_b[j-1] while both are keyed with the mod-a projections.
+    With the matched offset there is no collision (prefix odd, mod_b
+    slots even under shift-1) and the query-to-prefix distance is a
+    constant 0 (shift-1) or -1 (shift-2) for every k.
+    The rationale this came from ("give the prefix a self-consistent
+    0-indexed RoPE for prefix-INTERNAL relative time") is preserved:
+    stride-2 only scales those internal distances by 2.
+    The RoPE table is sized from the indices actually used, since the
+    widened prefix reaches 2(T-1)+offset, past the suffix's 2T-1.
 
 Pass 0 to any of them to reproduce a pre-fix run. The run directory name
 carries _sh1/_tgt/_ps2 so checkpoints of different schemes never share a
@@ -486,26 +497,43 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         assert L == 3 * T
         head_dim = H // self.num_attention_heads
         # Base RoPE table for up to 2T positions (max length of any segment).
-        # 2T covers the suffix (0..2T-1) and, under prefix_stride2, the
-        # prefix's widened range (0..2T-2).
-        cos_base, sin_base = _rope_freqs(
-            2 * T, head_dim, device=h_full.device, dtype=h_full.dtype,
-        )
-        # Build per-position local index: prefix -> pos; suffix -> pos - T.
+        positions = torch.arange(L, device=h_full.device)
+        if self.prefix_stride2:
+            # Give the prefix copy of frame j the SAME rotary index as the
+            # SUFFIX SLOT THAT HOLDS IT, so one musical event has one
+            # rotary coordinate. Which slot that is depends on the shift:
+            #   shift-1: suffix idx 2j+1 holds mod_a[j]
+            #   shift-2: suffix idx 2j+2 holds mod_a[j]
+            # Getting this wrong is not merely a constant offset. Indexing
+            # the prefix at a bare 2j under shift-1 lands it on the EVEN
+            # suffix slots, which hold mod_b -- so the prefix copy of
+            # mod_a[j] and the suffix slot holding mod_b[j-1] become
+            # positionally indistinguishable, and both are keyed with the
+            # mod-a projections. With the matched offset there is no such
+            # collision: prefix indices are odd under shift-1, and the
+            # suffix's mod_b slots are even.
+            offset = 1 if self.suffix_shift1 else 2
+            prefix_pos = positions * 2 + offset
+        else:
+            prefix_pos = positions
+        # Build per-position local index: prefix as above; suffix -> pos - T.
         #
         # prefix_stride2 fixes a UNIT MISMATCH. The suffix interleaves two
         # streams, so it advances TWO rotary units per musical frame, while
-        # the drum-only prefix advances one. Same frame k therefore had two
-        # rotary coordinates (k in the prefix, 2k+2 in the suffix) that
-        # drift apart, and the distance from nondrum_k's query slot to
-        # drum_k in the prefix grew as k+1 -- one frame at the start of the
-        # sequence, T at the end. Exactly where the rehearsal is supposed
-        # to pay off (late frames, distant future drum), RoPE placed the
-        # answer furthest from the question. Counting the prefix in
-        # half-frames too makes that distance a constant 1.
-        positions = torch.arange(L, device=h_full.device)
-        prefix_pos = positions * 2 if self.prefix_stride2 else positions
+        # the mod_a-only prefix advances one. Same frame j therefore had
+        # two rotary coordinates that drift apart, and the distance from
+        # mod_b[k]'s query slot to mod_a[k] in the prefix grew as k+1 --
+        # one frame at the start of the sequence, T at the end. Exactly
+        # where the rehearsal is supposed to pay off (late frames, distant
+        # future mod_a), RoPE placed the answer furthest from the question.
         local_pos = torch.where(positions < T, prefix_pos, positions - T)
+        # Size the table from what is actually indexed: the widened prefix
+        # reaches 2(T-1)+offset, which exceeds the suffix's 2T-1 when
+        # offset is 2.
+        max_pos = int(local_pos.max().item()) + 1
+        cos_base, sin_base = _rope_freqs(
+            max_pos, head_dim, device=h_full.device, dtype=h_full.dtype,
+        )
         cos = cos_base[:, :, local_pos]   # [1, 1, L, head_dim]
         sin = sin_base[:, :, local_pos]
         total_aux = torch.zeros((), device=h_full.device, dtype=h_full.dtype)
