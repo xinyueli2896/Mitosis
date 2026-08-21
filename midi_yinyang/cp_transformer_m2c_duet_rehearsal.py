@@ -8,11 +8,16 @@ AR on the suffix with full visibility into the prefix.
 
 Sequence layout (length 3T):
 
-  [ drum_0, drum_1, ..., drum_{T-1},   sos_m, sos_c, drum_0, nondrum_0, ..., drum_{T-2}, nondrum_{T-2} ]
-   └──── drum prefix (T pos) ────┘   └────────────── shifted interleaved suffix (2T pos) ──────────────┘
-   bidirectional within prefix       standard DuetAttn shifted causal AR
-   invisible to nothing in suffix    sees all prefix + causal-within-suffix
-   no targets / no loss              CE targets = the original interleaved x
+  default (shift-1, the conditional scheme):
+  [ a_0, a_1, ..., a_{T-1},   sos_m, a_0, b_0, a_1, b_1, ..., a_{T-1} ]
+   └─ prefix (T pos) ────┘   └──── shifted interleaved suffix (2T pos) ────┘
+   bidirectional within        causal within; sees ALL of the prefix
+   never sees the suffix       slot i predicts x_i and HOLDS x_{i-1},
+   no targets, no loss         so the slot predicting b_k holds a_k
+
+  legacy (shift-2, --suffix_shift1 0): the suffix opens [sos_m, sos_c,
+  a_0, b_0, ...] and slot i holds x_{i-2}, so b_k's slot holds b_{k-1}
+  and a_k is in that slot's masked future.
 
 The prefix is the same drum content as appears at the suffix's drum
 slots; it's just made available before AR begins so nondrum predictions
@@ -20,11 +25,12 @@ in the suffix can attend to FUTURE drum content (not just past drum).
 That's the rehearsal: the model knows what drum is going to be when it
 predicts nondrum.
 
-Loss = standard CE on the entire 2T-length suffix. Drum-side CE
-collapses fast because the model can trivially copy drum_k from the
-prefix to the suffix's drum slot. That's expected. The useful signal
-lives in the nondrum CE -- nondrum_k's prediction now sees ALL drum
-(via the prefix) instead of only PAST drum (DuetAttn's behaviour).
+Loss = CE on the mod_b slots of the suffix (--target_only_loss, the
+default). mod_a is given, so scoring the model on reproducing it teaches
+nothing: under the legacy joint objective the mod_a CE and the Brier
+term collapsed immediately by copying the prefix. The signal is mod_b's
+CE -- and b_k now sees ALL of mod_a (via the prefix) instead of only
+past mod_a (DuetAttn's behaviour).
 
 Architecture: 2 SDPA passes per block (intra + cross) with per-modality
 Q/K/V/O, per-modality cross gate, shared MoE FFN -- same machinery as
@@ -40,10 +46,11 @@ extra same-modality keys to suffix drum attention. Not exact
 warm-start equivalence with DuetAttn (prefix changes the attention
 distribution), but close to it.
 
-Inference: deferred. Generation needs a custom loop that maintains a
-prefix buffer of committed drum frames separately from the suffix's
-shift-trick buffer. See IMPLEMENTATION_REPORT.md outstanding-work
-table.
+Inference: cp_transformer_m2c_duet_rehearsal_inference.py. It keeps a
+prefix buffer of committed mod_a frames separate from the suffix's
+shift-trick buffer, and mirrors the ckpt's shift -- under shift-1 it
+commits a_t BEFORE sampling b_t, so the query slot holds what it held
+in training.
 
 CONDITIONAL-MODEL CORRECTIONS (all ON by default; each rides in the
 state_dict, so a checkpoint decodes and trains under the scheme it was
@@ -567,9 +574,9 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         h, emb = self.local_encode(x, token_type_ids)
         h = h.view(batch_size, seq_len, -1)
 
-        # Drum prefix: T_full positions, no shift.
+        # mod_a prefix: T_full positions, no shift.
         h_drum = h[:, 0::2]                          # [B, T_full, H]
-        # Suffix: standard DuetAttn shifted interleaved.
+        # Suffix: interleaved, shifted by 1 or 2 per suffix_shift1.
         h_suffix = self.build_suffix(h)                 # [B, 2T_full, H]
 
         # Concat.
@@ -583,9 +590,10 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         return logits, aux_loss
 
     def loss(self, x_mel, x_acc, batch_pitch_shift):
-        """Standard CE on the 2T-length suffix. Same loss structure as
-        DuetAttn (#2); the prefix contributes via attention only, not via
-        the loss."""
+        """CE over the suffix. Under target_only_loss (the default) only
+        the mod_b slots are scored -- mod_a is given, so reproducing it
+        teaches nothing. The prefix contributes via attention only and
+        never carries targets under either setting."""
         x_mel, x_acc = self.preprocess(x_mel, batch_pitch_shift, y=x_acc)
         batch_size, seq_len, subseq_len = x_mel.shape
 
@@ -660,19 +668,26 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         # local_decode returns logits with the batch and frame dims
         # collapsed, so reshape to [B, 2T_full, S, V] before slicing
         # the drum (even-frame) rows.
+        # Under target_only_loss this is DIAGNOSTIC ONLY, so compute it
+        # without grad: softmax + one_hot each materialise a
+        # [B, T_full, S, vocab] float tensor, and keeping them in the
+        # autograd graph for a term that is thrown away costs real VRAM on
+        # a model whose sequences are already 3T long.
         V = self.tokenizer.n_tokens
-        logits_4d = logits.view(batch_size, full_seq_len, subseq_len, V)
-        drum_logits = logits_4d[:, 0::2]               # [B, T_full, S, V]
-        drum_targets = x[:, 0::2]                      # [B, T_full, S]
-        drum_non_pad = (drum_targets != self.tokenizer.pad_token).float()
-        drum_probs = F.softmax(drum_logits, dim=-1)
-        safe_targets = drum_targets.clamp(min=0, max=V - 1)
-        one_hot = F.one_hot(safe_targets, num_classes=V).float()
-        mse_per_slot = ((drum_probs - one_hot) ** 2).sum(dim=-1)   # [B, T_full, S]
-        recon_loss = (
-            (mse_per_slot * drum_non_pad).sum()
-            / drum_non_pad.sum().clamp_min(1.0)
-        )
+        with torch.set_grad_enabled(
+                torch.is_grad_enabled() and not self.target_only_loss):
+            logits_4d = logits.view(batch_size, full_seq_len, subseq_len, V)
+            drum_logits = logits_4d[:, 0::2]           # [B, T_full, S, V]
+            drum_targets = x[:, 0::2]                  # [B, T_full, S]
+            drum_non_pad = (drum_targets != self.tokenizer.pad_token).float()
+            drum_probs = F.softmax(drum_logits, dim=-1)
+            safe_targets = drum_targets.clamp(min=0, max=V - 1)
+            one_hot = F.one_hot(safe_targets, num_classes=V).float()
+            mse_per_slot = ((drum_probs - one_hot) ** 2).sum(dim=-1)
+            recon_loss = (
+                (mse_per_slot * drum_non_pad).sum()
+                / drum_non_pad.sum().clamp_min(1.0)
+            )
 
         self._last_ce_loss = ce_loss.detach()
         self._last_ce_loss_content = ce_loss_content.detach()

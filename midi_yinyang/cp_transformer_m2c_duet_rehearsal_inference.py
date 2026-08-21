@@ -75,6 +75,27 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
     )
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)
+
+    # The scheme flags are buffers added after some checkpoints were
+    # trained. Their ABSENCE is meaningful, not an error: a ckpt with no
+    # flag was trained under the legacy scheme, so pin the buffers to 0
+    # and carry on. Without this the missing-key check below -- which is
+    # there to catch genuinely untrained weights -- would reject every
+    # pre-flag C.1 checkpoint.
+    scheme_flags = {'prefix_stride2_flag': 0, 'suffix_shift1_flag': 0}
+    legacy = [k for k in missing if k in scheme_flags]
+    if legacy:
+        with torch.no_grad():
+            for k in legacy:
+                getattr(net, k).fill_(scheme_flags[k])
+        print(f'[load_model] {sorted(legacy)} absent from the ckpt -> '
+              f'LEGACY scheme assumed (flag=0). This checkpoint predates '
+              f'the conditional-model corrections; it will decode exactly '
+              f'as it was trained.')
+        missing = [k for k in missing if k not in scheme_flags]
+    print(f'[scheme] prefix_stride2={net.prefix_stride2} '
+          f'suffix_shift1={net.suffix_shift1}')
+
     if unexpected:
         print(f'[load_model] unexpected keys ({len(unexpected)}): {unexpected[:5]}'
               f'{"..." if len(unexpected) > 5 else ""}')
