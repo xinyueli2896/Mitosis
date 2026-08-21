@@ -44,21 +44,25 @@ RECON_WEIGHT="${RECON_WEIGHT:-1.0}"
 # the multi-GPU command line first and abbreviation-matches a bare
 # --monitor against its own --monitor-interval, dying with "ambiguous
 # option" before the trainer is ever reached.
-# val_loss averages CE over BOTH streams and adds the Brier drum term; drum is copied from the prefix, so both
-# collapse early and dilute the conditional signal. val_ce_loss_nondrum
-# selects on the task this model is actually evaluated on.
+# Under TARGET_ONLY_LOSS=1 (the default) val_loss IS the conditional
+# objective -- mod_b CE plus the MoE aux term -- so val_loss is the right
+# monitor. Set MONITOR=val_ce_loss_nondrum only when running the old
+# joint objective (TARGET_ONLY_LOSS=0), where val_loss mixes in the
+# given stream and the Brier term.
 MONITOR="${MONITOR:-val_loss}"
-# Geometry (see the model docstring). PREFIX_STRIDE2 counts the drum
-# prefix in the same half-frame units as the interleaved suffix, making
-# the rehearsal distance constant instead of growing with k. ON by
-# default -- the old behaviour mixed units and was a defect, not a
-# trade-off. Set 0 only to reproduce a pre-fix run.
-# SUFFIX_SHIFT1=1 is EXPERIMENTAL and OFF by default: it gives nondrum_k
-# its own frame's drum, at the cost of the per-modality projection
-# bookkeeping. Existing ckpts are unaffected by either default -- the
-# flags are buffers, so they decode under their trained scheme.
+# Conditional-model corrections, all ON by default (see the model
+# docstring). This variant inherited its shift and loss from the
+# symmetric co-generation lineage; as a conditional model those were
+# wrong. SUFFIX_SHIFT1 puts mod_a[k] in the slot predicting mod_b[k], so
+# every b is conditioned on its own a. TARGET_ONLY_LOSS scores mod_b
+# alone (mod_a is given; the Brier term stays logged, not optimised).
+# PREFIX_STRIDE2 counts the prefix in the suffix's half-frame units, so
+# the rehearsal distance is constant instead of growing with k.
+# Set any to 0 to reproduce a pre-fix run. Existing ckpts are unaffected
+# -- the flags are buffers and decode under their trained scheme.
 PREFIX_STRIDE2="${PREFIX_STRIDE2:-1}"
-SUFFIX_SHIFT1="${SUFFIX_SHIFT1:-0}"
+SUFFIX_SHIFT1="${SUFFIX_SHIFT1:-1}"
+TARGET_ONLY_LOSS="${TARGET_ONLY_LOSS:-1}"
 TASK="${TASK:-drumnondrum}"
 # Data max_polyphony, auto-set from TASK (override with MAX_POLYPHONY).
 # The melchord datasets are cp8 (16-token frames; cp4 retired -- seventh
@@ -125,7 +129,7 @@ echo "Task:    $TASK"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS   recon_weight: $RECON_WEIGHT"
 echo "Checkpoint selection: monitor=$MONITOR"
-echo "Geometry: prefix_stride2=$PREFIX_STRIDE2  suffix_shift1=$SUFFIX_SHIFT1"
+echo "Conditional scheme: prefix_stride2=$PREFIX_STRIDE2  suffix_shift1=$SUFFIX_SHIFT1  target_only_loss=$TARGET_ONLY_LOSS"
 if [[ -n "$CKPT" ]]; then
     echo "Mode: RESUME from CKPT=$CKPT (skip init)"
 else
@@ -195,6 +199,7 @@ if [[ "$NGPUS" -le 1 ]]; then
         --ckpt_monitor "$MONITOR" \
         --prefix_stride2 "$PREFIX_STRIDE2" \
         --suffix_shift1 "$SUFFIX_SHIFT1" \
+        --target_only_loss "$TARGET_ONLY_LOSS" \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
 else
@@ -220,6 +225,7 @@ else
         --ckpt_monitor "$MONITOR" \
         --prefix_stride2 "$PREFIX_STRIDE2" \
         --suffix_shift1 "$SUFFIX_SHIFT1" \
+        --target_only_loss "$TARGET_ONLY_LOSS" \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
 fi

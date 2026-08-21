@@ -45,61 +45,63 @@ prefix buffer of committed drum frames separately from the suffix's
 shift-trick buffer. See IMPLEMENTATION_REPORT.md outstanding-work
 table.
 
-GEOMETRY FLAGS. Both ride in the state_dict, so a checkpoint decodes
-under the scheme it was TRAINED with and inference needs no CLI --
-existing ckpts are unaffected by these defaults.
+CONDITIONAL-MODEL CORRECTIONS (all ON by default; each rides in the
+state_dict, so a checkpoint decodes and trains under the scheme it was
+built with and older ckpts are unaffected by these defaults).
 
---prefix_stride2 -- FIXES A UNIT MISMATCH. The interleaved suffix
-    advances TWO rotary units per musical frame; the drum-only prefix
-    advanced ONE. The same frame k therefore had two rotary coordinates
-    (k in the prefix, 2k+2 in the suffix) that drift apart, and the
-    distance from nondrum_k's query slot to drum_k in the prefix grew as
-    k+1 -- 1 frame at the start of the sequence, T at the end. Exactly
-    where the rehearsal should pay off (late frames, distant future
-    drum), RoPE placed the answer furthest from the question. Counting
-    the prefix in half-frames makes that distance a constant 1.
-    ON BY DEFAULT: the old behaviour mixed units, which is a defect
-    rather than a trade-off. The segment-wise rationale it came from
-    ("give the prefix a self-consistent 0-indexed RoPE so it can learn
-    prefix-INTERNAL relative time") is fully preserved under stride-2,
-    which merely scales those internal distances by 2 -- so stride-2
-    gives up nothing that choice was protecting. Pass 0 only to
-    reproduce a pre-fix run.
+This variant inherited its layout, shift and loss from the symmetric
+CO-GENERATION lineage (DuetAttn), where both streams are predicted and
+neither is given. As a CONDITIONAL model -- mod_a given in full, mod_b
+generated -- three of those inherited choices were wrong:
 
---suffix_shift1 -- CORRECT TEACHER FORCING FOR A CONDITIONAL MODEL, but
-    it trades against this family's per-modality bookkeeping, so it is
-    offered as an experiment rather than a fix.
-      Under the inherited shift-2, the slot predicting nondrum_k holds
-      nondrum_{k-1}, and drum_k sits at slot 2k+2 -- the slot's masked
-      future. Both streams at frame k are predicted from strictly
-      earlier frames: a symmetric CO-GENERATION shift. For a conditional
-      model, where drum is GIVEN, that is the wrong target: nondrum_k
-      cannot see the very frame it is conditioned on except by reaching
-      into the prefix. Shift-1 puts drum_k in the query slot itself.
-      THE COST: with shift-2 the content at slot i and the frame slot i
-      predicts share parity, so the per-modality Q/K/V/O and the
-      intra/cross mask split agree with the content they act on. Under
-      shift-1 they no longer do -- odd (mod-b) slots hold drum content,
-      so nondrum queries project drum content through the chord
-      weights and the intra pass attends keys holding the other
-      stream. The modality decomposition that is the core of this
-      architecture gets scrambled, and the warm start (mod-a weights
-      initialised for drum content) no longer lines up.
-      A.2/DuetBlock solves the same-instant problem the other way --
-      appended query slots -- without disturbing the shift. If what you
-      want is "nondrum_k sees drum_k", that route is the tested one.
+--suffix_shift1  Under the inherited shift-2 the slot predicting mod_b[k]
+    holds mod_b[k-1], and mod_a[k] sits at slot 2k+2, in that slot's
+    MASKED FUTURE. Both streams at frame k were predicted from strictly
+    earlier frames -- correct for co-generation, wrong here: mod_b[k]
+    could not see the very frame it is conditioned on except by reaching
+    back into the prefix. Shift-1 (single SOS) puts mod_a[k] in the query
+    slot itself, so in the interleaved [a, b, a, b, ...] region every b
+    is conditioned on its own a.
+    The per-modality projections stay coherent: under shift-1 odd slots
+    ALWAYS hold mod_a content and even slots ALWAYS mod_b, so the
+    assignment is consistent, and the warm start replicates the SAME
+    pretrained q/k/v into both branches (init_pretrained_into_jointattn
+    _map_global_key), so there is no init mismatch to break.
 
-M2CDuetPrefix (C.2) needs neither flag: both of its blocks are
-single-stream, so it already advances one rotary unit per frame
-(nondrum_t and drum_t a constant T apart) and already shifts by one over
-a pure nondrum block.
+--target_only_loss  CE on the mod_b slots only. mod_a is GIVEN, so
+    scoring the model on reproducing it teaches nothing -- the drum-side
+    CE and the Brier term collapse immediately by copying the prefix,
+    spending capacity and diluting val_loss. The Brier term is still
+    LOGGED (recon_loss) as a diagnostic of how faithfully the given
+    stream is echoed, but is no longer optimised.
+    Note the PREFIX itself never had a loss and still does not: logits
+    are read only from suffix positions.
 
-val_loss IS NOT COMPARABLE TO M2CDuetPrefix's. Here it averages CE over
-BOTH streams and adds recon_weight * the Brier drum term; the drum side
-is copied from the prefix, so both collapse early and drag the number
-well below a nondrum-only loss. M2CDuetPrefix reports nondrum CE alone.
-Compare val_ce_loss_nondrum against its val_ce_loss instead, and see
---ckpt_monitor for selecting checkpoints on that quantity.
+--prefix_stride2  Fixes a UNIT MISMATCH. The interleaved suffix advances
+    TWO rotary units per musical frame; the mod_a-only prefix advanced
+    ONE. The same frame k carried two rotary coordinates -- k in the
+    prefix, 2k+2 in the suffix -- that drift apart, so the distance from
+    mod_b[k]'s query to mod_a[k] in the prefix grew as k+1: one frame at
+    the start of the sequence, T at the end. Exactly where the rehearsal
+    should pay off (late frames, distant future mod_a), RoPE placed the
+    answer furthest from the question. Counting the prefix in half-frames
+    makes that distance a constant 1. The rationale this came from
+    ("give the prefix a self-consistent 0-indexed RoPE for
+    prefix-INTERNAL relative time") is preserved under stride-2, which
+    only scales those internal distances by 2.
+
+Pass 0 to any of them to reproduce a pre-fix run. The run directory name
+carries _sh1/_tgt/_ps2 so checkpoints of different schemes never share a
+directory (resolve_best_ckpt scans by directory).
+
+M2CDuetPrefix (C.2) needed none of these: it is single-stream per block,
+already shifts by one over a pure mod_b block, already scores mod_b
+alone, and already advances one rotary unit per frame.
+
+Under target_only_loss this model's val_loss IS comparable to
+M2CDuetPrefix's -- both are then mod_b CE plus the MoE aux term. Under
+the old joint objective it was not, which is why val_ce_loss_nondrum
+exists; see --ckpt_monitor for selecting checkpoints on it.
 """
 
 from __future__ import annotations
@@ -359,7 +361,8 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
                  moe_intermediate_size=None, global_num_layers=None,
                  global_dropout=0.0, preserve_program=True,
                  gate_init_bias=-10.0, recon_weight=1.0,
-                 prefix_stride2=False, suffix_shift1=False, **kwargs):
+                 prefix_stride2=True, suffix_shift1=True,
+                 target_only_loss=True, **kwargs):
         super().__init__(
             *args,
             moe_num_experts=moe_num_experts,
@@ -378,6 +381,11 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         # the prefix" gradient that's useful as the explicit rehearsal
         # supervision and as a logged quantity for analysis.
         self.recon_weight = float(recon_weight)
+        # Conditional model: mod_a is GIVEN, so nothing is learned by
+        # scoring the model on reproducing it. Under target_only_loss the
+        # CE is restricted to mod_b slots and the Brier drum term is
+        # logged but not optimised.
+        self.target_only_loss = bool(target_only_loss)
         del self.global_roformer
         del self.gate_m
         del self.gate_c
@@ -579,9 +587,11 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         is_content = non_pad * (1.0 - is_eos)
 
         frame_idx = torch.arange(full_seq_len, device=x.device)
+        # Even frames are mod_a (given), odd are mod_b (generated).
+        mel_w = 0.0 if self.target_only_loss else self.mel_loss_weight
         frame_w = torch.where(
             frame_idx % 2 == 0,
-            torch.as_tensor(self.mel_loss_weight, device=x.device),
+            torch.as_tensor(mel_w, device=x.device),
             torch.as_tensor(self.acc_loss_weight, device=x.device),
         )
         w = frame_w.view(1, full_seq_len, 1).expand(batch_size, -1, subseq_len)
@@ -590,10 +600,16 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         normalizer = (w * ttw * non_pad).sum().clamp_min(1.0)
         ce_loss = weighted.sum() / normalizer
 
+        # Scope the content/eos split to whatever the objective covers,
+        # so the logged numbers describe the loss actually being minimised.
+        scope = (frame_idx % 2 == 1).float().view(1, full_seq_len, 1) \
+            if self.target_only_loss else torch.ones_like(non_pad)
+        is_content = is_content * scope
+        is_eos_s = is_eos * scope
         content_n = is_content.sum().clamp_min(1.0)
-        eos_n = is_eos.sum().clamp_min(1.0)
+        eos_n = is_eos_s.sum().clamp_min(1.0)
         ce_loss_content = (per_token * is_content).sum() / content_n
-        ce_loss_eos = (per_token * is_eos).sum() / eos_n
+        ce_loss_eos = (per_token * is_eos_s).sum() / eos_n
 
         # Diagnostic: drum-side vs nondrum-side CE. drum CE collapses fast
         # because the prefix gives away the answer; nondrum CE is the
@@ -642,11 +658,13 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         else:
             aux_loss = ce_loss.new_zeros(())
 
-        total_loss = (
-            ce_loss
-            + self.recon_weight * recon_loss
-            + self.aux_loss_weight * aux_loss
-        )
+        # recon_loss stays LOGGED as a diagnostic (how well the model
+        # reproduces the stream it was handed) but is excluded from the
+        # objective under target_only_loss -- optimising it spends
+        # capacity on copying the prefix.
+        recon_term = (0.0 if self.target_only_loss
+                      else self.recon_weight * recon_loss)
+        total_loss = ce_loss + recon_term + self.aux_loss_weight * aux_loss
         return total_loss, aux_loss
 
     def training_step(self, batch, batch_idx):
@@ -777,22 +795,25 @@ if __name__ == '__main__':
                              'Existing ckpts are unaffected either way: the '
                              'flag is a buffer, so they decode under the '
                              'scheme they were trained with.')
-    parser.add_argument('--suffix_shift1', type=int, default=0,
+    parser.add_argument('--suffix_shift1', type=int, default=1,
                         help='1 = shift the interleaved suffix by ONE slot '
-                             '(single SOS) instead of two. Under shift-2 the '
-                             'slot predicting nondrum_k holds nondrum_{k-1} '
-                             'and drum_k sits in that slot\'s masked future '
-                             '-- correct teacher forcing for symmetric '
-                             'CO-GENERATION, wrong for a CONDITIONAL model '
-                             'where drum is given. Shift-1 puts drum_k in '
-                             'the query slot itself. 0 by default, and '
-                             'EXPERIMENTAL: it scrambles the per-modality '
-                             'bookkeeping (odd/mod-b slots come to hold drum '
-                             'content, so nondrum queries project drum '
-                             'through the chord weights and the intra pass '
-                             'attends the other stream). See the module '
-                             'docstring; A.2/DuetBlock solves same-instant '
-                             'coupling without disturbing the shift.')
+                             '(single SOS) instead of two. ON BY DEFAULT: '
+                             'under shift-2 the slot predicting mod_b at '
+                             'frame k holds mod_b[k-1], and mod_a[k] sits in '
+                             "that slot's masked future -- correct teacher "
+                             'forcing for symmetric CO-GENERATION, wrong for '
+                             'a conditional model where mod_a is given. '
+                             'Shift-1 puts mod_a[k] in the query slot, so '
+                             'mod_b[k] is conditioned on its own frame of '
+                             'mod_a. Pass 0 to reproduce a pre-fix run.')
+    parser.add_argument('--target_only_loss', type=int, default=1,
+                        help='1 = CE on the mod_b (generated) slots only, '
+                             'and the Brier mod_a term logged but not '
+                             'optimised. ON BY DEFAULT: mod_a is GIVEN, so '
+                             'scoring the model on reproducing it teaches '
+                             'nothing and spends capacity copying the '
+                             'prefix. Pass 0 for the old joint objective '
+                             '(CE over both streams + recon_weight * Brier).')
     parser.add_argument('--fresh_schedule', action='store_true', default=False)
     args = parser.parse_args()
 
@@ -813,6 +834,8 @@ if __name__ == '__main__':
         geo += '_ps2'
     if args.suffix_shift1:
         geo += '_sh1'
+    if args.target_only_loss:
+        geo += '_tgt'
     default_name = (f"m2c_duet_rehearsal_v1.0_{args.model_size}_"
                     f"gnl{gnl}_{task.name}{geo}{tag}_"
                     f"batch_{args.batch_size * n_gpus}_schedule")
@@ -820,7 +843,8 @@ if __name__ == '__main__':
 
     print(f'[task] {task.name}  mod_a={task.mod_a_label}  mod_b={task.mod_b_label}')
     print(f'[scheme] prefix_stride2={bool(args.prefix_stride2)} '
-          f'suffix_shift1={bool(args.suffix_shift1)}')
+          f'suffix_shift1={bool(args.suffix_shift1)} '
+          f'target_only_loss={bool(args.target_only_loss)}')
 
     net = M2CDuetRehearsal(
         large=(args.model_size == 'large'),
@@ -843,6 +867,7 @@ if __name__ == '__main__':
         recon_weight=args.recon_weight,
         prefix_stride2=bool(args.prefix_stride2),
         suffix_shift1=bool(args.suffix_shift1),
+        target_only_loss=bool(args.target_only_loss),
     )
     print(f'Architecture: M2CDuetRehearsal  drum-prefix (T pos, bidirectional) + '
           f'interleaved AR suffix (2T pos) + per-mod Q/K/V/O + cross gate + shared MoE FFN '
