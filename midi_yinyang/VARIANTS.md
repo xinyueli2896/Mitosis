@@ -78,6 +78,53 @@ changes the key/value distribution even with cross gate silent), but
 close — the model needs a brief adaptation phase before it leverages
 the prefix usefully.
 
+### DuetRehearsal splits into C.1.A and C.1.B
+
+The rehearsal model has TWO variants, differing only in how the
+interleaved suffix is shifted. They are not two settings of one model:
+the shift decides what the ungated intra path carries, which cross-gate
+init is coherent, and how the prefix must be indexed. Run dirs are named
+`m2c_duet_rehearsal_C1A_...` / `_C1B_...` so `resolve_best_ckpt` (which
+scans a directory) can never confuse them.
+
+|  | **C.1.A** (shift-2) | **C.1.B** (shift-1) |
+|---|---|---|
+| suffix | `[sos_m, sos_c, x_0 …]`, slot *i* holds x_{i-2} | `[sos_m, x_0 …]`, slot *i* holds x_{i-1} |
+| slot predicting `b_k` holds | `b_{k-1}` | **`a_k`** |
+| intra path (ungated) carries | mod_b's own history | mod_a |
+| mod_b's own history reached via | intra | **cross (gated)** |
+| `a_k` reaches `b_k` via | prefix only | prefix **and** the query slot |
+| coherent `GATE_INIT_BIAS` | **-10** (warm start intact) | **0.0** (else no AR history at init) |
+| prefix rotary index | `2j+2` | `2j+1` |
+| rotary offset, `b_k` query → prefix `a_k` | -1 | 0 |
+| `SUFFIX_SHIFT1` | `0` | `1` (the default) |
+
+C.1.A is the conservative reading: it keeps the co-generation shift the
+DuetAttn lineage uses, so the warm start lands exactly as intended and
+the prefix is the sole route to same-frame and future mod_a. C.1.B makes
+`a_k` locally available inside the interleave, at the cost of moving
+mod_b's AR history behind the gate.
+
+Both share the corrections that are not optional:
+
+- **`prefix_stride2`** — the prefix copy of frame *j* takes the same
+  rotary index as the suffix slot holding it, so one musical event has
+  one coordinate. The offset tracks the shift (see table). Without it,
+  the distance from `b_k`'s query to `a_k` grew as *k*+1, and so did the
+  distance for the Brier retrieval term.
+- **`target_only_loss`** — no token-level CE on mod_a. It is trivially
+  satisfiable and diluted `val_loss`.
+- **`recon_weight` > 0** — the Brier term is KEPT. It is not a copy: the
+  slot predicting `a_k` never holds `a_k`, so it must retrieve it from
+  the prefix by position, over the same `k_m`/`v_m` a mod_b query reads
+  on the cross path. It trains the shared half of the conditioning
+  mechanism.
+- Checkpoints select on `val_ce_loss_nondrum`, since `val_loss` carries
+  the Brier term.
+
+The prefix itself carries no loss under either variant: logits are read
+only from suffix positions.
+
 ### DuetPrefix (#5) — conditioning baseline, architecture-side
 
 Different conditioning route: drum is a **hard prefix** that the

@@ -160,7 +160,9 @@ echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS   recon_weight: $RECON_WEIGHT"
 echo "Warm start: $INIT_CKPT"
 echo "Checkpoint selection: monitor=$MONITOR"
-echo "Conditional scheme: prefix_stride2=$PREFIX_STRIDE2  suffix_shift1=$SUFFIX_SHIFT1  target_only_loss=$TARGET_ONLY_LOSS"
+if [[ "$SUFFIX_SHIFT1" == "1" ]]; then VARIANT=C1B; else VARIANT=C1A; fi
+echo "Variant: $VARIANT  ($([[ "$SUFFIX_SHIFT1" == "1" ]] && echo shift-1 || echo shift-2) suffix)"
+echo "Conditional scheme: prefix_stride2=$PREFIX_STRIDE2  suffix_shift1=$SUFFIX_SHIFT1  target_only_loss=$TARGET_ONLY_LOSS  recon_weight=$RECON_WEIGHT"
 if [[ -n "$CKPT" ]]; then
     echo "Mode: RESUME from CKPT=$CKPT (skip init)"
 else

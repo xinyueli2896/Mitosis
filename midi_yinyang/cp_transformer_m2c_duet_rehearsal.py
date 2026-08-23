@@ -894,24 +894,40 @@ if __name__ == '__main__':
     mod_b_path = args.path_to_dataset if args.path_to_dataset is not None else task.mod_b_path
 
     tag = f'_{args.run_tag}' if args.run_tag else ''
-    # Geometry in the run name: resolve_best_ckpt scans a directory, so two
-    # schemes sharing one dir would be silently interchangeable.
-    geo = ''
-    if args.prefix_stride2:
-        geo += '_ps2'
-    if args.suffix_shift1:
-        geo += '_sh1'
-    if args.target_only_loss:
-        geo += '_tgt'
-    default_name = (f"m2c_duet_rehearsal_v1.0_{args.model_size}_"
-                    f"gnl{gnl}_{task.name}{geo}{tag}_"
+    # The two shift schemes are separate VARIANTS, not settings of one
+    # model -- they differ in what the ungated intra path carries, which
+    # gate bias is coherent, and how the prefix must be indexed. Name them
+    # apart so resolve_best_ckpt (which scans a directory) can never treat
+    # one as the other, and so E3 tables can report them as distinct rows.
+    #
+    #   C1A  shift-2: the slot predicting mod_b[k] holds mod_b[k-1]; the
+    #        intra path carries mod_b's own history, so gate -10 is the
+    #        coherent warm start. mod_a[k] arrives ONLY via the prefix.
+    #   C1B  shift-1: that slot holds mod_a[k] itself; the intra path
+    #        carries mod_a and mod_b's history moves to the gated cross
+    #        path, so the gate must start open (0.0).
+    variant = 'C1B' if args.suffix_shift1 else 'C1A'
+    # Anything that deviates from the variant's canonical config gets
+    # spelled out, so a non-standard run is never mistaken for the real one.
+    dev = ''
+    if not args.prefix_stride2:
+        dev += '_nops2'
+    if not args.target_only_loss:
+        dev += '_jointce'
+    if args.recon_weight == 0.0:
+        dev += '_norecon'
+    default_name = (f"m2c_duet_rehearsal_{variant}_{args.model_size}_"
+                    f"gnl{gnl}_{task.name}{dev}{tag}_"
                     f"batch_{args.batch_size * n_gpus}_schedule")
     model_name = args.model_name if args.model_name is not None else default_name
 
     print(f'[task] {task.name}  mod_a={task.mod_a_label}  mod_b={task.mod_b_label}')
+    print(f'[variant] {variant}  '
+          f'({"shift-1" if args.suffix_shift1 else "shift-2"} suffix)')
     print(f'[scheme] prefix_stride2={bool(args.prefix_stride2)} '
           f'suffix_shift1={bool(args.suffix_shift1)} '
-          f'target_only_loss={bool(args.target_only_loss)}')
+          f'target_only_loss={bool(args.target_only_loss)} '
+          f'recon_weight={args.recon_weight}')
 
     net = M2CDuetRehearsal(
         large=(args.model_size == 'large'),
