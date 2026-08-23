@@ -510,6 +510,28 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         sos = self._assemble_sos(B, h.device, h.dtype)
         return torch.cat([sos, h[:, :-2]], dim=1)
 
+    def _gate_means(self):
+        """Mean cross-gate value per modality, averaged over layers.
+
+        The gates decide whether the rehearsal prefix reaches the
+        generated stream at all: for a mod_b query the prefix is
+        cross-modality, so g_c scales ALL of it. At gate_init_bias=-10,
+        g_c = 4.5e-5 and sigmoid'(-10) is the same 4.5e-5 -- the gate
+        passes almost no signal AND receives almost no gradient to
+        change. Whether it climbs out of that is the single most
+        important thing to watch in a C.1 run, so log it.
+
+        Reads the values cached by the last forward; returns None before
+        one has run.
+        """
+        gm = [l._last_gate_m.mean() for l in self.global_layers
+              if getattr(l, '_last_gate_m', None) is not None]
+        gc = [l._last_gate_c.mean() for l in self.global_layers
+              if getattr(l, '_last_gate_c', None) is not None]
+        if not gc:
+            return None, None
+        return torch.stack(gm).mean(), torch.stack(gc).mean()
+
     def _run_global_stack(self, h_full, T):
         """h_full: [B, 3T, H] prefix + shifted suffix. Returns (h_global, aux).
 
@@ -744,6 +766,11 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         self.log('train_ce_loss_nondrum', self._last_ce_loss_nondrum)
         self.log('train_recon_loss', self._last_recon_loss)
         self.log('train_moe_aux_loss', aux_loss.detach())
+        gm, gc = self._gate_means()
+        if gc is not None:
+            # gate_c is the channel the prefix reaches mod_b through.
+            self.log('train_gate_c', gc)
+            self.log('train_gate_m', gm)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -756,6 +783,11 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         self.log('val_ce_loss_nondrum', self._last_ce_loss_nondrum)
         self.log('val_recon_loss', self._last_recon_loss)
         self.log('val_moe_aux_loss', aux_loss.detach())
+        gm, gc = self._gate_means()
+        if gc is not None:
+            # gate_c is the channel the prefix reaches mod_b through.
+            self.log('val_gate_c', gc)
+            self.log('val_gate_m', gm)
         return loss
 
 
