@@ -46,18 +46,24 @@ RECON_WEIGHT="${RECON_WEIGHT:-1.0}"
 # the multi-GPU command line first and abbreviation-matches a bare
 # --monitor against its own --monitor-interval, dying with "ambiguous
 # option" before the trainer is ever reached.
-# Under TARGET_ONLY_LOSS=1 (the default) val_loss IS the conditional
-# objective -- mod_b CE plus the MoE aux term -- so val_loss is the right
-# monitor. Set MONITOR=val_ce_loss_nondrum only when running the old
-# joint objective (TARGET_ONLY_LOSS=0), where val_loss mixes in the
-# given stream and the Brier term.
-MONITOR="${MONITOR:-val_loss}"
+# val_loss carries the Brier retrieval term whenever RECON_WEIGHT != 0,
+# so it is not purely the conditional objective. Default to ranking on
+# val_ce_loss_nondrum -- mod_b CE alone -- and fall back to val_loss only
+# when the Brier term is off, where the two coincide.
+if [[ -z "${MONITOR:-}" ]]; then
+    if [[ "${RECON_WEIGHT:-1.0}" == "0" || "${RECON_WEIGHT:-1.0}" == "0.0" ]]
+    then MONITOR=val_loss
+    else MONITOR=val_ce_loss_nondrum; fi
+fi
 # Conditional-model corrections, all ON by default (see the model
 # docstring). This variant inherited its shift and loss from the
 # symmetric co-generation lineage; as a conditional model those were
 # wrong. SUFFIX_SHIFT1 puts mod_a[k] in the slot predicting mod_b[k], so
-# every b is conditioned on its own a. TARGET_ONLY_LOSS scores mod_b
-# alone (mod_a is given; the Brier term stays logged, not optimised).
+# every b is conditioned on its own a. TARGET_ONLY_LOSS drops the
+# token-level CE on mod_a only -- the Brier RETRIEVAL term is separate,
+# controlled by RECON_WEIGHT, and stays ON: the slot predicting mod_a[k]
+# holds mod_a[k-1], so it must fetch mod_a[k] out of the prefix, over the
+# same keys/values the conditioning path reads.
 # PREFIX_STRIDE2 counts the prefix in the suffix's half-frame units, so
 # the rehearsal distance is constant instead of growing with k.
 # Set any to 0 to reproduce a pre-fix run. Existing ckpts are unaffected

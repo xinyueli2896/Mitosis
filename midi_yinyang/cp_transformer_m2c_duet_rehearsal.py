@@ -26,11 +26,13 @@ That's the rehearsal: the model knows what drum is going to be when it
 predicts nondrum.
 
 Loss = CE on the mod_b slots of the suffix (--target_only_loss, the
-default). mod_a is given, so scoring the model on reproducing it teaches
-nothing: under the legacy joint objective the mod_a CE and the Brier
-term collapsed immediately by copying the prefix. The signal is mod_b's
-CE -- and b_k now sees ALL of mod_a (via the prefix) instead of only
-past mod_a (DuetAttn's behaviour).
+default) + recon_weight * the Brier retrieval term on the mod_a slots +
+the MoE aux. Token-level CE on mod_a is dropped -- it is trivially
+satisfiable and dilutes val_loss -- but the Brier term is KEPT, because
+it is not a copy: the slot predicting mod_a[k] holds mod_a[k-1], so it
+has to retrieve mod_a[k] out of the prefix, over the same k_m/v_m the
+conditioning path reads. The signal is mod_b's CE, and b_k sees ALL of
+mod_a via the prefix instead of only past mod_a (DuetAttn's behaviour).
 
 Architecture: 2 SDPA passes per block (intra + cross) with per-modality
 Q/K/V/O, per-modality cross gate, shared MoE FFN -- same machinery as
@@ -86,12 +88,20 @@ generated -- three of those inherited choices were wrong:
     (init_pretrained_into_jointattn._map_global_key), so neither branch
     is initialised for a role it does not get.
 
---target_only_loss  CE on the mod_b slots only. mod_a is GIVEN, so
-    scoring the model on reproducing it teaches nothing -- the drum-side
-    CE and the Brier term collapse immediately by copying the prefix,
-    spending capacity and diluting val_loss. The Brier term is still
-    LOGGED (recon_loss) as a diagnostic of how faithfully the given
-    stream is echoed, but is no longer optimised.
+--target_only_loss  CE on the mod_b slots only. Token-level CE on mod_a
+    is trivially satisfiable and dilutes val_loss, so it is dropped.
+    THIS DOES NOT TOUCH THE BRIER TERM, which is controlled separately by
+    recon_weight and stays ON by default -- the two were coupled at first
+    and that was a mistake. The Brier term is not a copy task: under the
+    shift the slot predicting mod_a[k] holds mod_a[k-1], so satisfying it
+    requires RETRIEVING mod_a[k] from the prefix by position, and that
+    retrieval runs over k_m/v_m at the prefix positions, which are the
+    same keys and values a mod_b query reads on the cross path. It
+    therefore trains the shared half of the conditioning mechanism, which
+    is the point of the rehearsal.
+    With recon_weight > 0, val_loss carries that term, so select
+    checkpoints on val_ce_loss_nondrum (--ckpt_monitor) to rank on the
+    conditional objective alone.
     Note the PREFIX itself never had a loss and still does not: logits
     are read only from suffix positions.
 
@@ -679,14 +689,13 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         # local_decode returns logits with the batch and frame dims
         # collapsed, so reshape to [B, 2T_full, S, V] before slicing
         # the drum (even-frame) rows.
-        # Under target_only_loss this is DIAGNOSTIC ONLY, so compute it
-        # without grad: softmax + one_hot each materialise a
-        # [B, T_full, S, vocab] float tensor, and keeping them in the
-        # autograd graph for a term that is thrown away costs real VRAM on
+        # Grad only when the term is actually optimised: softmax + one_hot
+        # each materialise a [B, T_full, S, vocab] float tensor, and keeping
+        # them in the autograd graph for a discarded term costs real VRAM on
         # a model whose sequences are already 3T long.
         V = self.tokenizer.n_tokens
         with torch.set_grad_enabled(
-                torch.is_grad_enabled() and not self.target_only_loss):
+                torch.is_grad_enabled() and self.recon_weight != 0.0):
             logits_4d = logits.view(batch_size, full_seq_len, subseq_len, V)
             drum_logits = logits_4d[:, 0::2]           # [B, T_full, S, V]
             drum_targets = x[:, 0::2]                  # [B, T_full, S]
@@ -712,13 +721,17 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         else:
             aux_loss = ce_loss.new_zeros(())
 
-        # recon_loss stays LOGGED as a diagnostic (how well the model
-        # reproduces the stream it was handed) but is excluded from the
-        # objective under target_only_loss -- optimising it spends
-        # capacity on copying the prefix.
-        recon_term = (0.0 if self.target_only_loss
-                      else self.recon_weight * recon_loss)
-        total_loss = ce_loss + recon_term + self.aux_loss_weight * aux_loss
+        # The Brier term is INDEPENDENT of target_only_loss, and is kept on
+        # by default. It is not a copy task: under the shift the slot
+        # predicting mod_a[k] holds mod_a[k-1], so satisfying it requires
+        # RETRIEVING mod_a[k] out of the prefix, indexed by position. That
+        # retrieval runs over k_m/v_m on the prefix positions -- the same
+        # keys and values a mod_b query reads on the cross path -- so it
+        # trains the shared half of exactly the mechanism the conditioning
+        # depends on. Set recon_weight=0 to drop it.
+        total_loss = (ce_loss
+                      + self.recon_weight * recon_loss
+                      + self.aux_loss_weight * aux_loss)
         return total_loss, aux_loss
 
     def training_step(self, batch, batch_idx):
