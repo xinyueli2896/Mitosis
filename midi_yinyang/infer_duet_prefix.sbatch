@@ -34,6 +34,13 @@ GEN_LENGTH="${GEN_LENGTH:-384}"
 PROMPT_LENGTH="${PROMPT_LENGTH:-64}"
 TEMPERATURE="${TEMPERATURE:-1.0}"
 MAX_POLYPHONY="${MAX_POLYPHONY:-16}"
+# See infer_duet_rehearsal.sbatch for what these mean; --drum/--nondrum
+# are mod_a/mod_b SLOTS, so MODE_NAME=mel2chord labels a melchord run's
+# output tree with the direction it actually holds.
+N_SAMPLES="${N_SAMPLES:-1}"
+MODE_NAME="${MODE_NAME:-drum2nondrum}"
+SWAP_STREAM_NAMES="${SWAP_STREAM_NAMES:-0}"
+ALLOW_PARTIAL_LOAD="${ALLOW_PARTIAL_LOAD:-0}"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -61,6 +68,8 @@ fi
 if [[ -n "$NONDRUM_FOLDER" ]]; then
     EXTRA_ARGS+=(--nondrum-folder "$NONDRUM_FOLDER")
 fi
+[[ "$SWAP_STREAM_NAMES" == "1" ]] && EXTRA_ARGS+=(--swap-stream-names)
+[[ "$ALLOW_PARTIAL_LOAD" == "1" ]] && EXTRA_ARGS+=(--allow-partial-load)
 
 python cp_transformer_m2c_duet_prefix_inference.py \
     --ckpt "$CKPT" \
@@ -70,6 +79,8 @@ python cp_transformer_m2c_duet_prefix_inference.py \
     --prompt-length "$PROMPT_LENGTH" \
     --temperature "$TEMPERATURE" \
     --max-polyphony "$MAX_POLYPHONY" \
+    --n-samples "$N_SAMPLES" \
+    --mode-name "$MODE_NAME" \
     --model-size large \
     --moe-num-experts 4 --moe-topk 2 \
     "${EXTRA_ARGS[@]}"
