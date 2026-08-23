@@ -299,8 +299,13 @@ class M2CDuetRehearsalLayer(nn.Module):
         self._mask_cross = mask_cross
         return mask_intra, mask_cross
 
-    def forward(self, h, T, cos, sin):
-        """h: [B, 3T, H]. Returns (h_out, aux_loss)."""
+    def forward(self, h, T, cos, sin, gate_offset=0.0):
+        """h: [B, 3T, H]. Returns (h_out, aux_loss).
+
+        gate_offset is added to the gate PRE-ACTIVATION, so the
+        caller can ramp the cross path open on a schedule without
+        touching the learned bias.
+        """
         B, L, H = h.shape
         assert L == 3 * T
 
@@ -362,8 +367,8 @@ class M2CDuetRehearsalLayer(nn.Module):
         u_cross_c = _gather_c(out_cross)
 
         # Gates.
-        g_m = torch.sigmoid(self.gate_m(h_m_all))
-        g_c = torch.sigmoid(self.gate_c(h_c_all))
+        g_m = torch.sigmoid(self.gate_m(h_m_all) + gate_offset)
+        g_c = torch.sigmoid(self.gate_c(h_c_all) + gate_offset)
         self._last_gate_m = g_m.detach()
         self._last_gate_c = g_c.detach()
 
@@ -401,7 +406,8 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
                  global_dropout=0.0, preserve_program=True,
                  gate_init_bias=-10.0, recon_weight=1.0,
                  prefix_stride2=True, suffix_shift1=True,
-                 target_only_loss=True, **kwargs):
+                 target_only_loss=True, gate_target_bias=0.0,
+                 gate_warmup_steps=1000, **kwargs):
         super().__init__(
             *args,
             moe_num_experts=moe_num_experts,
@@ -461,6 +467,27 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
             torch.tensor(1 if suffix_shift1 else 0, dtype=torch.long),
             persistent=True,
         )
+        # GATE WARMUP. The cross gate starts at sigmoid(gate_init_bias) so
+        # the model begins as the pretrained single-stream LM. At -10 that
+        # is 4.5e-5 -- and sigmoid'(-10) is the SAME 4.5e-5, so the gate
+        # both passes almost no signal and receives almost none to change.
+        # Waiting for gradients to escape that saturation is a gamble,
+        # especially on a corpus that overfits in ~1k steps. Instead ramp
+        # an ADDITIVE offset on the pre-activation from 0 to
+        # (gate_target_bias - gate_init_bias) over gate_warmup_steps: the
+        # warm start is exact at step 0, and the prefix is guaranteed to
+        # come online by the end of the ramp regardless of gradient flow.
+        # The learned bias keeps training on top of it.
+        self.gate_warmup_steps = int(gate_warmup_steps)
+        self.register_buffer(
+            'gate_offset_total',
+            torch.tensor(float(gate_target_bias) - float(gate_init_bias)),
+            persistent=True,
+        )
+        # How far the ramp got. Persisted so INFERENCE reproduces the
+        # effective gate the model was last trained with -- without this a
+        # decode would silently run at the raw learned bias.
+        self.register_buffer('gate_ramp', torch.tensor(1.0), persistent=True)
 
         # Modality info carried by per-modality QKVO; freeze token type
         # embedding as a no-op.
@@ -586,9 +613,13 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
         )
         cos = cos_base[:, :, local_pos]   # [1, 1, L, head_dim]
         sin = sin_base[:, :, local_pos]
+        if self.training and self.gate_warmup_steps > 0:
+            step = float(getattr(self, 'global_step', 0) or 0)
+            self.gate_ramp.fill_(min(1.0, step / self.gate_warmup_steps))
+        gate_offset = self.gate_offset_total * self.gate_ramp
         total_aux = torch.zeros((), device=h_full.device, dtype=h_full.dtype)
         for layer in self.global_layers:
-            h_full, aux = layer(h_full, T, cos, sin)
+            h_full, aux = layer(h_full, T, cos, sin, gate_offset=gate_offset)
             total_aux = total_aux + aux
         return h_full, total_aux / max(len(self.global_layers), 1)
 
@@ -913,6 +944,19 @@ if __name__ == '__main__':
                              'nothing and spends capacity copying the '
                              'prefix. Pass 0 for the old joint objective '
                              '(CE over both streams + recon_weight * Brier).')
+    parser.add_argument('--gate_target_bias', type=float, default=0.0,
+                        help='effective cross-gate bias the warmup ramps '
+                             'TO. 0.0 -> sigmoid 0.5, i.e. the prefix fully '
+                             'available to the generated stream by the end '
+                             'of the ramp. Set equal to --gate_init_bias to '
+                             'disable the ramp and rely on gradients alone.')
+    parser.add_argument('--gate_warmup_steps', type=int, default=1000,
+                        help='steps over which the cross gate opens from '
+                             'gate_init_bias to gate_target_bias. The ramp '
+                             'is an ADDITIVE offset on the pre-activation, '
+                             'so the learned bias trains on top of it and '
+                             'step 0 is still the exact warm start. 0 '
+                             'disables the ramp (jump straight to target).')
     parser.add_argument('--fresh_schedule', action='store_true', default=False)
     args = parser.parse_args()
 
@@ -960,6 +1004,10 @@ if __name__ == '__main__':
           f'suffix_shift1={bool(args.suffix_shift1)} '
           f'target_only_loss={bool(args.target_only_loss)} '
           f'recon_weight={args.recon_weight}')
+    print(f'[gate] init_bias={args.gate_init_bias} -> '
+          f'target={args.gate_target_bias} over {args.gate_warmup_steps} '
+          f'steps (sigmoid {1/(1+2.718281828**-args.gate_init_bias):.5f} -> '
+          f'{1/(1+2.718281828**-args.gate_target_bias):.3f})')
 
     net = M2CDuetRehearsal(
         large=(args.model_size == 'large'),
@@ -983,6 +1031,8 @@ if __name__ == '__main__':
         prefix_stride2=bool(args.prefix_stride2),
         suffix_shift1=bool(args.suffix_shift1),
         target_only_loss=bool(args.target_only_loss),
+        gate_target_bias=args.gate_target_bias,
+        gate_warmup_steps=args.gate_warmup_steps,
     )
     print(f'Architecture: M2CDuetRehearsal  drum-prefix (T pos, bidirectional) + '
           f'interleaved AR suffix (2T pos) + per-mod Q/K/V/O + cross gate + shared MoE FFN '

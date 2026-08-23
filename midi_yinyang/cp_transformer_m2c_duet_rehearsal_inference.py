@@ -82,19 +82,25 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
     # and carry on. Without this the missing-key check below -- which is
     # there to catch genuinely untrained weights -- would reject every
     # pre-flag C.1 checkpoint.
-    scheme_flags = {'prefix_stride2_flag': 0, 'suffix_shift1_flag': 0}
+    # gate_offset_total / gate_ramp describe the gate WARMUP, added after
+    # some ckpts were trained. Absent means no warmup was ever applied, so
+    # offset 0 with the ramp complete reproduces that model exactly.
+    scheme_flags = {'prefix_stride2_flag': 0, 'suffix_shift1_flag': 0,
+                    'gate_offset_total': 0.0, 'gate_ramp': 1.0}
     legacy = [k for k in missing if k in scheme_flags]
     if legacy:
         with torch.no_grad():
             for k in legacy:
                 getattr(net, k).fill_(scheme_flags[k])
         print(f'[load_model] {sorted(legacy)} absent from the ckpt -> '
-              f'LEGACY scheme assumed (flag=0). This checkpoint predates '
-              f'the conditional-model corrections; it will decode exactly '
-              f'as it was trained.')
+              f'LEGACY values assumed. This checkpoint predates those '
+              f'buffers; the values chosen reproduce exactly how it was '
+              f'trained.')
         missing = [k for k in missing if k not in scheme_flags]
     print(f'[scheme] prefix_stride2={net.prefix_stride2} '
-          f'suffix_shift1={net.suffix_shift1}')
+          f'suffix_shift1={net.suffix_shift1}  '
+          f'effective_gate_offset='
+          f'{float(net.gate_offset_total * net.gate_ramp):+.2f}')
 
     if unexpected:
         print(f'[load_model] unexpected keys ({len(unexpected)}): {unexpected[:5]}'

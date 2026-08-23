@@ -71,6 +71,16 @@ fi
 PREFIX_STRIDE2="${PREFIX_STRIDE2:-1}"
 SUFFIX_SHIFT1="${SUFFIX_SHIFT1:-1}"
 TARGET_ONLY_LOSS="${TARGET_ONLY_LOSS:-1}"
+# Cross-gate WARMUP. The gate starts closed so the model begins as the
+# pretrained single-stream LM -- but at bias -10 it is saturated
+# (sigmoid = 4.5e-5, and sigmoid' is the SAME 4.5e-5), so it passes
+# almost no signal AND receives almost none to change. Rather than hope
+# gradients escape that, ramp an additive offset to GATE_TARGET_BIAS over
+# GATE_WARMUP_STEPS: step 0 is still the exact warm start, and the prefix
+# is guaranteed online by the end of the ramp. Set GATE_TARGET_BIAS equal
+# to GATE_INIT_BIAS to disable.
+GATE_TARGET_BIAS="${GATE_TARGET_BIAS:-0.0}"
+GATE_WARMUP_STEPS="${GATE_WARMUP_STEPS:-1000}"
 # Cross-gate bias at init. The default DEPENDS ON THE SHIFT, because
 # what the gated cross path carries depends on it:
 #   shift-2: the intra path already carries mod_b's own history, so the
@@ -158,6 +168,7 @@ echo "Variant: m2c_duet_rehearsal  (drum-prefix + interleaved AR suffix)"
 echo "Task:    $TASK"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS   recon_weight: $RECON_WEIGHT"
+echo "Gate warmup: $GATE_INIT_BIAS -> $GATE_TARGET_BIAS over $GATE_WARMUP_STEPS steps"
 echo "Warm start: $INIT_CKPT"
 echo "Checkpoint selection: monitor=$MONITOR"
 if [[ "$SUFFIX_SHIFT1" == "1" ]]; then VARIANT=C1B; else VARIANT=C1A; fi
@@ -235,6 +246,8 @@ if [[ "$NGPUS" -le 1 ]]; then
         --prefix_stride2 "$PREFIX_STRIDE2" \
         --suffix_shift1 "$SUFFIX_SHIFT1" \
         --target_only_loss "$TARGET_ONLY_LOSS" \
+        --gate_target_bias "$GATE_TARGET_BIAS" \
+        --gate_warmup_steps "$GATE_WARMUP_STEPS" \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
 else
@@ -261,6 +274,8 @@ else
         --prefix_stride2 "$PREFIX_STRIDE2" \
         --suffix_shift1 "$SUFFIX_SHIFT1" \
         --target_only_loss "$TARGET_ONLY_LOSS" \
+        --gate_target_bias "$GATE_TARGET_BIAS" \
+        --gate_warmup_steps "$GATE_WARMUP_STEPS" \
         --checkpoint_path "$TRAIN_CKPT" \
         --wandb
 fi
