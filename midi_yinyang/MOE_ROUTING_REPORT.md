@@ -154,6 +154,18 @@ The layer-11 partition read together with load: melody pair e0+e1 takes
    should FALL toward 0 as the bias absorbs the parity job) and
    within-modality routing structure emerging (register, density,
    harmonic function).
+
+   **BUILT (2026-08-24) as A.2.moe_improved** — see VARIANTS.md for the
+   full description. `SimpleMoEFFN` gains an opt-in zero-init
+   `modality_bias [2, E]` on the router logits, wired through the A.2
+   layer stack only; `train_duet_block_diffusion.sbatch` knob
+   `MOE_MODALITY_BIAS=1` (run dirs marked `K4mb`). Inference and
+   `analyze_moe_routing.py` auto-detect the bias from the ckpt; on a
+   bias ckpt the analyzer separates the explicit-bias vs content
+   pathways and runs the probes on the content pathway, which is where
+   the success metric above lives. Correctness (warm-start equivalence,
+   layout, probe-cache isolation) is audited by
+   `audit_moe_bias.sbatch`.
 4. **Extend the same analysis to the other MoE checkpoints** (A.1, B.1,
    C.1, C.2, and A.2-drumnondrum) — the analyzer takes any of them via
    `VARIANT=`.

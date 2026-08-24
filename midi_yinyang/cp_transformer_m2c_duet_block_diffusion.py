@@ -580,6 +580,20 @@ if __name__ == '__main__':
                              'alignment. Baked into the ckpt as a buffer; '
                              'inference auto-detects. Incompatible with '
                              '--legacy_slot_rope.')
+    parser.add_argument('--moe_modality_bias', type=int, default=0,
+                        help='1 = A.2.moe_improved: learned per-modality '
+                             'additive bias [2, E] on the router logits, '
+                             'zero-init. Hands the router the slot-parity '
+                             'bit the per-modality attention projections '
+                             'already imprint on the hidden state (probes '
+                             'measured ~69%% of routing separation as that '
+                             'stamp), freeing the input-driven pathway for '
+                             'within-modality structure. Baked into the '
+                             'ckpt as the ffn.modality_bias parameter; '
+                             'inference auto-detects. Success metric: the '
+                             'identical-content probe\'s stamp share on '
+                             'the CONTENT pathway falls toward zero '
+                             '(analyze_moe_routing.sbatch PROBE=identical).')
     parser.add_argument('--fresh_schedule', action='store_true', default=False)
     args = parser.parse_args()
 
@@ -598,8 +612,12 @@ if __name__ == '__main__':
                          'mutually exclusive (v1.2 vs v1.0).')
     scheme_version = ('v1.2' if args.time_rope_aligned
                       else 'v1.0' if args.legacy_slot_rope else 'v1.1')
+    # A.2.moe_improved runs get their own run-dir family: the ckpts carry
+    # an extra parameter per MoE layer, so resuming across the two
+    # configs must fail loudly instead of finding each other's last.ckpt.
+    mb_tag = 'mb' if args.moe_modality_bias else ''
     default_name = (f"m2c_duet_block_diffusion_{scheme_version}_{args.model_size}_"
-                    f"gnl{gnl}_K{args.diffusion_K}_{task.name}{tag}_"
+                    f"gnl{gnl}_K{args.diffusion_K}{mb_tag}_{task.name}{tag}_"
                     f"batch_{args.batch_size * n_gpus}_schedule")
     model_name = args.model_name if args.model_name is not None else default_name
 
@@ -626,10 +644,13 @@ if __name__ == '__main__':
         slot_rope_aligned=(not args.legacy_slot_rope),
         time_rope_aligned=bool(args.time_rope_aligned),
         self_cond_prob=args.self_cond_prob,
+        moe_modality_bias=bool(args.moe_modality_bias),
     )
     print(f'[scheme] {scheme_version}: slot_rope_aligned={not args.legacy_slot_rope}  '
           f'time_rope_aligned={bool(args.time_rope_aligned)}  '
-          f'self_cond_prob={args.self_cond_prob}')
+          f'self_cond_prob={args.self_cond_prob}  '
+          f'moe_modality_bias={bool(args.moe_modality_bias)}'
+          f'{" (A.2.moe_improved)" if args.moe_modality_bias else ""}')
     print(f'Architecture: M2CDuetBlockDiffusion (A.3)  K={args.diffusion_K}  '
           f'3-pass (intra/cross/frame) + 2 gates + query slots with per-item '
           f'noise levels + k-embedding')
@@ -722,6 +743,7 @@ if __name__ == '__main__':
                     'diffusion_K': args.diffusion_K,
                     'slot_rope_aligned': not args.legacy_slot_rope,
                     'self_cond_prob': args.self_cond_prob,
+                    'moe_modality_bias': bool(args.moe_modality_bias),
                     'run_tag': args.run_tag,
                 },
             ) if args.wandb else TensorBoardLogger('tb_logs', name=model_name)

@@ -96,7 +96,15 @@ def stats(probs, topk):
             'dead': [e for e in range(E) if not used[e]], 'n': N}
 
 
-def snapshot(layers):
+def snapshot(layers, content=False):
+    """content=True reads _last_content_probs -- the softmax of the
+    UNBIASED router logits, which only exists on a modality-bias
+    (A.2.moe_improved) model. That is the pathway the probes must test
+    there: the explicit bias separates the modalities BY DESIGN, so
+    running the stamp probe on the full probs would just re-measure the
+    bias. The success metric is the stamp share of the content pathway."""
+    if content:
+        return [l.ffn._last_content_probs.clone() for l in layers]
     return [l.ffn._last_routing_probs.clone() for l in layers]
 
 
@@ -115,7 +123,8 @@ def parity_profile(pr, layout, topk):
             'pref_b': int(stats(fb, topk)['load'].argmax())}
 
 
-def run_probe(net, batch, probe, base_prs, layers, layout, topk):
+def run_probe(net, batch, probe, base_prs, layers, layout, topk,
+              content=False):
     """Second forward with manipulated streams; compare to baseline."""
     x_mel, x_acc, ps = batch[0], batch[1], batch[2]
     if probe == 'identical':
@@ -129,11 +138,18 @@ def run_probe(net, batch, probe, base_prs, layers, layout, topk):
                 'disagree; whichever the experts follow wins')
     with torch.no_grad():
         net.loss(*probed)
-    probe_prs = snapshot(layers)
+    probe_prs = snapshot(layers, content=content)
 
     print('\n' + '=' * 72)
     print(f'PROBE: {probe}')
     print(f'  {what}')
+    if content:
+        print('  NOTE: modality-bias router -- this probe runs on the '
+              'CONTENT pathway')
+        print('  (unbiased logits). The explicit bias separates the '
+              'parities by design;')
+        print('  the question is whether the input-driven part still '
+              'carries the stamp.')
     print('=' * 72)
     base = [parity_profile(p, layout, topk) for p in base_prs]
     prob = [parity_profile(p, layout, topk) for p in probe_prs]
@@ -148,6 +164,13 @@ def run_probe(net, batch, probe, base_prs, layers, layout, topk):
         ratio = mq / mb if mb > 0 else float('nan')
         print(f'\n  mean L1: real {mb:.3f} -> identical-content {mq:.3f}  '
               f'(stamp share ~ {ratio:.0%})')
+        if content:
+            print('\n  A.2.moe_improved success metric: this stamp share '
+                  'should be near ZERO --')
+            print('  the explicit bias should have absorbed the parity bit, '
+                  'leaving the content')
+            print('  pathway free of it. The baseline (job 178945, no bias) '
+                  'measured ~69%.')
         print('\n  VERDICT:')
         if ratio < 0.15:
             print('  CONTENT-DRIVEN. With identical content the parity '
@@ -265,8 +288,22 @@ def main():
                  'built with moe_num_experts > 1?')
     E = layers[0].ffn.num_experts
     topk = layers[0].ffn.topk
+    has_bias = any(getattr(l.ffn, 'modality_bias', None) is not None
+                   for l in layers)
     print(f'\n{len(layers)} MoE layer(s), {E} experts, top-{topk}. '
-          f'Balanced load = {1/E:.3f} per expert.\n')
+          f'Balanced load = {1/E:.3f} per expert.')
+    if has_bias:
+        print('MODALITY-BIAS ROUTER (A.2.moe_improved): this ckpt carries '
+              'an explicit')
+        print('per-modality bias on the router logits. The tables below '
+              'describe the')
+        print('ACTUAL routing (bias included), so a modality split there is '
+              'by design,')
+        print('not a discovery. The bias-vs-content section after the '
+              'verdict separates')
+        print('what the explicit bias contributes from what the '
+              'input-driven pathway does.')
+    print()
 
     hdr = (f'{"layer":>5} {"max_load":>9} {"entropy":>8} {"dead":>6}  '
            f'{"per-expert top-1 load":<28} {"mod L1":>7}')
@@ -451,11 +488,43 @@ def main():
                       f'e{ea} ({va:.3f})     e{eb} ({vb:.3f})   {same}')
     print('=' * 72)
 
+    if has_bias:
+        print('\n' + '=' * 72)
+        print('BIAS vs CONTENT PATHWAY -- division of labour per layer')
+        print('  full L1     parity separation of the actual routing '
+              '(bias included)')
+        print('  content L1  parity separation of the input-driven pathway '
+              'alone')
+        print('              (softmax of the unbiased logits)')
+        print('  bias delta  max |bias_a[e] - bias_b[e]| -- how strongly '
+              'the explicit')
+        print('              bias itself separates the modalities')
+        print(f'\n  {"layer":>5} {"full L1":>9} {"content L1":>11} '
+              f'{"bias delta":>11}')
+        for i, layer in enumerate(layers):
+            fl = parity_profile(layer.ffn._last_routing_probs, layout,
+                                topk)['l1']
+            cl = parity_profile(layer.ffn._last_content_probs, layout,
+                                topk)['l1']
+            bd = float((layer.ffn.modality_bias[0]
+                        - layer.ffn.modality_bias[1]).detach().abs().max())
+            print(f'  {i:>5} {fl:>9.3f} {cl:>11.3f} {bd:>11.3f}')
+        print('\n  Healthy A.2.moe_improved: bias delta grows during '
+              'training while')
+        print('  content L1 on the REAL batch reflects genuine content '
+              'differences only')
+        print('  -- confirmed by PROBE=identical driving the content-'
+              'pathway stamp share')
+        print('  toward zero (baseline without the bias: ~69%).')
+        print('=' * 72)
+
     if args.probe != 'none':
         # Baseline probs are still live on the layers (nothing has run a
         # forward since); snapshot them before the probe pass overwrites.
-        base_prs = snapshot(layers)
-        run_probe(net, batch, args.probe, base_prs, layers, layout, topk)
+        # On a modality-bias model the probes target the content pathway.
+        base_prs = snapshot(layers, content=has_bias)
+        run_probe(net, batch, args.probe, base_prs, layers, layout, topk,
+                  content=has_bias)
 
 
 if __name__ == '__main__':

@@ -101,7 +101,8 @@ class M2CDuetBlockLayer(nn.Module):
 
     def __init__(self, hidden_size, num_heads, intermediate_size,
                  moe_num_experts, moe_topk, moe_intermediate_size,
-                 dropout=0.0, gate_init_bias=-10.0):
+                 dropout=0.0, gate_init_bias=-10.0,
+                 moe_modality_bias=False):
         super().__init__()
         assert hidden_size % num_heads == 0
         self.hidden_size = hidden_size
@@ -136,7 +137,8 @@ class M2CDuetBlockLayer(nn.Module):
         if self.use_moe:
             self.ffn = SimpleMoEFFN(hidden_size, ffn_inter,
                                      num_experts=moe_num_experts,
-                                     topk=moe_topk)
+                                     topk=moe_topk,
+                                     modality_bias=moe_modality_bias)
         else:
             self.ffn = nn.Sequential(
                 nn.Linear(hidden_size, ffn_inter),
@@ -374,7 +376,16 @@ class M2CDuetBlockLayer(nn.Module):
 
         # Shared MoE FFN over the flat L-length sequence.
         if self.use_moe:
-            ffn_out, aux_loss = self.ffn(h)
+            if self.ffn.modality_bias is not None:
+                # Per-position modality, matching _build_masks: even
+                # clean positions and the first query slot are mod_a (0),
+                # odd clean positions and the second slot are mod_b (1).
+                pos = torch.arange(L, device=h.device)
+                mod_ids = torch.where(pos < clean_len, pos % 2,
+                                      (pos - clean_len) % 2)
+                ffn_out, aux_loss = self.ffn(h, modality_ids=mod_ids)
+            else:
+                ffn_out, aux_loss = self.ffn(h)
         else:
             ffn_out = self.ffn(h)
             aux_loss = torch.zeros((), device=h.device, dtype=h.dtype)
@@ -394,7 +405,8 @@ class M2CDuetBlockAttn(RoFormerSymbolicTransformer):
     def __init__(self, *args, moe_num_experts=4, moe_topk=2,
                  moe_intermediate_size=None, global_num_layers=None,
                  global_dropout=0.0, preserve_program=True,
-                 gate_init_bias=-10.0, query_loss_weight=1.0, **kwargs):
+                 gate_init_bias=-10.0, query_loss_weight=1.0,
+                 moe_modality_bias=False, **kwargs):
         super().__init__(
             *args,
             moe_num_experts=moe_num_experts,
@@ -422,6 +434,7 @@ class M2CDuetBlockAttn(RoFormerSymbolicTransformer):
                 moe_intermediate_size=ffn_inter,
                 dropout=global_dropout,
                 gate_init_bias=gate_init_bias,
+                moe_modality_bias=moe_modality_bias,
             )
             for _ in range(self.global_num_layers)
         ])

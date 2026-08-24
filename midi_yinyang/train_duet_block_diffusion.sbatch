@@ -52,6 +52,21 @@
 #                           the old last_epoch on top, so the LR keeps
 #                           annealing smoothly instead of restarting.
 #   --export=ALL,DIFFUSION_K=8       number of noise-level bins (default 4).
+#   --export=ALL,MOE_MODALITY_BIAS=1 A.2.moe_improved: learned per-modality
+#                           bias [2, E] on the MoE router logits, zero-init.
+#                           Hands the router the slot-parity bit the
+#                           per-modality attention projections already
+#                           imprint (probes 178945/178946: ~69% of routing
+#                           separation was that stamp), freeing the
+#                           input-driven pathway for within-modality
+#                           structure. Run dirs get an 'mb' marker after
+#                           the K tag so plain and bias runs never
+#                           auto-resume into each other; a mismatched
+#                           explicit CKPT fails loudly at the strict load.
+#                           Verify after training with
+#                           analyze_moe_routing.sbatch PROBE=identical:
+#                           the content-pathway stamp share should be
+#                           near zero.
 #   --export=ALL,FRESH_SCHEDULE=1    opt-in: load weights only, drop
 #                           optimizer + scheduler + step counter, run a
 #                           brand-new OneCycle from step 0. NOT the
@@ -132,6 +147,9 @@ SELF_COND_PROB="${SELF_COND_PROB:-0.5}"
 # deficit). The scheme version is stamped into the run dir name
 # (v1.2 vs v1.1), so runs never intermingle. Default 0 = v1.1.
 TIME_ROPE_ALIGNED="${TIME_ROPE_ALIGNED:-0}"
+# A.2.moe_improved: per-modality bias on the MoE router logits (see
+# header). Marks the run dir with 'mb' after the K tag.
+MOE_MODALITY_BIAS="${MOE_MODALITY_BIAS:-0}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_block_diffusion_${SLURM_JOB_ID}}"
 # Data polyphony per stream (drives the sample-dump reshape, not the model):
@@ -184,7 +202,9 @@ GLOBAL_BATCH=$((BATCH_SIZE * NGPUS))
 # (v1.2 when TIME_ROPE_ALIGNED=1, else v1.1) or auto-resume looks in
 # the wrong directory.
 if [[ "$TIME_ROPE_ALIGNED" == "1" ]]; then SCHEME_VERSION=v1.2; else SCHEME_VERSION=v1.1; fi
-RUN_DIR="ckpt/m2c_duet_block_diffusion_${SCHEME_VERSION}_large_gnl12_K${DIFFUSION_K}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
+# 'mb' marker must match the python side's default_name derivation.
+if [[ "$MOE_MODALITY_BIAS" == "1" ]]; then MB_TAG=mb; else MB_TAG=""; fi
+RUN_DIR="ckpt/m2c_duet_block_diffusion_${SCHEME_VERSION}_large_gnl12_K${DIFFUSION_K}${MB_TAG}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
     CKPT="$RUN_DIR/last.ckpt"
     echo "[auto-resume] found $CKPT  (run dir: $RUN_DIR)"
@@ -224,7 +244,7 @@ fi
 
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
-echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K"
+echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K  moe_modality_bias=$MOE_MODALITY_BIAS${MB_TAG:+ (A.2.moe_improved)}"
 echo "MoE: experts=$MOE_NUM_EXPERTS topk=$MOE_TOPK intermediate=${MOE_INTERMEDIATE_SIZE:-<default 3072/expert>}  RUN_TAG=${RUN_TAG:-<none>}"
 echo "Task:    $TASK   (data max_polyphony: $MAX_POLYPHONY)"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
@@ -317,6 +337,7 @@ COMMON_ARGS=(
     --query_loss_weight "$QUERY_LOSS_WEIGHT"
     --self_cond_prob "$SELF_COND_PROB"
     --time_rope_aligned "$TIME_ROPE_ALIGNED"
+    --moe_modality_bias "$MOE_MODALITY_BIAS"
     --diffusion_K "$DIFFUSION_K"
     --checkpoint_path "$TRAIN_CKPT"
     --wandb

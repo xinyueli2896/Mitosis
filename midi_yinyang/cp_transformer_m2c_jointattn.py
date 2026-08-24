@@ -126,15 +126,32 @@ class SimpleMoEFFN(nn.Module):
     Each expert is a 2-layer MLP (Linear -> GELU -> Linear), matching the
     dense FFN shape of the pretrained one-backbone so warm-start is a
     direct weight copy.
+
+    modality_bias (A.2.moe_improved): a learned per-modality additive
+    bias on the router logits, [2, E], zero-initialised. The stamp-vs-
+    content probes (analyze_moe_routing.py, jobs 178945/178946) showed
+    ~69% of the router's modality separation is the architecture's
+    parity imprint read back out of the hidden state -- a redundant bit
+    the per-modality attention projections already encode. The bias
+    hands the router that bit for free so the input-driven pathway can
+    spend its capacity on within-modality structure. Zero init keeps
+    warm-start equivalence, and checkpoints without the key load into a
+    bias-off model unchanged. When enabled, forward() REQUIRES
+    modality_ids; callers that do not know the layout cannot enable it.
     """
 
-    def __init__(self, hidden_size, intermediate_size, num_experts, topk):
+    def __init__(self, hidden_size, intermediate_size, num_experts, topk,
+                 modality_bias=False):
         super().__init__()
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
         self.num_experts = num_experts
         self.topk = topk
         self.gate = nn.Linear(hidden_size, num_experts, bias=False)
+        if modality_bias:
+            self.modality_bias = nn.Parameter(torch.zeros(2, num_experts))
+        else:
+            self.register_parameter('modality_bias', None)
         self.fc1 = nn.ModuleList(
             [nn.Linear(hidden_size, intermediate_size) for _ in range(num_experts)]
         )
@@ -142,17 +159,38 @@ class SimpleMoEFFN(nn.Module):
             [nn.Linear(intermediate_size, hidden_size) for _ in range(num_experts)]
         )
 
-    def forward(self, x):
+    def forward(self, x, modality_ids=None):
         """x: [B, L, H]. Returns (out, aux_loss).
+
+        modality_ids: LongTensor [L] or [B, L] of 0 (mod_a) / 1 (mod_b)
+        per position. Required iff the module was built with
+        modality_bias=True; ignored (and must be None-safe for callers)
+        otherwise.
 
         Caches the most recent routing probabilities at self._last_routing_probs
         with shape [B, L, num_experts] so a diagnostic callback can read them
         (split by interleaved position parity to compare drum vs non-drum).
+        With modality_bias also caches self._last_content_probs -- the
+        softmax of the UNBIASED logits, i.e. the input-driven part of the
+        routing decision, which is what the stamp-share probes measure.
         Detached to avoid graph buildup; replaced every forward."""
         B, L, H = x.shape
         x_flat = x.reshape(-1, H)                                   # [N, H]
         N = x_flat.size(0)
         logits = self.gate(x_flat)                                  # [N, E]
+        if self.modality_bias is not None:
+            if modality_ids is None:
+                raise ValueError(
+                    'SimpleMoEFFN was built with modality_bias=True but '
+                    'forward() got no modality_ids -- the caller must pass '
+                    'the per-position modality layout.'
+                )
+            self._last_content_probs = F.softmax(logits, dim=-1) \
+                .detach().view(B, L, self.num_experts)
+            ids = modality_ids.to(device=x.device).long()
+            if ids.dim() == 1:
+                ids = ids.unsqueeze(0).expand(B, L)
+            logits = logits + self.modality_bias[ids.reshape(-1)]
         probs = F.softmax(logits, dim=-1)
         # Cache for diagnostics. Reshape back to [B, L, E].
         self._last_routing_probs = probs.detach().view(B, L, self.num_experts)

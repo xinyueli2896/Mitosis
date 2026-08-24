@@ -220,6 +220,41 @@ across frames. The base's 2 SDPA passes become 3 (intra / cross-strict /
 frame); the base's single cross gate becomes 2 gates (cross + frame),
 both bias=-10 at init for warm-start equivalence on the AR forward path.
 
+### A.2.moe_improved — modality-bias MoE router (2026-08-24)
+
+An opt-in change to A.2 (`M2CDuetBlockDiffusion`), motivated directly by
+the stamp-vs-content probes (jobs 178945/178946, MOE_ROUTING_REPORT.md):
+~69% of the router's melody/chord separation survives content
+equalisation, and expert preferences follow moved content in 0 of 11
+layers — the router mostly re-derives slot parity from the per-modality
+attention projections' imprint on the hidden state. That bit is
+redundant (the architecture encodes modality twice already) and it costs
+routing capacity: the 2+2 expert partition means each token effectively
+chooses between 2 experts, not 4.
+
+The fix hands the router the bit for free: a learned per-modality
+additive bias `[2, E]` on the router logits (`SimpleMoEFFN
+modality_bias`), zero-initialised so warm-start behaviour is
+bit-identical (audited: `audit_moe_bias.sbatch`). The input-driven part
+of the routing decision is then free to specialise on within-modality
+structure (texture, density, harmonic rhythm) — or, if the modality
+partition really was the optimum, the bias simply learns it explicitly
+and we learn that instead.
+
+Mechanics:
+
+- `train_duet_block_diffusion.sbatch` knob `MOE_MODALITY_BIAS=1`; run
+  dirs get an `mb` marker after the K tag (`..._K4mb_...`) so plain and
+  bias runs never auto-resume into each other.
+- The bias parameter's presence in the state dict IS the flag: inference
+  and the routing analyzer auto-detect it, nothing to pass at decode.
+- **Success metric** (falsifiable, fixed before training):
+  `analyze_moe_routing.sbatch PROBE=identical` on the new ckpt, where
+  the probe automatically runs on the CONTENT pathway (softmax of the
+  unbiased logits). The content-pathway stamp share should fall toward
+  zero (baseline without the bias: ~69%), and PROBE=swap layers should
+  shift from "neither" toward content-following.
+
 ## Experimental story
 
 The variants bracket the question:

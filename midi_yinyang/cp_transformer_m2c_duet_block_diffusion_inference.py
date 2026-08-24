@@ -99,6 +99,15 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
               else 'legacy v1.0 -> decode-time padding')
     print(f'[load_model] slot_rope_aligned={slot_rope_aligned} '
           f'time_rope_aligned={time_rope_aligned} ({scheme})')
+    # A.2.moe_improved detection: the per-modality router bias is a real
+    # parameter (ffn.modality_bias), so its presence in the state dict IS
+    # the flag. Building the model without it would silently drop the
+    # learned bias (strict=False) and decode with a router trained to
+    # rely on it.
+    moe_modality_bias = any(k.endswith('ffn.modality_bias')
+                            for k in state_dict_keys)
+    print(f'[load_model] moe_modality_bias={moe_modality_bias}'
+          f'{" (A.2.moe_improved)" if moe_modality_bias else ""}')
     if diffusion_K is None:
         for key, name in (('k_emb_m.weight', 'k_emb_m'),
                           ('k_emb_c.weight', 'k_emb_c')):
@@ -126,6 +135,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         diffusion_K=diffusion_K,
         slot_rope_aligned=slot_rope_aligned,
         time_rope_aligned=time_rope_aligned,
+        moe_modality_bias=moe_modality_bias,
     )
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)
