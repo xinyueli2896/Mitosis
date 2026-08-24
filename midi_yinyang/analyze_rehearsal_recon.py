@@ -138,6 +138,8 @@ def main():
 
     print(f'\nper-position curves over T={T} frames '
           f'({args.batches} batch(es), {int(a_tot.sum())} mod_a tokens):\n')
+    print('  NOTE: token accuracy counts EOS/sustain tokens, which dominate')
+    print('  sparse streams and inflate all columns; frame-exact is stricter.')
     print(f'  {"frames":>12} {"a tok acc":>10} {"a frame-exact":>14} '
           f'{"b tok acc":>10}   (b = the generative stream, as a floor)')
     bw = max(1, T // args.bins)
@@ -160,14 +162,22 @@ def main():
 
     print('\n' + '=' * 72)
     print('VERDICT')
-    if a_acc.mean() < b_acc.mean() + 0.05:
-        print('  NO RECONSTRUCTION: mod_a accuracy is at the generative '
-              'floor -- the')
-        print('  suffix is not retrieving the conditioning stream from the '
-              'prefix at all.')
-        print('  Check val_recon_loss in wandb; if it never fell, the Brier '
-              'term did not')
-        print('  train (was recon_weight 0 on this run?).')
+    # Compare ERROR rates, not accuracies. The first version required
+    # a_acc to beat b_acc by an absolute +0.05 margin, which is
+    # unsatisfiable near the ceiling: on job 178861 mod_a hit 1.000
+    # against a 0.953 floor -- perfect reconstruction -- and the margin
+    # test still declared NO RECONSTRUCTION because 1.000 < 1.003.
+    # Error ratio has no ceiling: a_err 50x smaller than b_err is
+    # unambiguous at any accuracy level.
+    a_err, b_err = 1.0 - a_acc.mean(), 1.0 - b_acc.mean()
+    if a_err >= 0.8 * b_err:
+        print(f'  NO RECONSTRUCTION SIGNAL: mod_a error ({a_err:.3f}) is '
+              f'not meaningfully')
+        print(f'  below the generative floor ({b_err:.3f}) -- the suffix '
+              f'is not using the')
+        print('  prefix beyond what free prediction achieves. Check '
+              'val_recon_loss in')
+        print('  wandb; if it never fell, the Brier term did not train.')
     elif delta < -0.05:
         print(f'  RETRIEVAL DECAYS with position ({delta:+.3f} first->last '
               f'quartile).')
@@ -184,7 +194,9 @@ def main():
             print('  empirical signature of the bug prefix_stride2 fixes.')
     else:
         print(f'  RETRIEVAL HOLDS across the sequence (delta {delta:+.3f}, '
-              f'mean {a_acc.mean():.3f}).')
+              f'mean {a_acc.mean():.3f};')
+        print(f'  error {a_err:.4f} vs generative floor {b_err:.4f}, '
+              f'{b_err / max(a_err, 1e-6):.0f}x smaller).')
         if ps2:
             print('  As predicted for the fixed geometry: constant rotary '
                   'distance, flat curve.')
