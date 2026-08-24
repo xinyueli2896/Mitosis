@@ -17,6 +17,15 @@
 #   MAX_SONGS       default unset (process all)
 #   N_SAMPLES       default 1. Each sample is a full AR decode over a 3T
 #                   sequence with no KV cache, so cost is linear in this.
+#   MODE            drum2nondrum (default) | reconstruct. reconstruct
+#                   SAMPLES mod_a instead of copying it from the prompt --
+#                   the ground truth reaches the model only through the
+#                   prefix, so this is the free-running test of whether
+#                   the rehearsal can recover the conditioning stream it
+#                   heard. Prints per-frame Jaccard vs ground truth, by
+#                   sequence quartile, plus an aggregate. NOTE: under a
+#                   shift-1 (C1B) ckpt this needs TWO forwards per frame
+#                   -- halve MAX_SONGS or double the time limit.
 #   MODE_NAME       output folder/file label; default drum2nondrum. On the
 #                   MELCHORD task pass mel2chord (or chord2mel for a
 #                   reversed ckpt) so the tree names the direction it holds
@@ -67,7 +76,8 @@ PROMPT_LENGTH="${PROMPT_LENGTH:-64}"
 TEMPERATURE="${TEMPERATURE:-1.0}"
 MAX_POLYPHONY="${MAX_POLYPHONY:-16}"
 N_SAMPLES="${N_SAMPLES:-1}"
-MODE_NAME="${MODE_NAME:-drum2nondrum}"
+MODE="${MODE:-drum2nondrum}"
+MODE_NAME="${MODE_NAME:-}"
 SWAP_STREAM_NAMES="${SWAP_STREAM_NAMES:-0}"
 ALLOW_PARTIAL_LOAD="${ALLOW_PARTIAL_LOAD:-0}"
 
@@ -85,7 +95,7 @@ echo "NONDRUM_FOLDER=$NONDRUM_FOLDER"
 echo "OUTPUT_DIR=$OUTPUT_DIR"
 echo "GEN_LENGTH=$GEN_LENGTH  PROMPT_LENGTH=$PROMPT_LENGTH"
 echo "TEMPERATURE=$TEMPERATURE  MAX_POLYPHONY=$MAX_POLYPHONY  N_SAMPLES=$N_SAMPLES"
-echo "MODE_NAME=$MODE_NAME  SWAP_STREAM_NAMES=$SWAP_STREAM_NAMES"
+echo "MODE=$MODE  MODE_NAME=${MODE_NAME:-<auto>}  SWAP_STREAM_NAMES=$SWAP_STREAM_NAMES"
 if [[ -n "${MAX_SONGS:-}" ]]; then echo "MAX_SONGS=$MAX_SONGS"; fi
 echo "----------------------------------------------------------------"
 nvidia-smi | head -n 20 || true
@@ -98,6 +108,7 @@ fi
 if [[ -n "$NONDRUM_FOLDER" ]]; then
     EXTRA_ARGS+=(--nondrum-folder "$NONDRUM_FOLDER")
 fi
+[[ -n "$MODE_NAME" ]] && EXTRA_ARGS+=(--mode-name "$MODE_NAME")
 [[ "$SWAP_STREAM_NAMES" == "1" ]] && EXTRA_ARGS+=(--swap-stream-names)
 [[ "$ALLOW_PARTIAL_LOAD" == "1" ]] && EXTRA_ARGS+=(--allow-partial-load)
 
@@ -110,7 +121,7 @@ python cp_transformer_m2c_duet_rehearsal_inference.py \
     --temperature "$TEMPERATURE" \
     --max-polyphony "$MAX_POLYPHONY" \
     --n-samples "$N_SAMPLES" \
-    --mode-name "$MODE_NAME" \
+    --mode "$MODE" \
     --model-size large \
     --moe-num-experts 4 --moe-topk 2 \
     "${EXTRA_ARGS[@]}"

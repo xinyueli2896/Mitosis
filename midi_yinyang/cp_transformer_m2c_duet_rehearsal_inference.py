@@ -133,8 +133,21 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
     return net
 
 
+def frame_content(frame_tokens, eos, pad):
+    """The pitch-duration multiset of one frame's (program, pitch-dur)
+    pairs, stopping at EOS/pad. Used to score reconstruction."""
+    vals = []
+    t = frame_tokens.reshape(-1).tolist()
+    for i in range(0, len(t) - 1, 2):
+        prog, pd = t[i], t[i + 1]
+        if prog == eos or prog == pad or pd == pad:
+            break
+        vals.append(pd)
+    return set(vals)
+
+
 def drum_to_nondrum(model, drum_tokens, nondrum_prompt_tokens, gen_length,
-                    temperature):
+                    temperature, reconstruct=False):
     """Run drum->nondrum AR decoding on a single song.
 
     Args:
@@ -195,23 +208,49 @@ def drum_to_nondrum(model, drum_tokens, nondrum_prompt_tokens, gen_length,
         if t % 10 == 0:
             print(f'[gen] step {t}/{gen_length}')
 
-        # Drum is given: teacher-force it from the prompt either way.
-        m_tokens = drum_tokens[:, t, :]   # [1, subseq]
-        if shift1:
-            # Commit drum_t FIRST so it lands in the query slot 2t+1.
-            m_h = model._encode_frame(m_tokens, 0).to(dtype=dtype)
-            h_suffix_buffer = torch.cat([h_suffix_buffer, m_h], dim=1)
+        def forward_now():
+            committed = torch.cat([sos, h_suffix_buffer], dim=1)
+            if committed.shape[1] < suffix_total_len:
+                pad_len = suffix_total_len - committed.shape[1]
+                pad = torch.zeros(B, pad_len, H, device=device, dtype=dtype)
+                suffix_full = torch.cat([committed, pad], dim=1)
+            else:
+                suffix_full = committed[:, :suffix_total_len]
+            h_in = torch.cat([h_drum, suffix_full], dim=1)   # [1, 3T, H]
+            out, _ = model._run_global_stack(h_in, T=T_target)
+            return out
 
-        committed = torch.cat([sos, h_suffix_buffer], dim=1)
-        if committed.shape[1] < suffix_total_len:
-            pad_len = suffix_total_len - committed.shape[1]
-            pad = torch.zeros(B, pad_len, H, device=device, dtype=dtype)
-            suffix_full = torch.cat([committed, pad], dim=1)
+        if reconstruct:
+            # RECONSTRUCTION MODE: mod_a is NOT copied from the prompt --
+            # it is sampled from slot 2t, which predicts a_t under both
+            # shifts. The prefix still holds the ground truth, so this
+            # tests whether the model can RECOVER the conditioning stream
+            # it heard. Causality per shift:
+            #   shift-2: slot 2t's input is a_{t-1} and slot 2t+1's is
+            #            b_{t-1} -- both already committed, and b_t cannot
+            #            see a_t in the suffix anyway, so ONE forward
+            #            samples both (matches training exactly).
+            #   shift-1: slot 2t+1's input IS a_t, so the sampled a_t must
+            #            be committed and a SECOND forward run before b_t
+            #            can be sampled.
+            h_global = forward_now()
+            h_m_pred = h_global[:, T_target + 2 * t]
+            m_tokens = model.local_sampling(
+                h_m_pred, max_subseq_len=drum_tokens.shape[2],
+                temperature=temperature, token_type_id=0,
+            )
+            if shift1:
+                m_h = model._encode_frame(m_tokens, 0).to(dtype=dtype)
+                h_suffix_buffer = torch.cat([h_suffix_buffer, m_h], dim=1)
+                h_global = forward_now()
         else:
-            suffix_full = committed[:, :suffix_total_len]
-
-        h_in = torch.cat([h_drum, suffix_full], dim=1)   # [1, 3*T_target, H]
-        h_global, _ = model._run_global_stack(h_in, T=T_target)
+            # Drum is given: teacher-force it from the prompt either way.
+            m_tokens = drum_tokens[:, t, :]   # [1, subseq]
+            if shift1:
+                # Commit drum_t FIRST so it lands in the query slot 2t+1.
+                m_h = model._encode_frame(m_tokens, 0).to(dtype=dtype)
+                h_suffix_buffer = torch.cat([h_suffix_buffer, m_h], dim=1)
+            h_global = forward_now()
 
         # Slot 2t+1 predicts nondrum_t under BOTH shifts; only what that
         # slot HOLDS differs. In h_global it lives at T_target + 2t + 1.
@@ -261,8 +300,9 @@ def run_folder(model, args):
     if args.max_songs is not None:
         drum_files = drum_files[:args.max_songs]
 
-    print(f'[infer] {len(drum_files)} drum prompts')
+    print(f'[infer] {len(drum_files)} drum prompts  mode={args.mode}')
     os.makedirs(args.output_dir, exist_ok=True)
+    recon_scores = []
 
     for i, drum_path in enumerate(drum_files):
         base = os.path.basename(drum_path)
@@ -309,7 +349,28 @@ def run_folder(model, args):
                 mel_frames, chord_frames = drum_to_nondrum(
                     model, drum_tokens, nondrum_prompt_tokens,
                     gen_length=args.gen_length, temperature=args.temperature,
+                    reconstruct=(args.mode == 'reconstruct'),
                 )
+                if args.mode == 'reconstruct':
+                    # Score the sampled mod_a against the ground truth it
+                    # was supposed to recover from the prefix: per-frame
+                    # pitch-duration Jaccard, reported by quartile so decay
+                    # across the sequence is visible.
+                    eos, pad = model.tokenizer.eos_token, model.tokenizer.pad_token
+                    js = []
+                    for t, mf in enumerate(mel_frames):
+                        g = frame_content(mf, eos, pad)
+                        r = frame_content(drum_tokens[:, t, :], eos, pad)
+                        u = g | r
+                        js.append(1.0 if not u else len(g & r) / len(u))
+                    n = len(js)
+                    q = max(1, n // 4)
+                    qs = [sum(js[i:i + q]) / max(1, len(js[i:i + q]))
+                          for i in range(0, n, q)][:4]
+                    print(f'  [recon] {sid} sample {s}: mean Jaccard '
+                          f'{sum(js) / n:.3f}  quartiles '
+                          + ' '.join(f'{v:.3f}' for v in qs))
+                    recon_scores.append((sid, sum(js) / n, qs))
 
                 out_dir = os.path.join(args.output_dir, sid)
                 if args.n_samples > 1:
@@ -336,6 +397,22 @@ def run_folder(model, args):
         except Exception as e:
             print(f'  failed: {e!r}')
 
+    if recon_scores:
+        n = len(recon_scores)
+        mean = sum(m for _, m, _ in recon_scores) / n
+        qagg = [sum(qs[i] for _, _, qs in recon_scores if len(qs) > i)
+                / max(1, sum(1 for _, _, qs in recon_scores if len(qs) > i))
+                for i in range(4)]
+        print('\n' + '=' * 64)
+        print(f'RECONSTRUCTION SUMMARY over {n} song-sample(s)')
+        print(f'  mean per-frame Jaccard vs ground-truth mod_a: {mean:.3f}')
+        print(f'  by sequence quartile: ' + '  '.join(f'{v:.3f}' for v in qagg))
+        print('  1.0 = perfect recovery of the conditioning stream from the')
+        print('  prefix under free-running sampling; a fall across quartiles')
+        print('  = retrieval degrading with distance (compare the teacher-')
+        print('  forced curve from analyze_rehearsal_recon.sbatch).')
+        print('=' * 64)
+
 
 def main():
     p = argparse.ArgumentParser(
@@ -350,6 +427,15 @@ def main():
                         'a file with matching basename is found, its first '
                         '--prompt-length frames are used as a nondrum prompt; '
                         'remaining nondrum frames are sampled.')
+    p.add_argument('--mode', default='drum2nondrum',
+                   choices=['drum2nondrum', 'reconstruct'],
+                   help='drum2nondrum: mod_a teacher-forced from the prompt '
+                        '(standard conditional). reconstruct: mod_a is '
+                        'SAMPLED, with the ground truth available only via '
+                        'the prefix -- the free-running test of whether the '
+                        'rehearsal can recover the conditioning stream it '
+                        'heard. Scores per-frame Jaccard vs ground truth. '
+                        'Under shift-1 this needs two forwards per frame.')
     p.add_argument('--output-dir', required=True)
     p.add_argument('--gen-length', type=int, default=384,
                    help='Max frames per modality to generate (capped at drum '
@@ -368,7 +454,7 @@ def main():
                    help='independent samples per song. >1 switches the '
                         "output to the 'duet_multi' layout "
                         '(<song>/drum2nondrum/sample_<i>_temp<T>.mid).')
-    p.add_argument('--mode-name', dest='mode_name', default='drum2nondrum',
+    p.add_argument('--mode-name', dest='mode_name', default=None,
                    help='LABEL used for the output folder/file (the eval '
                         "manifest reads the mode from it). Purely cosmetic "
                         'to the model -- the conditioning is always mod_a '
@@ -394,6 +480,9 @@ def main():
                         'only for a ckpt you know predates a parameter.')
     p.add_argument('--max-songs', type=int, default=None)
     args = p.parse_args()
+    if args.mode_name is None:
+        args.mode_name = ('reconstruct' if args.mode == 'reconstruct'
+                          else 'drum2nondrum')
 
     model = load_model(
         args.ckpt,
