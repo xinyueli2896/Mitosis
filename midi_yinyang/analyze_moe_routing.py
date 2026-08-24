@@ -24,6 +24,26 @@ reports what the mean hides:
 Runs on CPU. One real batch from the task's own dataset, one forward,
 then every SimpleMoEFFN's cached `_last_routing_probs` is read.
 
+PROBE MODES (--probe) -- stamp vs content. In the ENCODING nothing
+distinguishes the streams (same local encoder, token_type_embeddings
+zeroed, programs constant on melchord): at the global-stack input the
+only difference is content. But the router reads the hidden AFTER the
+per-modality attention projections, and once training diverges o_m from
+o_c every position is STAMPED with its slot parity before the first
+router sees it. So high modality purity has two candidate mechanisms:
+the router reads content (density, register), or it merely reads the
+architectural stamp. The probes separate them on a trained ckpt, no
+retraining:
+
+  --probe identical   duplicate the MELODY content into the chord slots.
+                      Content is then identical across parities, so ANY
+                      remaining parity separation IS the stamp.
+  --probe swap        exchange the streams' contents. Content and slot
+                      now disagree; whichever the experts follow wins.
+
+Either probe runs a baseline pass on the real batch first and prints a
+per-layer comparison plus a verdict.
+
 Usage (via analyze_moe_routing.sbatch -- do not call this directly):
     python analyze_moe_routing.py --variant c1 --task melchord_nottingham \\
         --ckpt ckpt/<run>/ --batch-size 2
@@ -76,6 +96,120 @@ def stats(probs, topk):
             'dead': [e for e in range(E) if not used[e]], 'n': N}
 
 
+def snapshot(layers):
+    return [l.ffn._last_routing_probs.clone() for l in layers]
+
+
+def parity_profile(pr, layout, topk):
+    """One layer's routing summarised per slot parity: mean-prob L1
+    between parities, and each parity's top-1-preferred expert."""
+    B, L, E = pr.shape
+    labels = modality_of(layout, L, L // 3 if layout == 'prefix_interleaved'
+                         else L // 2)
+    ia = [j for j, x in enumerate(labels) if x == 'a']
+    ib = [j for j, x in enumerate(labels) if x == 'b']
+    fa = pr[:, ia].reshape(-1, E)
+    fb = pr[:, ib].reshape(-1, E)
+    return {'l1': float((fa.mean(0) - fb.mean(0)).abs().sum()),
+            'pref_a': int(stats(fa, topk)['load'].argmax()),
+            'pref_b': int(stats(fb, topk)['load'].argmax())}
+
+
+def run_probe(net, batch, probe, base_prs, layers, layout, topk):
+    """Second forward with manipulated streams; compare to baseline."""
+    x_mel, x_acc, ps = batch[0], batch[1], batch[2]
+    if probe == 'identical':
+        probed = (x_mel, x_mel.clone(), ps)
+        what = ('melody content DUPLICATED into the chord slots -- content '
+                'is identical across parities, so any remaining parity '
+                'separation is the architectural stamp')
+    else:
+        probed = (x_acc, x_mel, ps)
+        what = ('stream contents SWAPPED -- content and slot parity now '
+                'disagree; whichever the experts follow wins')
+    with torch.no_grad():
+        net.loss(*probed)
+    probe_prs = snapshot(layers)
+
+    print('\n' + '=' * 72)
+    print(f'PROBE: {probe}')
+    print(f'  {what}')
+    print('=' * 72)
+    base = [parity_profile(p, layout, topk) for p in base_prs]
+    prob = [parity_profile(p, layout, topk) for p in probe_prs]
+
+    if probe == 'identical':
+        print(f'\n  {"layer":>5} {"L1 real":>9} {"L1 identical":>13}   '
+              f'(parity separation with content equalised)')
+        for i, (b, q) in enumerate(zip(base, prob)):
+            print(f'  {i:>5} {b["l1"]:>9.3f} {q["l1"]:>13.3f}')
+        mb = sum(x['l1'] for x in base) / len(base)
+        mq = sum(x['l1'] for x in prob) / len(prob)
+        ratio = mq / mb if mb > 0 else float('nan')
+        print(f'\n  mean L1: real {mb:.3f} -> identical-content {mq:.3f}  '
+              f'(stamp share ~ {ratio:.0%})')
+        print('\n  VERDICT:')
+        if ratio < 0.15:
+            print('  CONTENT-DRIVEN. With identical content the parity '
+                  'separation collapses;')
+            print('  the router reads what is in the frame (density, '
+                  'register), not the slot.')
+            print('  The layer-0 density caveat therefore stands as the '
+                  'live concern.')
+        elif ratio > 0.6:
+            print('  STAMP-DRIVEN. The separation survives content '
+                  'equalisation almost intact:')
+            print('  the diverged per-modality projections imprint slot '
+                  'parity on the hidden and')
+            print('  the router reads the imprint. The "router discovers '
+                  'the streams" claim')
+            print('  should be restated: the ATTENTION projections '
+                  'specialised; the router piggybacks.')
+        else:
+            print(f'  MIXED. ~{ratio:.0%} of the separation survives '
+                  f'content equalisation (stamp),')
+            print('  the rest was content. Report both mechanisms.')
+        return
+
+    # swap: does each parity's preferred expert stay with the SLOT or
+    # follow the CONTENT to the other parity?
+    slot_hits = content_hits = usable = 0
+    print(f'\n  {"layer":>5} {"base a/b pref":>14} {"swap a/b pref":>14}   verdict')
+    for i, (b, q) in enumerate(zip(base, prob)):
+        if b['pref_a'] == b['pref_b']:
+            print(f'  {i:>5} {"e%d/e%d" % (b["pref_a"], b["pref_b"]):>14} '
+                  f'{"e%d/e%d" % (q["pref_a"], q["pref_b"]):>14}   (ambiguous: '
+                  f'base parities share a preference)')
+            continue
+        usable += 1
+        slot = q['pref_a'] == b['pref_a'] and q['pref_b'] == b['pref_b']
+        cont = q['pref_a'] == b['pref_b'] and q['pref_b'] == b['pref_a']
+        slot_hits += slot
+        content_hits += cont
+        tag = 'SLOT' if slot else ('CONTENT' if cont else 'neither')
+        print(f'  {i:>5} {"e%d/e%d" % (b["pref_a"], b["pref_b"]):>14} '
+              f'{"e%d/e%d" % (q["pref_a"], q["pref_b"]):>14}   {tag}')
+    print(f'\n  layers following the slot: {slot_hits}/{usable}   '
+          f'following the content: {content_hits}/{usable}')
+    print('\n  VERDICT:')
+    if usable == 0:
+        print('  No usable layers (base parities always shared a '
+              'preference); rely on --probe identical.')
+    elif content_hits > slot_hits:
+        print('  CONTENT-DRIVEN: expert preferences travel with the '
+              'content when it moves')
+        print('  to the other slot. The router recognises the material, '
+              'not the position.')
+    elif slot_hits > content_hits:
+        print('  STAMP-DRIVEN: expert preferences stay with the slot '
+              'parity even when the')
+        print('  content moves. The router reads the per-modality '
+              'projections\' imprint.')
+    else:
+        print('  SPLIT. Layers disagree; read the per-layer column and '
+              'pair with --probe identical.')
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--variant', required=True, choices=sorted(VARIANTS))
@@ -85,6 +219,9 @@ def main():
     p.add_argument('--model-size', default='large')
     p.add_argument('--moe-num-experts', type=int, default=4)
     p.add_argument('--moe-topk', type=int, default=2)
+    p.add_argument('--probe', default='none',
+                   choices=['none', 'identical', 'swap'],
+                   help='stamp-vs-content probe; see module docstring')
     args = p.parse_args()
 
     module_name, layout = VARIANTS[args.variant]
@@ -111,7 +248,10 @@ def main():
 
     ds = FramedDataset(task.mod_b_path, TRAIN_LENGTH, args.batch_size,
                        split='val', mel_path=task.mod_a_path)
-    batch = next(iter(ds))
+    batch = list(next(iter(ds)))
+    if len(batch) < 3:
+        sys.exit(f'expected a (x_mel, x_acc, pitch_shift) batch, got '
+                 f'{len(batch)} elements')
     with torch.no_grad():
         net.loss(*batch)          # populates _last_routing_probs per layer
 
@@ -310,6 +450,12 @@ def main():
                 print(f'    layer {i:>2}                      '
                       f'e{ea} ({va:.3f})     e{eb} ({vb:.3f})   {same}')
     print('=' * 72)
+
+    if args.probe != 'none':
+        # Baseline probs are still live on the layers (nothing has run a
+        # forward since); snapshot them before the probe pass overwrites.
+        base_prs = snapshot(layers)
+        run_probe(net, batch, args.probe, base_prs, layers, layout, topk)
 
 
 if __name__ == '__main__':

@@ -94,16 +94,27 @@ The layer-11 partition read together with load: melody pair e0+e1 takes
 
 ## Caveats
 
-- **Layer 0 already scores 0.97.** At the first layer the router has
-  seen almost nothing beyond the frame embedding, and on cp4 melchord
-  the streams are trivially separable by surface statistics (melody ≈
-  monophonic; chord frames denser). This may be density-reading rather
-  than anything modality-semantic. The claim "the MoE discovers the two
-  streams unsupervised" is much weaker if the streams are linearly
-  separable by note count. **Control: rerun on drumnondrum**, where
-  both streams are dense — if layer-0 purity holds, the routing is
-  genuinely stream-driven; if it collapses toward 50%, layer 0 was
-  reading density.
+- **Two candidate mechanisms, and the purity number does not separate
+  them.** In the ENCODING nothing distinguishes the streams (same local
+  encoder, `token_type_embeddings` zeroed, programs constant 0 on
+  melchord) — but the router reads the hidden AFTER the per-modality
+  attention projections, and once training diverges `o_m` from `o_c`,
+  every position is STAMPED with its slot parity before the first
+  router sees it. So high purity is either **content-reading** (the
+  router recognises sparse-monophonic vs dense frames — the layer-0
+  score of 0.97 makes density the prime suspect) or **stamp-reading**
+  (the attention projections specialised and the router merely reads
+  their imprint). Both are learned — the stamp is absent at the warm
+  start, whose branches are identical copies — but they are different
+  claims about what the MoE is doing.
+- **The probe that separates them needs no retraining**:
+  `--probe identical` duplicates the melody content into the chord
+  slots, so any parity separation that survives IS the stamp;
+  `--probe swap` exchanges the contents and asks whether expert
+  preferences follow the slot or the content. This supersedes the
+  drumnondrum control originally proposed here, which turns out to be
+  confounded: drums are encoded as program 127, so the program token
+  would leak modality to the router there.
 - Purity attributes each token to its argmax winner, but routing is
   top-2 with similar weights (entropy 0.87), so purity overstates
   commitment just as the mean-prob L1 understates it. The truth is
@@ -115,8 +126,17 @@ The layer-11 partition read together with load: melody pair e0+e1 takes
 
 1. **Do not raise `aux_loss_weight`.** There is no collapse to fix, and
    a stronger balancing pressure would fight the (healthy) 2+2 split.
-2. **Run the drumnondrum control** (one CPU sbatch, ~minutes) before
-   putting the "implicit modality routing" claim in any writeup.
+2. **Run the stamp-vs-content probes** (one CPU sbatch each, ~minutes)
+   before putting the "implicit modality routing" claim in any writeup:
+
+   ```
+   sbatch --export=ALL,VARIANT=a2,TASK=melchord,MAX_POLYPHONY=4,PROBE=identical,\
+   CKPT=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4_melchord_cp4tar_batch_8_schedule/ \
+       midi_yinyang/analyze_moe_routing.sbatch
+   ```
+
+   and the same with `PROBE=swap`. They print a per-layer baseline
+   comparison and a verdict (content-driven / stamp-driven / mixed).
 3. **For "improve MoE": a hard modality→expert route is now pointless**
    — the router already found that partition unaided. The interesting
    variant is the opposite: *give* modality to the router for free (a

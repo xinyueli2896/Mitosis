@@ -31,6 +31,16 @@
 #             positions by modality. A wrong value mislabels that split.
 #   TASK      REQUIRED. Must match what the ckpt was TRAINED on: the
 #             batch comes from that task's own dataset.
+#   PROBE     none (default) | identical | swap. The stamp-vs-content
+#             probe: nothing in the ENCODING separates the streams (same
+#             local encoder, zeroed type embeddings, constant programs on
+#             melchord), but the trained per-modality attention
+#             projections stamp slot parity onto the hidden before the
+#             router reads it. 'identical' duplicates melody into the
+#             chord slots -- any parity separation that survives IS the
+#             stamp. 'swap' exchanges the contents -- whichever the
+#             experts follow (slot or content) wins. Both run a baseline
+#             pass first and print a per-layer comparison + verdict.
 #   BATCH_SIZE     default 2 (one forward is plenty; this is not a
 #                  statistical estimate over the corpus, it is a read of
 #                  the router's behaviour).
@@ -65,6 +75,7 @@ TASK="${TASK:-}"
 BATCH_SIZE="${BATCH_SIZE:-2}"
 MOE_NUM_EXPERTS="${MOE_NUM_EXPERTS:-4}"
 MOE_TOPK="${MOE_TOPK:-2}"
+PROBE="${PROBE:-none}"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -93,7 +104,7 @@ case "$TASK" in melchord*) export MELCHORD_CP="$MAX_POLYPHONY" ;; esac
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "MoE ROUTER COLLAPSE ANALYSIS"
-echo "VARIANT=$VARIANT  TASK=$TASK  MAX_POLYPHONY=$MAX_POLYPHONY"
+echo "VARIANT=$VARIANT  TASK=$TASK  MAX_POLYPHONY=$MAX_POLYPHONY  PROBE=$PROBE"
 echo "CKPT=$CKPT"
 echo "================================================================"
 
@@ -103,7 +114,8 @@ python analyze_moe_routing.py \
     --task "$TASK" \
     --batch-size "$BATCH_SIZE" \
     --moe-num-experts "$MOE_NUM_EXPERTS" \
-    --moe-topk "$MOE_TOPK"
+    --moe-topk "$MOE_TOPK" \
+    --probe "$PROBE"
 
 echo "================================================================"
 echo "Done. Read the VERDICT block above."
