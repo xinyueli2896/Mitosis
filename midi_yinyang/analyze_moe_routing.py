@@ -133,6 +133,8 @@ def main():
     print(hdr)
     print('-' * len(hdr))
     worst_load, min_ent, any_dead, mod_l1s = 0.0, 1.0, [], []
+    per_mod = []
+    max_ent = 0.0
     for i, layer in enumerate(layers):
         pr = layer.ffn._last_routing_probs        # [B, L, E]
         B, L, _ = pr.shape
@@ -149,8 +151,16 @@ def main():
                 mb = pr[:, ib].reshape(-1, E).mean(0)
                 l1 = float((ma - mb).abs().sum())
                 mod_l1s.append(l1)
+                # Which expert each stream prefers by TOP-1 load, not by
+                # mean prob -- an expert can lead on average without ever
+                # winning the argmax.
+                la = stats(pr[:, ia].reshape(-1, E), topk)['load']
+                lb = stats(pr[:, ib].reshape(-1, E), topk)['load']
+                per_mod.append((i, int(la.argmax()), float(la.max()),
+                                int(lb.argmax()), float(lb.max())))
         worst_load = max(worst_load, s['max_load'])
         min_ent = min(min_ent, s['entropy'])
+        max_ent = max(max_ent, s['entropy'])
         any_dead += [(i, e) for e in s['dead']]
         loads = ' '.join(f'{v:.3f}' for v in s['load'])
         print(f'{i:>5} {s["max_load"]:>9.3f} {s["entropy"]:>8.3f} '
@@ -190,10 +200,28 @@ def main():
                   f'entropy {min_ent:.3f} says the router IS deciding.')
             print('  The load-balancing aux loss is not holding. Raise '
                   'aux_loss_weight.')
-        elif worst_load < balanced * 1.5 and not any_dead:
+        elif worst_load < balanced * 1.5:
             print(f'  HEALTHY: worst max_load {worst_load:.3f} vs '
                   f'{balanced:.3f} ideal, no dead experts, and entropy '
                   f'{min_ent:.3f} shows real routing decisions.')
+        else:
+            # The band between "well balanced" and "collapsed" had no
+            # message at all, which reads as no comment rather than a
+            # result. It is the normal healthy-but-specialised regime.
+            print(f'  NO COLLAPSE, MILD IMBALANCE: worst max_load '
+                  f'{worst_load:.3f} against {balanced:.3f} ideal, no dead '
+                  f'experts, entropy {min_ent:.3f}-{max_ent:.3f}.')
+            print('  Imbalance in this band is what SPECIALIZATION looks '
+                  'like -- an expert that owns a recognisable slice of the')
+            print('  input necessarily takes more than its even share. Read '
+                  'it together with the modality numbers below: if the')
+            print('  imbalanced layers are also the high-L1 ones, the load '
+                  'skew IS the specialization, not a failure of the aux')
+            print('  loss.')
+        if 0.3 < min_ent < 0.95:
+            print(f'  Routing is SOFT (entropy {min_ent:.3f}): experts are '
+                  f'being blended more than selected. With top-{topk} of {E} '
+                  f'that means the chosen experts get similar weights.')
     if mod_l1s:
         m = sum(mod_l1s) / len(mod_l1s)
         print(f'\n  MODALITY SPECIALIZATION: mean L1 between mod_a and mod_b '
@@ -208,7 +236,17 @@ def main():
             print('  modality route would be a mask on the router logits, no')
             print('  new module.')
         else:
-            print('  The router does separate the streams to some degree.')
+            print('  The router DOES separate the streams -- with no modality')
+            print('  input of its own, purely from the hidden state. Worth')
+            print('  reporting: implicit modality routing is a result, not a')
+            print('  configuration.')
+        if per_mod:
+            print(f'\n  per-layer top-1 preference    '
+                  f'{"mod_a":>14}  {"mod_b":>14}   same?')
+            for (i, ea, va, eb, vb) in per_mod:
+                same = 'SAME' if ea == eb else ''
+                print(f'    layer {i:>2}                      '
+                      f'e{ea} ({va:.3f})     e{eb} ({vb:.3f})   {same}')
     print('=' * 72)
 
 
