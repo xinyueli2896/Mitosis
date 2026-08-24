@@ -127,6 +127,22 @@ only from suffix positions.
 
 ### C.1 reconstruction study — results (2026-08-24)
 
+**Conclusion.** The rehearsal mechanism works: with the corrected
+prefix geometry, C.1 recovers the conditioning modality from its prefix
+essentially perfectly even under free-running sampling (Jaccard 0.999),
+where the legacy geometry manages only 0.830 despite looking identical
+teacher-forced — proof that the old model was coasting on local
+continuation while the fixed one genuinely retrieves. The two design
+axes decouple cleanly: prefix geometry governs how well the conditioning
+modality can be reconstructed, while the suffix shift governs the
+generation modality's quality — shift-1 (C.1.B) proves pure retrieval is
+learnable but collapses generation from 0.95 to 0.65 by exiling the
+generated stream's own history to the gated cross path. C.1.A — fixed
+geometry, co-generation shift — is therefore the canonical C.1, the only
+configuration strong in both columns, pending replication in the
+mel2chord direction where the conditioning stream offers no sustain to
+hide behind.
+
 Terminology: the **conditioning modality** is the stream given in full
 (mod_a, the rehearsal prefix); the **generation modality** is the stream
 the model produces (mod_b). On the melchord testbed both are symbolic
