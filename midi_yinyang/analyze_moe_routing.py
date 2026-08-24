@@ -134,6 +134,7 @@ def main():
     print('-' * len(hdr))
     worst_load, min_ent, any_dead, mod_l1s = 0.0, 1.0, [], []
     per_mod = []
+    purity = []
     max_ent = 0.0
     for i, layer in enumerate(layers):
         pr = layer.ffn._last_routing_probs        # [B, L, E]
@@ -158,6 +159,22 @@ def main():
                 lb = stats(pr[:, ib].reshape(-1, E), topk)['load']
                 per_mod.append((i, int(la.argmax()), float(la.max()),
                                 int(lb.argmax()), float(lb.max())))
+                # EXPERT PURITY -- the direct "has this expert specialised
+                # in a modality" question. The L1 above is
+                # P(expert | modality); this is P(modality | expert): of
+                # the tokens an expert actually WINS, what share are
+                # mod_a? 0.5 means the expert is modality-agnostic, 0 or 1
+                # means it is a pure specialist.
+                ta = pr[:, ia].reshape(-1, E).argmax(-1)
+                tb = pr[:, ib].reshape(-1, E).argmax(-1)
+                ca = torch.bincount(ta, minlength=E).float()
+                cb = torch.bincount(tb, minlength=E).float()
+                share_a = ca / (ca + cb).clamp_min(1.0)
+                # base rate: mod_a's share of all positions, so an expert
+                # is only "specialised" relative to what it would get by
+                # chance.
+                base = len(ia) / float(len(ia) + len(ib))
+                purity.append((i, share_a, (ca + cb), base))
         worst_load = max(worst_load, s['max_load'])
         min_ent = min(min_ent, s['entropy'])
         max_ent = max(max_ent, s['entropy'])
@@ -240,6 +257,45 @@ def main():
             print('  input of its own, purely from the hidden state. Worth')
             print('  reporting: implicit modality routing is a result, not a')
             print('  configuration.')
+        if purity:
+            base = purity[0][3]
+            print(f'\n  EXPERT PURITY -- of the tokens each expert WINS, the '
+                  f'%% that are mod_a.')
+            print(f'  Base rate is {base:.0%} (mod_a\'s share of all '
+                  f'positions), so {base:.0%} means modality-agnostic and')
+            print(f'  0%% or 100%% means a pure specialist.\n')
+            print('  layer  ' + '  '.join(f'{"e"+str(e):>10}' for e in range(E))
+                  + f'  {"spec":>6}')
+            worst_spec, best_spec = 1.0, 0.0
+            for (i, share_a, counts, b) in purity:
+                cells = []
+                for e in range(E):
+                    if counts[e] < 1:
+                        cells.append(f'{"unused":>10}')
+                    else:
+                        cells.append(f'{float(share_a[e]):>9.1%} ')
+                # how far the most one-sided expert is from the base rate,
+                # normalised so 1.0 = a perfectly pure specialist
+                dev = max(abs(float(share_a[e]) - b) for e in range(E)
+                          if counts[e] >= 1) / max(b, 1 - b)
+                worst_spec = min(worst_spec, dev)
+                best_spec = max(best_spec, dev)
+                print(f'  {i:>5}  ' + '  '.join(cells) + f'  {dev:>6.2f}')
+            print(f'\n  most modality-specialised layer: {best_spec:.2f}   '
+                  f'least: {worst_spec:.2f}   (1.00 = a pure specialist)')
+            if best_spec < 0.15:
+                print('  VERDICT: experts have NOT specialised by modality. '
+                      'Every expert sees')
+                print('  both streams in roughly their base-rate proportion.')
+            elif best_spec < 0.5:
+                print('  VERDICT: PARTIAL modality specialisation. Experts '
+                      'lean toward one')
+                print('  stream but none is dedicated to it -- the router is '
+                      'biasing, not partitioning.')
+            else:
+                print('  VERDICT: experts HAVE specialised by modality; the '
+                      'most one-sided')
+                print('  is close to a dedicated per-stream expert.')
         if per_mod:
             print(f'\n  per-layer top-1 preference    '
                   f'{"mod_a":>14}  {"mod_b":>14}   same?')
