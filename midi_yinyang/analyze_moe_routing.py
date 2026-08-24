@@ -259,11 +259,11 @@ def main():
             print('  configuration.')
         if purity:
             base = purity[0][3]
-            print(f'\n  EXPERT PURITY -- of the tokens each expert WINS, the '
-                  f'%% that are mod_a.')
+            print(f'\n  EXPERT PURITY -- of the tokens each expert WINS, '
+                  f'the % that are mod_a.')
             print(f'  Base rate is {base:.0%} (mod_a\'s share of all '
                   f'positions), so {base:.0%} means modality-agnostic and')
-            print(f'  0%% or 100%% means a pure specialist.\n')
+            print(f'  0% or 100% means a pure specialist.\n')
             print('  layer  ' + '  '.join(f'{"e"+str(e):>10}' for e in range(E))
                   + f'  {"spec":>6}')
             worst_spec, best_spec = 1.0, 0.0
@@ -297,8 +297,14 @@ def main():
                       'most one-sided')
                 print('  is close to a dedicated per-stream expert.')
         if per_mod:
-            print(f'\n  per-layer top-1 preference    '
-                  f'{"mod_a":>14}  {"mod_b":>14}   same?')
+            print(f'\n  per-layer top-1 preference -- P(expert | modality): '
+                  f'which expert each STREAM')
+            print(f'  most often lands on. Purity above is the other '
+                  f'conditional, P(modality | expert),')
+            print(f'  so the two tables can legitimately name different '
+                  f'experts (a small pure expert')
+            print(f'  vs a large mixed one).')
+            print(f'  {"":28s}{"mod_a":>14}  {"mod_b":>14}   same?')
             for (i, ea, va, eb, vb) in per_mod:
                 same = 'SAME' if ea == eb else ''
                 print(f'    layer {i:>2}                      '
