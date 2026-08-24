@@ -13,7 +13,8 @@ second.
   Batch = 2 songs × 384 frames, interleaved → ~1.5k routed tokens per
   layer, ~770 per modality.
 - **Evidence** SLURM jobs **178410** and **178528** (independent val
-  batches, same checkpoint). Logs: `~/logs/moe_routing_1784{10,528}.out`.
+  batches, same checkpoint); stamp-vs-content probes **178945**
+  (identical) and **178946** (swap). Logs: `~/logs/moe_routing_*.out`.
 
 ## Verdict
 
@@ -24,13 +25,24 @@ second.
 2. **Routing is soft.** Normalized entropy 0.83–0.93 (mean 0.87):
    the top-2 experts are blended with similar weights rather than
    selected sharply.
-3. **Experts HAVE specialised by modality — strongly, and without ever
-   being told the modality.** Mean per-layer specialisation 0.82
-   (1.00 = a pure per-stream expert); layer 11 reaches 1.00, layer 0
-   reaches 0.97. The router is a bias-free `Linear(hidden, 4)` with
-   `token_type_embeddings` zeroed and frozen, so modality reaches it
-   only through the per-modality attention output — and it recovers the
-   stream boundary anyway.
+3. **Experts route by modality — but the probes show the router mostly
+   reads the ARCHITECTURE'S IMPRINT, not the music.** Behaviourally the
+   partition is strong (mean per-layer specialisation 0.82; layers 0
+   and 11 near-pure). Mechanistically, equalising the content across
+   parities removes only ~31% of the separation (mean L1 0.589 → 0.408,
+   **stamp share ~69%**), and when the contents are swapped, expert
+   preferences follow the moved content in **0 of 11** layers. The
+   diverged per-modality projections (`o_m` vs `o_c`) stamp slot parity
+   onto every hidden, and the router piggybacks on that stamp. The
+   correct claim is therefore *"the architecture's modality signal
+   propagates into the FFN routing"*, not *"the router discovers the
+   streams unsupervised"*.
+4. **The stamp is installed immediately; content routing accumulates
+   with depth.** Layers 0–3 are ~94% stamp — which RESOLVES the layer-0
+   caveat: the 0.97 purity there was never density-reading. Content's
+   share grows in the middle and late layers (layer 9 is
+   majority-content at 56%), so the genuine content-based routing the
+   MoE does happens on top of, and after, the parity signal.
 
 ## Why three different metrics disagreed
 
@@ -88,33 +100,36 @@ Expert purity — of the tokens each expert wins, the % that are melody
 | 10 | 3.4 | 60.6 | 54.4 | 72.8 | 0.93 |
 | 11 | 100.0 | 82.3 | 3.3 | 6.7 | 1.00 |
 
+Stamp-vs-content probe (job 178945): parity L1 with real content vs
+with melody duplicated into the chord slots. What survives equalisation
+is the architectural stamp:
+
+| layer | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 real | .36 | .47 | .38 | .53 | .80 | .42 | .74 | .69 | .62 | .59 | .59 | .88 |
+| L1 identical | .33 | .44 | .39 | .49 | .52 | .25 | .41 | .36 | .43 | .26 | .40 | .63 |
+| stamp share | 91% | 93% | 100% | 92% | 65% | 59% | 55% | 52% | 69% | 44% | 68% | 72% |
+
+Swap probe (job 178946): slot preserved exactly in 2/11 usable layers,
+content followed in 0/11, "neither" in 9/11 — swapped inputs are
+out-of-distribution for parity-specialised projections, itself evidence
+of the stamp.
+
 The layer-11 partition read together with load: melody pair e0+e1 takes
 0.249+0.279 = 0.528 of routing, chord pair e2+e3 takes 0.316+0.156 =
 0.472 — a near-even 2+2 split, which is why the load view saw nothing.
 
 ## Caveats
 
-- **Two candidate mechanisms, and the purity number does not separate
-  them.** In the ENCODING nothing distinguishes the streams (same local
-  encoder, `token_type_embeddings` zeroed, programs constant 0 on
-  melchord) — but the router reads the hidden AFTER the per-modality
-  attention projections, and once training diverges `o_m` from `o_c`,
-  every position is STAMPED with its slot parity before the first
-  router sees it. So high purity is either **content-reading** (the
-  router recognises sparse-monophonic vs dense frames — the layer-0
-  score of 0.97 makes density the prime suspect) or **stamp-reading**
-  (the attention projections specialised and the router merely reads
-  their imprint). Both are learned — the stamp is absent at the warm
-  start, whose branches are identical copies — but they are different
-  claims about what the MoE is doing.
-- **The probe that separates them needs no retraining**:
-  `--probe identical` duplicates the melody content into the chord
-  slots, so any parity separation that survives IS the stamp;
-  `--probe swap` exchanges the contents and asks whether expert
-  preferences follow the slot or the content. This supersedes the
-  drumnondrum control originally proposed here, which turns out to be
-  confounded: drums are encoded as program 127, so the program token
-  would leak modality to the router there.
+- **RESOLVED: the stamp-vs-content question.** The two candidate
+  mechanisms (router reads content vs router reads the parity imprint
+  of the diverged `o_m`/`o_c` projections) were separated by the
+  probes: **stamp-driven, ~69%**, with the content component (~31%)
+  concentrated in middle/late layers. Both mechanisms are learned —
+  the stamp is absent at the warm start, whose branches are identical
+  copies — but the discovery lives in the attention projections, not
+  the router. The originally proposed drumnondrum control was retracted
+  as confounded (drums carry program 127, leaking modality).
 - Purity attributes each token to its argmax winner, but routing is
   top-2 with similar weights (entropy 0.87), so purity overstates
   commitment just as the mean-prob L1 understates it. The truth is
@@ -126,25 +141,19 @@ The layer-11 partition read together with load: melody pair e0+e1 takes
 
 1. **Do not raise `aux_loss_weight`.** There is no collapse to fix, and
    a stronger balancing pressure would fight the (healthy) 2+2 split.
-2. **Run the stamp-vs-content probes** (one CPU sbatch each, ~minutes)
-   before putting the "implicit modality routing" claim in any writeup:
-
-   ```
-   sbatch --export=ALL,VARIANT=a2,TASK=melchord,MAX_POLYPHONY=4,PROBE=identical,\
-   CKPT=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4_melchord_cp4tar_batch_8_schedule/ \
-       midi_yinyang/analyze_moe_routing.sbatch
-   ```
-
-   and the same with `PROBE=swap`. They print a per-layer baseline
-   comparison and a verdict (content-driven / stamp-driven / mixed).
-3. **For "improve MoE": a hard modality→expert route is now pointless**
-   — the router already found that partition unaided. The interesting
-   variant is the opposite: *give* modality to the router for free (a
-   per-modality bias added to the router logits — no new module; the
-   modality of every position is known) and see whether the experts then
-   differentiate on something else: register, density, harmonic
-   function. Measure success as within-modality routing structure
-   emerging, not as loss.
+2. **Probes done (jobs 178945/178946): stamp-driven.** Results in the
+   Data section; the verdict above is restated accordingly.
+3. **For "improve MoE" the case for a modality-informed router is now
+   at its strongest.** The router spends its capacity relaying a parity
+   signal the architecture computes explicitly anyway. Hand it over for
+   free — a per-modality bias added to the router logits (no new
+   module; the modality of every position is known) — and the learned
+   routing is released for the content signal that today only reaches
+   ~31% and only in the deeper layers. Success metrics: the content
+   share of routing (re-run the identical probe on the new ckpt — it
+   should FALL toward 0 as the bias absorbs the parity job) and
+   within-modality routing structure emerging (register, density,
+   harmonic function).
 4. **Extend the same analysis to the other MoE checkpoints** (A.1, B.1,
    C.1, C.2, and A.2-drumnondrum) — the analyzer takes any of them via
    `VARIANT=`.
