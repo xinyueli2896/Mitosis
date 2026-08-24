@@ -125,6 +125,56 @@ Both share the corrections that are not optional:
 The prefix itself carries no loss under either variant: logits are read
 only from suffix positions.
 
+### C.1 reconstruction study — results (2026-08-24)
+
+Terminology: the **conditioning modality** is the stream given in full
+(mod_a, the rehearsal prefix); the **generation modality** is the stream
+the model produces (mod_b). On the melchord testbed both are symbolic
+streams simulating the cross-modal setting.
+
+Setup: chord→melody direction (`melchord_nottingham_rev`), so the
+conditioning modality is chord. Two tests per checkpoint
+(`analyze_rehearsal_recon.sbatch` teacher-forced + position-resolved;
+`infer_duet_rehearsal.sbatch MODE=reconstruct` free-running, scored as
+per-frame pitch-duration Jaccard). SLURM jobs 178861–178864 and
+178877–178878.
+
+| checkpoint | geometry | shift | cond. recon (TF) | cond. recon (free-run) | gen. prediction (TF) |
+|---|---|---|---|---|---|
+| legacy v1.0 | growing | 2 | 0.998, flat | **0.830** | 0.961 |
+| **C.1.A** | fixed | 2 | 1.000, flat | **0.999** | **0.952** |
+| C.1.B | fixed | 1 | 0.950, flat | 0.847 | 0.647 |
+
+Findings:
+
+1. **Geometry governs reconstruction of the conditioning modality.**
+   At the same shift, fixing the prefix rotary indexing moves
+   free-running reconstruction from 0.830 to 0.999. Teacher-forced
+   scores could not see this (legacy 0.998): with clean context, a
+   shift-2 model can *continue* a sustained chord instead of retrieving
+   it, and only free-running — where its own errors must be re-anchored
+   against the prefix — exposes the broken addressing.
+2. **Shift governs the generation modality's quality.** C.1.B's shift-1
+   puts the conditioning frame in the predicting slot but exiles the
+   generation modality's own history to the gated, wrong-branch cross
+   path; its generation prediction collapses 0.952 → 0.647 (audibly
+   chaotic output) while C.1.A's is unharmed. C.1.B's value is as the
+   diagnostic: with continuation impossible, its 0.95-flat TF curve and
+   0.847 free-running score are *pure prefix retrieval* — the proof the
+   rehearsal mechanism works.
+3. **C.1.A is the canonical C.1**: the only configuration weak in
+   neither column. Legacy matched it on generation but fails the
+   retrieval test; C.1.B proves retrieval but breaks generation.
+
+Caveats: this is the direction whose conditioning modality is the easy,
+sustained stream — the mel2chord replication (melody reconstruction, no
+sustain to lean on) is required before calling the pattern general.
+Legacy vs C.1.A is not a single-variable ablation (loss form, gate
+schedule and LR horizon co-vary with geometry; a `PREFIX_STRIDE2=0`
+C.1.A run would isolate it). Token accuracies are EOS-inflated on
+sparse streams, and each run drew its own val batches, so only large
+gaps are meaningful.
+
 ### DuetPrefix (#5) — conditioning baseline, architecture-side
 
 Different conditioning route: drum is a **hard prefix** that the
