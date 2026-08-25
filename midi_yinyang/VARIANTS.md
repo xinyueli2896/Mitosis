@@ -140,8 +140,8 @@ learnable but collapses generation from 0.95 to 0.65 by exiling the
 generated stream's own history to the gated cross path. C.1.A — fixed
 geometry, co-generation shift — is therefore the canonical C.1, the only
 configuration strong in both columns. The mel2chord replication
-(2026-08-25, below) confirms the teacher-forced retrieval half of the
-pattern is direction-independent.
+(2026-08-25, below) confirms retrieval is direction-independent at both
+the teacher-forced and free-running levels.
 
 Terminology: the **conditioning modality** is the stream given in full
 (mod_a, the rehearsal prefix); the **generation modality** is the stream
@@ -187,24 +187,24 @@ direction (`melchord_nottingham`): the conditioning modality is melody —
 sparse, non-repetitive, no sustain to hide behind. Teacher-forced,
 position-resolved:
 
-| checkpoint | shift | cond. recon (TF) | error vs gen. floor | curve |
-|---|---|---|---|---|
-| C.1.A fwd | 2 | 0.998 | 13× smaller (0.0015 vs 0.0201) | flat (+0.003) |
-| C.1.B fwd | 1 | 0.999 | 7× smaller (0.0010 vs 0.0066) | flat (+0.004) |
+| checkpoint | shift | cond. recon (TF) | error vs gen. floor | curve | cond. recon (free-run) |
+|---|---|---|---|---|---|
+| C.1.A fwd | 2 | 0.998 | 13× smaller (0.0015 vs 0.0201) | flat (+0.003) | **1.000** (every song, every quartile) |
+| C.1.B fwd | 1 | 0.999 | 7× smaller (0.0010 vs 0.0066) | flat (+0.004) | 0.997 (first-quartile 0.988, then 1.000) |
 
-Retrieval holds, flat, in both variants — the caveat is retired for the
-teacher-forced level. Notable direction asymmetry: C.1.B, whose TF
-accuracy is pure retrieval (shift-1 makes continuation impossible),
-reconstructs sparse melody perfectly (0.999) where it managed only
-0.950 on dense cp8 chords — a chord frame is a many-token exact match,
-a melody frame nearly monophonic. Conclusions unchanged: C.1.A remains
-canonical (C.1.B's generation damage is shift-borne, not
-retrieval-borne). The free-running (level 3) forward replication is
-still pending: the first attempt (jobs 179922/179923) accidentally ran
-on the default RWC drumnondrum prompt folders — out-of-domain drum
-content into a melchord ckpt — and its Jaccards (0.35/0.30) are not
-comparable; rerun with `DRUM_FOLDER=input/not_split/melody
-NONDRUM_FOLDER=input/not_split/chord`.
+Free-running: jobs 179956/179957 (`MODE=reconstruct`, `not_split`
+Nottingham melody/chord, 3 songs). Retrieval holds at both levels, in
+both variants — **the rev-only caveat is retired.** Notable direction
+asymmetry, consistent across levels: C.1.B free-runs at 0.997 on sparse
+melody where it managed only 0.847 on dense cp8 chords (TF: 0.999 vs
+0.950). Since C.1.B's accuracy is pure retrieval (shift-1 makes
+continuation impossible), the asymmetry lives in the content difficulty
+— a chord frame is a many-token exact match, a melody frame nearly
+monophonic — not in the mechanism. Conclusions unchanged: C.1.A remains
+canonical (its generation quality is what C.1.B lacks; both retrieve).
+Note the first forward level-3 attempt (jobs 179922/179923) ran on the
+default RWC drumnondrum prompt folders — out-of-domain drum content
+into a melchord ckpt, Jaccards 0.35/0.30, not comparable, discarded.
 
 Caveats: legacy vs C.1.A is not a single-variable ablation (loss form, gate
 schedule and LR horizon co-vary with geometry; a `PREFIX_STRIDE2=0`
