@@ -124,7 +124,7 @@ def parity_profile(pr, layout, topk):
 
 
 def run_probe(net, batch, probe, base_prs, layers, layout, topk,
-              content=False):
+              content=False, gates=False):
     """Second forward with manipulated streams; compare to baseline."""
     x_mel, x_acc, ps = batch[0], batch[1], batch[2]
     if probe == 'identical':
@@ -150,6 +150,16 @@ def run_probe(net, batch, probe, base_prs, layers, layout, topk,
               'parities by design;')
         print('  the question is whether the input-driven part still '
               'carries the stamp.')
+    if gates:
+        print('  NOTE: per-modality gates -- the stamp framing does NOT '
+              'apply here.')
+        print('  identical: any remaining parity separation is gate_m-vs-'
+              'gate_c weight')
+        print('  divergence (expected once trained), not a stamp read. '
+              'swap: if each')
+        print('  gate routes by content, expert preferences should FOLLOW '
+              'the moved')
+        print('  content -- this is the live question for this variant.')
     print('=' * 72)
     base = [parity_profile(p, layout, topk) for p in base_prs]
     prob = [parity_profile(p, layout, topk) for p in probe_prs]
@@ -290,8 +300,25 @@ def main():
     topk = layers[0].ffn.topk
     has_bias = any(getattr(l.ffn, 'modality_bias', None) is not None
                    for l in layers)
+    has_gates = any(getattr(l.ffn, 'modality_gates', False) for l in layers)
     print(f'\n{len(layers)} MoE layer(s), {E} experts, top-{topk}. '
           f'Balanced load = {1/E:.3f} per expert.')
+    if has_gates:
+        print('PER-MODALITY GATES (A.2.moe_permod): each stream is routed '
+              'by its own')
+        print('gate matrix over a fully shared, unassigned expert pool. '
+              'Parity')
+        print('separation (mod L1) is therefore BY CONSTRUCTION -- two '
+              'different gates')
+        print('-- and is not the finding. The finding is the PURITY table: '
+              'an expert')
+        print('near 0%/100% is a learned per-stream specialist, one near '
+              'the base rate')
+        print('that both gates keep using is a learned INTEGRATOR serving '
+              'both streams.')
+        print('The probes below test content-responsiveness within each '
+              'gate, not the')
+        print('stamp (which cannot steer within-stream routing here).')
     if has_bias:
         print('MODALITY-BIAS ROUTER (A.2.moe_improved): this ckpt carries '
               'an explicit')
@@ -524,7 +551,7 @@ def main():
         # On a modality-bias model the probes target the content pathway.
         base_prs = snapshot(layers, content=has_bias)
         run_probe(net, batch, args.probe, base_prs, layers, layout, topk,
-                  content=has_bias)
+                  content=has_bias, gates=has_gates)
 
 
 if __name__ == '__main__':

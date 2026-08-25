@@ -594,6 +594,23 @@ if __name__ == '__main__':
                              'identical-content probe\'s stamp share on '
                              'the CONTENT pathway falls toward zero '
                              '(analyze_moe_routing.sbatch PROBE=identical).')
+    parser.add_argument('--moe_modality_gates', type=int, default=0,
+                        help='1 = A.2.moe_permod: per-modality router '
+                             'matrices gate_m/gate_c replacing the single '
+                             'shared gate -- the q_m/q_c move applied to '
+                             'the router. Each gate only scores its own '
+                             'stream, so the parity stamp becomes a '
+                             'constant offset it cannot route on, and '
+                             'within-stream routing is content-driven by '
+                             'construction. The expert pool stays fully '
+                             'shared and unassigned: which experts each '
+                             'stream uses, and whether any serves both '
+                             '(an integrator), is learned -- read it off '
+                             'analyze_moe_routing\'s purity tables. '
+                             'Presence of gate_m/gate_c in the ckpt is '
+                             'the flag; inference auto-detects. A '
+                             'warm-start ckpt with only the shared '
+                             'gate.weight seeds BOTH gates with it.')
     parser.add_argument('--fresh_schedule', action='store_true', default=False)
     args = parser.parse_args()
 
@@ -612,10 +629,12 @@ if __name__ == '__main__':
                          'mutually exclusive (v1.2 vs v1.0).')
     scheme_version = ('v1.2' if args.time_rope_aligned
                       else 'v1.0' if args.legacy_slot_rope else 'v1.1')
-    # A.2.moe_improved runs get their own run-dir family: the ckpts carry
-    # an extra parameter per MoE layer, so resuming across the two
-    # configs must fail loudly instead of finding each other's last.ckpt.
-    mb_tag = 'mb' if args.moe_modality_bias else ''
+    # A.2.moe_improved ('mb') / A.2.moe_permod ('mg') runs get their own
+    # run-dir families: the ckpts carry different router parameters, so
+    # resuming across configs must fail loudly instead of finding each
+    # other's last.ckpt.
+    mb_tag = ('mb' if args.moe_modality_bias else '') + \
+             ('mg' if args.moe_modality_gates else '')
     default_name = (f"m2c_duet_block_diffusion_{scheme_version}_{args.model_size}_"
                     f"gnl{gnl}_K{args.diffusion_K}{mb_tag}_{task.name}{tag}_"
                     f"batch_{args.batch_size * n_gpus}_schedule")
@@ -645,12 +664,15 @@ if __name__ == '__main__':
         time_rope_aligned=bool(args.time_rope_aligned),
         self_cond_prob=args.self_cond_prob,
         moe_modality_bias=bool(args.moe_modality_bias),
+        moe_modality_gates=bool(args.moe_modality_gates),
     )
     print(f'[scheme] {scheme_version}: slot_rope_aligned={not args.legacy_slot_rope}  '
           f'time_rope_aligned={bool(args.time_rope_aligned)}  '
           f'self_cond_prob={args.self_cond_prob}  '
           f'moe_modality_bias={bool(args.moe_modality_bias)}'
-          f'{" (A.2.moe_improved)" if args.moe_modality_bias else ""}')
+          f'{" (A.2.moe_improved)" if args.moe_modality_bias else ""}  '
+          f'moe_modality_gates={bool(args.moe_modality_gates)}'
+          f'{" (A.2.moe_permod)" if args.moe_modality_gates else ""}')
     print(f'Architecture: M2CDuetBlockDiffusion (A.3)  K={args.diffusion_K}  '
           f'3-pass (intra/cross/frame) + 2 gates + query slots with per-item '
           f'noise levels + k-embedding')
@@ -744,6 +766,7 @@ if __name__ == '__main__':
                     'slot_rope_aligned': not args.legacy_slot_rope,
                     'self_cond_prob': args.self_cond_prob,
                     'moe_modality_bias': bool(args.moe_modality_bias),
+                    'moe_modality_gates': bool(args.moe_modality_gates),
                     'run_tag': args.run_tag,
                 },
             ) if args.wandb else TensorBoardLogger('tb_logs', name=model_name)
@@ -777,6 +800,23 @@ if __name__ == '__main__':
             sd = dict(sd)
             sd.pop('time_rope_aligned_flag', None)
             sd.pop('slot_rope_aligned_flag', None)
+            # A.2.moe_permod warm start: a ckpt carrying only the shared
+            # gate.weight (the init ckpt, or a trained shared-gate run)
+            # seeds BOTH per-modality gates with it, so the gates start
+            # identical and diverge only from their streams' gradients
+            # (the q_m/q_c warm-start convention).
+            if args.moe_modality_gates:
+                n_remap = 0
+                for k in [k for k in sd if k.endswith('ffn.gate.weight')]:
+                    base = k[: -len('gate.weight')]
+                    for tgt in ('gate_m.weight', 'gate_c.weight'):
+                        if base + tgt not in sd:
+                            sd[base + tgt] = sd[k].clone()
+                            n_remap += 1
+                    del sd[k]
+                if n_remap:
+                    print(f'[init] moe_modality_gates: seeded {n_remap} '
+                          f'gate_m/gate_c weights from shared gate.weight')
             missing, unexpected = net.load_state_dict(sd, strict=False)
             if missing:
                 # Expected: k_emb_m.weight, k_emb_c.weight (zero-init).

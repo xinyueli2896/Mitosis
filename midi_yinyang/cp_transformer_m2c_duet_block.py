@@ -102,7 +102,7 @@ class M2CDuetBlockLayer(nn.Module):
     def __init__(self, hidden_size, num_heads, intermediate_size,
                  moe_num_experts, moe_topk, moe_intermediate_size,
                  dropout=0.0, gate_init_bias=-10.0,
-                 moe_modality_bias=False):
+                 moe_modality_bias=False, moe_modality_gates=False):
         super().__init__()
         assert hidden_size % num_heads == 0
         self.hidden_size = hidden_size
@@ -138,7 +138,8 @@ class M2CDuetBlockLayer(nn.Module):
             self.ffn = SimpleMoEFFN(hidden_size, ffn_inter,
                                      num_experts=moe_num_experts,
                                      topk=moe_topk,
-                                     modality_bias=moe_modality_bias)
+                                     modality_bias=moe_modality_bias,
+                                     modality_gates=moe_modality_gates)
         else:
             self.ffn = nn.Sequential(
                 nn.Linear(hidden_size, ffn_inter),
@@ -376,7 +377,7 @@ class M2CDuetBlockLayer(nn.Module):
 
         # Shared MoE FFN over the flat L-length sequence.
         if self.use_moe:
-            if self.ffn.modality_bias is not None:
+            if getattr(self.ffn, 'needs_modality_ids', False):
                 # Per-position modality, matching _build_masks: even
                 # clean positions and the first query slot are mod_a (0),
                 # odd clean positions and the second slot are mod_b (1).
@@ -406,7 +407,8 @@ class M2CDuetBlockAttn(RoFormerSymbolicTransformer):
                  moe_intermediate_size=None, global_num_layers=None,
                  global_dropout=0.0, preserve_program=True,
                  gate_init_bias=-10.0, query_loss_weight=1.0,
-                 moe_modality_bias=False, **kwargs):
+                 moe_modality_bias=False, moe_modality_gates=False,
+                 **kwargs):
         super().__init__(
             *args,
             moe_num_experts=moe_num_experts,
@@ -435,6 +437,7 @@ class M2CDuetBlockAttn(RoFormerSymbolicTransformer):
                 dropout=global_dropout,
                 gate_init_bias=gate_init_bias,
                 moe_modality_bias=moe_modality_bias,
+                moe_modality_gates=moe_modality_gates,
             )
             for _ in range(self.global_num_layers)
         ])

@@ -268,7 +268,51 @@ pathways without pressure. val_loss was unaffected (0.340 vs baseline
 options are listed at the end of MOE_ROUTING_REPORT.md: add an
 invariance penalty on the unbiased logits (the differentiable success
 metric), or a hard 2+2 per-modality expert partition ablation, or close
-the line of work with the negative result recorded.
+the line of work with the negative result recorded. The chosen
+follow-up is A.2.moe_permod (next section).
+
+### A.2.moe_permod — per-modality router gates (2026-08-25)
+
+The constructive successor to A.2.moe_improved, built after its negative
+result. Instead of *offering* the router the modality label (a bias it
+ignored), the router is *restructured* so the label is no longer its
+job: two router matrices, `gate_m` for melody slots and `gate_c` for
+chord slots, replacing the single shared gate — the same
+per-modality-parameters move the duet family applies to Q/K/V/O,
+applied to the one per-token module that stayed shared. Each gate only
+ever scores its own stream's tokens, so the parity stamp is a
+near-constant input component within that population and cannot
+influence how one token routes differently from another: within-stream
+routing is content-driven by construction, with no loss change.
+
+**The expert pool stays fully shared and unassigned.** No expert is
+designated melody, chord, or "integrator" — the design goal (per-stream
+specialists coexisting with experts that serve both streams) is left
+for training to discover, and read off the analyzer's purity tables: an
+expert near 0%/100% purity is a learned specialist, one near the base
+rate that both gates keep using is a learned integrator. Precedent:
+modality-aware routing is standard in multimodal MoE (MoMa, VL-MoE,
+Uni-MoE route per modality but over hard disjoint pools; MoIIE hybrid);
+the shared-unassigned-pool version is the departure that makes this an
+experiment — melody/chord are far more alike than image/text, so how
+much sharing the model wants is genuinely open.
+
+Mechanics:
+
+- `train_duet_block_diffusion.sbatch` knob `MOE_MODALITY_GATES=1`; run
+  dirs get an `mg` marker after the K tag (`..._K4mg_...`).
+- Warm start: a ckpt carrying the shared `gate.weight` (the init ckpt
+  or any trained shared-gate run) seeds BOTH gates with it — step 0 is
+  bit-identical to the shared-router model (audited:
+  `audit_moe_gates.sbatch`); the gates diverge only from their streams'
+  gradients, the q_m/q_c convention.
+- The `gate_m/gate_c` keys' presence in the ckpt IS the flag; inference
+  and the analyzer auto-detect.
+- Readout: `analyze_moe_routing.sbatch` — the mod-L1 column is by
+  construction here (two different gates) and is NOT the finding; the
+  purity table is. `PROBE=swap` becomes the live probe: if each gate
+  routes by content, expert preferences should follow moved content
+  (the shared-router baseline scored 0/11–0/12).
 
 ## Experimental story
 

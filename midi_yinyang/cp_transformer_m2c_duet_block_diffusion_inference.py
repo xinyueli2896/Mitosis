@@ -108,6 +108,14 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
                             for k in state_dict_keys)
     print(f'[load_model] moe_modality_bias={moe_modality_bias}'
           f'{" (A.2.moe_improved)" if moe_modality_bias else ""}')
+    # A.2.moe_permod detection: per-modality router matrices. Same
+    # principle -- the gate_m/gate_c keys' presence IS the flag; building
+    # without them would leave the model with a fresh shared gate while
+    # silently dropping both trained routers.
+    moe_modality_gates = any(k.endswith('ffn.gate_m.weight')
+                             for k in state_dict_keys)
+    print(f'[load_model] moe_modality_gates={moe_modality_gates}'
+          f'{" (A.2.moe_permod)" if moe_modality_gates else ""}')
     if diffusion_K is None:
         for key, name in (('k_emb_m.weight', 'k_emb_m'),
                           ('k_emb_c.weight', 'k_emb_c')):
@@ -136,6 +144,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         slot_rope_aligned=slot_rope_aligned,
         time_rope_aligned=time_rope_aligned,
         moe_modality_bias=moe_modality_bias,
+        moe_modality_gates=moe_modality_gates,
     )
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)

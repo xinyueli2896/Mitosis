@@ -66,7 +66,22 @@
 #                           Verify after training with
 #                           analyze_moe_routing.sbatch PROBE=identical:
 #                           the content-pathway stamp share should be
-#                           near zero.
+#                           near zero. OUTCOME (probes 179683/179684):
+#                           offered, not used. Kept for ablations.
+#   --export=ALL,MOE_MODALITY_GATES=1  A.2.moe_permod: per-modality
+#                           router matrices gate_m/gate_c replacing the
+#                           shared gate (the q_m/q_c move applied to the
+#                           router). Each gate only scores its own
+#                           stream, so the parity stamp cannot influence
+#                           within-stream routing; the expert pool stays
+#                           fully shared and UNASSIGNED -- which experts
+#                           each stream uses, and whether any serves
+#                           both (an integrator), is learned. Read the
+#                           outcome off analyze_moe_routing's purity
+#                           tables. Run dirs get an 'mg' marker after
+#                           the K tag; warm start seeds both gates from
+#                           the shared gate so step 0 matches the
+#                           shared-router init exactly.
 #   --export=ALL,FRESH_SCHEDULE=1    opt-in: load weights only, drop
 #                           optimizer + scheduler + step counter, run a
 #                           brand-new OneCycle from step 0. NOT the
@@ -150,6 +165,9 @@ TIME_ROPE_ALIGNED="${TIME_ROPE_ALIGNED:-0}"
 # A.2.moe_improved: per-modality bias on the MoE router logits (see
 # header). Marks the run dir with 'mb' after the K tag.
 MOE_MODALITY_BIAS="${MOE_MODALITY_BIAS:-0}"
+# A.2.moe_permod: per-modality router matrices over a fully shared,
+# unassigned expert pool (see header). Marks the run dir with 'mg'.
+MOE_MODALITY_GATES="${MOE_MODALITY_GATES:-0}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_block_diffusion_${SLURM_JOB_ID}}"
 # Data polyphony per stream (drives the sample-dump reshape, not the model):
@@ -202,8 +220,11 @@ GLOBAL_BATCH=$((BATCH_SIZE * NGPUS))
 # (v1.2 when TIME_ROPE_ALIGNED=1, else v1.1) or auto-resume looks in
 # the wrong directory.
 if [[ "$TIME_ROPE_ALIGNED" == "1" ]]; then SCHEME_VERSION=v1.2; else SCHEME_VERSION=v1.1; fi
-# 'mb' marker must match the python side's default_name derivation.
-if [[ "$MOE_MODALITY_BIAS" == "1" ]]; then MB_TAG=mb; else MB_TAG=""; fi
+# 'mb'/'mg' markers must match the python side's default_name derivation
+# (mb_tag concatenates in that order).
+MB_TAG=""
+[[ "$MOE_MODALITY_BIAS" == "1" ]] && MB_TAG="${MB_TAG}mb"
+[[ "$MOE_MODALITY_GATES" == "1" ]] && MB_TAG="${MB_TAG}mg"
 RUN_DIR="ckpt/m2c_duet_block_diffusion_${SCHEME_VERSION}_large_gnl12_K${DIFFUSION_K}${MB_TAG}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
     CKPT="$RUN_DIR/last.ckpt"
@@ -244,7 +265,7 @@ fi
 
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
-echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K  moe_modality_bias=$MOE_MODALITY_BIAS${MB_TAG:+ (A.2.moe_improved)}"
+echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K  moe_modality_bias=$MOE_MODALITY_BIAS  moe_modality_gates=$MOE_MODALITY_GATES${MB_TAG:+  [$MB_TAG]}"
 echo "MoE: experts=$MOE_NUM_EXPERTS topk=$MOE_TOPK intermediate=${MOE_INTERMEDIATE_SIZE:-<default 3072/expert>}  RUN_TAG=${RUN_TAG:-<none>}"
 echo "Task:    $TASK   (data max_polyphony: $MAX_POLYPHONY)"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
@@ -338,6 +359,7 @@ COMMON_ARGS=(
     --self_cond_prob "$SELF_COND_PROB"
     --time_rope_aligned "$TIME_ROPE_ALIGNED"
     --moe_modality_bias "$MOE_MODALITY_BIAS"
+    --moe_modality_gates "$MOE_MODALITY_GATES"
     --diffusion_K "$DIFFUSION_K"
     --checkpoint_path "$TRAIN_CKPT"
     --wandb

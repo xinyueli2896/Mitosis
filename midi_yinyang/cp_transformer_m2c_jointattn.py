@@ -136,22 +136,53 @@ class SimpleMoEFFN(nn.Module):
     hands the router that bit for free so the input-driven pathway can
     spend its capacity on within-modality structure. Zero init keeps
     warm-start equivalence, and checkpoints without the key load into a
-    bias-off model unchanged. When enabled, forward() REQUIRES
-    modality_ids; callers that do not know the layout cannot enable it.
+    bias-off model unchanged. OUTCOME (probes 179683/179684): offered,
+    not used -- with no pressure on the gate the parity job never
+    migrated into the bias. Kept for ablations.
+
+    modality_gates (A.2.moe_permod): the constructive successor. TWO
+    router matrices, gate_m for mod_a slots and gate_c for mod_b slots,
+    replacing the single shared gate -- the same per-modality-parameters
+    move the duet family already applies to Q/K/V/O, applied to the one
+    per-token module that stayed shared. Each gate only ever scores its
+    own stream's tokens, so the parity stamp is a near-constant input
+    component within that gate's population and cannot influence how
+    one token routes differently from another: within-stream routing is
+    content-driven by construction. The EXPERT POOL STAYS FULLY SHARED
+    and no expert is pre-assigned to a modality -- which experts each
+    stream uses, and whether any expert serves both (an integrator), is
+    left for training to decide and read off the purity tables.
+    Presence of the gate_m/gate_c keys in a checkpoint IS the flag.
+
+    Either feature makes forward() REQUIRE modality_ids; callers that
+    do not know the layout cannot enable them.
     """
 
     def __init__(self, hidden_size, intermediate_size, num_experts, topk,
-                 modality_bias=False):
+                 modality_bias=False, modality_gates=False):
         super().__init__()
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
         self.num_experts = num_experts
         self.topk = topk
-        self.gate = nn.Linear(hidden_size, num_experts, bias=False)
+        self.modality_gates = bool(modality_gates)
+        if modality_gates:
+            self.gate_m = nn.Linear(hidden_size, num_experts, bias=False)
+            self.gate_c = nn.Linear(hidden_size, num_experts, bias=False)
+            # Both gates start as the SAME matrix so the step-0 forward
+            # is identical to a shared-gate model with that weight; they
+            # diverge only as their streams' gradients differ (the same
+            # convention the q_m/q_c warm start uses).
+            with torch.no_grad():
+                self.gate_c.weight.copy_(self.gate_m.weight)
+        else:
+            self.gate = nn.Linear(hidden_size, num_experts, bias=False)
         if modality_bias:
             self.modality_bias = nn.Parameter(torch.zeros(2, num_experts))
         else:
             self.register_parameter('modality_bias', None)
+        # Callers check this to know whether to pass modality_ids.
+        self.needs_modality_ids = bool(modality_bias or modality_gates)
         self.fc1 = nn.ModuleList(
             [nn.Linear(hidden_size, intermediate_size) for _ in range(num_experts)]
         )
@@ -164,8 +195,8 @@ class SimpleMoEFFN(nn.Module):
 
         modality_ids: LongTensor [L] or [B, L] of 0 (mod_a) / 1 (mod_b)
         per position. Required iff the module was built with
-        modality_bias=True; ignored (and must be None-safe for callers)
-        otherwise.
+        modality_bias=True or modality_gates=True (check
+        self.needs_modality_ids); ignored otherwise.
 
         Caches the most recent routing probabilities at self._last_routing_probs
         with shape [B, L, num_experts] so a diagnostic callback can read them
@@ -177,20 +208,33 @@ class SimpleMoEFFN(nn.Module):
         B, L, H = x.shape
         x_flat = x.reshape(-1, H)                                   # [N, H]
         N = x_flat.size(0)
-        logits = self.gate(x_flat)                                  # [N, E]
-        if self.modality_bias is not None:
+        ids_flat = None
+        if self.needs_modality_ids:
             if modality_ids is None:
                 raise ValueError(
-                    'SimpleMoEFFN was built with modality_bias=True but '
-                    'forward() got no modality_ids -- the caller must pass '
-                    'the per-position modality layout.'
+                    'SimpleMoEFFN was built with modality_bias/modality_'
+                    'gates but forward() got no modality_ids -- the caller '
+                    'must pass the per-position modality layout.'
                 )
-            self._last_content_probs = F.softmax(logits, dim=-1) \
-                .detach().view(B, L, self.num_experts)
             ids = modality_ids.to(device=x.device).long()
             if ids.dim() == 1:
                 ids = ids.unsqueeze(0).expand(B, L)
-            logits = logits + self.modality_bias[ids.reshape(-1)]
+            ids_flat = ids.reshape(-1)                              # [N]
+        if self.modality_gates:
+            # Each stream scored by its own gate. Both gates run on the
+            # full flat batch (two [N, E] matmuls -- negligible) and the
+            # per-position modality selects the row.
+            logits = torch.where(
+                ids_flat.unsqueeze(-1) == 0,
+                self.gate_m(x_flat),
+                self.gate_c(x_flat),
+            )                                                        # [N, E]
+        else:
+            logits = self.gate(x_flat)                              # [N, E]
+        if self.modality_bias is not None:
+            self._last_content_probs = F.softmax(logits, dim=-1) \
+                .detach().view(B, L, self.num_experts)
+            logits = logits + self.modality_bias[ids_flat]
         probs = F.softmax(logits, dim=-1)
         # Cache for diagnostics. Reshape back to [B, L, E].
         self._last_routing_probs = probs.detach().view(B, L, self.num_experts)
