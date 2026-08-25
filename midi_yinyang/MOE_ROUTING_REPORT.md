@@ -14,7 +14,9 @@ second.
   layer, ~770 per modality.
 - **Evidence** SLURM jobs **178410** and **178528** (independent val
   batches, same checkpoint); stamp-vs-content probes **178945**
-  (identical) and **178946** (swap). Logs: `~/logs/moe_routing_*.out`.
+  (identical) and **178946** (swap); A.2.moe_improved probes **179683**
+  / **179684** (the intervention outcome — see the section before
+  Reproduction). Logs: `~/logs/moe_routing_*.out`.
 
 ## Verdict
 
@@ -166,9 +168,72 @@ The layer-11 partition read together with load: melody pair e0+e1 takes
    the success metric above lives. Correctness (warm-start equivalence,
    layout, probe-cache isolation) is audited by
    `audit_moe_bias.sbatch`.
+
+   **OUTCOME (2026-08-25): negative — see the "A.2.moe_improved
+   outcome" section.** The bias trained to near-zero deltas and the
+   gate kept reading the stamp; a free shortcut is not taken without
+   pressure on the old pathway.
 4. **Extend the same analysis to the other MoE checkpoints** (A.1, B.1,
    C.1, C.2, and A.2-drumnondrum) — the analyzer takes any of them via
    `VARIANT=`.
+
+## A.2.moe_improved outcome (2026-08-25): bias offered, not used
+
+The intervention ran exactly as designed and **falsified its own
+mechanism**. Run
+`m2c_duet_block_diffusion_v1.2_large_gnl12_K4mb_melchord_cp4tar_batch_8_schedule`
+(best-val `val_loss=0.34028`), matched to the baseline in everything but
+`MOE_MODALITY_BIAS=1`; probes 179683 (identical) / 179684 (swap).
+
+| measurement | baseline (no bias) | A.2.moe_improved | success target |
+|---|---|---|---|
+| bias delta, max \|bias_a − bias_b\| | — | **0.019–0.056** | large (bias owns the split) |
+| full L1 vs content L1 gap | — | ≤ 0.02 everywhere | large (bias, not gate, separates) |
+| identical-probe stamp share (content pathway) | ~69% | **~93%** | → 0 |
+| swap probe: layers following content | 0/11 | **0/12** | majority |
+
+The router **ignored the free bit**. Bias deltas of ~0.03 logits move a
+4-way softmax by well under 1% — the parameter is alive but unused, and
+the gate weights still read the parity stamp off the hidden state
+(stamp share, measured on the now-separable content pathway, is if
+anything higher than baseline). One instructive local detail: in layers
+1–3 the identical-content L1 *exceeds* the real-batch L1 (e.g. 0.487 →
+0.661) — real content differences partially cancel the stamp, and
+equalising the content lets the pure stamp show through.
+
+**Why, in retrospect, this had to happen:** the loss never penalised
+reading the stamp from the residual, and that read was already free — a
+linear gate on a direction the per-modality projections write strongly.
+Gradient descent does not migrate a function from one redundant pathway
+to another without a gradient that favours the move; offering a
+shortcut removes nothing unless the old route is made costly or
+impossible. (The earlier caveat anticipated the bias *absorbing* the
+partition; the actual outcome is the third case: neither pathway
+yielded, the bias just went unused.)
+
+Also worth noting: best val_loss 0.340 vs the baseline's 0.365. With
+the bias effectively inert this cannot be attributed to the
+architecture change — treat it as run-to-run variance — but it does
+confirm the change is performance-neutral-or-better, i.e. the
+stamp-routing redundancy costs nothing measurable either way.
+
+**Where this leaves "improve MoE" — three follow-ups, in order of
+directness:**
+
+1. **Invariance pressure, not just a shortcut** — keep the bias, add a
+   small auxiliary penalty on the parity separation of the *unbiased*
+   logits (the differentiable version of the success metric itself).
+   The gate is then pushed to become stamp-orthogonal while the bias
+   picks up the partition. Few lines in `SimpleMoEFFN`; the analyzer
+   already measures the target quantity.
+2. **Hard per-modality partition ablation** — fixed 2+2 expert masks
+   per modality, router chooses within the pair. Removes the question
+   by construction and tests whether the learned 2+2 partition is
+   actually load-bearing (compare val_loss and E2/E3 metrics).
+3. **Accept and close** — the redundancy is demonstrably harmless; the
+   scientific finding (architectural imprint dominates implicit MoE
+   "specialisation", and a free shortcut is not taken without pressure)
+   stands on its own, and the week has higher-leverage open tasks.
 
 ## Reproduction
 

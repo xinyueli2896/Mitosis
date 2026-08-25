@@ -255,6 +255,21 @@ Mechanics:
   zero (baseline without the bias: ~69%), and PROBE=swap layers should
   shift from "neither" toward content-following.
 
+**Result (2026-08-25, run `..._K4mb_melchord_cp4tar_batch_8_schedule`,
+probes 179683/179684): NEGATIVE — the bias was offered and not used.**
+Bias deltas trained to only 0.019–0.056 logits (softmax-negligible),
+full and content L1 differ by ≤0.02 everywhere, the content-pathway
+stamp share came out ~93% (vs ~69% baseline), and the swap probe found
+0/12 content-following layers. The gate kept reading the parity stamp
+off the hidden state because nothing in the loss made that read costly
+— gradient descent does not migrate a function between redundant
+pathways without pressure. val_loss was unaffected (0.340 vs baseline
+0.365 — run variance; the change is performance-neutral). Follow-up
+options are listed at the end of MOE_ROUTING_REPORT.md: add an
+invariance penalty on the unbiased logits (the differentiable success
+metric), or a hard 2+2 per-modality expert partition ablation, or close
+the line of work with the negative result recorded.
+
 ## Experimental story
 
 The variants bracket the question:
