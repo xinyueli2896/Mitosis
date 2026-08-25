@@ -16,7 +16,19 @@ class RoFormerSymbolicTransformerInjected(RoFormerSymbolicTransformer):
     def __init__(self, size=1, max_position_embeddings=512):
         super().__init__(size=size, max_position_embeddings=max_position_embeddings)
 
-    def get_base_model(self, config):
+    def get_base_model(self, config=None):
+        # config=None is a peft compatibility path, NOT part of this
+        # class's own API. Recent peft versions duck-type a zero-arg
+        # `get_base_model()` on the model they wrap (tied-embedding
+        # check inside get_peft_model/inject_adapter) and expect the
+        # raw base module back; they collide with this unrelated
+        # config-taking backbone builder and crash with a
+        # missing-argument TypeError (upstream YinYang trained on an
+        # older peft without the check). yinyang_e3_driver.py shims
+        # this at import time for inference; fixing it here at the
+        # definition covers the training entry point too.
+        if config is None:
+            return self
         return RoFormerEncoderInject(config)
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
