@@ -155,7 +155,19 @@ where Y-mc is the matched system — the Nottingham melody/chord
 tokenization pipeline exists (`preprocess_nottingham_melchord.sbatch`
 → `data/nottingham_{melody,chord}_cp8_v2.pt`, POP909-compatible cp8
 format, plus a `melchord_nottingham` task entry for duet training).
-Record the decision either way. Y-dn has no such caveat: it is
+Record the decision either way.
+
+**Decision (2026-08-25): option (a) — train the POP909-matched YinYang
+("Y-909"), both directions.** Pipeline:
+`preprocess_pop909_yinyang.sbatch` builds the paired within-frame
+dataset `data/pop909_cp8_v2_chord_mel.pt` from the tagged merged folder
+(same `ins_ids=['track-1','track-0']` build and `_chord_mel` naming as
+the published Y-mc data, so all direction auto-detection carries over);
+`train_yinyang_pop909.sbatch` trains one direction per submission
+(`DIRECTION=chord2mel` → no `_rev`, `DIRECTION=mel2chord` → `_rev`)
+with the published recipe defaults (mask 0.25/10, LoRA r16, n_skip 2).
+Y-mc remains reported as the external Nottingham-domain reference;
+Y-909 is the matched conditional baseline for the POP909 melchord E3. Y-dn has no such caveat: it is
 LA-trained like the duet drumnondrum systems and evaluated on held-out
 RWC.
 
