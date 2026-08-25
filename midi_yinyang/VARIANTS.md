@@ -139,9 +139,9 @@ generation modality's quality — shift-1 (C.1.B) proves pure retrieval is
 learnable but collapses generation from 0.95 to 0.65 by exiling the
 generated stream's own history to the gated cross path. C.1.A — fixed
 geometry, co-generation shift — is therefore the canonical C.1, the only
-configuration strong in both columns, pending replication in the
-mel2chord direction where the conditioning stream offers no sustain to
-hide behind.
+configuration strong in both columns. The mel2chord replication
+(2026-08-25, below) confirms the teacher-forced retrieval half of the
+pattern is direction-independent.
 
 Terminology: the **conditioning modality** is the stream given in full
 (mod_a, the rehearsal prefix); the **generation modality** is the stream
@@ -182,10 +182,31 @@ Findings:
    neither column. Legacy matched it on generation but fails the
    retrieval test; C.1.B proves retrieval but breaks generation.
 
-Caveats: this is the direction whose conditioning modality is the easy,
-sustained stream — the mel2chord replication (melody reconstruction, no
-sustain to lean on) is required before calling the pattern general.
-Legacy vs C.1.A is not a single-variable ablation (loss form, gate
+**mel2chord replication (2026-08-25, jobs 179919/179920).** Forward
+direction (`melchord_nottingham`): the conditioning modality is melody —
+sparse, non-repetitive, no sustain to hide behind. Teacher-forced,
+position-resolved:
+
+| checkpoint | shift | cond. recon (TF) | error vs gen. floor | curve |
+|---|---|---|---|---|
+| C.1.A fwd | 2 | 0.998 | 13× smaller (0.0015 vs 0.0201) | flat (+0.003) |
+| C.1.B fwd | 1 | 0.999 | 7× smaller (0.0010 vs 0.0066) | flat (+0.004) |
+
+Retrieval holds, flat, in both variants — the caveat is retired for the
+teacher-forced level. Notable direction asymmetry: C.1.B, whose TF
+accuracy is pure retrieval (shift-1 makes continuation impossible),
+reconstructs sparse melody perfectly (0.999) where it managed only
+0.950 on dense cp8 chords — a chord frame is a many-token exact match,
+a melody frame nearly monophonic. Conclusions unchanged: C.1.A remains
+canonical (C.1.B's generation damage is shift-borne, not
+retrieval-borne). The free-running (level 3) forward replication is
+still pending: the first attempt (jobs 179922/179923) accidentally ran
+on the default RWC drumnondrum prompt folders — out-of-domain drum
+content into a melchord ckpt — and its Jaccards (0.35/0.30) are not
+comparable; rerun with `DRUM_FOLDER=input/not_split/melody
+NONDRUM_FOLDER=input/not_split/chord`.
+
+Caveats: legacy vs C.1.A is not a single-variable ablation (loss form, gate
 schedule and LR horizon co-vary with geometry; a `PREFIX_STRIDE2=0`
 C.1.A run would isolate it). Token accuracies are EOS-inflated on
 sparse streams, and each run drew its own val batches, so only large
