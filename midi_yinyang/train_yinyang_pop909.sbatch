@@ -113,6 +113,13 @@ nvidia-smi || true
 
 python check_gpu_health.py --expect "$NGPUS" || exit 1
 
+# Log to wandb (project MusicMOE, same as the duet runs); the mitosis
+# env has no tensorboard. Set WANDB=0 to fall back to a CSV logger.
+WANDB="${WANDB:-1}"
+export YINYANG_WANDB="$WANDB"
+export WANDB_PROJECT="${WANDB_PROJECT:-MusicMOE}"
+export WANDB_DIR="${WANDB_DIR:-/tmp/wandb}"
+
 EXTRA=()
 [[ -n "$WEIGHTS" ]] && EXTRA+=(--weights_path "$WEIGHTS")
 [[ -n "$PRETRAINED" ]] && EXTRA+=(--fp_path "$PRETRAINED")

@@ -176,6 +176,28 @@ class RoformerFineTune(L.LightningModule):
                 return True
         return False
 
+def _make_logger(model_name):
+    # The mitosis env has wandb (every duet run logs there) but NOT
+    # tensorboard, and TensorBoardLogger hard-errors at __init__ when
+    # neither tensorboard nor tensorboardX is importable. Preference:
+    # wandb when YINYANG_WANDB=1 (set by train_yinyang_pop909.sbatch, so
+    # Y-909 curves land in the same project as the duet runs), then
+    # tensorboard if it exists, then CSV so training never dies over
+    # logging.
+    if os.environ.get('YINYANG_WANDB', '0') == '1':
+        from pytorch_lightning.loggers import WandbLogger
+        return WandbLogger(name=model_name,
+                           project=os.environ.get('WANDB_PROJECT', 'MusicMOE'),
+                           save_dir=os.environ.get('WANDB_DIR', '/tmp/wandb'))
+    try:
+        return TensorBoardLogger("tb_logs", name=model_name)
+    except ModuleNotFoundError:
+        from pytorch_lightning.loggers import CSVLogger
+        print('[logger] tensorboard not installed; falling back to '
+              f'CSVLogger (tb_logs/{model_name}/**/metrics.csv)')
+        return CSVLogger("tb_logs", name=model_name)
+
+
 def train(net, model_name, early_stopping_patience, max_steps, train_set_loader, val_set_loader):
     n_gpus = max(torch.cuda.device_count(), 1)
     checkpoint_callback = L.callbacks.ModelCheckpoint(monitor='val_loss',
@@ -195,7 +217,7 @@ def train(net, model_name, early_stopping_patience, max_steps, train_set_loader,
                         val_check_interval=500,
                         limit_val_batches=25,
                         check_val_every_n_epoch=None,
-                        logger=TensorBoardLogger("tb_logs", name=model_name),
+                        logger=_make_logger(model_name),
                         strategy='auto' if n_gpus == 1 else 'ddp')
     net.strict_loading = False
     trainer.fit(net, train_set_loader, val_set_loader)
