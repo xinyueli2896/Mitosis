@@ -449,7 +449,17 @@ def main():
     p.add_argument('--probe', default='none',
                    choices=['none', 'identical', 'swap', 'within'],
                    help='stamp-vs-content probe; see module docstring')
+    p.add_argument('--seed', type=int, default=0,
+                   help='seeds torch RNG before the dataset draw, so two '
+                        'runs (e.g. mg vs baseline ckpts) analyze the '
+                        'SAME batch -- FramedDataset picks songs and '
+                        'window offsets with torch.randperm/rand. '
+                        'Without this, cross-ckpt comparisons are '
+                        'confounded by the batch draw (different songs, '
+                        'and features can degenerate to flat/skip in '
+                        'one run but not the other).')
     args = p.parse_args()
+    torch.manual_seed(args.seed)
 
     module_name, layout = VARIANTS[args.variant]
     mod = __import__(module_name)
@@ -475,6 +485,13 @@ def main():
 
     ds = FramedDataset(task.mod_b_path, TRAIN_LENGTH, args.batch_size,
                        split='val', mel_path=task.mod_a_path)
+    # Seed HERE, not only at startup: model construction above consumes
+    # RNG (random init before the state-dict load) and consumes a
+    # different amount per variant (mg has extra gate params), so an
+    # early seed alone still yields different batches per ckpt.
+    torch.manual_seed(args.seed)
+    print(f'[seed] batch draw seeded with {args.seed} -- same seed => '
+          f'same songs/windows across ckpts')
     batch = list(next(iter(ds)))
     if len(batch) < 3:
         sys.exit(f'expected a (x_mel, x_acc, pitch_shift) batch, got '

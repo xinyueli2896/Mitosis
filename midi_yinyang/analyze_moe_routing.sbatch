@@ -50,6 +50,10 @@
 #   BATCH_SIZE     default 2 (one forward is plenty; this is not a
 #                  statistical estimate over the corpus, it is a read of
 #                  the router's behaviour).
+#   SEED      default 0. Seeds the batch draw (songs + windows), so runs
+#             on DIFFERENT ckpts with the same SEED analyze the same
+#             batch -- required for fair cross-ckpt comparisons (e.g.
+#             PROBE=within on mg vs baseline).
 #   MAX_POLYPHONY  melchord ckpts are cp8; sets MELCHORD_CP so tasks.py
 #                  resolves the matching data files.
 #
@@ -82,6 +86,7 @@ BATCH_SIZE="${BATCH_SIZE:-2}"
 MOE_NUM_EXPERTS="${MOE_NUM_EXPERTS:-4}"
 MOE_TOPK="${MOE_TOPK:-2}"
 PROBE="${PROBE:-none}"
+SEED="${SEED:-0}"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -121,7 +126,8 @@ python analyze_moe_routing.py \
     --batch-size "$BATCH_SIZE" \
     --moe-num-experts "$MOE_NUM_EXPERTS" \
     --moe-topk "$MOE_TOPK" \
-    --probe "$PROBE"
+    --probe "$PROBE" \
+    --seed "$SEED"
 
 echo "================================================================"
 echo "Done. Read the VERDICT block above."
