@@ -55,38 +55,46 @@ def main():
         'legend.fontsize': 7, 'mathtext.fontset': 'stix',
         'axes.linewidth': 0.6,
     })
-    fig, axes = plt.subplots(1, 2, figsize=(6.8, 2.0), sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(5.0, 2.7), sharey=True)
     layers = np.arange(12)
-    w = 0.36
 
     for ax, title, base, mg in [
             (axes[0], 'Melody stream', BASE_MEL, MG_MEL),
             (axes[1], 'Chord stream', BASE_CHD, MG_CHD)]:
         rb, rm = ratios(base), ratios(mg)
-        ax.bar(layers - w / 2, rb, width=w * 0.92, color=C_SHARED,
-               edgecolor='black', linewidth=0.25, label='shared router')
-        ax.bar(layers + w / 2, rm, width=w * 0.92, color=C_MG,
-               edgecolor='black', linewidth=0.25,
-               label='per-modality gates')
-        ax.axhline(1.0, color='0.25', linewidth=0.7,
+        for l in layers:
+            ax.plot([rb[l], rm[l]], [l, l], color='0.75', linewidth=0.9,
+                    zorder=1)
+        ax.scatter(rb, layers, s=16, facecolor=C_SHARED, edgecolor='black',
+                   linewidth=0.3, zorder=3, label='shared router')
+        ax.scatter(rm, layers, s=16, marker='s', facecolor=C_MG,
+                   edgecolor='black', linewidth=0.3, zorder=3,
+                   label='per-modality gates')
+        ax.axvline(1.0, color='0.25', linewidth=0.7,
                    linestyle=(0, (4, 2)), zorder=0)
         nb, nm = int((rb > 1).sum()), int((rm > 1).sum())
-        ax.set_title(f'{title}   ({nb}/12 vs {nm}/12 layers above null)',
+        ax.set_title(f'{title}\n{nb}/12 vs {nm}/12 layers above null',
                      pad=3)
-        ax.set_xlabel('layer', labelpad=1.5)
-        ax.set_xticks(layers[::2])
-        ax.set_xlim(-0.7, 11.7)
+        ax.set_xlabel(r'register effect / null$_{95}$', labelpad=1.5)
+        ax.set_xlim(0, 2.7)
+        ax.set_xticks([0, 0.5, 1.0, 1.5, 2.0, 2.5])
         ax.spines[['top', 'right']].set_visible(False)
         ax.tick_params(length=2.5)
 
-    axes[0].set_ylabel(r'register effect / null$_{95}$')
-    axes[0].set_ylim(0, 2.6)
-    axes[0].text(11.5, 1.03, 'shuffle null', ha='right', va='bottom',
-                 fontsize=6.5, color='0.25')
-    axes[1].legend(frameon=False, loc='upper left', borderpad=0.1,
-                   handlelength=1.1, handletextpad=0.5, labelspacing=0.3)
+    axes[0].set_ylim(11.6, -0.6)                 # layer 0 on top
+    axes[0].set_yticks(layers)
+    axes[0].set_yticklabels([str(l) for l in layers])
+    axes[0].set_ylabel('layer')
+    from matplotlib.lines import Line2D
+    handles, labels = axes[1].get_legend_handles_labels()
+    handles.append(Line2D([0], [0], color='0.25', linewidth=0.7,
+                          linestyle=(0, (4, 2))))
+    labels.append('shuffle null')
+    fig.legend(handles, labels, frameon=False, ncol=3,
+               loc='lower center', bbox_to_anchor=(0.54, -0.04),
+               handlelength=1.2, handletextpad=0.45, columnspacing=1.6)
 
-    fig.tight_layout(pad=0.4, w_pad=1.2)
+    fig.tight_layout(pad=0.4, w_pad=1.0)
     out = os.path.dirname(os.path.abspath(__file__))
     for ext in ('pdf', 'png'):
         fig.savefig(os.path.join(out, f'content_probe.{ext}'), dpi=300,
