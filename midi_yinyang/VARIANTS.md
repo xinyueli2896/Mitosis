@@ -352,6 +352,20 @@ sensitivity: swap changed expert preferences in 9/12 layers; layers
 snapshot ≈ baseline (0.368 vs 0.365; mb run 0.340); final numbers and
 final-ckpt probes pending the extended run.
 
+**Within-stream content-responsiveness (PROBE=within, seeded batch,
+jobs 182680/182681): the freed routing capacity went to the chord
+stream.** On the identical batch (SEED=0), routing follows frame
+register in — melody: mg 10/12 layers vs baseline 9/12 (tied; the
+shared router's content channel already served melody); **chord: mg
+9/12 vs baseline 5/12**, with mg's strongest effects mid-stack (L8
+0.245 vs null 0.110). Direction replicates on a second independent
+batch. Interpretation: in a shared router, chord content competes with
+the parity signal and melody structure for the same weight rows and
+loses; a dedicated gate_c starts tracking chord register. (Density and
+mean-duration terciles are degenerate on this corpus/batch and skip —
+register is the live feature.) Snapshot-level; re-run at the final
+extended ckpt.
+
 ## Experimental story
 
 The variants bracket the question:
