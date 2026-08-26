@@ -40,6 +40,14 @@ retraining:
                       remaining parity separation IS the stamp.
   --probe swap        exchange the streams' contents. Content and slot
                       now disagree; whichever the experts follow wins.
+  --probe within      WITHIN-STREAM content-responsiveness: does routing
+                      vary with what is in the frame (note density,
+                      register, mean duration), inside each stream, vs a
+                      shuffle null? This is the right content question
+                      for per-modality-gate (A.2.moe_permod) ckpts --
+                      where swap's slot/content dichotomy is undefined --
+                      and runs on shared-router ckpts too, so baselines
+                      are directly comparable. Interleaved layouts only.
 
 Either probe runs a baseline pass on the real batch first and prints a
 per-layer comparison plus a verdict.
@@ -279,6 +287,156 @@ def run_probe(net, batch, probe, base_prs, layers, layout, topk,
               'pair with --probe identical.')
 
 
+def frame_features(frame, eos, pad):
+    """(density, mean pitch, mean duration) of one frame's
+    (program, pitch-dur) token pairs; NaN pitch/dur for empty frames.
+    Decoding mirrors decode_output: pitch=(pd-2)%128, dur=(pd-2)//128."""
+    t = frame.reshape(-1).tolist()
+    pitches, durs = [], []
+    for i in range(0, len(t) - 1, 2):
+        prog, pd = t[i], t[i + 1]
+        if prog == eos or prog == pad or pd == pad or pd == eos:
+            break
+        pitches.append((pd - 2) % 128)
+        durs.append((pd - 2) // 128)
+    if not pitches:
+        return 0.0, float('nan'), float('nan')
+    return (float(len(pitches)),
+            sum(pitches) / len(pitches),
+            sum(durs) / len(durs))
+
+
+def _bucket_l1(vals, probs, n_shuffle=20):
+    """Content-responsiveness of routing to one feature: split tokens
+    into feature terciles, mean routing distribution per tercile, mean
+    pairwise L1 between them -- against a shuffle null (95th pct of the
+    same metric with feature values permuted). Returns (l1, null95) or
+    None when the feature is (near-)constant."""
+    keep = ~torch.isnan(vals)
+    vals, probs = vals[keep], probs[keep]
+    if vals.numel() < 30:
+        return None
+    q1, q2 = torch.quantile(vals, 1 / 3), torch.quantile(vals, 2 / 3)
+    if q1 == q2:            # degenerate feature (e.g. constant density)
+        return None
+    groups = [vals <= q1, (vals > q1) & (vals <= q2), vals > q2]
+    if min(int(g.sum()) for g in groups) < 10:
+        return None
+
+    def metric(p):
+        means = [p[g].mean(0) for g in groups]
+        return float(sum((means[i] - means[j]).abs().sum()
+                         for i in range(3) for j in range(i + 1, 3)) / 3)
+
+    real = metric(probs)
+    nulls = []
+    g = torch.Generator().manual_seed(0)
+    for _ in range(n_shuffle):
+        perm = torch.randperm(probs.shape[0], generator=g)
+        nulls.append(metric(probs[perm]))
+    nulls.sort()
+    return real, nulls[int(0.95 * len(nulls)) - 1]
+
+
+def run_within_probe(net, batch, layers, layout, E):
+    """Within-stream content-responsiveness: does routing vary with what
+    is IN the frame (density, register, duration), inside each stream?
+    This is the question swap cannot answer for per-modality gates (and
+    answers it for shared routers too, so baselines are comparable)."""
+    if layout != 'interleaved':
+        print('\nPROBE=within currently supports the interleaved layout '
+              f'only (got {layout}).')
+        return
+    # Re-run one loss pass capturing the EXACT tokens that get routed
+    # (preprocess applies pitch shift; features must describe the
+    # shifted tokens, not the raw batch).
+    captured = {}
+    orig = net.preprocess
+
+    def wrap(*a, **k):
+        out = orig(*a, **k)
+        captured['xm'], captured['xa'] = out[0].detach(), out[1].detach()
+        return out
+
+    net.preprocess = wrap
+    try:
+        with torch.no_grad():
+            net.loss(*batch)
+    finally:
+        net.preprocess = orig
+    prs = snapshot(layers)
+    eos, pad = net.tokenizer.eos_token, net.tokenizer.pad_token
+    xm, xa = captured['xm'], captured['xa']         # [B, T, S] each
+    B, T, S = xm.shape
+
+    feats = {}   # stream -> feature name -> [B*T]
+    for key, x in (('a', xm), ('b', xa)):
+        rows = [frame_features(x[b, t], eos, pad)
+                for b in range(B) for t in range(T)]
+        feats[key] = {
+            'density': torch.tensor([r[0] for r in rows]),
+            'register': torch.tensor([r[1] for r in rows]),
+            'mean dur': torch.tensor([r[2] for r in rows]),
+        }
+
+    print('\n' + '=' * 72)
+    print('PROBE: within -- routing vs frame content, INSIDE each stream')
+    print('  For each layer/stream/feature: tokens split into feature '
+          'terciles;')
+    print('  metric = mean pairwise L1 between the terciles\' mean '
+          'routing')
+    print('  distributions, vs a shuffle null (95th pct, 20 perms). A '
+          'value well')
+    print('  above its null means routing follows that aspect of the '
+          'content.')
+    print('  Applies to shared routers and per-modality gates alike.')
+    print('=' * 72)
+
+    hits = {'a': 0, 'b': 0}
+    for key, label in (('a', 'mod_a'), ('b', 'mod_b')):
+        print(f'\n  {label}:  {"layer":>5} '
+              + ''.join(f'{f:>22}' for f in feats[key]))
+        layer_hit = [False] * len(prs)
+        for i, pr in enumerate(prs):
+            L = pr.shape[1]
+            idx = [j for j in range(min(L, 2 * T))
+                   if (j % 2 == 0) == (key == 'a')]
+            p = pr[:, idx].reshape(-1, E)[: B * T]
+            cells = []
+            for fname, v in feats[key].items():
+                r = _bucket_l1(v[: p.shape[0]], p)
+                if r is None:
+                    cells.append(f'{"flat/skip":>22}')
+                    continue
+                real, null95 = r
+                mark = ' *' if real > null95 else '  '
+                layer_hit[i] = layer_hit[i] or real > null95
+                cells.append(f'{real:>10.3f} ({null95:.3f}){mark}')
+            print(f'  {"":8}{i:>5} ' + ''.join(cells))
+        hits[key] = sum(layer_hit)
+        print(f'    -> {label}: routing follows content in '
+              f'{hits[key]}/{len(prs)} layers (* = beats the null)')
+
+    print('\n  VERDICT:')
+    total = 2 * len(prs)
+    n = hits['a'] + hits['b']
+    if n >= total * 0.6:
+        print(f'  CONTENT-DRIVEN WITHIN STREAMS: {n}/{total} '
+              f'(stream, layer) pairs route')
+        print('  differently by frame content, well beyond shuffle '
+              'noise.')
+    elif n > 0:
+        print(f'  PARTIAL: {n}/{total} (stream, layer) pairs beat the '
+              f'null; the rest route')
+        print('  mostly from position/weight priors. Read the per-layer '
+              'stars above.')
+    else:
+        print('  NOT CONTENT-DRIVEN: no (stream, layer) pair beats the '
+              'shuffle null --')
+        print('  within a stream, routing ignores what is in the frame.')
+    print('=' * 72)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--variant', required=True, choices=sorted(VARIANTS))
@@ -289,7 +447,7 @@ def main():
     p.add_argument('--moe-num-experts', type=int, default=4)
     p.add_argument('--moe-topk', type=int, default=2)
     p.add_argument('--probe', default='none',
-                   choices=['none', 'identical', 'swap'],
+                   choices=['none', 'identical', 'swap', 'within'],
                    help='stamp-vs-content probe; see module docstring')
     args = p.parse_args()
 
@@ -581,7 +739,9 @@ def main():
         print('  toward zero (baseline without the bias: ~69%).')
         print('=' * 72)
 
-    if args.probe != 'none':
+    if args.probe == 'within':
+        run_within_probe(net, batch, layers, layout, E)
+    elif args.probe != 'none':
         # Baseline probs are still live on the layers (nothing has run a
         # forward since); snapshot them before the probe pass overwrites.
         # On a modality-bias model the probes target the content pathway.

@@ -41,6 +41,12 @@
 #             stamp. 'swap' exchanges the contents -- whichever the
 #             experts follow (slot or content) wins. Both run a baseline
 #             pass first and print a per-layer comparison + verdict.
+#             'within' is the WITHIN-STREAM content probe: per layer and
+#             stream, does routing vary with the frame's note density /
+#             register / mean duration, against a shuffle null? The
+#             right content question for A.2.moe_permod ckpts (where
+#             swap's slot/content dichotomy is undefined); also runs on
+#             shared-router ckpts for a directly comparable baseline.
 #   BATCH_SIZE     default 2 (one forward is plenty; this is not a
 #                  statistical estimate over the corpus, it is a read of
 #                  the router's behaviour).
