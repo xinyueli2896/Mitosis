@@ -1,20 +1,21 @@
-"""Paper figure: per-expert top-1 routing load by layer, for the three
-A.2 router designs -- the "are there dead experts?" figure.
+"""Paper figure: expert utilization -- the "are there dead experts?"
+figure, as a distribution strip.
 
-Every bar rises from zero, so a dead expert (one that never wins any
-token's top-1) would be a visibly missing bar. Across all three designs
-and all 12 layers, no (layer, expert) pair is at zero, and loads sit
-near the balanced ideal 1/E = 0.25 (dashed line).
+One dot per (layer, expert) pair: 12 layers x 4 experts = 48 dots per
+router design. The claim reads directly off the geometry: no dot sits
+at zero (a dead expert would), every cloud hugs the balanced ideal
+1/E = 0.25, and the per-modality-gates cloud is the tightest. The
+per-design minimum is annotated -- the single number the dead-expert
+question reduces to.
 
 Data: per-expert top-1 load tables from analyze_moe_routing.sbatch --
   shared        job 182681 (seeded batch, SEED=0)
   + bias (mb)   job 179683
   per-modality gates (mg)  job 182680 (seeded batch, SEED=0)
-The utilization claim replicates across every batch analyzed (jobs
-178410, 178528, 178945/46, 179683/84, 182634/35, 182665/66, 182680/81):
-zero dead experts in all of them.
+Zero dead experts replicates across every batch analyzed (jobs 178410,
+178528, 178945/46, 179683/84, 182634/35, 182665/66, 182680/81).
 
-Run anywhere with matplotlib (no torch needed):
+Run anywhere with matplotlib (no torch):
     python figures/plot_expert_load.py
 Writes figures/expert_load.pdf (vector, for LaTeX) and .png (300 dpi).
 """
@@ -25,9 +26,6 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
-
-# Okabe-Ito, colorblind-safe; fixed expert order e0..e3.
-COLORS = ['#0072B2', '#E69F00', '#009E73', '#CC79A7']
 
 SHARED = [
     [.238, .323, .231, .208], [.203, .220, .286, .291],
@@ -51,18 +49,17 @@ MG = [
     [.164, .260, .270, .306], [.237, .315, .226, .222],
     [.177, .347, .205, .271], [.320, .227, .247, .206]]
 
-PANELS = [('Shared router', SHARED),
-          ('Shared + modality bias', MB),
-          ('Per-modality gates', MG)]
+DESIGNS = [('Shared', SHARED), ('+ Bias', MB), ('Per-modality\ngates', MG)]
+DOT = '#0072B2'
 
 
-def main():
+def paper_style():
     plt.rcParams.update({
         'font.family': 'serif',
         'font.size': 8,
         'axes.labelsize': 8,
         'axes.titlesize': 8.5,
-        'xtick.labelsize': 7,
+        'xtick.labelsize': 7.5,
         'ytick.labelsize': 7,
         'legend.fontsize': 7,
         'mathtext.fontset': 'stix',
@@ -71,38 +68,42 @@ def main():
         'ytick.major.width': 0.6,
     })
 
-    fig, axes = plt.subplots(1, 3, figsize=(6.8, 2.05), sharey=True)
-    layers = np.arange(12)
-    width = 0.19
 
-    for ax, (title, data) in zip(axes, PANELS):
-        arr = np.array(data)
-        for e in range(4):
-            ax.bar(layers + (e - 1.5) * width, arr[:, e], width=width * 0.92,
-                   color=COLORS[e], edgecolor='black', linewidth=0.25,
-                   label=f'expert {e}')
-        ax.axhline(0.25, color='0.25', linewidth=0.7, linestyle=(0, (4, 2)),
-                   zorder=0)
-        ax.set_title(title, pad=3)
-        ax.set_xlabel('layer', labelpad=1.5)
-        ax.set_xticks(layers[::2])
-        ax.set_xlim(-0.7, 11.7)
-        ax.set_ylim(0, 0.5)
-        ax.set_yticks([0, 0.1, 0.2, 0.3, 0.4, 0.5])
-        ax.spines[['top', 'right']].set_visible(False)
-        ax.tick_params(length=2.5)
+def main():
+    paper_style()
+    fig, ax = plt.subplots(figsize=(3.35, 2.5))
+    rng = np.random.default_rng(0)
 
-    axes[0].set_ylabel('top-1 load')
-    handles, labels = axes[0].get_legend_handles_labels()
-    from matplotlib.lines import Line2D
-    handles.append(Line2D([0], [0], color='0.25', linewidth=0.7,
-                          linestyle=(0, (4, 2))))
-    labels.append(r'balanced $1/E$')
-    fig.legend(handles, labels, ncol=5, frameon=False,
-               loc='upper center', bbox_to_anchor=(0.5, 1.09),
-               handlelength=1.1, handletextpad=0.45, columnspacing=1.4)
+    for i, (name, data) in enumerate(DESIGNS):
+        vals = np.array(data).ravel()
+        x = i + rng.uniform(-0.16, 0.16, size=vals.size)
+        ax.scatter(x, vals, s=9, facecolor=DOT, edgecolor='none',
+                   alpha=0.65, zorder=3)
+        med, lo = np.median(vals), vals.min()
+        ax.hlines(med, i - 0.24, i + 0.24, color='black', linewidth=1.1,
+                  zorder=4)
+        ax.annotate(f'min {lo:.2f}', xy=(i, lo), xytext=(i + 0.02, lo - 0.045),
+                    ha='center', fontsize=6.5, color='0.25')
 
-    fig.tight_layout(pad=0.4, w_pad=1.0, rect=(0, 0, 1, 0.95))
+    ax.axhline(0.25, color='0.25', linewidth=0.7, linestyle=(0, (4, 2)),
+               zorder=1)
+    ax.text(2.44, 0.256, r'balanced $1/E$', ha='right', va='bottom',
+            fontsize=6.5, color='0.25')
+    ax.axhline(0, color='black', linewidth=0.8)
+    ax.text(2.44, 0.008, 'dead-expert level', ha='right', va='bottom',
+            fontsize=6.5, color='0.25')
+
+    ax.set_xticks(range(3))
+    ax.set_xticklabels([n for n, _ in DESIGNS])
+    ax.set_xlim(-0.5, 2.5)
+    ax.set_ylim(-0.01, 0.47)
+    ax.set_yticks([0, 0.1, 0.2, 0.3, 0.4])
+    ax.set_ylabel('per-expert top-1 load')
+    ax.spines[['top', 'right']].set_visible(False)
+    ax.tick_params(length=2.5)
+    ax.tick_params(axis='x', length=0)
+
+    fig.tight_layout(pad=0.4)
     out = os.path.dirname(os.path.abspath(__file__))
     for ext in ('pdf', 'png'):
         fig.savefig(os.path.join(out, f'expert_load.{ext}'), dpi=300,
