@@ -51,54 +51,37 @@ def ratios(pairs):
 def main():
     plt.rcParams.update({
         'font.family': 'serif', 'font.size': 8, 'axes.labelsize': 8,
-        'axes.titlesize': 8.5, 'xtick.labelsize': 7.5, 'ytick.labelsize': 7,
-        'legend.fontsize': 7, 'mathtext.fontset': 'stix',
-        'axes.linewidth': 0.6,
+        'xtick.labelsize': 8, 'ytick.labelsize': 7, 'legend.fontsize': 7,
+        'mathtext.fontset': 'stix', 'axes.linewidth': 0.6,
     })
-    fig, ax = plt.subplots(figsize=(3.35, 2.5))
-    rng = np.random.default_rng(0)
-    groups = [('Melody', ratios(BASE_MEL), C_SHARED, 'o'),
-              ('Melody', ratios(MG_MEL), C_MG, 's'),
-              ('Chord', ratios(BASE_CHD), C_SHARED, 'o'),
-              ('Chord', ratios(MG_CHD), C_MG, 's')]
-    xs = [0, 0.75, 2.0, 2.75]
-
-    for x0, (stream, r, color, marker) in zip(xs, groups):
-        jit = x0 + rng.uniform(-0.13, 0.13, size=r.size)
-        above = r > 1
-        ax.scatter(jit[above], r[above], s=15, marker=marker,
-                   facecolor=color, edgecolor='black', linewidth=0.3,
-                   zorder=3)
-        ax.scatter(jit[~above], r[~above], s=15, marker=marker,
-                   facecolor='none', edgecolor=color, linewidth=0.9,
-                   zorder=3)
-        ax.hlines(np.median(r), x0 - 0.22, x0 + 0.22, color='black',
-                  linewidth=1.1, zorder=4)
-        ax.text(x0, 2.62, f'{int(above.sum())}/12', ha='center',
-                fontsize=7.5, fontweight='bold', color='black')
-
-    ax.axhline(1.0, color='0.25', linewidth=0.7, linestyle=(0, (4, 2)),
-               zorder=1)
-    ax.text(-0.44, 1.04, 'null', ha='left', va='bottom', fontsize=6.5,
-            color='0.25')
-    ax.set_xticks(xs)
-    ax.set_xticklabels(['shared', 'gates', 'shared', 'gates'])
-    ax.text(0.375, -0.62, 'Melody stream', ha='center', fontsize=8)
-    ax.text(2.375, -0.62, 'Chord stream', ha='center', fontsize=8)
-    ax.set_xlim(-0.5, 3.25)
-    ax.set_ylim(0, 2.85)
-    ax.set_yticks([0, 0.5, 1.0, 1.5, 2.0, 2.5])
-    ax.set_ylabel(r'register effect / null$_{95}$')
+    fig, ax = plt.subplots(figsize=(2.6, 2.1))
+    counts = [int((ratios(d) > 1).sum())
+              for d in (BASE_MEL, MG_MEL, BASE_CHD, MG_CHD)]
+    x = np.array([0, 1])
+    w = 0.36
+    ax.bar(x - w/2, [counts[0], counts[2]], width=w*0.92, color=C_SHARED,
+           edgecolor='black', linewidth=0.3, label='shared router')
+    ax.bar(x + w/2, [counts[1], counts[3]], width=w*0.92, color=C_MG,
+           edgecolor='black', linewidth=0.3, label='per-modality gates')
+    for xi, c in zip([x[0]-w/2, x[0]+w/2, x[1]-w/2, x[1]+w/2],
+                     [counts[0], counts[1], counts[2], counts[3]]):
+        ax.text(xi, c + 0.25, str(c), ha='center', fontsize=7.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels(['Melody', 'Chord'])
+    ax.set_ylim(0, 12)
+    ax.set_yticks([0, 4, 8, 12])
+    ax.set_ylabel('layers with content-driven\nrouting (of 12)')
     ax.spines[['top', 'right']].set_visible(False)
-    ax.tick_params(length=2.5)
-    ax.tick_params(axis='x', length=0)
-
-    fig.tight_layout(pad=0.4, rect=(0, 0.05, 1, 1))
+    ax.tick_params(length=2.5); ax.tick_params(axis='x', length=0)
+    ax.legend(frameon=False, loc='upper left', borderpad=0.1,
+              handlelength=1.0, handletextpad=0.4, labelspacing=0.3,
+              fontsize=6.5)
+    fig.tight_layout(pad=0.4)
     out = os.path.dirname(os.path.abspath(__file__))
     for ext in ('pdf', 'png'):
-        fig.savefig(os.path.join(out, f'content_probe.{ext}'), dpi=300,
-                    bbox_inches='tight')
-    print('wrote figures/content_probe.{pdf,png}')
+        fig.savefig(os.path.join(out, f'content_probe_summary.{ext}'),
+                    dpi=300, bbox_inches='tight')
+    print('wrote figures/content_probe_summary.{pdf,png}')
 
 
 if __name__ == '__main__':
