@@ -78,6 +78,36 @@ TASKS = {
         mod_a_default_program=0,
         mod_b_default_program=24,
     ),
+    'melchord_pop909_pop1k7': TaskConfig(
+        name='melchord_pop909_pop1k7',
+        mod_a_label='mel',
+        mod_b_label='chord',
+        # POP909 + Pop1K7 combined (~2.6k songs vs POP909's ~0.9k),
+        # built by combine_pop909_pop1k7.sbatch with POP909 FIRST so its
+        # songs keep their standalone absolute indices and the held-out
+        # ids stay held out under the index-mod-10 split. Both sources
+        # must be tokenized at the same MELCHORD_CP. Note the corpora
+        # differ in kind: POP909 chords are human annotations, Pop1K7's
+        # come from the release's own annotated tracks over transcribed
+        # performances -- compare combined-corpus models against
+        # POP909-only ones rather than swapping silently.
+        mod_a_path=f'data/melchord_pop909_pop1k7_melody_cp{MELCHORD_CP}_v2.pt',
+        mod_b_path=f'data/melchord_pop909_pop1k7_chord_cp{MELCHORD_CP}_v2.pt',
+        mod_a_default_program=24,
+        mod_b_default_program=0,
+    ),
+    'melchord_pop909_pop1k7_rev': TaskConfig(
+        name='melchord_pop909_pop1k7_rev',
+        mod_a_label='chord',
+        mod_b_label='mel',
+        # REVERSED combined corpus for the conditional (C) models'
+        # chord->mel direction. Same two files, same split, roles
+        # swapped -- a forward/reverse pair differs ONLY in direction.
+        mod_a_path=f'data/melchord_pop909_pop1k7_chord_cp{MELCHORD_CP}_v2.pt',
+        mod_b_path=f'data/melchord_pop909_pop1k7_melody_cp{MELCHORD_CP}_v2.pt',
+        mod_a_default_program=0,
+        mod_b_default_program=24,
+    ),
     'melchord_pop1k7': TaskConfig(
         name='melchord_pop1k7',
         mod_a_label='mel',
