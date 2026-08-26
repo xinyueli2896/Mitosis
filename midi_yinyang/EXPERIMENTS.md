@@ -604,6 +604,48 @@ from both ends.
 as A.2-melchord, ~50k steps × 4 GPUs). Drumnondrum replication gated
 on the melchord outcome, like the other training-side ablations.
 
+#### E4d — Router-design ablation: shared gate vs per-modality gates
+
+Completes the MoE story E4c opens. E4c asks whether expert routing is
+load-bearing at all (MoE vs dense); E4d asks whether HOW the routing is
+computed matters: the standard shared gate vs **A.2.moe_permod** —
+per-modality gate matrices (`gate_m`/`gate_c`) over the same fully
+shared, unassigned expert pool (see VARIANTS.md, "A.2.moe_permod").
+
+**Motivation (established, MOE_ROUTING_REPORT.md).** The shared gate's
+apparent modality specialization is ~69% architectural stamp: content
+equalisation removes only ~31% of the routing separation and expert
+preferences follow moved content in 0/11 layers. A per-modality bias
+offered as a free shortcut went unused (falsified, pre-registered
+metric). Per-modality gates remove the stamp from the router's job by
+construction.
+
+**Arms.** A2shared (the standard melchord A.2) vs A2mg (`K4mg` run,
+identical recipe/data/steps, `MOE_MODALITY_GATES=1`). Optionally
+A2dense (the E4c arm) joins the same evaluation run for a three-way
+routing spectrum: none / shared / per-modality.
+
+**Mechanism evidence (already measured, mid-training snapshot).**
+Emergent specialists + integrators over the unassigned pool; chord-side
+within-stream content-routing 5→9 of 12 layers (seeded within-probe);
+zero dead experts teacher-forced AND free-running; deadliness
+(1 − min-load/(1/E)) 0.25/0.31 for mg vs 0.25/0.36 for shared
+(TF/free-running). Figures under `midi_yinyang/figures/`.
+
+**Output-side evaluation.** `eval_a2_moe_ablation.sbatch`: co-generates
+with all arms on identical prompts and decode settings, SAVES the
+sample midis per (song, arm) for listening, records per-arm
+free-running routing stats, then scores structure metrics + the
+standard E1 chain with `BASELINE=A2shared` (Wilcoxon column reads as
+"did per-modality gates move vs shared"). Pre-registered expectation:
+quality parity or better (the redundancy removal is an
+efficiency/interpretability claim first); any gain should land on H3
+stream-grammar metrics, mirroring E4c's logic. Reported honestly
+either way — the mechanism results stand independently.
+
+**Cost.** The mg training run already exists; evaluation is one GPU
+job. Final-checkpoint numbers pending the extended mg run.
+
 ### E5 — (Optional) Anticipation-horizon sweep (B.1 only)
 
 Run only if the E3 horizon-spectrum result is positive (B.1 recovers a
