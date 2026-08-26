@@ -154,6 +154,14 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
     if unexpected:
         print(f'[load_model] unexpected keys ({len(unexpected)}): {unexpected[:5]}'
               f'{"..." if len(unexpected) > 5 else ""}')
+    # Free-running routing statistics (env-activated, like the A3_*
+    # decode knobs, so every driver that loads through here gets it
+    # without CLI plumbing): accumulate every MoE routing decision this
+    # process makes and report + dump JSON at exit.
+    _stats_out = _os.environ.get('MOE_ROUTING_STATS')
+    if _stats_out:
+        from moe_runtime_stats import attach as _attach_routing_stats
+        _attach_routing_stats(net, _stats_out)
     return net
 
 

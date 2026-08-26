@@ -66,6 +66,15 @@ TEMPERATURE="${TEMPERATURE:-1.0}"
 MAX_POLYPHONY="${MAX_POLYPHONY:-16}"
 MIN_CHORD_TOKENS_BEFORE_EOS="${MIN_CHORD_TOKENS_BEFORE_EOS:-0}"
 MODES="${MODES:-co mel2chord chord2mel mel_only chord_only}"
+# ROUTING_STATS=1: accumulate MoE routing over EVERY forward of the
+# decode (free-running expert utilization -- the generation-time
+# counterpart to analyze_moe_routing's teacher-forced measurement).
+# Report prints at the end of the job log; raw counts land in
+# results/routing_stats_<jobid>.json for figures/. Costs ~nothing.
+ROUTING_STATS="${ROUTING_STATS:-0}"
+if [[ "$ROUTING_STATS" == "1" ]]; then
+    export MOE_ROUTING_STATS="results/routing_stats_${SLURM_JOB_ID:-local}.json"
+fi
 # Samples per (song, mode). 1 (default) keeps the 'duet' layout
 # (<song>/<mode>.mid); >1 switches to 'duet_multi'
 # (<song>/<mode>/sample_<i>_temp<T>.mid) -- tell build_eval_manifest
