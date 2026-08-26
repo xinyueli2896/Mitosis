@@ -331,9 +331,26 @@ Mechanics:
   and the analyzer auto-detect.
 - Readout: `analyze_moe_routing.sbatch` — the mod-L1 column is by
   construction here (two different gates) and is NOT the finding; the
-  purity table is. `PROBE=swap` becomes the live probe: if each gate
-  routes by content, expert preferences should follow moved content
-  (the shared-router baseline scored 0/11–0/12).
+  purity table is. Probe semantics change for this variant (the
+  analyzer prints gates-specific verdicts): the identical probe
+  measures gate_m-vs-gate_c divergence (expected), and swap's
+  SLOT/CONTENT dichotomy does not apply — moved content is scored by
+  the other stream's gate, so "neither" is the expected outcome for a
+  content-responsive gate; the meaningful split is prefs-changed
+  (input-sensitive) vs prefs-unchanged (weight-prior routing).
+
+**Preliminary result (2026-08-26, mid-extension snapshot at best-val
+0.368, probes 182634/182635): the specialists+integrators structure
+EMERGED without assignment.** Typical layer: one melody specialist,
+one chord specialist, and mixed experts winning real traffic from both
+streams — e.g. L0: e0 1.7%/e1 93.5% (specialist pair) with e2 at 41%
+(integrator); L7: e2 at 51%; L3/L10/L11 near-pure specialist pairs
+(0.0%/100%). Loads MORE balanced than the shared-router baseline
+(worst max_load 0.36 vs 0.43–0.52), no dead experts. Input
+sensitivity: swap changed expert preferences in 9/12 layers; layers
+0/4/5 kept theirs (weight-prior routing there). val_loss at the
+snapshot ≈ baseline (0.368 vs 0.365; mb run 0.340); final numbers and
+final-ckpt probes pending the extended run.
 
 ## Experimental story
 

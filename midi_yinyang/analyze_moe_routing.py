@@ -174,6 +174,20 @@ def run_probe(net, batch, probe, base_prs, layers, layout, topk,
         ratio = mq / mb if mb > 0 else float('nan')
         print(f'\n  mean L1: real {mb:.3f} -> identical-content {mq:.3f}  '
               f'(stamp share ~ {ratio:.0%})')
+        if gates:
+            print('\n  VERDICT (per-modality gates):')
+            print(f'  GATE DIVERGENCE ~{ratio:.0%}: with identical content, '
+                  f'the remaining parity')
+            print('  separation is gate_m vs gate_c mapping the SAME input '
+                  'to different')
+            print('  expert distributions -- expected of two independently '
+                  'trained matrices,')
+            print('  and NOT a stamp read (the stamp cannot steer '
+                  'within-stream routing here).')
+            print('  The shared-router STAMP/CONTENT verdict below does '
+                  'not apply; it is')
+            print('  suppressed for this variant.')
+            return
         if content:
             print('\n  A.2.moe_improved success metric: this stamp share '
                   'should be near ZERO --')
@@ -224,6 +238,28 @@ def run_probe(net, batch, probe, base_prs, layers, layout, topk,
               f'{"e%d/e%d" % (q["pref_a"], q["pref_b"]):>14}   {tag}')
     print(f'\n  layers following the slot: {slot_hits}/{usable}   '
           f'following the content: {content_hits}/{usable}')
+    if gates:
+        print('\n  VERDICT (per-modality gates):')
+        print('  The SLOT/CONTENT dichotomy assumes ONE router mapping '
+              'content -> expert')
+        print('  consistently across slots. With per-modality gates that '
+              'is structurally')
+        print('  impossible: under swap, moved content is scored by the '
+              'OTHER stream\'s')
+        print('  gate, a different matrix with no trained correspondence '
+              '-- "neither" is')
+        print('  the expected outcome for a content-responsive gate, and '
+              'CONTENT rows')
+        print('  would be coincidence. The meaningful split here:')
+        print(f'    prefs CHANGED under swap (input-sensitive layers): '
+              f'{usable - slot_hits}/{usable}')
+        print(f'    prefs UNCHANGED (weight-prior routing, content-'
+              f'insensitive): {slot_hits}/{usable}')
+        print('  A rigorous within-stream content-responsiveness test '
+              'needs a same-stream')
+        print('  probe (e.g. routing correlation with frame register/'
+              'density), not swap.')
+        return
     print('\n  VERDICT:')
     if usable == 0:
         print('  No usable layers (base parities always shared a '
