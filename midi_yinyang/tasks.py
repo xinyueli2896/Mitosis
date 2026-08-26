@@ -78,6 +78,33 @@ TASKS = {
         mod_a_default_program=0,
         mod_b_default_program=24,
     ),
+    'melchord_pop1k7': TaskConfig(
+        name='melchord_pop1k7',
+        mod_a_label='mel',
+        mod_b_label='chord',
+        # Pop1K7 (AILabs.tw: 1,747 transcribed piano covers of J-anime /
+        # K-pop / Western pop; src_001..src_004 of the annotated release,
+        # 'test' held out). Melody and chord come from the release's own
+        # NAMED tracks (the piano/accompaniment track is dropped), split
+        # by split_named_tracks.py and tokenized by
+        # preprocess_pop1k7_melchord.sbatch at MELCHORD_CP. Disjoint
+        # from POP909 (different songs, different provenance).
+        mod_a_path=f'data/pop1k7_melody_cp{MELCHORD_CP}_v2.pt',
+        mod_b_path=f'data/pop1k7_chord_cp{MELCHORD_CP}_v2.pt',
+        mod_a_default_program=24,
+        mod_b_default_program=0,
+    ),
+    'melchord_pop1k7_rev': TaskConfig(
+        name='melchord_pop1k7_rev',
+        mod_a_label='chord',
+        mod_b_label='mel',
+        # REVERSED Pop1K7 for the conditional (C) models' chord->mel
+        # direction. Same files, same index-mod-10 split, roles swapped.
+        mod_a_path=f'data/pop1k7_chord_cp{MELCHORD_CP}_v2.pt',
+        mod_b_path=f'data/pop1k7_melody_cp{MELCHORD_CP}_v2.pt',
+        mod_a_default_program=0,
+        mod_b_default_program=24,
+    ),
     'melchord_nottingham': TaskConfig(
         name='melchord_nottingham',
         mod_a_label='mel',
