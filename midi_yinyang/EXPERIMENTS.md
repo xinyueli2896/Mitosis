@@ -26,6 +26,35 @@ Research questions:
 
 ---
 
+## Paper scope (registered 2026-08-27)
+
+The publication target, for now, is **co-generation plus two ablation
+families**. Everything below stays in the plan, but these three carry
+the paper:
+
+1. **Co-generation (E1)** — lead-sheet (melody+chord) co-generation:
+   duet systems vs single-stream baselines vs the external SOTA
+   references of §2.6 (whole-song model's lead-sheet stage;
+   AccoMontage via the future accompaniment arm). Headline claim: what
+   explicit two-stream joint modeling buys.
+2. **MoE ablation (E6)** — interpretability-first: dense / shared /
+   hard-route / per-modality-gates spanning imposed-vs-learned
+   modality separation, with the stamp-probe diagnosis, the falsified
+   bias variant, and the emergent specialists+integrators result.
+3. **Alignment ablation** — the "one musical event, one coordinate"
+   principle, shown twice independently: A.2's rope-geometry ablation
+   (v1.1 parity RoPE vs v1.2 time-aligned,
+   `eval_a2_rope_ablation.sbatch`) and C.1's prefix-geometry study
+   (legacy vs `prefix_stride2`, reconstruction 0.830 → 0.999) — the
+   same alignment idea at two different places in the architecture.
+
+Second-degree (recorded, not in the paper for now): conditional
+generation as a headline (E3 stays supporting material), the
+conditioning-balance knob (E3 side note), non-aligned modalities
+(§2.7), E5.
+
+---
+
 ## 1. Tasks, data, splits
 
 | | drumnondrum | melchord |
