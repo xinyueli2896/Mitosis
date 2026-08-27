@@ -102,7 +102,8 @@ class M2CDuetBlockLayer(nn.Module):
     def __init__(self, hidden_size, num_heads, intermediate_size,
                  moe_num_experts, moe_topk, moe_intermediate_size,
                  dropout=0.0, gate_init_bias=-10.0,
-                 moe_modality_bias=False, moe_modality_gates=False):
+                 moe_modality_bias=False, moe_modality_gates=False,
+                 moe_modality_hard_route=False):
         super().__init__()
         assert hidden_size % num_heads == 0
         self.hidden_size = hidden_size
@@ -139,7 +140,8 @@ class M2CDuetBlockLayer(nn.Module):
                                      num_experts=moe_num_experts,
                                      topk=moe_topk,
                                      modality_bias=moe_modality_bias,
-                                     modality_gates=moe_modality_gates)
+                                     modality_gates=moe_modality_gates,
+                                     modality_hard_route=moe_modality_hard_route)
         else:
             self.ffn = nn.Sequential(
                 nn.Linear(hidden_size, ffn_inter),
@@ -408,6 +410,7 @@ class M2CDuetBlockAttn(RoFormerSymbolicTransformer):
                  global_dropout=0.0, preserve_program=True,
                  gate_init_bias=-10.0, query_loss_weight=1.0,
                  moe_modality_bias=False, moe_modality_gates=False,
+                 moe_modality_hard_route=False,
                  **kwargs):
         super().__init__(
             *args,
@@ -438,6 +441,7 @@ class M2CDuetBlockAttn(RoFormerSymbolicTransformer):
                 gate_init_bias=gate_init_bias,
                 moe_modality_bias=moe_modality_bias,
                 moe_modality_gates=moe_modality_gates,
+                moe_modality_hard_route=moe_modality_hard_route,
             )
             for _ in range(self.global_num_layers)
         ])

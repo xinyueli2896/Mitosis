@@ -154,18 +154,64 @@ class SimpleMoEFFN(nn.Module):
     left for training to decide and read off the purity tables.
     Presence of the gate_m/gate_c keys in a checkpoint IS the flag.
 
-    Either feature makes forward() REQUIRE modality_ids; callers that
-    do not know the layout cannot enable them.
+    modality_hard_route (A.2.moe_hardroute): the DISJOINT-POOL control.
+    The expert list is split in half by index -- mod_a may only reach
+    experts [0, E/2), mod_b only [E/2, E) -- by masking the other
+    pool's logits to -inf before the softmax. This is the design the
+    multimodal MoE literature calls modality-specific experts (MoMa,
+    VL-MoE, Uni-MoE): separation is IMPOSED rather than learned, and no
+    expert can serve both streams. It is the strawman the per-modality
+    gates are argued against: same parameters, same activated compute,
+    the only difference being that an integrator expert is no longer
+    representable. Purity is therefore 0/100 BY CONSTRUCTION and must
+    not be read as a finding -- the informative measurements on this
+    arm are within-pool content-responsiveness and downstream quality.
+    The aux load-balancing loss is computed WITHIN each pool (see
+    forward): the standard all-expert form would push toward a uniform
+    load the routing cannot produce, penalising the arm for its own
+    architecture and making the comparison unfair.
+    No new parameters, so the flag is carried by a registered buffer
+    (hard_route_flag) for checkpoint auto-detection.
+
+    Any of these features makes forward() REQUIRE modality_ids; callers
+    that do not know the layout cannot enable them.
     """
 
     def __init__(self, hidden_size, intermediate_size, num_experts, topk,
-                 modality_bias=False, modality_gates=False):
+                 modality_bias=False, modality_gates=False,
+                 modality_hard_route=False):
         super().__init__()
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
         self.num_experts = num_experts
         self.topk = topk
         self.modality_gates = bool(modality_gates)
+        self.modality_hard_route = bool(modality_hard_route)
+        if self.modality_hard_route:
+            if num_experts % 2 != 0:
+                raise ValueError(
+                    f'modality_hard_route needs an even num_experts to '
+                    f'split into two pools (got {num_experts})'
+                )
+            self.pool_size = num_experts // 2
+            if topk > self.pool_size:
+                raise ValueError(
+                    f'modality_hard_route: topk={topk} exceeds the '
+                    f'per-modality pool size {self.pool_size}. Lower '
+                    f'topk or raise num_experts.'
+                )
+            # Buffer, not a parameter: hard routing adds no weights, so
+            # this is what a checkpoint carries to identify the variant.
+            self.register_buffer(
+                'hard_route_flag', torch.tensor(1, dtype=torch.long),
+                persistent=True,
+            )
+            # [E] mask, True where expert e belongs to mod_a's pool.
+            self.register_buffer(
+                'pool_is_a',
+                torch.arange(num_experts) < self.pool_size,
+                persistent=False,
+            )
         if modality_gates:
             self.gate_m = nn.Linear(hidden_size, num_experts, bias=False)
             self.gate_c = nn.Linear(hidden_size, num_experts, bias=False)
@@ -182,7 +228,8 @@ class SimpleMoEFFN(nn.Module):
         else:
             self.register_parameter('modality_bias', None)
         # Callers check this to know whether to pass modality_ids.
-        self.needs_modality_ids = bool(modality_bias or modality_gates)
+        self.needs_modality_ids = bool(
+            modality_bias or modality_gates or modality_hard_route)
         self.fc1 = nn.ModuleList(
             [nn.Linear(hidden_size, intermediate_size) for _ in range(num_experts)]
         )
@@ -235,6 +282,15 @@ class SimpleMoEFFN(nn.Module):
             self._last_content_probs = F.softmax(logits, dim=-1) \
                 .detach().view(B, L, self.num_experts)
             logits = logits + self.modality_bias[ids_flat]
+        if self.modality_hard_route:
+            # Mask the other modality's pool out of the softmax entirely.
+            # allowed[n, e] is True iff expert e is in token n's pool.
+            allowed = torch.where(
+                ids_flat.unsqueeze(-1) == 0,
+                self.pool_is_a.unsqueeze(0),
+                ~self.pool_is_a.unsqueeze(0),
+            )                                                        # [N, E]
+            logits = logits.masked_fill(~allowed, float('-inf'))
         probs = F.softmax(logits, dim=-1)
         # Cache for diagnostics. Reshape back to [B, L, E].
         self._last_routing_probs = probs.detach().view(B, L, self.num_experts)
@@ -259,11 +315,38 @@ class SimpleMoEFFN(nn.Module):
         # f_i = fraction of tokens whose top-1 is expert i
         # P_i = mean softmax probability of expert i
         top1 = top_idx[:, 0]
-        f = torch.zeros(self.num_experts, device=x.device, dtype=x.dtype)
-        f.scatter_add_(0, top1, torch.ones_like(top1, dtype=x.dtype))
-        f = f / max(N, 1)
-        P = probs.mean(dim=0)
-        aux_loss = self.num_experts * (f * P).sum()
+        if self.modality_hard_route:
+            # Balance WITHIN each pool. The all-expert form would ask for
+            # a uniform load over E experts that hard routing cannot
+            # produce (a mod_a token can never reach pool B), turning the
+            # aux term into a constant penalty on the architecture rather
+            # than a balancing pressure. Each pool is its own Switch
+            # problem over pool_size experts; the two are averaged.
+            aux_terms = []
+            for pool_id in (0, 1):
+                sel = (ids_flat == pool_id)
+                n_sel = int(sel.sum())
+                if n_sel == 0:
+                    continue
+                lo = pool_id * self.pool_size
+                hi = lo + self.pool_size
+                f_p = torch.zeros(self.pool_size, device=x.device,
+                                  dtype=x.dtype)
+                f_p.scatter_add_(
+                    0, top1[sel] - lo,
+                    torch.ones(n_sel, device=x.device, dtype=x.dtype),
+                )
+                f_p = f_p / n_sel
+                P_p = probs[sel, lo:hi].mean(dim=0)
+                aux_terms.append(self.pool_size * (f_p * P_p).sum())
+            aux_loss = (torch.stack(aux_terms).mean() if aux_terms
+                        else probs.sum() * 0.0)
+        else:
+            f = torch.zeros(self.num_experts, device=x.device, dtype=x.dtype)
+            f.scatter_add_(0, top1, torch.ones_like(top1, dtype=x.dtype))
+            f = f / max(N, 1)
+            P = probs.mean(dim=0)
+            aux_loss = self.num_experts * (f * P).sum()
 
         return out_flat.view(B, L, H), aux_loss
 

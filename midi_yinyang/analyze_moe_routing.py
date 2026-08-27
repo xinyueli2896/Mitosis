@@ -512,8 +512,31 @@ def main():
     has_bias = any(getattr(l.ffn, 'modality_bias', None) is not None
                    for l in layers)
     has_gates = any(getattr(l.ffn, 'modality_gates', False) for l in layers)
+    has_hard = any(getattr(l.ffn, 'modality_hard_route', False)
+                   for l in layers)
     print(f'\n{len(layers)} MoE layer(s), {E} experts, top-{topk}. '
           f'Balanced load = {1/E:.3f} per expert.')
+    if has_hard:
+        pool = E // 2
+        print('HARD ROUTE (A.2.moe_hardroute): DISJOINT expert pools -- '
+              f'mod_a reaches')
+        print(f'experts 0..{pool - 1} only, mod_b {pool}..{E - 1} only. '
+              'READ THIS TABLE WITH CARE:')
+        print('  * parity separation (mod L1) is MAXIMAL by construction, '
+              'not a finding;')
+        print('  * purity is 0%/100% by construction -- there are no '
+              'learned specialists')
+        print('    and an INTEGRATOR IS UNREPRESENTABLE, which is exactly '
+              'what this')
+        print('    control exists to contrast with the shared-pool arms;')
+        print(f'  * per-expert load is bounded by {1/pool:.3f} within a '
+              'pool, so compare')
+        print('    utilization WITHIN pools, never against the 1/E line;')
+        print('  * the stamp probes are meaningless here (routing cannot '
+              'cross pools).')
+        print('The informative measurement on this arm is the WITHIN-probe: '
+              'does routing')
+        print('inside a pool still follow the music? Run PROBE=within.')
     if has_gates:
         print('PER-MODALITY GATES (A.2.moe_permod): each stream is routed '
               'by its own')
@@ -758,6 +781,23 @@ def main():
 
     if args.probe == 'within':
         run_within_probe(net, batch, layers, layout, E)
+    elif args.probe != 'none' and has_hard:
+        # Refuse rather than print a confidently wrong verdict: the
+        # stamp/swap probes ask which of {slot identity, content} the
+        # router follows, and under hard routing slot identity is not a
+        # preference the router expresses -- it is a wall the softmax
+        # cannot cross. Every such probe would read '100% stamp'.
+        print('\n' + '=' * 72)
+        print(f'PROBE={args.probe} SKIPPED: hard route makes it '
+              'uninterpretable.')
+        print('  Slot identity fixes the reachable pool, so any '
+              'stamp-vs-content probe')
+        print('  reports total slot dominance by construction and '
+              'measures nothing.')
+        print('  Use --probe within, which asks the question that IS '
+              'meaningful here:')
+        print('  inside a pool, does routing follow the music?')
+        print('=' * 72)
     elif args.probe != 'none':
         # Baseline probs are still live on the layers (nothing has run a
         # forward since); snapshot them before the probe pass overwrites.

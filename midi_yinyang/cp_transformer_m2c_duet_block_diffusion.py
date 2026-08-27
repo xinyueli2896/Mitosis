@@ -611,6 +611,27 @@ if __name__ == '__main__':
                              'the flag; inference auto-detects. A '
                              'warm-start ckpt with only the shared '
                              'gate.weight seeds BOTH gates with it.')
+    parser.add_argument('--moe_modality_hard_route', type=int, default=0,
+                        help='1 = A.2.moe_hardroute: DISJOINT expert '
+                             'pools. mod_a may only reach experts '
+                             '[0, E/2), mod_b only [E/2, E), enforced by '
+                             'masking the other pool out of the softmax. '
+                             'This is the imposed-separation control '
+                             '(MoMa / VL-MoE / Uni-MoE style) that the '
+                             'learned per-modality gates are argued '
+                             'against: same parameters, same activated '
+                             'compute, but an integrator expert serving '
+                             'both streams is no longer representable. '
+                             'The load-balancing aux loss is computed '
+                             'WITHIN each pool so the arm is not '
+                             'penalised for its own architecture. Expert '
+                             'purity is 0/100 BY CONSTRUCTION -- read '
+                             'within-pool content-responsiveness and '
+                             'downstream quality instead. Requires an '
+                             'even --moe_num_experts and topk <= E/2; '
+                             'carried in the ckpt as the '
+                             'ffn.hard_route_flag buffer, which '
+                             'inference auto-detects.')
     parser.add_argument('--fresh_schedule', action='store_true', default=False)
     args = parser.parse_args()
 
@@ -634,7 +655,8 @@ if __name__ == '__main__':
     # resuming across configs must fail loudly instead of finding each
     # other's last.ckpt.
     mb_tag = ('mb' if args.moe_modality_bias else '') + \
-             ('mg' if args.moe_modality_gates else '')
+             ('mg' if args.moe_modality_gates else '') + \
+             ('hr' if args.moe_modality_hard_route else '')
     default_name = (f"m2c_duet_block_diffusion_{scheme_version}_{args.model_size}_"
                     f"gnl{gnl}_K{args.diffusion_K}{mb_tag}_{task.name}{tag}_"
                     f"batch_{args.batch_size * n_gpus}_schedule")
@@ -665,6 +687,7 @@ if __name__ == '__main__':
         self_cond_prob=args.self_cond_prob,
         moe_modality_bias=bool(args.moe_modality_bias),
         moe_modality_gates=bool(args.moe_modality_gates),
+        moe_modality_hard_route=bool(args.moe_modality_hard_route),
     )
     print(f'[scheme] {scheme_version}: slot_rope_aligned={not args.legacy_slot_rope}  '
           f'time_rope_aligned={bool(args.time_rope_aligned)}  '
@@ -672,7 +695,9 @@ if __name__ == '__main__':
           f'moe_modality_bias={bool(args.moe_modality_bias)}'
           f'{" (A.2.moe_improved)" if args.moe_modality_bias else ""}  '
           f'moe_modality_gates={bool(args.moe_modality_gates)}'
-          f'{" (A.2.moe_permod)" if args.moe_modality_gates else ""}')
+          f'{" (A.2.moe_permod)" if args.moe_modality_gates else ""}  '
+          f'moe_modality_hard_route={bool(args.moe_modality_hard_route)}'
+          f'{" (A.2.moe_hardroute)" if args.moe_modality_hard_route else ""}')
     print(f'Architecture: M2CDuetBlockDiffusion (A.3)  K={args.diffusion_K}  '
           f'3-pass (intra/cross/frame) + 2 gates + query slots with per-item '
           f'noise levels + k-embedding')
@@ -767,6 +792,8 @@ if __name__ == '__main__':
                     'self_cond_prob': args.self_cond_prob,
                     'moe_modality_bias': bool(args.moe_modality_bias),
                     'moe_modality_gates': bool(args.moe_modality_gates),
+                    'moe_modality_hard_route': bool(
+                        args.moe_modality_hard_route),
                     'run_tag': args.run_tag,
                 },
             ) if args.wandb else TensorBoardLogger('tb_logs', name=model_name)

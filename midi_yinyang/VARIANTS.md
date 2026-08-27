@@ -366,6 +366,76 @@ mean-duration terciles are degenerate on this corpus/batch and skip —
 register is the live feature.) Snapshot-level; re-run at the final
 extended ckpt.
 
+### A.2.moe_hardroute — disjoint per-modality expert pools (2026-08-27)
+
+The **control** for A.2.moe_permod, added when the MoE work was
+promoted to its own experiment (EXPERIMENTS.md, E6). Not a candidate
+design: it exists to make the permod claim falsifiable.
+
+**What it does.** The expert list is split in half by index — mod_a may
+only reach experts `[0, E/2)`, mod_b only `[E/2, E)` — by masking the
+other pool's logits to `-inf` before the softmax. This is what the
+multimodal MoE literature calls modality-specific experts (MoMa,
+VL-MoE, Uni-MoE): separation IMPOSED rather than learned. No new
+parameters, so the variant is carried by a persistent buffer
+`ffn.hard_route_flag` that inference auto-detects; run dirs are tagged
+`hr` after the K tag.
+
+**Why it is the right control.** A.2.moe_permod changes two things at
+once relative to the shared router: each stream gets its own routing
+decision, AND the pool stays shared so an expert may serve both
+streams. Hard route keeps the first and removes the second. So
+
+| | own routing decision per stream | expert may serve both streams |
+|---|---|---|
+| A2shared | no | yes |
+| A2hr | yes (by wall) | **no** |
+| A2mg | yes (by gate) | yes |
+
+and A2hr vs A2mg isolates exactly the property the design intent names:
+*modalities specialise but are not fully separated, and some experts
+integrate the two.* If A2mg > A2hr, the learned integrators are doing
+work disjoint pools cannot express. If they tie, the honest reading is
+that cross-stream sharing is not load-bearing on this corpus and the
+simpler imposed split suffices — the interpretability result (the
+shared router keys on the attention stamp, ~69%) stands either way.
+
+**Fairness, deliberately engineered.** Same parameters, same activated
+compute (2 experts per token). The load-balancing aux loss is computed
+WITHIN each pool and averaged: the standard all-expert Switch form is
+minimised by a uniform load over all E experts, which hard routing
+CANNOT produce, so it would act as a constant penalty on the arm's own
+architecture rather than as balancing pressure. Verified end to end by
+`audit_moe_hard_route.py` / `.sbatch` — pool disjointness at FFN and
+layer level (arbitrary gate weights, query slots included), rows still
+summing to 1 with finite outputs and live gate gradients through the
+`-inf` mask, aux fairness (pool-uniform load scores the same ~1.0 floor
+the shared arm gets at ITS optimum, not 2.0), parameter parity with the
+shared arm (state dicts differ by the flag buffer alone), flag
+persistence for auto-detection, loud misuse, and — over 25 random
+routers — that no expert ever wins tokens from both streams.
+
+**Reading its diagnostics (the trap).** On this arm, parity separation
+is maximal and expert purity is 0%/100% **by construction**; neither is
+a finding. Per-expert load is bounded by `1/pool`, so utilization must
+be compared within pools, never against the 1/E line. The stamp/swap
+probes are meaningless — slot identity is a wall, not a preference —
+and `analyze_moe_routing.py` now REFUSES them on a hard-route
+checkpoint with an explanation rather than printing a confidently wrong
+"100% stamp" verdict. The meaningful measurement is `PROBE=within`:
+inside a pool, does routing still follow the music?
+
+**Geometry knob.** At the default E=4 the pools are 2 wide and top-2
+selects both, so within-pool routing is a weighting rather than a
+selection — acceptable for the primary comparison because parameters
+and activated compute stay matched. `MOE_NUM_EXPERTS=8` preserves
+sparsity inside the pools (2 of 4) at 2× expert parameters; the eval
+harness takes `HR_EXPERTS`/`HR_TOPK` and the table must then report the
+parameter difference. The constructor rejects an odd expert count or
+`topk > E/2` rather than silently degrading.
+
+**Status.** Implemented and audited; training run not yet launched.
+
 ## Experimental story
 
 The variants bracket the question:

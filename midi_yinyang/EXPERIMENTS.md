@@ -563,88 +563,11 @@ A3_ADAPTIVE early-exit that guards the headline K=4 configuration
 
 #### E4c — MoE ablation: A.2 vs A.2-dense
 
-Complements E4a: E4a ablates the ATTENTION-SIDE mechanism (mutual
-within-frame conditioning), E4c ablates the CAPACITY-SIDE mechanism
-(expert routing). Together they factorize the architecture story:
-cross-stream attention carries the coupling, MoE carries the
-per-stream grammars. E4c tests whether the second half of that story
-is causal rather than decorative.
-
-**Design.** Train A.2-dense on melchord: identical to A.2 in layout,
-objective, recipe, steps, and data; only the FFN differs —
-`moe_num_experts=1` (a plain dense FFN by construction) with
-intermediate width 6144, matching the ACTIVATED compute of the
-standard 4-expert top-2 × 3072 config. Compute-matched is the primary
-comparison (same FLOPs per token); a parameter-matched variant
-(intermediate 12288) is optional if the compute-matched result is
-ambiguous. Training command (the sbatch exposes the knobs):
-
-    MOE_NUM_EXPERTS=1 MOE_TOPK=1 MOE_INTERMEDIATE_SIZE=6144 \
-    RUN_TAG=densecm TASK=melchord \
-        sbatch --export=ALL midi_yinyang/train_duet_block_diffusion.sbatch
-
-**Pre-registered expectations.** The deficit of A.2-dense should be
-metric-selective in the OPPOSITE direction from E4a's contrast 1: it
-should land on H3 (stream-appropriate grammar — harmonic rhythm,
-contour, duration distributions) and secondarily H1 (role/texture
-maintenance), with H2 (inter-stream fit) least affected, since the
-coupling is carried by the attention structure that both variants
-share. A uniform deficit → MoE capacity helps generically; no deficit
-→ MoE is not load-bearing for the duet claim (reported honestly; the
-E1 claim survives but the H3 mechanism attribution weakens and the
-routing analysis is demoted to descriptive).
-
-**Closing the loop with the routing analysis.** E1-H3's expert-usage
-side analysis is observational (experts LOOK stream-specialized). E4c
-makes it causal: if routing shows specialization AND removing routing
-hurts exactly the grammar metrics, the specialization story is closed
-from both ends.
-
-**Cost & gating.** One additional melchord training run (same budget
-as A.2-melchord, ~50k steps × 4 GPUs). Drumnondrum replication gated
-on the melchord outcome, like the other training-side ablations.
-
-#### E4d — Router-design ablation: shared gate vs per-modality gates
-
-Completes the MoE story E4c opens. E4c asks whether expert routing is
-load-bearing at all (MoE vs dense); E4d asks whether HOW the routing is
-computed matters: the standard shared gate vs **A.2.moe_permod** —
-per-modality gate matrices (`gate_m`/`gate_c`) over the same fully
-shared, unassigned expert pool (see VARIANTS.md, "A.2.moe_permod").
-
-**Motivation (established, MOE_ROUTING_REPORT.md).** The shared gate's
-apparent modality specialization is ~69% architectural stamp: content
-equalisation removes only ~31% of the routing separation and expert
-preferences follow moved content in 0/11 layers. A per-modality bias
-offered as a free shortcut went unused (falsified, pre-registered
-metric). Per-modality gates remove the stamp from the router's job by
-construction.
-
-**Arms.** A2shared (the standard melchord A.2) vs A2mg (`K4mg` run,
-identical recipe/data/steps, `MOE_MODALITY_GATES=1`). Optionally
-A2dense (the E4c arm) joins the same evaluation run for a three-way
-routing spectrum: none / shared / per-modality.
-
-**Mechanism evidence (already measured, mid-training snapshot).**
-Emergent specialists + integrators over the unassigned pool; chord-side
-within-stream content-routing 5→9 of 12 layers (seeded within-probe);
-zero dead experts teacher-forced AND free-running; deadliness
-(1 − min-load/(1/E)) 0.25/0.31 for mg vs 0.25/0.36 for shared
-(TF/free-running). Figures under `midi_yinyang/figures/`.
-
-**Output-side evaluation.** `eval_a2_moe_ablation.sbatch`: co-generates
-with all arms on identical prompts and decode settings, SAVES the
-sample midis per (song, arm) for listening, records per-arm
-free-running routing stats, then scores structure metrics + the
-standard E1 chain with `BASELINE=A2shared` (Wilcoxon column reads as
-"did per-modality gates move vs shared"). Pre-registered expectation:
-quality parity or better (the redundancy removal is an
-efficiency/interpretability claim first); any gain should land on H3
-stream-grammar metrics, mirroring E4c's logic. Reported honestly
-either way — the mechanism results stand independently.
-
-**Cost.** The mg training run already exists; evaluation is one GPU
-job. Final-checkpoint numbers pending the extended mg run.
+**Promoted out of E4.** The dense arm is now one of the four arms of
+**E6 — MoE ablation**, its own experiment. The design, the
+pre-registered expectations and the training command live there; this
+entry is kept so older references to "E4c" resolve. E4a/E4b are
+unaffected.
 
 ### E5 — (Optional) Anticipation-horizon sweep (B.1 only)
 
@@ -655,6 +578,114 @@ k ∈ {8, 16, 32} (`ANTICIPATION_FRAMES` knob in
 E3 conditional metrics against k, with A.1 (ablation system) as the
 k=0 point and C.2 as the k=∞ asymptote. Deliverable: one dose–response
 figure locating the knee of the lookahead curve.
+
+---
+
+### E6 — MoE ablation (RQ5): does *how* the experts are routed matter?
+
+Its own experiment, not a sub-ablation. E4a asks whether the
+attention-side coupling is load-bearing; E6 asks a complete question
+about the capacity side: is expert routing load-bearing at all, and if
+so, does the ROUTING DESIGN change what the model learns? The four arms
+form a spectrum of how much modality separation the architecture
+imposes versus permits.
+
+**This experiment is interpretability-first.** Its headline deliverable
+is a mechanism account backed by probes — what the router actually
+keys on — with generation quality as the accompanying check that the
+mechanism change costs nothing. Arms are therefore chosen to make
+mechanisms *distinguishable*, not merely to win a metric.
+
+| arm | FFN | who may reach which expert | what it isolates |
+|---|---|---|---|
+| **A2dense** | one dense FFN (`moe_num_experts=1`, inter 6144) | n/a — no routing | the floor: is routing load-bearing at all? cross-stream interaction survives only in attention |
+| **A2shared** | 4 experts, top-2, ONE router | any token → any expert | the status quo, whose apparent specialisation the probes traced to the attention stamp |
+| **A2hr** | 4 experts, top-2, **disjoint pools** | mod_a → {0,1}, mod_b → {2,3}, enforced | separation IMPOSED (MoMa / VL-MoE / Uni-MoE style): an integrator expert is unrepresentable |
+| **A2mg** | 4 experts, top-2, per-modality routers | any token → any expert, scored by its own gate | separation AVAILABLE but not imposed: specialists and integrators both representable, the split is learned |
+
+**The load-bearing contrast is A2hr vs A2mg.** Both give each stream its
+own routing decision; they differ ONLY in whether the model may also
+learn to let an expert serve both streams. A2shared and A2dense bracket
+them from below. This is the experimental form of the design intent:
+*experts may specialise by modality, the modalities must not be fully
+separated, and some experts should be able to integrate the two* —
+with which experts do what left to training rather than assigned.
+
+**Fairness of the hard-route arm (matters, or the contrast is rigged).**
+A2hr keeps the same parameters and the same activated compute (2
+experts per token) as the shared-pool arms — the only removed
+capability is cross-stream expert sharing. Its load-balancing aux loss
+is computed WITHIN each pool: the standard all-expert form would demand
+a uniform load over 4 experts that hard routing cannot produce, taxing
+the arm for its own architecture. Verified by `audit_moe_hard_route.py`
+(pool disjointness, distribution validity, aux fairness, parameter
+parity, checkpoint detectability, unrepresentability of integrators).
+Note the E=4 default makes within-pool routing a weighting rather than
+a selection (top-2 of a 2-expert pool is both); run `MOE_NUM_EXPERTS=8`
+if within-pool sparsity must be preserved, and report the 2× expert
+parameters when doing so.
+
+**Established mechanism results (A2shared vs A2mg).** The shared gate's
+apparent modality specialisation is ~69% architectural stamp: content
+equalisation removes only ~31% of the routing separation, and expert
+preferences follow moved content in 0/11 layers. A per-modality bias
+offered as a free shortcut went unused — falsified against a
+pre-registered metric, and explained: the bias enters the logits
+identically to the stamp term, adding no representable function. Under
+per-modality gates, specialists and integrators emerged over the
+unassigned pool; chord-side within-stream content-routing rose 5→9 of
+12 layers while melody held its ceiling (9→10); zero dead experts
+teacher-forced AND free-running; deadliness 0.246/0.308 (mg) vs
+0.248/0.364 (shared). Figures in `midi_yinyang/figures/`
+(`expert_purity`, `content_probe`, `expert_load*`, `load_distribution`).
+
+**Pre-registered predictions for the new arms.**
+1. *A2hr routing*: within-pool content-responsiveness should be
+   comparable to A2mg's (both removed the stamp from the routing
+   decision), so a per-modality router is not by itself the gain.
+2. *A2hr quality*: at parity or slightly below A2mg. If A2mg wins, the
+   integrator experts it learned are doing work that disjoint pools
+   cannot express — the design intent confirmed. If A2hr matches A2mg,
+   the honest conclusion is that cross-stream expert sharing is NOT
+   load-bearing here and the simpler imposed split suffices; the
+   interpretability result (what the shared router keyed on) stands
+   either way.
+3. *A2dense*: deficit should be metric-selective on H3 stream-grammar
+   metrics; a uniform deficit means MoE capacity helps generically.
+
+**Analysis protocol per arm.** `analyze_moe_routing.sbatch` with
+`PROBE=within` (the only probe meaningful on all four arms — the
+stamp/swap probes are refused on A2hr, where slot identity is a wall
+rather than a preference, and the analyzer says so instead of printing
+a confidently wrong verdict); free-running utilization via
+`MOE_ROUTING_STATS`; purity tables read as learned structure ONLY on
+the shared-pool arms — on A2hr purity is 0/100 by construction and load
+is bounded by 1/pool, so utilization is compared within pools.
+
+**Output-side evaluation.** `eval_a2_moe_ablation.sbatch` runs every
+arm on identical prompts and decode settings, SAVES the sample midis
+per (song, arm) as listening material, records per-arm free-running
+routing stats, then scores structure metrics plus the standard E1 chain
+with `BASELINE=A2shared`. Arm identity is verified from `load_model`'s
+own auto-detect lines (`moe_modality_gates`, `moe_modality_hard_route`)
+so a swapped `CKPT_*` aborts before any number is produced.
+
+**Training the new arms** (same recipe/data/steps as the existing pair;
+`hr` and `dense` get their own run-dir families):
+
+    # hard route (disjoint pools)
+    sbatch --exclude=gpu-50,gpu-51 --export=ALL,TASK=melchord,\
+    MOE_MODALITY_HARD_ROUTE=1,RUN_TAG=hr \
+        midi_yinyang/train_duet_block_diffusion.sbatch
+
+    # dense (no MoE) -- compute-matched
+    sbatch --exclude=gpu-50,gpu-51 --export=ALL,TASK=melchord,\
+    MOE_NUM_EXPERTS=1,MOE_TOPK=1,MOE_INTERMEDIATE_SIZE=6144,RUN_TAG=densecm \
+        midi_yinyang/train_duet_block_diffusion.sbatch
+
+**Cost.** Two additional melchord training runs (hr, dense) at the same
+budget as the existing pair; evaluation is one GPU job for all four
+arms. The shared and mg runs already exist.
 
 ---
 
@@ -771,8 +802,12 @@ Phase 1 — generation sweeps (all sbatch, mostly existing scripts)
 - E4a: A.1 drumnondrum runs (co + conditional, existing ckpt);
   A.1-melchord training deferred until the drumnondrum result is in.
 - E4b: three additional A.2 melchord runs (K sweep + adaptive toggle).
-- E4c: one A.2-dense melchord TRAINING run (sbatch command in §E4c),
-  then its co-mode inference sweep at the frozen decode settings.
+- E6 (MoE ablation): two additional melchord TRAINING runs — hard route
+  (`MOE_MODALITY_HARD_ROUTE=1`) and dense (`MOE_NUM_EXPERTS=1`,
+  inter 6144, the former E4c arm); the shared and mg runs exist. Then
+  ONE `eval_a2_moe_ablation.sbatch` job covering all four arms at the
+  frozen decode settings, plus `analyze_moe_routing.sbatch PROBE=within`
+  per arm for the interpretability half.
 
 Phase 2 — scoring: run `eval_metrics.py` over Phase-1 outputs; produce
 the per-mode comparison tables.

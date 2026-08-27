@@ -116,6 +116,14 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
                              for k in state_dict_keys)
     print(f'[load_model] moe_modality_gates={moe_modality_gates}'
           f'{" (A.2.moe_permod)" if moe_modality_gates else ""}')
+    # A.2.moe_hardroute detection: hard routing adds no weights, so the
+    # variant is carried by a registered buffer instead. Building without
+    # it would decode a disjoint-pool model as if every expert were
+    # reachable from either stream -- silently wrong, no error.
+    moe_modality_hard_route = any(k.endswith('ffn.hard_route_flag')
+                                  for k in state_dict_keys)
+    print(f'[load_model] moe_modality_hard_route={moe_modality_hard_route}'
+          f'{" (A.2.moe_hardroute)" if moe_modality_hard_route else ""}')
     if diffusion_K is None:
         for key, name in (('k_emb_m.weight', 'k_emb_m'),
                           ('k_emb_c.weight', 'k_emb_c')):
@@ -145,6 +153,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         time_rope_aligned=time_rope_aligned,
         moe_modality_bias=moe_modality_bias,
         moe_modality_gates=moe_modality_gates,
+        moe_modality_hard_route=moe_modality_hard_route,
     )
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)

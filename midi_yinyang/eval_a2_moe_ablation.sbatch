@@ -1,8 +1,27 @@
 #!/bin/bash
-# SLURM: E4d router-design ablation -- shared gate vs per-modality gates
-# (A.2.moe_permod), same architecture otherwise, same decode settings,
-# same prompts. Optionally adds the E4c dense arm for a three-way
-# routing spectrum (none / shared / per-modality).
+# SLURM: the MoE ABLATION evaluation harness -- up to four arms spanning
+# the routing spectrum, identical architecture otherwise, identical
+# decode settings, identical prompts:
+#
+#   A2dense   no MoE at all: one dense FFN. Cross-modality interaction
+#             happens ONLY in the attention block. The floor -- is
+#             expert routing load-bearing at all?
+#   A2shared  one router over a shared pool. The status quo, whose
+#             apparent stream specialisation the probes traced to the
+#             attention stamp rather than the music.
+#   A2hr      HARD ROUTE: disjoint per-modality pools, separation
+#             IMPOSED (MoMa / VL-MoE style). The ceiling on separation
+#             and the floor on integration -- no expert can serve both
+#             streams.
+#   A2mg      per-modality routers over a fully SHARED, unassigned pool.
+#             Separation is available but not imposed; specialists and
+#             integrators are both representable and the split is
+#             learned.
+#
+# The A2hr vs A2mg contrast is the experiment's point: both give each
+# stream its own routing decision, and they differ ONLY in whether the
+# model may also learn to share an expert. A2shared and A2dense bracket
+# them from below.
 #
 # What it does:
 #   1. co-generates with every arm on identical prompts and SAVES the
@@ -21,8 +40,10 @@
 # Env knobs (--export=ALL,KEY=val):
 #   CKPT_SHARED     REQUIRED. Standard A.2 run dir or ckpt (shared gate).
 #   CKPT_MG         REQUIRED. A.2.moe_permod run dir (K4mg family).
-#   CKPT_DENSE      optional. E4c dense arm (moe_num_experts=1); scored
-#                   as a third system when set.
+#   CKPT_HR         optional. A.2.moe_hardroute run dir (K4hr family) --
+#                   the disjoint-pool control. HR_EXPERTS/HR_TOPK
+#                   (default 4/2) must match how it was TRAINED.
+#   CKPT_DENSE      optional. Dense arm (moe_num_experts=1, inter 6144).
 #   TASK            melchord (default) | drumnondrum
 #   MEL_FOLDER / CHORD_FOLDER   eval prompts; defaults match eval_e1.
 #   PROMPT_LENGTH   default 64. GEN_LENGTH default 384 (TOTAL incl.
@@ -62,7 +83,17 @@ REPO_DIR=/home/xinyue.li/Mitosis
 
 CKPT_SHARED="${CKPT_SHARED:-}"
 CKPT_MG="${CKPT_MG:-}"
+CKPT_HR="${CKPT_HR:-}"
 CKPT_DENSE="${CKPT_DENSE:-}"
+# Hard-route pool geometry. The default 4/2 matches the other arms in
+# parameters AND activated compute (2 experts per token) -- the fair
+# comparison -- at the cost of making within-pool routing a weighting
+# rather than a selection (top-2 of a 2-expert pool is both). Set
+# HR_EXPERTS=8 HR_TOPK=2 if the hard-route ckpt was trained with
+# sparsity preserved inside the pools; the arm then has 2x expert
+# parameters and the table must say so.
+HR_EXPERTS="${HR_EXPERTS:-4}"
+HR_TOPK="${HR_TOPK:-2}"
 TASK="${TASK:-melchord}"
 PROMPT_LENGTH="${PROMPT_LENGTH:-64}"
 GEN_LENGTH="${GEN_LENGTH:-384}"
@@ -97,7 +128,8 @@ echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "E4d ROUTER-DESIGN ABLATION   task=$TASK"
 echo "CKPT_SHARED = ${CKPT_SHARED:-<UNSET>}"
 echo "CKPT_MG     = ${CKPT_MG:-<UNSET>}"
-echo "CKPT_DENSE  = ${CKPT_DENSE:-<none -- two-arm run>}"
+echo "CKPT_HR     = ${CKPT_HR:-<none>}${CKPT_HR:+  (pools ${HR_EXPERTS}/2, topk $HR_TOPK)}"
+echo "CKPT_DENSE  = ${CKPT_DENSE:-<none>}"
 echo "PROMPT_LENGTH=$PROMPT_LENGTH GEN_LENGTH=$GEN_LENGTH N_SAMPLES=$N_SAMPLES"
 echo "MAX_POLYPHONY=$MAX_POLYPHONY   OUT_ROOT=$OUT_ROOT"
 echo "================================================================"
@@ -106,7 +138,8 @@ if [[ -z "$CKPT_SHARED" || -z "$CKPT_MG" ]]; then
     echo "ERROR: both CKPT_SHARED and CKPT_MG are required."
     exit 1
 fi
-for c in "$CKPT_SHARED" "$CKPT_MG" ${CKPT_DENSE:+"$CKPT_DENSE"}; do
+for c in "$CKPT_SHARED" "$CKPT_MG" ${CKPT_HR:+"$CKPT_HR"} \
+         ${CKPT_DENSE:+"$CKPT_DENSE"}; do
     [[ -e "$c" ]] || { echo "ERROR: ckpt not found: $c"; exit 1; }
 done
 
@@ -149,6 +182,7 @@ fi
 # ---------------------------------------------------------------------
 SHARED_OUT="$OUT_ROOT/A2shared"
 MG_OUT="$OUT_ROOT/A2mg"
+HR_OUT="$OUT_ROOT/A2hr"
 DENSE_OUT="$OUT_ROOT/A2dense"
 export A3_REFINE_STEPS="${A3_REFINE_STEPS:-4}"
 export A3_FINAL_TEMP="${A3_FINAL_TEMP:-0.9}"
@@ -157,7 +191,8 @@ export A3_ADAPTIVE="${A3_ADAPTIVE:-1}"
 echo "[decode] K=$A3_REFINE_STEPS temp=$A3_FINAL_TEMP top_p=$A3_TOP_P adaptive=$A3_ADAPTIVE (all arms)"
 
 run_arm () {
-    local name="$1" ckpt="$2" out="$3" want_gates="$4" experts="$5" topk="$6" inter="$7"
+    local name="$1" ckpt="$2" out="$3" want_gates="$4" want_hr="$5" \
+          experts="$6" topk="$7" inter="$8"
     local log="$OUT_ROOT/infer_${name}.log"
     local extra=()
     [[ -n "$inter" ]] && extra=(--moe-intermediate-size "$inter")
@@ -174,14 +209,27 @@ run_arm () {
         --model-size large --moe-num-experts "$experts" --moe-topk "$topk" \
         "${extra[@]}" \
         2>&1 | tee "$log"
-    # Arm-identity verification: refuse to score a mislabeled pair.
+    # Arm-identity verification from load_model's own auto-detect lines:
+    # refuse to score a mislabeled set. Every router variant is
+    # distinguishable this way, so a swapped CKPT_* aborts before any
+    # number is produced.
+    local detected
     if [[ -n "$want_gates" ]]; then
-        local detected
         detected=$(grep -o 'moe_modality_gates=[A-Za-z]*' "$log" | head -1 || true)
         echo "[$name] detected: ${detected:-<no gates line in log>}"
         if [[ "$detected" != "moe_modality_gates=$want_gates" ]]; then
             echo "ERROR: $name ckpt reports '$detected' but this slot expects"
-            echo "       moe_modality_gates=$want_gates. CKPT_SHARED/CKPT_MG"
+            echo "       moe_modality_gates=$want_gates. The CKPT_* variables"
+            echo "       are likely swapped."
+            exit 1
+        fi
+    fi
+    if [[ -n "$want_hr" ]]; then
+        detected=$(grep -o 'moe_modality_hard_route=[A-Za-z]*' "$log" | head -1 || true)
+        echo "[$name] detected: ${detected:-<no hard-route line in log>}"
+        if [[ "$detected" != "moe_modality_hard_route=$want_hr" ]]; then
+            echo "ERROR: $name ckpt reports '$detected' but this slot expects"
+            echo "       moe_modality_hard_route=$want_hr. The CKPT_* variables"
             echo "       are likely swapped."
             exit 1
         fi
@@ -191,10 +239,15 @@ run_arm () {
 if [[ "$SKIP_INFER" == "1" ]]; then
     echo "[infer] SKIP_INFER=1 -- reusing outputs under $OUT_ROOT"
 else
-    run_arm A2shared "$CKPT_SHARED" "$SHARED_OUT" False 4 2 ""
-    run_arm A2mg     "$CKPT_MG"     "$MG_OUT"     True  4 2 ""
+    #        name      ckpt            out           gates hr    E  k  inter
+    run_arm A2shared "$CKPT_SHARED" "$SHARED_OUT" False False 4 2 ""
+    run_arm A2mg     "$CKPT_MG"     "$MG_OUT"     True  False 4 2 ""
+    if [[ -n "$CKPT_HR" ]]; then
+        run_arm A2hr "$CKPT_HR" "$HR_OUT" False True \
+            "$HR_EXPERTS" "$HR_TOPK" ""
+    fi
     if [[ -n "$CKPT_DENSE" ]]; then
-        run_arm A2dense "$CKPT_DENSE" "$DENSE_OUT" "" 1 1 6144
+        run_arm A2dense "$CKPT_DENSE" "$DENSE_OUT" "" "" 1 1 6144
     fi
 fi
 
@@ -205,6 +258,8 @@ RSUF="p${PROMPT_LENGTH}${RESULT_TAG:+_${RESULT_TAG}}"
 STRUCT_OUT="results/a2moe_${TASK}_${RSUF}_structure.txt"
 SPLIT_FLAG=()
 [[ "$SPLIT_STREAMS" == "1" ]] && SPLIT_FLAG=(--split-streams)
+HR_SYS=()
+[[ -n "$CKPT_HR" ]] && HR_SYS=(--system "A2hr:$HR_OUT")
 DENSE_SYS=()
 [[ -n "$CKPT_DENSE" ]] && DENSE_SYS=(--system "A2dense:$DENSE_OUT")
 echo "================================================================"
@@ -212,6 +267,7 @@ echo "--- structure metrics (all arms vs REF) ---"
 python structure_metrics.py \
     --system "A2shared:$SHARED_OUT" \
     --system "A2mg:$MG_OUT" \
+    "${HR_SYS[@]}" \
     "${DENSE_SYS[@]}" \
     --system "REF:$EVAL_MERGED" \
     --prompt-bars $((PROMPT_LENGTH / 16)) \
@@ -228,6 +284,8 @@ TABLE="results/a2moe_${TASK}_${RSUF}_table.md"
 DUET_LAYOUT=duet
 [[ "$N_SAMPLES" -gt 1 ]] && DUET_LAYOUT=duet_multi
 EVAL_SONG_IDS=$(ls "$EVAL_MEL" | sed 's/\.[Mm][Ii][Dd]$//' | tr '\n' ' ')
+HR_SRC=()
+[[ -n "$CKPT_HR" ]] && HR_SRC=(--source "A2hr:$DUET_LAYOUT:$HR_OUT")
 DENSE_SRC=()
 [[ -n "$CKPT_DENSE" ]] && DENSE_SRC=(--source "A2dense:$DUET_LAYOUT:$DENSE_OUT")
 
@@ -235,6 +293,7 @@ echo "--- building manifest ---"
 python build_eval_manifest.py \
     --source "A2shared:$DUET_LAYOUT:$SHARED_OUT" \
     --source "A2mg:$DUET_LAYOUT:$MG_OUT" \
+    "${HR_SRC[@]}" \
     "${DENSE_SRC[@]}" \
     --songs $EVAL_SONG_IDS \
     --modes co --out "$MANIFEST"
@@ -256,7 +315,7 @@ python aggregate_eval_results.py --csv "$METRICS" \
 
 echo "================================================================"
 echo "E4d router-design ablation complete."
-echo "  SAVED SAMPLES   : $SHARED_OUT , $MG_OUT${CKPT_DENSE:+ , $DENSE_OUT}"
+echo "  SAVED SAMPLES   : $SHARED_OUT , $MG_OUT${CKPT_HR:+ , $HR_OUT}${CKPT_DENSE:+ , $DENSE_OUT}"
 echo "                    (one .mid per song/sample per arm -- the"
 echo "                     listening material; same prompts everywhere)"
 echo "  routing stats   : results/routing_stats_A2*_${SLURM_JOB_ID:-local}.json"
