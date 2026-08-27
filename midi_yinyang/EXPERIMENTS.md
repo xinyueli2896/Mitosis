@@ -232,6 +232,24 @@ outputs are regenerated locally (needs their repos running in the
 cluster env) or taken from released samples (weaker, but zero
 integration risk).
 
+### 2.7 Tabled: non-aligned modalities (second-degree)
+
+The duet family assumes one shared frame clock with pairing by
+arithmetic — the interleaved layout, A.2's frame pass and frame gate,
+C.1's stride-2 prefix coordinates, and even the MoE modality ids
+(slot parity) all key on it. The question of alignment-FREE operation
+(streams on their own clocks, content-addressed cross-attention) is
+**deliberately tabled as second-degree**: the C.1 study showed
+position-addressed retrieval is what makes the rehearsal mechanism
+work (0.830 → 0.999), and giving that up is a research project, not a
+feature. Working policy until revisited: **buy alignment in
+preprocessing** and keep the proven architecture — beat-track/quantize
+unaligned clocks onto the grid (the Pop1K7/madmom route), force-align
+weakly-aligned modalities (the planned lyrics phase 1), and treat
+timeless conditioning (tags, descriptions) as global conditioning, not
+a stream. The one change any of these need regardless: MoE modality
+ids passed explicitly instead of derived from parity.
+
 ---
 
 ## 3. Experiment matrix
