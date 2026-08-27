@@ -617,6 +617,18 @@ class M2CDuetRehearsal(RoFormerSymbolicTransformer):
             step = float(getattr(self, 'global_step', 0) or 0)
             self.gate_ramp.fill_(min(1.0, step / self.gate_warmup_steps))
         gate_offset = self.gate_offset_total * self.gate_ramp
+        # Decode-time conditioning-balance knob (inference only, never a
+        # trained quantity): an extra shift on the cross-gate
+        # pre-activation. The cross path is what carries the OTHER
+        # stream -- for the slot generating mod_b that is the
+        # conditioning stream (prefix + interleaved mod_a) -- while the
+        # intra path carries the slot's own history. Positive values
+        # open the gate (listen more to the condition), negative close
+        # it (lean on own generated context). 0.0 = the trained
+        # operating point; the model was never trained off it, so treat
+        # a sweep as an out-of-distribution probe, not a free control.
+        gate_offset = gate_offset + float(
+            getattr(self, 'cond_gate_offset', 0.0) or 0.0)
         total_aux = torch.zeros((), device=h_full.device, dtype=h_full.dtype)
         for layer in self.global_layers:
             h_full, aux = layer(h_full, T, cos, sin, gate_offset=gate_offset)

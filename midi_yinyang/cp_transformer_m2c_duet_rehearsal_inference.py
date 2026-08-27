@@ -479,6 +479,21 @@ def main():
                         'weak model rather than a failed load. Turn this on '
                         'only for a ckpt you know predates a parameter.')
     p.add_argument('--max-songs', type=int, default=None)
+    p.add_argument('--cond-gate-offset', type=float, default=0.0,
+                   help='Decode-time conditioning-balance knob: an extra '
+                        'shift on the cross-gate pre-activation (sigmoid '
+                        'logit) in every layer. The cross path carries '
+                        'the conditioning stream (prefix + interleaved '
+                        'mod_a) into the generating slot; the intra path '
+                        'carries its own generated history. Positive '
+                        'opens the gate -- listen MORE to the condition; '
+                        'negative closes it -- lean on own context. '
+                        '0.0 is the trained operating point; the model '
+                        'was never trained elsewhere, so a sweep (try '
+                        '+/-1, +/-2) is an out-of-distribution probe, '
+                        'not a calibrated control. Applies to BOTH '
+                        'per-modality gates (the interesting one for '
+                        'conditional generation is mod_b\'s).')
     args = p.parse_args()
     if args.mode_name is None:
         args.mode_name = ('reconstruct' if args.mode == 'reconstruct'
@@ -494,6 +509,12 @@ def main():
     )
     model = model.cuda().eval()
     model.save_name = os.path.basename(os.path.dirname(args.ckpt))
+    if args.cond_gate_offset != 0.0:
+        model.cond_gate_offset = args.cond_gate_offset
+        print(f'[cond-balance] cross-gate pre-activation shifted by '
+              f'{args.cond_gate_offset:+.2f} at decode time '
+              f'(>0 = listen more to the condition, <0 = more to own '
+              f'context; trained operating point is 0.0)')
 
     with torch.no_grad():
         run_folder(model, args)

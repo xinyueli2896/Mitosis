@@ -36,6 +36,17 @@
 #   ALLOW_PARTIAL_LOAD  1 to proceed when the ckpt is missing parameters.
 #                   OFF by default: a missing key stays at random init and
 #                   the run still writes midi.
+#   COND_GATE_OFFSET  default 0.0. Decode-time conditioning-balance knob:
+#                   shifts the cross-gate pre-activation in every layer.
+#                   The cross path carries the conditioning stream into
+#                   the generating slot; the intra path carries the
+#                   slot's own generated history. Positive = listen MORE
+#                   to the condition, negative = lean on own context.
+#                   0.0 is the trained operating point -- the model was
+#                   never trained elsewhere, so a sweep (+/-1, +/-2) is
+#                   an out-of-distribution probe, not a calibrated
+#                   control. Second-degree study; registered under E3
+#                   notes, not a headline experiment.
 #
 # Example (melchord, the shift-1 conditional ckpt, Nottingham prompts):
 #   sbatch --export=ALL,\
@@ -111,6 +122,9 @@ fi
 [[ -n "$MODE_NAME" ]] && EXTRA_ARGS+=(--mode-name "$MODE_NAME")
 [[ "$SWAP_STREAM_NAMES" == "1" ]] && EXTRA_ARGS+=(--swap-stream-names)
 [[ "$ALLOW_PARTIAL_LOAD" == "1" ]] && EXTRA_ARGS+=(--allow-partial-load)
+COND_GATE_OFFSET="${COND_GATE_OFFSET:-0.0}"
+[[ "$COND_GATE_OFFSET" != "0.0" && "$COND_GATE_OFFSET" != "0" ]] && \
+    EXTRA_ARGS+=(--cond-gate-offset "$COND_GATE_OFFSET")
 
 python cp_transformer_m2c_duet_rehearsal_inference.py \
     --ckpt "$CKPT" \

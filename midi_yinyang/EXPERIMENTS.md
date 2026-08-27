@@ -185,6 +185,53 @@ RWC.
   the value of in-domain data; the S1→A.2 gap isolates the value of
   architectural stream separation.
 
+### 2.6 Planned external SOTA baselines — lead-sheet framing (SCOPING)
+
+Status: **scoping only** — nothing downloaded, adapted, or run.
+Decision points for the two candidate systems are listed at the end.
+(Container access to arXiv is proxy-blocked, so citation details below
+are from memory and must be verified against the papers/repos before
+anything is claimed in writing.)
+
+Our melchord co-generation IS lead-sheet generation (melody + chord
+jointly), which gives us a recognized task name and two natural
+external baselines, both POP909-native (Xia lab), i.e. domain-matched
+to our main corpus:
+
+| system | task shape | maps onto |
+|---|---|---|
+| **Whole-song hierarchical generation** (cascaded diffusion; Wang / Min / Xia, ICLR 2024 — verify) | unconditional full-song generation: form → **lead sheet (melody+chord)** → accompaniment, POP909-trained | its lead-sheet stage is a direct external baseline for **E1 co-generation**; its form stage makes it the strongest available reference for the long-term-structure metrics |
+| **AccoMontage** (Zhao & Xia, ISMIR 2021; later versions exist — verify which) | conditional: lead sheet → piano accompaniment (phrase retrieval + texture style transfer over POP909) | no direct melchord arm — its slot is a future **accompaniment task**: Pop1K7's dropped `piano` track gives us paired (melody, chord, accompaniment) data to train our own arm against it |
+
+**Integration work (why this is its own pass, not a checkbox):**
+
+1. *Output conversion*: both emit their own representations; we need
+   converters into the split melody/chord midi layout the eval chain
+   consumes (`build_eval_manifest.py` expects per-stream files on our
+   16th-note 4/4 grid; both systems are beat-quantized 4/4, so this is
+   bookkeeping, not resampling).
+2. *Protocol matching*: the whole-song model is natively
+   unconditional-with-form; our E1 rows are prompt-continuations. Fair
+   comparison needs either its prompted/infilling mode (verify one
+   exists) or an unconditional comparison row where OUR systems also
+   run unprompted. Do not mix the two protocols in one table.
+3. *Contamination*: both baselines TRAINED on POP909 — our held-out
+   ids were in their training data. POP909 rows carry that caveat in
+   their favor; the clean generalization comparison is on Nottingham /
+   Pop1K7-held-out prompts, which are out-of-domain for them (caveat
+   then runs the other way). Report both, labeled.
+4. *Decode budget parity*: sample counts, lengths and any cherry-pick
+   policy matched to §4's frozen settings.
+
+**Decision points before work starts:** (a) which AccoMontage version
+is "the" baseline (original phrase-retrieval vs the later whole-song
+variants); (b) whether the accompaniment task (and hence Pop1K7 piano
+re-preprocessing) enters scope now or waits; (c) unconditional vs
+prompted protocol for the whole-song comparison; (d) whether baseline
+outputs are regenerated locally (needs their repos running in the
+cluster env) or taken from released samples (weaker, but zero
+integration risk).
+
 ---
 
 ## 3. Experiment matrix
@@ -483,6 +530,21 @@ Two notions of conditional quality must not be conflated:
   win. Both outcomes are informative; registering a fake prediction
   here would be rigor theater. (Y-mc participates in the melchord rows
   as an external reference only — domain caveat §2.4.)
+
+**E3 side note (second-degree, not a headline): conditioning-balance
+knob.** C.1's cross gates take a pre-activation offset, so
+`infer_duet_rehearsal.sbatch COND_GATE_OFFSET=<v>` shifts, at decode
+time only, how much the generating slot listens to the conditioning
+stream (cross path: prefix + interleaved mod_a) versus its own
+generated history (intra path). Positive opens the gate toward the
+condition; negative leans on own context; 0.0 is the trained operating
+point and the model was never trained elsewhere — a sweep (±1, ±2) is
+an out-of-distribution probe of the gate mechanism, not a calibrated
+control. If it ever graduates from side note, the honest version is a
+small sweep scored with the E3 conditional metrics (pc-set Jaccard vs
+the condition on one axis, own-stream grammar on the other) to draw the
+listen-to-condition / self-coherence trade-off curve. Deliberately
+tabled: conditional generation is not the main task.
 
 ### E4 — Ablations (RQ4)
 
