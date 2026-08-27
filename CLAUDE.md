@@ -32,6 +32,22 @@ Knobs go through `--export=ALL,KEY=val`; sbatch flags (`--gres=gpu:2`,
 `--exclude=gpu-50`) go before the script path and override the
 `#SBATCH` directives inside it.
 
+**This applies to submission too — no `bash run_everything.sh` helper
+wrappers.** Multi-stage pipelines chain with sbatch's own dependency
+mechanism, so every stage is still a plain `sbatch` the user can see,
+reorder, or resubmit alone:
+
+```bash
+J1=$(sbatch --parsable <flags> midi_yinyang/preprocess_x.sbatch)
+J2=$(sbatch --parsable --dependency=afterok:$J1 <flags> midi_yinyang/combine_x.sbatch)
+J3=$(sbatch --parsable --dependency=afterok:$J2 <flags> midi_yinyang/train_x.sbatch)
+```
+
+`afterok` starts a stage only if the previous exited 0; since every
+wrapper runs `set -euo pipefail`, a failure holds the rest of the chain
+(they show `(DependencyNeverSatisfied)` in `squeue`) instead of running
+on a broken artifact.
+
 ## Conventions that bite
 
 - **`MAX_POLYPHONY` cannot be recovered from a checkpoint.** The local
