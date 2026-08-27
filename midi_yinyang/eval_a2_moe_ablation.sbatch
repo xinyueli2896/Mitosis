@@ -3,24 +3,23 @@
 # the routing spectrum, identical architecture otherwise, identical
 # decode settings, identical prompts:
 #
-#   A2dense   no MoE at all: one dense FFN. Cross-modality interaction
-#             happens ONLY in the attention block. The floor -- is
-#             expert routing load-bearing at all?
-#   A2shared  one router over a shared pool. The status quo, whose
-#             apparent stream specialisation the probes traced to the
-#             attention stamp rather than the music.
-#   A2hr      HARD ROUTE: disjoint per-modality pools, separation
-#             IMPOSED (MoMa / VL-MoE style). The ceiling on separation
-#             and the floor on integration -- no expert can serve both
-#             streams.
-#   A2mg      per-modality routers over a fully SHARED, unassigned pool.
-#             Separation is available but not imposed; specialists and
-#             integrators are both representable and the split is
-#             learned.
+#   A2   shared gate (the base model): one router over a shared pool.
+#        The status quo, whose apparent stream specialisation the
+#        probes traced to the attention stamp rather than the music.
+#   D1   dense: no MoE at all, one dense FFN. Cross-modality
+#        interaction happens ONLY in the attention block. The floor --
+#        is expert routing load-bearing at all?
+#   D2   HARD ROUTE: disjoint per-modality pools, separation IMPOSED
+#        (MoMa / VL-MoE style). The ceiling on separation and the floor
+#        on integration -- no expert can serve both streams.
+#   D3   per-modality gates: per-stream routers over a fully SHARED,
+#        unassigned pool. Separation is available but not imposed;
+#        specialists and integrators are both representable and the
+#        split is learned.
 #
-# The A2hr vs A2mg contrast is the experiment's point: both give each
+# The D2 vs D3 contrast is the experiment's point: both give each
 # stream its own routing decision, and they differ ONLY in whether the
-# model may also learn to share an expert. A2shared and A2dense bracket
+# model may also learn to share an expert. A2 and D1 bracket
 # them from below.
 #
 # What it does:
@@ -30,7 +29,7 @@
 #   2. records per-arm FREE-RUNNING routing stats (MOE_ROUTING_STATS)
 #      into results/, extending the utilization evidence to this run;
 #   3. scores long-term structure metrics (all arms vs the ground-truth
-#      REF row) and the standard E1 chain with BASELINE=A2shared, so
+#      REF row) and the standard E1 chain with BASELINE=A2, so
 #      the Wilcoxon column reads directly as "did per-modality gates
 #      move vs the shared router".
 #
@@ -38,12 +37,13 @@
 # (moe_modality_gates=True/False); a swapped pair aborts before scoring.
 #
 # Env knobs (--export=ALL,KEY=val):
-#   CKPT_SHARED     REQUIRED. Standard A.2 run dir or ckpt (shared gate).
-#   CKPT_MG         REQUIRED. A.2.moe_permod run dir (K4mg family).
-#   CKPT_HR         optional. A.2.moe_hardroute run dir (K4hr family) --
-#                   the disjoint-pool control. HR_EXPERTS/HR_TOPK
-#                   (default 4/2) must match how it was TRAINED.
-#   CKPT_DENSE      optional. Dense arm (moe_num_experts=1, inter 6144).
+#   CKPT_SHARED     REQUIRED. A2: standard A.2 run dir/ckpt (shared gate).
+#   CKPT_MG         REQUIRED. D3: A.2.moe_permod run dir (K4mg family).
+#   CKPT_HR         optional. D2: A.2.moe_hardroute run dir (K4hr
+#                   family) -- the disjoint-pool control. HR_EXPERTS/
+#                   HR_TOPK (default 4/2) must match how it was TRAINED.
+#   CKPT_DENSE      optional. D1: dense arm (moe_num_experts=1, inter
+#                   6144).
 #   TASK            melchord (default) | drumnondrum
 #   MEL_FOLDER / CHORD_FOLDER   eval prompts; defaults match eval_e1.
 #   PROMPT_LENGTH   default 64. GEN_LENGTH default 384 (TOTAL incl.
@@ -125,7 +125,7 @@ mkdir -p /home/xinyue.li/logs "$OUT_ROOT" results
 
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
-echo "E4d ROUTER-DESIGN ABLATION   task=$TASK"
+echo "E6 MoE ABLATION (A2 / D1 / D2 / D3)   task=$TASK"
 echo "CKPT_SHARED = ${CKPT_SHARED:-<UNSET>}"
 echo "CKPT_MG     = ${CKPT_MG:-<UNSET>}"
 echo "CKPT_HR     = ${CKPT_HR:-<none>}${CKPT_HR:+  (pools ${HR_EXPERTS}/2, topk $HR_TOPK)}"
@@ -180,10 +180,10 @@ fi
 # 2. inference: every arm, identical decode settings + per-arm
 #    free-running routing stats
 # ---------------------------------------------------------------------
-SHARED_OUT="$OUT_ROOT/A2shared"
-MG_OUT="$OUT_ROOT/A2mg"
-HR_OUT="$OUT_ROOT/A2hr"
-DENSE_OUT="$OUT_ROOT/A2dense"
+SHARED_OUT="$OUT_ROOT/A2"
+MG_OUT="$OUT_ROOT/D3"
+HR_OUT="$OUT_ROOT/D2"
+DENSE_OUT="$OUT_ROOT/D1"
 export A3_REFINE_STEPS="${A3_REFINE_STEPS:-4}"
 export A3_FINAL_TEMP="${A3_FINAL_TEMP:-0.9}"
 export A3_TOP_P="${A3_TOP_P:-0.95}"
@@ -240,14 +240,14 @@ if [[ "$SKIP_INFER" == "1" ]]; then
     echo "[infer] SKIP_INFER=1 -- reusing outputs under $OUT_ROOT"
 else
     #        name      ckpt            out           gates hr    E  k  inter
-    run_arm A2shared "$CKPT_SHARED" "$SHARED_OUT" False False 4 2 ""
-    run_arm A2mg     "$CKPT_MG"     "$MG_OUT"     True  False 4 2 ""
+    run_arm A2 "$CKPT_SHARED" "$SHARED_OUT" False False 4 2 ""
+    run_arm D3     "$CKPT_MG"     "$MG_OUT"     True  False 4 2 ""
     if [[ -n "$CKPT_HR" ]]; then
-        run_arm A2hr "$CKPT_HR" "$HR_OUT" False True \
+        run_arm D2 "$CKPT_HR" "$HR_OUT" False True \
             "$HR_EXPERTS" "$HR_TOPK" ""
     fi
     if [[ -n "$CKPT_DENSE" ]]; then
-        run_arm A2dense "$CKPT_DENSE" "$DENSE_OUT" "" "" 1 1 6144
+        run_arm D1 "$CKPT_DENSE" "$DENSE_OUT" "" "" 1 1 6144
     fi
 fi
 
@@ -259,14 +259,14 @@ STRUCT_OUT="results/a2moe_${TASK}_${RSUF}_structure.txt"
 SPLIT_FLAG=()
 [[ "$SPLIT_STREAMS" == "1" ]] && SPLIT_FLAG=(--split-streams)
 HR_SYS=()
-[[ -n "$CKPT_HR" ]] && HR_SYS=(--system "A2hr:$HR_OUT")
+[[ -n "$CKPT_HR" ]] && HR_SYS=(--system "D2:$HR_OUT")
 DENSE_SYS=()
-[[ -n "$CKPT_DENSE" ]] && DENSE_SYS=(--system "A2dense:$DENSE_OUT")
+[[ -n "$CKPT_DENSE" ]] && DENSE_SYS=(--system "D1:$DENSE_OUT")
 echo "================================================================"
 echo "--- structure metrics (all arms vs REF) ---"
 python structure_metrics.py \
-    --system "A2shared:$SHARED_OUT" \
-    --system "A2mg:$MG_OUT" \
+    --system "A2:$SHARED_OUT" \
+    --system "D3:$MG_OUT" \
     "${HR_SYS[@]}" \
     "${DENSE_SYS[@]}" \
     --system "REF:$EVAL_MERGED" \
@@ -285,14 +285,14 @@ DUET_LAYOUT=duet
 [[ "$N_SAMPLES" -gt 1 ]] && DUET_LAYOUT=duet_multi
 EVAL_SONG_IDS=$(ls "$EVAL_MEL" | sed 's/\.[Mm][Ii][Dd]$//' | tr '\n' ' ')
 HR_SRC=()
-[[ -n "$CKPT_HR" ]] && HR_SRC=(--source "A2hr:$DUET_LAYOUT:$HR_OUT")
+[[ -n "$CKPT_HR" ]] && HR_SRC=(--source "D2:$DUET_LAYOUT:$HR_OUT")
 DENSE_SRC=()
-[[ -n "$CKPT_DENSE" ]] && DENSE_SRC=(--source "A2dense:$DUET_LAYOUT:$DENSE_OUT")
+[[ -n "$CKPT_DENSE" ]] && DENSE_SRC=(--source "D1:$DUET_LAYOUT:$DENSE_OUT")
 
 echo "--- building manifest ---"
 python build_eval_manifest.py \
-    --source "A2shared:$DUET_LAYOUT:$SHARED_OUT" \
-    --source "A2mg:$DUET_LAYOUT:$MG_OUT" \
+    --source "A2:$DUET_LAYOUT:$SHARED_OUT" \
+    --source "D3:$DUET_LAYOUT:$MG_OUT" \
     "${HR_SRC[@]}" \
     "${DENSE_SRC[@]}" \
     --songs $EVAL_SONG_IDS \
@@ -305,26 +305,28 @@ python eval_metrics.py --task "$TASK" \
     --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
     --out "$METRICS"
 
-echo "--- comparison table (paired Wilcoxon vs baseline A2shared) ---"
+echo "--- comparison table (paired Wilcoxon vs baseline A2) ---"
 python aggregate_eval_results.py --csv "$METRICS" \
-    --task "$TASK" --baseline A2shared --mode co \
+    --task "$TASK" --baseline A2 --mode co \
     --one-sided --complete-cases --out-md "$TABLE"
 python aggregate_eval_results.py --csv "$METRICS" \
-    --task "$TASK" --baseline A2shared --mode co \
+    --task "$TASK" --baseline A2 --mode co \
     --out-md "${TABLE%.md}_twosided.md"
 
 echo "================================================================"
-echo "E4d router-design ablation complete."
+echo "E6 MoE ablation complete."
 echo "  SAVED SAMPLES   : $SHARED_OUT , $MG_OUT${CKPT_HR:+ , $HR_OUT}${CKPT_DENSE:+ , $DENSE_OUT}"
 echo "                    (one .mid per song/sample per arm -- the"
 echo "                     listening material; same prompts everywhere)"
-echo "  routing stats   : results/routing_stats_A2*_${SLURM_JOB_ID:-local}.json"
+echo "  routing stats   : results/routing_stats_*_${SLURM_JOB_ID:-local}.json"
 echo "  structure table : $STRUCT_OUT"
 echo "  metric table    : $TABLE  (+ _twosided)"
 echo ""
-echo "How to read: quality parity (no significant A2mg deficits) already"
-echo "supports E4d -- the router redundancy costs nothing and buys the"
-echo "mechanism results (emergent structure, chord-side content routing,"
-echo "better balance). Gains, if any, should land on H3 stream-grammar"
-echo "metrics, mirroring E4c's logic."
+echo "How to read: quality parity (no significant D3 deficits vs A2)"
+echo "already supports E6 -- removing the router redundancy costs nothing"
+echo "and buys the mechanism results (emergent structure, chord-side"
+echo "content routing, better balance). The D2-vs-D3 column is the"
+echo "experiment's point: if D3 wins, learned integrators do work that"
+echo "imposed pools cannot express. Gains, if any, should land on H3"
+echo "stream-grammar metrics."
 echo "================================================================"

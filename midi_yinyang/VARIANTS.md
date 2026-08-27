@@ -292,7 +292,7 @@ metric), or a hard 2+2 per-modality expert partition ablation, or close
 the line of work with the negative result recorded. The chosen
 follow-up is A.2.moe_permod (next section).
 
-### A.2.moe_permod — per-modality router gates (2026-08-25)
+### A.2.moe_permod — per-modality router gates (codename D.3, 2026-08-25)
 
 The constructive successor to A.2.moe_improved, built after its negative
 result. Instead of *offering* the router the modality label (a bias it
@@ -366,7 +366,7 @@ mean-duration terciles are degenerate on this corpus/batch and skip —
 register is the live feature.) Snapshot-level; re-run at the final
 extended ckpt.
 
-### A.2.moe_hardroute — disjoint per-modality expert pools (2026-08-27)
+### A.2.moe_hardroute — disjoint per-modality expert pools (codename D.2, 2026-08-27)
 
 The **control** for A.2.moe_permod, added when the MoE work was
 promoted to its own experiment (EXPERIMENTS.md, E6). Not a candidate
@@ -388,13 +388,13 @@ streams. Hard route keeps the first and removes the second. So
 
 | | own routing decision per stream | expert may serve both streams |
 |---|---|---|
-| A2shared | no | yes |
-| A2hr | yes (by wall) | **no** |
-| A2mg | yes (by gate) | yes |
+| A2 (shared gate) | no | yes |
+| D2 (hard route) | yes (by wall) | **no** |
+| D3 (per-mod gates) | yes (by gate) | yes |
 
-and A2hr vs A2mg isolates exactly the property the design intent names:
+and D2 vs D3 isolates exactly the property the design intent names:
 *modalities specialise but are not fully separated, and some experts
-integrate the two.* If A2mg > A2hr, the learned integrators are doing
+integrate the two.* If D3 > D2, the learned integrators are doing
 work disjoint pools cannot express. If they tie, the honest reading is
 that cross-stream sharing is not load-bearing on this corpus and the
 simpler imposed split suffices — the interpretability result (the
