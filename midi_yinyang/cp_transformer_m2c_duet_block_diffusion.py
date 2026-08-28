@@ -29,6 +29,25 @@ ground-truth frame embedding _encode_frame(target, mod). A learned
 k-embedding is added to each slot so the model knows the noise level
 (analogous to the timestep embedding in diffusion models).
 
+TERMINOLOGY -- k is a COMMITMENT level, not a noise level. The name
+"noise level" is inherited from the diffusion analogy, but because a
+slot is a single frame VECTOR (the local-encoder bottleneck), the
+corruption here is all-or-nothing masking per slot: no intermediate
+corruption state exists, and for a masked slot the target is
+statistically independent of k. What k actually carries is
+COORDINATION metadata: (a) each slot reads the partner's k through the
+frame pass, so k is the signal distinguishing "the partner is
+committed -- harmonize with it" (k=0) from "the partner is guessing --
+negotiate" (k=K); (b) at inference k indexes the refinement round, the
+hook for round-aware behaviour (drafts improve as k falls); (c) the
+(k_m, k_c) configuration is how a decode schedule -- parallel
+diffusion, MaskGIT commit-then-condition -- is communicated to one
+checkpoint. Prose and figures should say "commitment level"; the
+k_emb_* parameter names stay (renaming them would orphan every
+existing checkpoint). A future variant with token-level masking inside
+the frame would restore genuinely graded corruption and make the
+diffusion reading literal.
+
 Both schedules (parallel diffusion, MaskGIT) become valid inference
 strategies on the same trained checkpoint -- the user can experiment
 with either without retraining.
@@ -70,9 +89,11 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  time_rope_aligned=False, self_cond_prob=0.5, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
-        # Per-modality noise-level (timestep) embeddings, indexed by
-        # k in {0, ..., K}. Zero-init: a warmstart from an A.2 ckpt then
-        # reproduces parent behaviour at k = K (fully masked) on step 0.
+        # Per-modality commitment-level embeddings (the diffusion
+        # "timestep" analogue -- see the TERMINOLOGY note in the module
+        # docstring), indexed by k in {0, ..., K}. Zero-init: a
+        # warmstart from an A.2 ckpt then reproduces parent behaviour
+        # at k = K (fully masked) on step 0.
         self.k_emb_m = nn.Embedding(self.diffusion_K + 1, self.hidden_size)
         self.k_emb_c = nn.Embedding(self.diffusion_K + 1, self.hidden_size)
         with torch.no_grad():
@@ -262,10 +283,12 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         slot_m = is_masked_m * mask_m_expand + (1.0 - is_masked_m) * gt_m
         slot_c = is_masked_c * mask_c_expand + (1.0 - is_masked_c) * gt_c
 
-        # Add per-item k-embeddings. The model learns to interpret the
-        # noise level -- crucial for iterative refinement at inference
-        # where the same slot input statistically can mean very different
-        # things depending on where in the K-step trajectory we are.
+        # Add per-item k-embeddings -- the commitment tag. Crucial for
+        # iterative refinement at inference, where the same slot input
+        # can mean very different things depending on where in the
+        # K-step trajectory we are, and it is what the partner slot
+        # reads (via the frame pass) to tell a committed frame from a
+        # tentative draft.
         k_m_e = self.k_emb_m(k_m_t).view(batch_size, 1, -1).to(h.dtype)
         k_c_e = self.k_emb_c(k_c_t).view(batch_size, 1, -1).to(h.dtype)
         slot_m = slot_m + k_m_e

@@ -241,6 +241,28 @@ across frames. The base's 2 SDPA passes become 3 (intra / cross-strict /
 frame); the base's single cross gate becomes 2 gates (cross + frame),
 both bias=-10 at init for warm-start equivalence on the AR forward path.
 
+### Terminology: k is a COMMITMENT level, not a noise level (2026-08-28)
+
+Decision recorded for all A.2 (`M2CDuetBlockDiffusion`) writing. The
+diffusion vocabulary the variant inherits ("noise level" for k) is not
+what the mechanism does: a query slot is one frame VECTOR (the
+local-encoder bottleneck), so corruption is all-or-nothing masking per
+slot — no intermediate corruption state exists, and for a masked slot
+the target is statistically independent of k. What k actually carries
+is coordination: each slot reads the partner's k through the frame
+pass (committed vs guessing), k indexes the refinement round at
+inference (drafts improve as k falls), and the (k_m, k_c)
+configuration is how a decode schedule — parallel refinement vs
+MaskGIT commit-then-condition — is expressed to one checkpoint. The
+honest one-line description of the decode mechanism is **symmetric
+iterative negotiation over a two-slot block, with a commitment tag**.
+Prose and figures say "commitment level"; parameter names
+(`k_emb_m/c`) are frozen — renaming them would orphan every existing
+checkpoint. Full rationale: the TERMINOLOGY note in
+`cp_transformer_m2c_duet_block_diffusion.py`. A future variant with
+token-level masking inside the frame would restore genuinely graded
+corruption and make the diffusion reading literal.
+
 ### A.2.moe_improved — modality-bias MoE router (2026-08-24)
 
 An opt-in change to A.2 (`M2CDuetBlockDiffusion`), motivated directly by
