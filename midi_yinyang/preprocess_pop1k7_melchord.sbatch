@@ -11,10 +11,16 @@
 #      (meta/tempo track + the one NAMED track; selection by name, so a
 #      reordered file cannot swap streams; the piano track is dropped).
 #      Songs missing either track are skipped and listed.
-#   2. check_beat_alignment.py -- INFORMATIONAL grid check. Pop1K7 is
-#      madmom-beat-synced so notes should sit on the 16th grid; TRIPLET
-#      or OFF-GRID flags here mean those songs will be corrupted by
-#      tokenization (see the checker's notes) -- review before training.
+#   2. check_tokenizer_grid.py -- grid check in TICK space, the domain
+#      the tokenizer actually reads. VERIFIED on the held-out test set
+#      (jobs 185995/186001): Pop1K7 is a beat-synced-transcription
+#      layout -- tick grid perfectly clean (0.0% off-grid), ~one tempo
+#      event per beat carrying the performance timing. The
+#      seconds-domain check_beat_alignment flags such files TRIPLET/
+#      OFF-GRID en masse (it assumes one constant tempo); that verdict
+#      is VOID for this corpus -- do not exclude songs over it.
+#      Tokenization discards the tempo map by design, so decoded output
+#      is on a straight metronomic grid (no rubato).
 #   3. tokenize both streams (ins_ids=['track-0'] on the split files,
 #      filter=False so no per-stream drops can desync the pairing) into
 #        data/pop1k7_melody_cp${MAX_POLYPHONY}_v2.pt
@@ -87,11 +93,13 @@ python split_named_tracks.py \
 N_PAIRS=$(ls "$MEL_DIR" | wc -l)
 [[ "$N_PAIRS" -gt 0 ]] || { echo "ERROR: split produced no pairs"; exit 1; }
 
-# --- 2. grid check (informational -- READ the summary) ---------------
+# --- 2. grid check in the TOKENIZER'S domain (tick space) ------------
+# (check_beat_alignment measures seconds through the tempo map and
+#  false-alarms on Pop1K7's beat-synced layout -- see the header note.)
 echo "================================================================"
-echo "--- beat/grid check (TRIPLET or OFF-GRID songs would be corrupted"
+echo "--- tokenizer-view grid check (DIRTY songs would be corrupted"
 echo "--- by tokenization; review before training) ---"
-python check_beat_alignment.py \
+python check_tokenizer_grid.py \
     --folder "$MEL_DIR" --folder "$CHD_DIR" || true
 
 # --- 3. tokenize both streams ----------------------------------------

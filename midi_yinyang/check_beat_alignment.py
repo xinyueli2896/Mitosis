@@ -1,5 +1,17 @@
 """Is a MIDI folder representable on the CP 16th-note grid?
 
+SCOPE CAVEAT (learned on Pop1K7, jobs 185995/186001): this check
+measures onsets in SECONDS through the file's full tempo map against a
+fixed step derived from the FIRST tempo event. That is the right
+instrument for constant-tempo corpora (Nottingham), and the WRONG one
+for beat-synced transcriptions (Pop1K7), whose note ticks sit cleanly
+on the grid while ~one tempo event per beat carries the performance
+timing -- such files flag TRIPLET/OFF-GRID here at 70-90% while
+tokenizing perfectly. The tokenizer reads TICK space only
+(XFMidi constant_tempo discards the tempo map), so when this check
+flags a corpus, confirm with check_tokenizer_grid.py before excluding
+anything; a high tempo-event count is the tell.
+
 The tokenizer quantizes every onset to step = 60/tempo/4 (a 16th note).
 Anything not on that grid is SNAPPED at tokenization -- the source file
 sounds fine, but the tokenized version (training data, prompts, and
