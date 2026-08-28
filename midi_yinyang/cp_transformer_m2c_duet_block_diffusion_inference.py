@@ -124,6 +124,16 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
                                   for k in state_dict_keys)
     print(f'[load_model] moe_modality_hard_route={moe_modality_hard_route}'
           f'{" (A.2.moe_hardroute)" if moe_modality_hard_route else ""}')
+    # A.4 detection: the buffer travels in the ckpt with its VALUE (0/1),
+    # unlike the presence-is-the-flag parameters, so read it.
+    token_level_mask = False
+    for k in state_dict_keys:
+        if k.endswith('token_level_mask_flag'):
+            sd_tmp = ck['state_dict'] if 'state_dict' in ck else ck
+            token_level_mask = bool(int(sd_tmp[k].item()))
+            break
+    print(f'[load_model] token_level_mask={token_level_mask}'
+          f'{" (A.4)" if token_level_mask else ""}')
     if diffusion_K is None:
         for key, name in (('k_emb_m.weight', 'k_emb_m'),
                           ('k_emb_c.weight', 'k_emb_c')):
@@ -154,6 +164,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         moe_modality_bias=moe_modality_bias,
         moe_modality_gates=moe_modality_gates,
         moe_modality_hard_route=moe_modality_hard_route,
+        token_level_mask=token_level_mask,
     )
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)
@@ -172,6 +183,54 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         from moe_runtime_stats import attach as _attach_routing_stats
         _attach_routing_stats(net, _stats_out)
     return net
+
+
+def _token_confidences(model, h_pred, tokens, type_id):
+    """Teacher-forced per-token probabilities of a sampled frame.
+
+    Mirrors the training query-logits path: embed [SOS, tokens][:-1]
+    with the type embedding, local_decode conditioned on h_pred, gather
+    each sampled token's probability. Returns [B, S] confidences (pad
+    positions get +inf so they are never selected for re-masking).
+    """
+    B, S = tokens.shape
+    device = tokens.device
+    sos = torch.full((B, 1), model.tokenizer.sos_token, dtype=torch.long,
+                     device=device)
+    x = torch.cat([sos, tokens], dim=1)                      # [B, S+1]
+    word = model.local_embedding(x)
+    type_emb = model.token_type_embeddings(
+        torch.full((B, S + 1), type_id, dtype=torch.long, device=device))
+    emb = (word + type_emb)[:, :-1]                          # [B, S, H]
+    logits = model.local_decode(h_pred, emb)                 # [B, S, V]
+    probs = torch.softmax(logits.float(), dim=-1)
+    conf = probs.gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
+    conf = torch.where(tokens == model.tokenizer.pad_token,
+                       torch.full_like(conf, float('inf')), conf)
+    return conf
+
+
+def _remask_lowest(model, tokens, conf, frac):
+    """A.4 decode schedule: re-mask the lowest-confidence non-pad tokens.
+
+    frac in [0, 1] is the target masked fraction (k/K for the level the
+    slot is about to enter). Per item, n = round(frac * n_maskable)
+    lowest-confidence tokens are replaced by the frame mask id. frac=0
+    returns tokens unchanged.
+    """
+    if frac <= 0:
+        return tokens
+    B, S = tokens.shape
+    maskable = tokens != model.tokenizer.pad_token
+    n_maskable = maskable.sum(dim=1)                          # [B]
+    n_mask = (frac * n_maskable.float()).round().long()       # [B]
+    order = conf.argsort(dim=1)               # ascending; pads (+inf) last
+    ranks = torch.empty_like(order)
+    ranks.scatter_(1, order, torch.arange(S, device=tokens.device)
+                   .unsqueeze(0).expand(B, S))
+    drop = ranks < n_mask.unsqueeze(1)
+    return torch.where(
+        drop, torch.full_like(tokens, model.frame_mask_token), tokens)
 
 
 def _build_slot(model, mode, prev_est_h, action_frame_h, r, K, slot_idx, B):
@@ -303,6 +362,17 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     adaptive = _os.environ.get('A3_ADAPTIVE') == '1'
     if adaptive:
         print('[gen] A3_ADAPTIVE=1 (skip refinement on silent-frame steps)')
+    # A.4 decode schedule: feed the next round a PARTIALLY re-masked
+    # draft -- the (r-1)/K lowest-confidence tokens replaced by the
+    # frame mask id -- matching the graded corruption the token-level
+    # variant trained on. Default ON for A.4 ckpts; A3_TOKEN_REMASK=0
+    # falls back to full-draft re-embedding (the plain schedule, which
+    # A.4 also trained on via its k=0-adjacent draws).
+    token_remask = (getattr(model, 'token_level_mask', False)
+                    and _os.environ.get('A3_TOKEN_REMASK') != '0')
+    if getattr(model, 'token_level_mask', False):
+        print(f'[gen] A.4 ckpt: token-level re-masking '
+              f'{"ON" if token_remask else "OFF (A3_TOKEN_REMASK=0)"}')
 
     def _is_silent(tokens):
         return tokens is not None and bool(
@@ -447,14 +517,26 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                         temperature=temp_r, token_type_id=0,
                     )
                     last_m_tokens = m_tokens_r
-                    prev_m_h = model._encode_frame(m_tokens_r, 0).to(dtype=dtype)
+                    feed_m = m_tokens_r
+                    if token_remask and r > 0 and K > 0:
+                        conf = _token_confidences(model, h_m_pred,
+                                                   m_tokens_r, 0)
+                        feed_m = _remask_lowest(model, m_tokens_r, conf,
+                                                 (r - 1) / K)
+                    prev_m_h = model._encode_frame(feed_m, 0).to(dtype=dtype)
                 if c_sampling:
                     c_tokens_r = model.local_sampling(
                         h_c_pred, max_subseq_len=subseq_len,
                         temperature=temp_r, token_type_id=1,
                     )
                     last_c_tokens = c_tokens_r
-                    prev_c_h = model._encode_frame(c_tokens_r, 1).to(dtype=dtype)
+                    feed_c = c_tokens_r
+                    if token_remask and r > 0 and K > 0:
+                        conf = _token_confidences(model, h_c_pred,
+                                                   c_tokens_r, 1)
+                        feed_c = _remask_lowest(model, c_tokens_r, conf,
+                                                 (r - 1) / K)
+                    prev_c_h = model._encode_frame(feed_c, 1).to(dtype=dtype)
 
                 # Adaptive early-exit: after the seed round, if either
                 # stream's current frame (sampled draft or given action)

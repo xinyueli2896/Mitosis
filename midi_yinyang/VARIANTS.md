@@ -259,9 +259,54 @@ iterative negotiation over a two-slot block, with a commitment tag**.
 Prose and figures say "commitment level"; parameter names
 (`k_emb_m/c`) are frozen — renaming them would orphan every existing
 checkpoint. Full rationale: the TERMINOLOGY note in
-`cp_transformer_m2c_duet_block_diffusion.py`. A future variant with
-token-level masking inside the frame would restore genuinely graded
-corruption and make the diffusion reading literal.
+`cp_transformer_m2c_duet_block_diffusion.py`. The variant that restores
+genuinely graded corruption is now implemented as **A.4** (next
+section).
+
+### A.4 — token-level commitment (graded within-frame corruption, 2026-08-28)
+
+The naturalness fix that follows from the terminology note above: if
+the corruption is all-or-nothing only because a slot is one frame
+VECTOR, corrupt at the TOKEN level instead. Opt-in
+(`--token_level_mask` / sbatch `TOKEN_LEVEL_MASK=1`), run-dir tag
+`tk`, carried in ckpts by the `token_level_mask_flag` buffer (stored
+by VALUE -- plain ckpts carry it as 0; detection must read the value).
+
+**Training.** At commitment level k, each non-pad token of the target
+frame is masked independently with prob k/K and the local encoder
+embeds the partially-masked frame: intermediate k are genuinely
+intermediate states ("chord root known, upper voices open").
+Self-conditioning applies at the token level (the draft's tokens are
+corrupted, not its encoding). Endpoints are preserved exactly -- an
+all-masked draw falls back to the learned `mask_*_emb` (deterministic
+at k=K) and k=0 encodes the clean frame -- so the fully-unknown and
+fully-known states remain the trained ones and the variant is a strict
+generalisation of the plain schedule.
+
+**The mask id is free.** With `with_velocity=False` the vocabulary
+pads the program range to 256 with only 128 real programs and caps
+pitch-dur ids at 128·25−1 = 3199, so ids 3200..3327 are unreachable in
+real data and excluded by `local_sampling`'s valid-token masks. A.4
+takes `n_normal_tokens − 1` (3327): no vocabulary change, no embedding
+surgery, warm starts load unchanged. The velocity vocabulary has no
+free id, so the constructor refuses `with_velocity` + A.4.
+
+**Decoding.** Inference auto-detects the flag. By default the
+refinement loop feeds each next round a PARTIALLY re-masked draft: the
+(r−1)/K lowest-confidence tokens (teacher-forced probability of the
+sampled token, pads exempt) are replaced by the mask id before
+re-encoding -- per-frame MaskGIT, matching the graded corruption the
+model trained on. `A3_TOKEN_REMASK=0` falls back to full-draft
+re-embedding.
+
+**Audited** by `audit_a4_token_mask.py` / `.sbatch`: mask-id safety,
+bit-exact endpoint equivalence with the plain variant at k=K and k=0,
+masked-fraction statistics, token-level self-conditioning, value-based
+flag detection, the velocity guard, and the re-masking helpers.
+
+**Status.** Implemented; audit not yet run on-cluster; no training run
+yet. Second-degree relative to the E6/paper scope -- registered so the
+naturalness argument has a concrete, costed counterpart.
 
 ### A.2.moe_improved — modality-bias MoE router (2026-08-24)
 

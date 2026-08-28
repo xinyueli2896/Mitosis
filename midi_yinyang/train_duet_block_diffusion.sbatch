@@ -102,6 +102,23 @@
 #                           Expert purity is 0/100 BY CONSTRUCTION on
 #                           this arm -- report within-pool content
 #                           responsiveness and quality instead.
+#   --export=ALL,TOKEN_LEVEL_MASK=1  A.4: per-token absorbing corruption
+#                           of the query-slot frame -- at commitment
+#                           level k each non-pad token is masked with
+#                           prob k/K and the local encoder embeds the
+#                           partial frame, so intermediate k are
+#                           genuinely intermediate ("chord root known,
+#                           upper voices open"). Endpoints match the
+#                           plain variant exactly (all-masked ->
+#                           mask_*_emb; k=0 -> clean), so shared/mg
+#                           ckpts warm-start cleanly. Uses the free
+#                           token id n_normal_tokens-1 (no vocab
+#                           change); melchord only (velocity vocab has
+#                           no free id). Run dirs get a 'tk' marker;
+#                           inference auto-detects and turns on
+#                           confidence-based per-token re-masking
+#                           across refinement rounds (A3_TOKEN_REMASK=0
+#                           to disable).
 #   --export=ALL,FRESH_SCHEDULE=1    opt-in: load weights only, drop
 #                           optimizer + scheduler + step counter, run a
 #                           brand-new OneCycle from step 0. NOT the
@@ -191,6 +208,9 @@ MOE_MODALITY_GATES="${MOE_MODALITY_GATES:-0}"
 # A.2.moe_hardroute: disjoint per-modality expert pools (see header).
 # Marks the run dir with 'hr'.
 MOE_MODALITY_HARD_ROUTE="${MOE_MODALITY_HARD_ROUTE:-0}"
+# A.4: token-level masking at the query slots (see header). Marks the
+# run dir with 'tk'.
+TOKEN_LEVEL_MASK="${TOKEN_LEVEL_MASK:-0}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_block_diffusion_${SLURM_JOB_ID}}"
 # Data polyphony per stream (drives the sample-dump reshape, not the model):
@@ -249,6 +269,7 @@ MB_TAG=""
 [[ "$MOE_MODALITY_BIAS" == "1" ]] && MB_TAG="${MB_TAG}mb"
 [[ "$MOE_MODALITY_GATES" == "1" ]] && MB_TAG="${MB_TAG}mg"
 [[ "$MOE_MODALITY_HARD_ROUTE" == "1" ]] && MB_TAG="${MB_TAG}hr"
+[[ "$TOKEN_LEVEL_MASK" == "1" ]] && MB_TAG="${MB_TAG}tk"
 RUN_DIR="ckpt/m2c_duet_block_diffusion_${SCHEME_VERSION}_large_gnl12_K${DIFFUSION_K}${MB_TAG}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
     CKPT="$RUN_DIR/last.ckpt"
@@ -289,7 +310,7 @@ fi
 
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
-echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K  moe_modality_bias=$MOE_MODALITY_BIAS  moe_modality_gates=$MOE_MODALITY_GATES  moe_modality_hard_route=$MOE_MODALITY_HARD_ROUTE${MB_TAG:+  [$MB_TAG]}"
+echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K  moe_modality_bias=$MOE_MODALITY_BIAS  moe_modality_gates=$MOE_MODALITY_GATES  moe_modality_hard_route=$MOE_MODALITY_HARD_ROUTE  token_level_mask=$TOKEN_LEVEL_MASK${MB_TAG:+  [$MB_TAG]}"
 echo "MoE: experts=$MOE_NUM_EXPERTS topk=$MOE_TOPK intermediate=${MOE_INTERMEDIATE_SIZE:-<default 3072/expert>}  RUN_TAG=${RUN_TAG:-<none>}"
 echo "Task:    $TASK   (data max_polyphony: $MAX_POLYPHONY)"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
@@ -385,6 +406,7 @@ COMMON_ARGS=(
     --moe_modality_bias "$MOE_MODALITY_BIAS"
     --moe_modality_gates "$MOE_MODALITY_GATES"
     --moe_modality_hard_route "$MOE_MODALITY_HARD_ROUTE"
+    --token_level_mask "$TOKEN_LEVEL_MASK"
     --diffusion_K "$DIFFUSION_K"
     --checkpoint_path "$TRAIN_CKPT"
     --wandb
