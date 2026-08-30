@@ -632,6 +632,16 @@ if __name__ == '__main__':
                         action='store_false')
     parser.add_argument('--wandb_dir', type=str, default='/tmp/wandb')
     parser.add_argument('--save_top_k', type=int, default=2)
+    parser.add_argument('--limit_val_batches', type=int, default=25,
+                        help='validation batches per check. Validation is '
+                             'now DETERMINISTIC (fixed sample order and '
+                             'crop offsets -- see FramedDataset.__iter__), '
+                             'so this sets how much of the val split the '
+                             'metric covers rather than how noisy it is. '
+                             'Raise it (100+) for a metric stable enough to '
+                             'compare ACROSS runs; the cost is per check, '
+                             'so pair a raise with a larger '
+                             '--val_check_interval.')
     parser.add_argument('--val_check_interval', type=int, default=500,
                         help='steps between val evaluations. On the small '
                              'melchord corpora the val minimum can arrive '
@@ -899,7 +909,7 @@ if __name__ == '__main__':
         accelerator='gpu' if torch.cuda.is_available() else 'cpu',
         callbacks=[checkpoint_callback] + extra_callbacks,
         val_check_interval=args.val_check_interval,
-        limit_val_batches=25,
+        limit_val_batches=args.limit_val_batches,
         check_val_every_n_epoch=None,
         gradient_clip_val=(args.gradient_clip_val if args.gradient_clip_val > 0 else None),
         logger=(

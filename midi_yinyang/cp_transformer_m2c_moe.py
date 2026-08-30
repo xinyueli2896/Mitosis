@@ -1151,12 +1151,32 @@ class FramedDataset(IterableDataset):
             pitch_shift_range_c = torch.zeros_like(pitch_shift_range_c)  # No pitch shift for validation
         print('Data for dataset', self.file_path, 'loaded.')
         while True:
-            indices = torch.randperm(len(self.valid_indices))
+            # DETERMINISTIC VALIDATION. The train split draws a fresh
+            # permutation and a fresh random crop window every pass --
+            # correct for training, ruinous for a metric: with
+            # limit_val_batches capping the pass, every validation scored a
+            # DIFFERENT random subset at DIFFERENT crop offsets, so val_loss
+            # swung +/-0.15 between adjacent checks and save_top_k selected
+            # lucky draws rather than good models (observed on the K4mgtk
+            # run: 0.347 and 0.329 were both spikes in a stationary band).
+            # For the val split we therefore fix the order and seed the
+            # window offsets, so every validation scores the SAME crops and
+            # the curve measures the model. Pitch shift was already
+            # disabled for val above.
+            # NOTE: val_loss values shift slightly versus runs trained
+            # before this change -- within-run trends and comparisons
+            # between new runs are what become meaningful.
+            if self.split == 'val':
+                gen = torch.Generator().manual_seed(0)
+                indices = torch.arange(len(self.valid_indices))
+            else:
+                gen = None
+                indices = torch.randperm(len(self.valid_indices))
             for i in range(0, len(self.valid_indices), self.batch_size):
                 batch_indices = indices[i:i + self.batch_size]
                 raw_ids = self.valid_indices[batch_indices]
                 # Sample a window offset that fits in BOTH streams (use min length).
-                to_be_added = torch.floor(torch.rand(len(raw_ids)) * (self.length[raw_ids] - self.target_length)).long()
+                to_be_added = torch.floor(torch.rand(len(raw_ids), generator=gen) * (self.length[raw_ids] - self.target_length)).long()
                 to_be_added -= to_be_added % 16
                 # Per-stream absolute starts: same window offset, different cumulative bases.
                 starts_chord = to_be_added + self.start_chord[raw_ids]
