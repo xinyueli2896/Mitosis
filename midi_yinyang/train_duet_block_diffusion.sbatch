@@ -148,6 +148,33 @@
 #                           across the two, so turn it on for a WHOLE
 #                           arm-set (all four E6 arms, say) or none.
 #                           Run dirs get a 'qm' marker.
+#   --export=ALL,QUERY_PAIRS=N       Q: how many DISTINCT frames each
+#                           training forward supervises at the query
+#                           slots. Training supervises ONE frame per
+#                           forward today (T_query is a single index,
+#                           shared batch-wide because it defines the
+#                           [L,L] mask), while the AR loss scores all
+#                           2T positions -- so the frame pass, the one
+#                           mechanism the decode loop actually uses,
+#                           gets ~1/T of the gradient. D3PM / MDLM /
+#                           MaskGIT reconstruct every corrupted
+#                           position instead. Q>1 appends Q query
+#                           PAIRS for Q distinct frames, each with its
+#                           own visibility window, its own (k_m, k_c)
+#                           draw and its own loss; pairs are blind to
+#                           each other and the clean stream is blind to
+#                           all of them. Cost is L: 2T+2 -> 2T+2Q, i.e.
+#                           at TRAIN_LENGTH=384 and Q=8, +2% sequence
+#                           and +3.7% attention for 8x the query
+#                           gradient. No rotary extrapolation (each
+#                           pair takes its own frame's phase).
+#                           Training-only: inference decodes one frame
+#                           at a time, so parameters, the ckpt and the
+#                           decode path are unchanged, and validation
+#                           stays at Q=1 so val_loss remains
+#                           comparable. Q=1 (default) reproduces the
+#                           old behaviour bit-for-bit. Run dirs get a
+#                           'qN' marker for Q>1.
 #   --export=ALL,FRESH_SCHEDULE=1    opt-in: load weights only, drop
 #                           optimizer + scheduler + step counter, run a
 #                           brand-new OneCycle from step 0. NOT the
@@ -248,6 +275,9 @@ TOKEN_LEVEL_MASK="${TOKEN_LEVEL_MASK:-0}"
 # Score the query loss only where the slot did NOT already hand the
 # model its own target (see header). Marks the run dir with 'qm'.
 MASK_REVEALED_QUERY_LOSS="${MASK_REVEALED_QUERY_LOSS:-0}"
+# Q: distinct frames supervised per forward at the query slots (see
+# header). Q>1 marks the run dir with 'qN'.
+QUERY_PAIRS="${QUERY_PAIRS:-1}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_block_diffusion_${SLURM_JOB_ID}}"
 # Data polyphony per stream (drives the sample-dump reshape, not the model):
@@ -308,6 +338,7 @@ MB_TAG=""
 [[ "$MOE_MODALITY_HARD_ROUTE" == "1" ]] && MB_TAG="${MB_TAG}hr"
 [[ "$TOKEN_LEVEL_MASK" == "1" ]] && MB_TAG="${MB_TAG}tk"
 [[ "$MASK_REVEALED_QUERY_LOSS" == "1" ]] && MB_TAG="${MB_TAG}qm"
+[[ "$QUERY_PAIRS" != "1" ]] && MB_TAG="${MB_TAG}q${QUERY_PAIRS}"
 RUN_DIR="ckpt/m2c_duet_block_diffusion_${SCHEME_VERSION}_large_gnl12_K${DIFFUSION_K}${MB_TAG}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
     CKPT="$RUN_DIR/last.ckpt"
@@ -348,7 +379,7 @@ fi
 
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
-echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K  moe_modality_bias=$MOE_MODALITY_BIAS  moe_modality_gates=$MOE_MODALITY_GATES  moe_modality_hard_route=$MOE_MODALITY_HARD_ROUTE  token_level_mask=$TOKEN_LEVEL_MASK  mask_revealed_query_loss=$MASK_REVEALED_QUERY_LOSS${MB_TAG:+  [$MB_TAG]}"
+echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K  moe_modality_bias=$MOE_MODALITY_BIAS  moe_modality_gates=$MOE_MODALITY_GATES  moe_modality_hard_route=$MOE_MODALITY_HARD_ROUTE  token_level_mask=$TOKEN_LEVEL_MASK  mask_revealed_query_loss=$MASK_REVEALED_QUERY_LOSS  query_pairs=$QUERY_PAIRS${MB_TAG:+  [$MB_TAG]}"
 echo "MoE: experts=$MOE_NUM_EXPERTS topk=$MOE_TOPK intermediate=${MOE_INTERMEDIATE_SIZE:-<default 3072/expert>}  RUN_TAG=${RUN_TAG:-<none>}"
 echo "Task:    $TASK   (data max_polyphony: $MAX_POLYPHONY)"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
@@ -447,6 +478,7 @@ COMMON_ARGS=(
     --moe_modality_hard_route "$MOE_MODALITY_HARD_ROUTE"
     --token_level_mask "$TOKEN_LEVEL_MASK"
     --mask_revealed_query_loss "$MASK_REVEALED_QUERY_LOSS"
+    --query_pairs "$QUERY_PAIRS"
     --diffusion_K "$DIFFUSION_K"
     --checkpoint_path "$TRAIN_CKPT"
     --wandb

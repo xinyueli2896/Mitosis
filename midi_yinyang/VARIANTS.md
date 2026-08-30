@@ -348,6 +348,77 @@ run on-cluster. Second-degree relative to the E6/paper scope —
 registered so the naturalness argument has a concrete, costed
 counterpart.
 
+### A.6 — Q query pairs per forward (2026-08-30)
+
+Opt-in (`--query_pairs Q` / sbatch `QUERY_PAIRS=Q`), run-dir tag `qN`
+for Q > 1. **Training-only**: inference decodes one frame at a time, so
+Q leaves the parameters, the checkpoint and the decode path untouched,
+and Q=1 reproduces the old behaviour bit-for-bit.
+
+**The problem.** `T_query` is a single frame index, and a single one for
+the whole *batch* — it has to be, because it defines the `[L, L]`
+attention mask. So each forward supervises the query slots on one frame
+out of `TRAIN_LENGTH = 384`, while the AR loss scores all `2·T` clean
+positions. The frame pass — the same-instant symmetric conditioning that
+is the novel contribution and the *only* mechanism the decode loop uses
+— therefore receives about 1/T of the gradient, while the inherited AR
+pathway receives all of it.
+
+Drawing one commitment level per sample is standard (D3PM, MDLM,
+MaskGIT all do it). Supervising one *position* is not: those methods
+corrupt the whole sequence at level t and reconstruct **every** corrupted
+position, and BERT masks 15% of positions rather than one for exactly
+this reason.
+
+**The change.** Append Q query *pairs* for Q distinct frames instead of
+one. Pair *j* occupies `clean_len+2j` / `clean_len+2j+1`, carries
+prediction-frame `T_j`, and gets its own visibility window (clean frames
+< `T_j`), its own `(k_m, k_c)` draw, and its own loss. So one forward
+also covers Q points of the commitment grid instead of one.
+
+Pairs are **blind to each other** — a slot reads its own partner's draft
+(that is the frame pass) but never another pair's, which inference could
+not supply — and the clean stream stays blind to all of them.
+
+**Cost.** `L` goes from `2T+2` to `2T+2Q`. At `TRAIN_LENGTH = 384`:
+
+| Q | L | attention (∝L²) | FFN/MoE (∝L) | query gradient |
+|---|---|---|---|---|
+| 1 | 770 | — | — | 1× |
+| 4 | 776 | +1.6% | +0.8% | 4× |
+| 8 | 784 | +3.7% | +2.1% | 8× |
+| 16 | 800 | +8.0% | +4.2% | 16× |
+
+The clean stream — the expensive part — does not grow. There is **no
+rotary extrapolation**: `_run_global_stack` writes rotary indices
+explicitly, and each pair takes the phase of its *own* frame
+(`2T_j+2`/`2T_j+3` under v1.1, `T_j+1` for both under v1.2), so a Q>1
+run visits no rotary position a Q=1 run would not.
+
+Validation stays at Q=1, so `val_loss` remains comparable across
+settings — unlike A.5, this knob does not need a whole arm-set switched
+together.
+
+**Why not corrupt in place instead?** Because query slots exist only to
+break a cycle: the clean stream is AR-shifted, so position `2t` holds
+m_{t−1} and predicts m_t, and letting it see c_t's *current* value is
+exactly what the c-position is producing. Corrupting the stream in place
+(true MaskGIT/MDLM on the interleaved sequence) would supervise all T
+frames at `L = 2T` with no appended positions — but a position's input
+cannot simultaneously be "frame t−1, clean" (for the AR loss) and
+"frame t, corrupted" (for the denoising loss). You cannot have all three
+of: no extra positions, the AR loss, and dense denoising in one forward.
+Q is the dial along that trade-off, with the AR loss and the pretrained
+warm start kept intact.
+
+**Audited** by `audit_query_pairs.py` / `.sbatch`. The strong check is
+pair equivalence: since pairs are mutually blind, pair *j* of a Q>1
+forward must produce bit-identical query logits to a Q=1 forward at that
+frame (verified at k=K and k=0, both model variants), and the AR logits
+must not move at all.
+
+**Status.** Implemented, unrun. Suggested first setting: Q=8.
+
 ### A.5 — query loss on corrupted positions only (2026-08-30)
 
 Opt-in (`--mask_revealed_query_loss` / sbatch

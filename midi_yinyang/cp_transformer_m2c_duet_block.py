@@ -79,6 +79,20 @@ from cp_transformer_m2c_jointattn import (
 from tasks import get_task, TASKS
 
 
+def normalize_T_query(T_query):
+    """Accept an int or a sequence of ints, return a tuple of ints.
+
+    An int means one query pair (Q=1) -- the inference shape, and the
+    behaviour every existing checkpoint was trained under. A sequence
+    means Q pairs, one per listed frame.
+    """
+    if isinstance(T_query, (list, tuple)):
+        return tuple(int(t) for t in T_query)
+    if torch.is_tensor(T_query):
+        return tuple(int(t) for t in T_query.flatten().tolist())
+    return (int(T_query),)
+
+
 # ---------------------------------------------------------------------------
 # Per-layer 3-pass block (intra + cross + frame), 2 gates (gate_c, gate_f)
 # ---------------------------------------------------------------------------
@@ -88,7 +102,8 @@ class M2CDuetBlockLayer(nn.Module):
     key-masked SDPA passes (intra + cross + frame), per-modality cross
     and frame gates, and a shared MoE FFN.
 
-    Three masks built per-call from (clean_len, T_query, device):
+    Three masks built per-call from (clean_len, T_query, device),
+    where T_query is one frame index or a tuple of Q of them:
       mask_intra : clean queries -> same-mod clean causal;
                     query slots -> same-mod clean with frame < T_query.
       mask_cross : clean queries -> other-mod clean with frame < query frame;
@@ -165,14 +180,22 @@ class M2CDuetBlockLayer(nn.Module):
         return x.transpose(1, 2).contiguous().view(B, L, h * d)
 
     def _build_masks(self, clean_len, T_query, device):
-        """Build the three [L, L] boolean masks where L = clean_len + 2.
+        """Build the three [L, L] boolean masks, L = clean_len + 2*Q.
 
-        Positions 0 .. clean_len-1 are clean (alternating m/c).
-        Position clean_len is the m-query slot for frame T_query.
-        Position clean_len+1 is the c-query slot for frame T_query.
+        Positions 0 .. clean_len-1 are clean (alternating m/c). After
+        them come Q QUERY PAIRS: pair j occupies clean_len+2j (the
+        m-slot) and clean_len+2j+1 (the c-slot), and predicts frame
+        T_query[j].
+
+        T_query is an int (Q=1, the inference shape and the historical
+        behaviour, reproduced bit-for-bit) or a sequence of Q distinct
+        frame indices. Q > 1 supervises Q frames per forward instead of
+        one; see the QUERY-PAIR COUNT note in the diffusion subclass.
         """
-        L = clean_len + 2
-        cache_key = (clean_len, T_query, str(device))
+        tq = normalize_T_query(T_query)
+        n_pairs = len(tq)
+        L = clean_len + 2 * n_pairs
+        cache_key = (clean_len, tq, str(device))
         if self._mask_cache_key == cache_key:
             return self._mask_intra, self._mask_cross, self._mask_frame
 
@@ -188,13 +211,22 @@ class M2CDuetBlockLayer(nn.Module):
             (pos - clean_len) % 2,
         )
 
+        # Query-pair index per position (-1 for clean positions), so
+        # the frame pass can be restricted to a slot's OWN partner.
+        pair_id = torch.where(
+            is_clean,
+            torch.full_like(pos, -1),
+            (pos - clean_len) // 2,
+        )
+
         # Prediction-frame per position.
         # Clean: pos // 2.
-        # Query: T_query.
+        # Query pair j: T_query[j].
+        tq_t = torch.tensor(tq, device=device, dtype=pos.dtype)
         pred_frame = torch.where(
             is_clean,
             pos // 2,
-            torch.full_like(pos, T_query),
+            tq_t[pair_id.clamp_min(0)],
         )
 
         # Broadcast.
@@ -243,11 +275,17 @@ class M2CDuetBlockLayer(nn.Module):
         # mask_frame:
         #   clean p AND clean q AND diff_mod AND same prediction-frame
         # OR
-        #   query p AND query q AND p != q
+        #   query p AND query q AND SAME PAIR AND p != q
+        # The same-pair restriction is what keeps Q > 1 honest: a slot
+        # may read its own partner's draft (that is the whole point of
+        # the frame pass) but never another pair's, which would hand it
+        # a second draft of a different frame that inference cannot
+        # supply.
         diag = torch.eye(L, dtype=torch.bool, device=device)
+        same_pair = (pair_id[:, None] == pair_id[None, :])
         mask_frame = (
             (clean_clean & diff_mod & same_frame)
-            | (p_query & q_query & ~diag)
+            | (p_query & q_query & same_pair & ~diag)
         )
 
         # Empty-row safeguard: pos 0 and pos 1 have empty mask_cross
@@ -268,21 +306,25 @@ class M2CDuetBlockLayer(nn.Module):
         return mask_intra, mask_cross, mask_frame
 
     def forward(self, h, T_query, cos, sin, clean_len):
-        """h: [B, L, H] with L = clean_len + 2. The last 2 positions are
-        the query slots (m-query, c-query) for frame T_query.
+        """h: [B, L, H] with L = clean_len + 2*Q. The trailing 2Q
+        positions are Q query pairs; pair j is (m-query, c-query) for
+        frame T_query[j]. T_query may be an int (Q=1).
 
         Returns (h_out, aux_loss).
         """
         B, L, H = h.shape
-        assert L == clean_len + 2
+        assert L > clean_len and (L - clean_len) % 2 == 0, (
+            f'L={L} must be clean_len={clean_len} plus an even number of '
+            f'query-slot positions (2 per query pair)'
+        )
 
         # Split into per-modality streams.
         # Clean stream: alternating m/c at positions 0..clean_len-1.
-        # Query stream: position clean_len (m), clean_len+1 (c).
+        # Query stream: Q pairs, m at clean_len+2j, c at clean_len+2j+1.
         h_m_clean = h[:, 0:clean_len:2]    # [B, T_full, H]  (mod-a clean)
         h_c_clean = h[:, 1:clean_len:2]    # [B, T_full, H]  (mod-b clean)
-        h_qm = h[:, clean_len:clean_len+1]   # [B, 1, H]  (m-query)
-        h_qc = h[:, clean_len+1:clean_len+2] # [B, 1, H]  (c-query)
+        h_qm = h[:, clean_len::2]            # [B, Q, H]  (m-queries)
+        h_qc = h[:, clean_len + 1::2]        # [B, Q, H]  (c-queries)
 
         # Per-modality Q/K/V build, then re-interleave to flat [B, L, H].
         # Modality-A positions: 0, 2, 4, ..., clean_len-2, clean_len.
@@ -305,8 +347,8 @@ class M2CDuetBlockLayer(nn.Module):
             out = torch.zeros(B_, hd, L, dk, device=t_m.device, dtype=t_m.dtype)
             out[:, :, 0:clean_len:2] = t_m[:, :, :clean_len // 2]
             out[:, :, 1:clean_len:2] = t_c[:, :, :clean_len // 2]
-            out[:, :, clean_len:clean_len+1] = t_m[:, :, clean_len // 2:clean_len // 2 + 1]
-            out[:, :, clean_len+1:clean_len+2] = t_c[:, :, clean_len // 2:clean_len // 2 + 1]
+            out[:, :, clean_len::2] = t_m[:, :, clean_len // 2:]
+            out[:, :, clean_len+1::2] = t_c[:, :, clean_len // 2:]
             return out
 
         q = _scatter(q_m, q_c)
@@ -336,12 +378,12 @@ class M2CDuetBlockLayer(nn.Module):
         # mod-B query positions: odd clean + position clean_len+1.
         def _gather_m(t):
             return torch.cat(
-                [t[:, 0:clean_len:2], t[:, clean_len:clean_len+1]], dim=1,
+                [t[:, 0:clean_len:2], t[:, clean_len::2]], dim=1,
             )
 
         def _gather_c(t):
             return torch.cat(
-                [t[:, 1:clean_len:2], t[:, clean_len+1:clean_len+2]], dim=1,
+                [t[:, 1:clean_len:2], t[:, clean_len+1::2]], dim=1,
             )
 
         u_intra_m = _gather_m(out_intra)
@@ -372,8 +414,8 @@ class M2CDuetBlockLayer(nn.Module):
         out_flat = torch.zeros_like(h)
         out_flat[:, 0:clean_len:2] = o_m[:, :clean_len // 2]
         out_flat[:, 1:clean_len:2] = o_c[:, :clean_len // 2]
-        out_flat[:, clean_len:clean_len+1] = o_m[:, clean_len // 2:clean_len // 2 + 1]
-        out_flat[:, clean_len+1:clean_len+2] = o_c[:, clean_len // 2:clean_len // 2 + 1]
+        out_flat[:, clean_len::2] = o_m[:, clean_len // 2:]
+        out_flat[:, clean_len+1::2] = o_c[:, clean_len // 2:]
 
         h = self.ln_attn(h + self.drop(out_flat))
 
@@ -473,12 +515,12 @@ class M2CDuetBlockAttn(RoFormerSymbolicTransformer):
         return sos.to(device=device, dtype=dtype)
 
     def _run_global_stack(self, h, T_query):
-        """h: [B, L, H] with L = clean_len + 2 (last 2 are query slots).
+        """h: [B, L, H] with L = clean_len + 2*Q (trailing query pairs).
 
         Returns (h_global, aux_loss).
         """
         B, L, H = h.shape
-        clean_len = L - 2
+        clean_len = L - 2 * len(normalize_T_query(T_query))
         head_dim = H // self.num_attention_heads
         cos, sin = _rope_freqs(L, head_dim, device=h.device, dtype=h.dtype)
         total_aux = torch.zeros((), device=h.device, dtype=h.dtype)

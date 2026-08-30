@@ -82,6 +82,36 @@ Both endpoints remain exact under the fixes (k=0 clean, k=K the learned
 whole-frame mask embedding, silent frames included), so a warm start
 from an A.2 checkpoint still reproduces A.2 at k=K.
 
+QUERY-PAIR COUNT (Q, --query_pairs)
+-----------------------------------
+Training supervises the query slots on ONE frame per forward: T_query is
+a single index, shared by the whole batch because it defines the [L, L]
+attention mask. The AR loss meanwhile scores all 2*T_full positions. So
+the frame pass -- the same-instant symmetric conditioning that is the
+only mechanism the decode loop actually uses -- receives roughly 1/T of
+the gradient, while the inherited AR pathway receives all of it.
+
+That is not how the literature does it. D3PM, MDLM and MaskGIT draw one
+noise level per sample but reconstruct EVERY corrupted position; BERT
+masks 15% of positions rather than one, for exactly this reason.
+
+--query_pairs Q appends Q query PAIRS instead of one, for Q distinct
+frames, each with its own visibility window (frames < T_j), its own
+(k_m, k_c) draw, and its own loss. Pairs are blind to each other -- a
+slot may read its own partner's draft, never another pair's, which
+inference could not supply. The clean stream is untouched and still
+blind to every slot.
+
+Cost: L goes from 2*T_full + 2 to 2*T_full + 2Q. At TRAIN_LENGTH=384
+that is 770 -> 784 for Q=8, i.e. +2% sequence and +3.7% attention for
+8x the query gradient and 8x the coverage of the (k_m, k_c) grid. No
+rotary extrapolation: each pair takes the rotary phase of its OWN
+frame, so no position is visited that Q=1 did not already visit.
+
+Q is training-only. Inference decodes one frame at a time regardless,
+so the parameters, the checkpoint and the decode path are unchanged,
+and validation keeps Q=1 so val_loss stays comparable across settings.
+
 Both schedules (parallel diffusion, MaskGIT) become valid inference
 strategies on the same trained checkpoint -- the user can experiment
 with either without retraining.
@@ -106,7 +136,7 @@ import torch.nn.functional as F
 from cp_transformer_m2c_moe import (
     RoFormerSymbolicTransformer, FramedDataset, TRAIN_LENGTH, MAX_STEPS,
 )
-from cp_transformer_m2c_duet_block import M2CDuetBlockAttn
+from cp_transformer_m2c_duet_block import M2CDuetBlockAttn, normalize_T_query
 from cp_transformer_m2c_jointattn import _rope_freqs
 from tasks import get_task, TASKS
 
@@ -122,7 +152,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
     def __init__(self, *args, diffusion_K=4, slot_rope_aligned=True,
                  time_rope_aligned=False, self_cond_prob=0.5,
                  token_level_mask=False, mask_revealed_query_loss=False,
-                 **kwargs):
+                 query_pairs=1, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- A.4: token-level masking inside the frame ----------------
@@ -223,6 +253,12 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         # between training (gt-or-mask) and inference (self-samples fed
         # back across refinement rounds).
         self.self_cond_prob = float(self_cond_prob)
+        # QUERY-PAIR COUNT (Q). How many DISTINCT frames each training
+        # forward supervises -- see the note in the module docstring.
+        # Training-only: inference always decodes one frame at a time,
+        # so Q leaves the parameters, the checkpoint and the decode path
+        # untouched, and Q=1 is bit-for-bit the historical behaviour.
+        self.query_pairs = max(int(query_pairs), 1)
 
     @property
     def slot_rope_aligned(self):
@@ -239,6 +275,28 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
     @property
     def mask_revealed_query_loss(self):
         return bool(self.mask_revealed_query_loss_flag.item())
+
+    def on_load_checkpoint(self, checkpoint):
+        """Let a checkpoint that predates a scheme buffer still resume.
+
+        Every training-scheme flag here is a registered buffer, so it
+        travels inside the ckpt -- but that also means a ckpt written
+        before a flag existed is MISSING that key, and Lightning's
+        resume path loads the state_dict strictly. Fill any absent
+        buffer with this run's own value, which is the right default:
+        the flag then comes from the CLI, exactly as it would on a cold
+        start. (frame_mask_row_init_flag=0 in particular means a legacy
+        A.4 ckpt gets its never-initialised mask row fixed on resume.)
+        """
+        sd = checkpoint.get('state_dict')
+        if isinstance(sd, dict):
+            for name, buf in self.named_buffers():
+                if name not in sd:
+                    sd[name] = buf.detach().clone()
+                    print(f'[compat] checkpoint predates buffer {name!r}; '
+                          f'filling in with this run\'s value '
+                          f'{buf.tolist()}')
+        super().on_load_checkpoint(checkpoint)
 
     def _init_frame_mask_row(self):
         """A.4 FIX 1: give the MASK id a trained-model-like embedding.
@@ -438,11 +496,13 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         if not (self.slot_rope_aligned or self.time_rope_aligned):
             return super()._run_global_stack(h, T_query)
         B, L, H = h.shape
-        clean_len = L - 2
+        tq = normalize_T_query(T_query)
+        clean_len = L - 2 * len(tq)
         head_dim = H // self.num_attention_heads
         positions = torch.arange(L, device=h.device)
-        positions[clean_len] = 2 * int(T_query) + 2
-        positions[clean_len + 1] = 2 * int(T_query) + 3
+        for j, t_j in enumerate(tq):
+            positions[clean_len + 2 * j] = 2 * t_j + 2
+            positions[clean_len + 2 * j + 1] = 2 * t_j + 3
         if self.time_rope_aligned:
             positions = torch.div(positions, 2, rounding_mode='floor')
         max_pos = int(positions.max().item()) + 1
@@ -486,14 +546,21 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
 
         if T_query is None:
             T_query = T_full - 1
-        T_query = int(T_query)
-        assert 1 <= T_query < T_full, (
-            f'T_query={T_query} out of valid range [1, {T_full})'
+        tq = normalize_T_query(T_query)
+        n_pairs = len(tq)
+        for t_j in tq:
+            assert 1 <= t_j < T_full, (
+                f'T_query entry {t_j} out of valid range [1, {T_full})'
+            )
+        assert len(set(tq)) == n_pairs, (
+            f'T_query must list DISTINCT frames, got {tq}'
         )
 
         K = self.diffusion_K
-        k_m_t = self._coerce_k(k_m, batch_size, x.device)
-        k_c_t = self._coerce_k(k_c, batch_size, x.device)
+        k_m_t = self._coerce_k_pairs(k_m, batch_size, n_pairs, x.device)
+        k_c_t = self._coerce_k_pairs(k_c, batch_size, n_pairs, x.device)
+        sc_mask_m = self._coerce_sc_mask(sc_mask_m, batch_size, n_pairs)
+        sc_mask_c = self._coerce_sc_mask(sc_mask_c, batch_size, n_pairs)
 
         # Local encode + token type ids (identical to parent).
         idx = torch.arange(seq_len, device=x.device)
@@ -515,95 +582,113 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         h_clean = torch.cat([sos, h[:, :-2]], dim=1)   # [B, 2T_full, H]
 
         # --- query-slot construction (the new part) ---
-        if self.token_level_mask:
-            # A.4: per-token absorbing corruption of the target frame,
-            # locally encoded -- intermediate k are genuinely partial
-            # frames. Self-conditioning overrides at the TOKEN level.
-            slot_m, revealed_m = self._token_level_slot(
-                x[:, 2 * T_query], sc_mask_m, sc_toks_m, k_m_t, 0,
-            )
-            slot_c, revealed_c = self._token_level_slot(
-                x[:, 2 * T_query + 1], sc_mask_c, sc_toks_c, k_c_t, 1,
-            )
-            slot_m = slot_m.to(h.dtype)
-            slot_c = slot_c.to(h.dtype)
-        else:
-            # Ground-truth frame embeddings at T_query, with optional
-            # self-conditioning override (model-generated frame
-            # embeddings replacing gt for the flagged items).
-            gt_m = h[:, 2 * T_query:2 * T_query + 1]       # [B, 1, H]
-            gt_c = h[:, 2 * T_query + 1:2 * T_query + 2]   # [B, 1, H]
-            if sc_mask_m is not None:
-                gt_m = torch.where(sc_mask_m.view(batch_size, 1, 1),
-                                    sc_emb_m.to(dtype=gt_m.dtype), gt_m)
-            if sc_mask_c is not None:
-                gt_c = torch.where(sc_mask_c.view(batch_size, 1, 1),
-                                    sc_emb_c.to(dtype=gt_c.dtype), gt_c)
-            mask_m_expand = self.mask_m_emb.view(1, 1, -1).expand(batch_size, 1, -1)
-            mask_c_expand = self.mask_c_emb.view(1, 1, -1).expand(batch_size, 1, -1)
+        # One (m, c) pair per entry of tq, built in pair order so that
+        # Q=1 consumes the RNG in exactly the historical order and
+        # reproduces the old behaviour bit-for-bit.
+        slots, revealed = [], []
+        mask_m_expand = self.mask_m_emb.view(1, 1, -1).expand(batch_size, 1, -1)
+        mask_c_expand = self.mask_c_emb.view(1, 1, -1).expand(batch_size, 1, -1)
+        denom = max(K, 1)
+        for j, t_j in enumerate(tq):
+            sc_m_j = None if sc_mask_m is None else sc_mask_m[:, j]
+            sc_c_j = None if sc_mask_c is None else sc_mask_c[:, j]
+            if self.token_level_mask:
+                # A.4: per-token absorbing corruption of the target
+                # frame, locally encoded -- intermediate k are genuinely
+                # partial frames. Self-conditioning at the TOKEN level.
+                slot_m, rev_m = self._token_level_slot(
+                    x[:, 2 * t_j], sc_m_j,
+                    self._sc_tok_slice(sc_toks_m, j), k_m_t[:, j], 0,
+                )
+                slot_c, rev_c = self._token_level_slot(
+                    x[:, 2 * t_j + 1], sc_c_j,
+                    self._sc_tok_slice(sc_toks_c, j), k_c_t[:, j], 1,
+                )
+                slot_m = slot_m.to(h.dtype)
+                slot_c = slot_c.to(h.dtype)
+            else:
+                # Ground-truth frame embeddings at t_j, with optional
+                # self-conditioning override (model-generated frame
+                # embeddings replacing gt for the flagged items).
+                gt_m = h[:, 2 * t_j:2 * t_j + 1]           # [B, 1, H]
+                gt_c = h[:, 2 * t_j + 1:2 * t_j + 2]       # [B, 1, H]
+                if sc_m_j is not None:
+                    gt_m = torch.where(
+                        sc_m_j.view(batch_size, 1, 1),
+                        self._sc_emb_slice(sc_emb_m, j).to(dtype=gt_m.dtype),
+                        gt_m)
+                if sc_c_j is not None:
+                    gt_c = torch.where(
+                        sc_c_j.view(batch_size, 1, 1),
+                        self._sc_emb_slice(sc_emb_c, j).to(dtype=gt_c.dtype),
+                        gt_c)
 
-            # Per-item Bernoulli mask draws with prob k_m[i] / K (=0 if
-            # K==0). Using max(K, 1) is purely a divide-by-zero guard;
-            # K==0 would mean "never mask," which is degenerate but
-            # well-defined.
-            denom = max(K, 1)
-            u_m = torch.rand(batch_size, device=h.device)
-            u_c = torch.rand(batch_size, device=h.device)
-            is_masked_m = (u_m < (k_m_t.float() / denom)).to(h.dtype)
-            is_masked_c = (u_c < (k_c_t.float() / denom)).to(h.dtype)
-            # [B] -> [B, 1, 1] for broadcasting.
-            is_masked_m = is_masked_m.view(batch_size, 1, 1)
-            is_masked_c = is_masked_c.view(batch_size, 1, 1)
+                # Per-item Bernoulli mask draws with prob k[i] / K (=0
+                # if K==0). Using max(K, 1) is purely a divide-by-zero
+                # guard; K==0 would mean "never mask," degenerate but
+                # well-defined.
+                u_m = torch.rand(batch_size, device=h.device)
+                u_c = torch.rand(batch_size, device=h.device)
+                is_masked_m = (u_m < (k_m_t[:, j].float() / denom)).to(h.dtype)
+                is_masked_c = (u_c < (k_c_t[:, j].float() / denom)).to(h.dtype)
+                # [B] -> [B, 1, 1] for broadcasting.
+                is_masked_m = is_masked_m.view(batch_size, 1, 1)
+                is_masked_c = is_masked_c.view(batch_size, 1, 1)
 
-            slot_m = is_masked_m * mask_m_expand + (1.0 - is_masked_m) * gt_m
-            slot_c = is_masked_c * mask_c_expand + (1.0 - is_masked_c) * gt_c
+                slot_m = is_masked_m * mask_m_expand \
+                    + (1.0 - is_masked_m) * gt_m
+                slot_c = is_masked_c * mask_c_expand \
+                    + (1.0 - is_masked_c) * gt_c
 
-            # Frame-level corruption is all-or-nothing, so an unmasked
-            # slot reveals the WHOLE target frame -- unless it was
-            # overridden by a self-conditioning draft, which may be
-            # wrong. [B] -> [B, S].
-            unmasked_m = is_masked_m.view(batch_size) == 0
-            unmasked_c = is_masked_c.view(batch_size) == 0
-            if sc_mask_m is not None:
-                unmasked_m = unmasked_m & ~sc_mask_m
-            if sc_mask_c is not None:
-                unmasked_c = unmasked_c & ~sc_mask_c
-            revealed_m = unmasked_m.view(batch_size, 1).expand(-1, subseq_len)
-            revealed_c = unmasked_c.view(batch_size, 1).expand(-1, subseq_len)
+                # Frame-level corruption is all-or-nothing, so an
+                # unmasked slot reveals the WHOLE target frame -- unless
+                # it was overridden by a self-conditioning draft, which
+                # may be wrong. [B] -> [B, S].
+                unmasked_m = is_masked_m.view(batch_size) == 0
+                unmasked_c = is_masked_c.view(batch_size) == 0
+                if sc_m_j is not None:
+                    unmasked_m = unmasked_m & ~sc_m_j
+                if sc_c_j is not None:
+                    unmasked_c = unmasked_c & ~sc_c_j
+                rev_m = unmasked_m.view(batch_size, 1).expand(-1, subseq_len)
+                rev_c = unmasked_c.view(batch_size, 1).expand(-1, subseq_len)
 
-        # Add per-item k-embeddings -- the commitment tag. Crucial for
-        # iterative refinement at inference, where the same slot input
-        # can mean very different things depending on where in the
-        # K-step trajectory we are, and it is what the partner slot
-        # reads (via the frame pass) to tell a committed frame from a
-        # tentative draft.
-        k_m_e = self.k_emb_m(k_m_t).view(batch_size, 1, -1).to(h.dtype)
-        k_c_e = self.k_emb_c(k_c_t).view(batch_size, 1, -1).to(h.dtype)
-        slot_m = slot_m + k_m_e
-        slot_c = slot_c + k_c_e
+            # Add per-item k-embeddings -- the commitment tag. Crucial
+            # for iterative refinement at inference, where the same slot
+            # input can mean very different things depending on where in
+            # the K-step trajectory we are, and it is what the partner
+            # slot reads (via the frame pass) to tell a committed frame
+            # from a tentative draft.
+            slot_m = slot_m + self.k_emb_m(
+                k_m_t[:, j]).view(batch_size, 1, -1).to(h.dtype)
+            slot_c = slot_c + self.k_emb_c(
+                k_c_t[:, j]).view(batch_size, 1, -1).to(h.dtype)
+            slots.extend([slot_m, slot_c])
+            revealed.extend([rev_m, rev_c])
 
         # Stash for the loss. Set on EVERY forward, so the no-grad
         # self-conditioning forward's value is overwritten by the real
         # one that follows it -- loss() reads it after that second call.
         self._last_query_revealed = torch.stack(
-            [revealed_m, revealed_c], dim=1)               # [B, 2, S]
+            revealed, dim=1)                              # [B, 2Q, S]
 
-        h_full = torch.cat([h_clean, slot_m, slot_c], dim=1)
-        # h_full: [B, 2T_full + 2, H]   (same shape as parent)
+        h_full = torch.cat([h_clean] + slots, dim=1)
+        # h_full: [B, 2*T_full + 2*Q, H]
 
-        h_global, aux_loss = self._run_global_stack(h_full, T_query=T_query)
+        h_global, aux_loss = self._run_global_stack(h_full, T_query=tq)
 
-        # Split outputs (identical to parent).
+        # Split outputs (identical to parent at Q=1).
         h_clean_global = h_global[:, :seq_len]
-        h_query_global = h_global[:, seq_len:seq_len + 2]
+        h_query_global = h_global[:, seq_len:]             # [B, 2Q, H]
 
         ar_logits = self.local_decode(h_clean_global, emb)
 
         emb_reshape = emb.view(batch_size, seq_len, subseq_len, -1)
-        emb_query_m = emb_reshape[:, 2 * T_query:2 * T_query + 1]
-        emb_query_c = emb_reshape[:, 2 * T_query + 1:2 * T_query + 2]
-        emb_query = torch.cat([emb_query_m, emb_query_c], dim=1)
-        emb_query_flat = emb_query.view(batch_size * 2, subseq_len, -1)
+        emb_query = torch.cat(
+            [emb_reshape[:, 2 * t_j:2 * t_j + 2] for t_j in tq], dim=1,
+        )                                                  # [B, 2Q, S, D]
+        emb_query_flat = emb_query.reshape(
+            batch_size * 2 * n_pairs, subseq_len, -1)
         query_logits = self.local_decode(h_query_global, emb_query_flat)
 
         return ar_logits, query_logits, aux_loss
@@ -626,6 +711,53 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         )
         return k
 
+    def _coerce_k_pairs(self, k, batch_size, n_pairs, device):
+        """Accept int / None / LongTensor[B] / LongTensor[B, Q].
+
+        Returns LongTensor[B, Q]. A [B] tensor (the historical shape,
+        and what inference passes) is broadcast to every query pair.
+        """
+        if k is not None and torch.is_tensor(k) and k.dim() == 2:
+            k = k.to(device=device, dtype=torch.long)
+            assert k.shape == (batch_size, n_pairs), (
+                f'k shape {tuple(k.shape)} != ({batch_size}, {n_pairs})'
+            )
+            return k
+        return self._coerce_k(k, batch_size, device).view(
+            batch_size, 1).expand(batch_size, n_pairs)
+
+    @staticmethod
+    def _coerce_sc_mask(sc_mask, batch_size, n_pairs):
+        """None / BoolTensor[B] / BoolTensor[B, Q] -> None or [B, Q]."""
+        if sc_mask is None:
+            return None
+        if sc_mask.dim() == 1:
+            return sc_mask.view(batch_size, 1).expand(batch_size, n_pairs)
+        assert sc_mask.shape == (batch_size, n_pairs), (
+            f'sc_mask shape {tuple(sc_mask.shape)} != '
+            f'({batch_size}, {n_pairs})'
+        )
+        return sc_mask
+
+    @staticmethod
+    def _sc_tok_slice(t, j):
+        """Query pair j's draft TOKENS -> [B, S].
+
+        Accepts the historical un-paired [B, S] and the paired
+        [B, Q, S]. Kept separate from the embedding slicer because
+        [B, 1, S] and [B, 1, H] are indistinguishable by shape alone.
+        """
+        return t if (t is None or t.dim() == 2) else t[:, j]
+
+    @staticmethod
+    def _sc_emb_slice(t, j):
+        """Query pair j's draft EMBEDDING -> [B, 1, H].
+
+        Accepts the historical un-paired [B, 1, H] and the paired
+        [B, Q, 1, H].
+        """
+        return t if (t is None or t.dim() == 3) else t[:, j]
+
     # ------------------------------------------------------------------
     # loss: sample k_m, k_c per item per batch and call forward.
     # ------------------------------------------------------------------
@@ -639,13 +771,26 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         T_full = seq_len
         full_seq_len = seq_len * 2
 
-        # Sample T_query (parent's behaviour).
+        # Sample the query frames. Q = query_pairs distinct frames per
+        # forward (see the QUERY-PAIR COUNT note in the module
+        # docstring); Q=1 reproduces the historical single-frame draw.
+        Q = min(max(int(self.query_pairs), 1), T_full - 1)
         if self.training:
-            T_query = int(torch.randint(
-                low=1, high=T_full, size=(1,), device=x.device,
-            ).item())
+            if Q == 1:
+                tq = (int(torch.randint(
+                    low=1, high=T_full, size=(1,), device=x.device,
+                ).item()),)
+            else:
+                # Distinct frames, sorted so the run-to-run layout is
+                # deterministic given the draw.
+                perm = torch.randperm(T_full - 1, device=x.device)[:Q] + 1
+                tq = tuple(sorted(int(t) for t in perm.tolist()))
         else:
-            T_query = T_full - 1
+            # Eval keeps the historical single frame, so val_loss stays
+            # comparable across Q.
+            tq = (T_full - 1,)
+        n_pairs = len(tq)
+        T_query = tq[0] if n_pairs == 1 else tq
 
         K = self.diffusion_K
         if self.training:
@@ -654,12 +799,18 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             #   parallel diffusion (k_m == k_c per round) AND MaskGIT
             #   (one slot at k=0, the other at k=K). The model has to
             #   handle every (k_m, k_c) combination at train time.
-            k_m = torch.randint(0, K + 1, (batch_size,), device=x.device)
-            k_c = torch.randint(0, K + 1, (batch_size,), device=x.device)
+            # Per pair as well as per item: one forward then covers
+            # n_pairs points of the (k_m, k_c) grid instead of one.
+            k_m = torch.randint(0, K + 1, (batch_size, n_pairs),
+                                device=x.device)
+            k_c = torch.randint(0, K + 1, (batch_size, n_pairs),
+                                device=x.device)
         else:
             # Eval: fully-masked (most informative single-pass setting).
-            k_m = torch.full((batch_size,), K, device=x.device, dtype=torch.long)
-            k_c = torch.full((batch_size,), K, device=x.device, dtype=torch.long)
+            k_m = torch.full((batch_size, n_pairs), K, device=x.device,
+                             dtype=torch.long)
+            k_c = torch.full((batch_size, n_pairs), K, device=x.device,
+                             dtype=torch.long)
 
         # --- self-conditioning (exposure-gap closing) -----------------
         # At inference the slots carry the model's own previous-round
@@ -675,28 +826,41 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         sc_toks_m = sc_toks_c = None
         self._last_selfcond_frac = torch.zeros((), device=x.device)
         if self.training and self.self_cond_prob > 0:
-            sc_mask_m = torch.rand(batch_size, device=x.device) < self.self_cond_prob
-            sc_mask_c = torch.rand(batch_size, device=x.device) < self.self_cond_prob
+            sc_mask_m = torch.rand(batch_size, n_pairs,
+                                   device=x.device) < self.self_cond_prob
+            sc_mask_c = torch.rand(batch_size, n_pairs,
+                                   device=x.device) < self.self_cond_prob
             if bool(sc_mask_m.any()) or bool(sc_mask_c.any()):
                 with torch.no_grad():
-                    k_full = torch.full((batch_size,), K, device=x.device,
-                                         dtype=torch.long)
+                    k_full = torch.full((batch_size, n_pairs), K,
+                                        device=x.device, dtype=torch.long)
                     _, q_logits_sc, _ = self.forward(
                         x, T_query=T_query, k_m=k_full, k_c=k_full,
                     )
                     V = self.tokenizer.n_tokens
                     toks = q_logits_sc.view(
-                        batch_size, 2, subseq_len, V,
-                    ).argmax(dim=-1)                       # [B, 2, S]
-                    sc_emb_m = self._encode_frame(toks[:, 0], 0)  # [B, 1, H]
-                    sc_emb_c = self._encode_frame(toks[:, 1], 1)
+                        batch_size, n_pairs, 2, subseq_len, V,
+                    ).argmax(dim=-1)                    # [B, Q, 2, S]
+                    sc_toks_m = toks[:, :, 0]           # [B, Q, S]
+                    sc_toks_c = toks[:, :, 1]
                     # A.4 corrupts at the TOKEN level, so it needs the
-                    # draft tokens themselves, not their encoding.
-                    sc_toks_m = toks[:, 0]
-                    sc_toks_c = toks[:, 1]
+                    # draft tokens themselves, not their encoding; the
+                    # frame-level branch needs the encoding.
+                    sc_emb_m = torch.stack([
+                        self._encode_frame(sc_toks_m[:, j], 0)
+                        for j in range(n_pairs)
+                    ], dim=1)                           # [B, Q, 1, H]
+                    sc_emb_c = torch.stack([
+                        self._encode_frame(sc_toks_c[:, j], 1)
+                        for j in range(n_pairs)
+                    ], dim=1)
+                    if n_pairs == 1:
+                        # Historical shapes, so a Q=1 run is unchanged.
+                        sc_toks_m, sc_toks_c = sc_toks_m[:, 0], sc_toks_c[:, 0]
+                        sc_emb_m, sc_emb_c = sc_emb_m[:, 0], sc_emb_c[:, 0]
                 self._last_selfcond_frac = (
                     (sc_mask_m.float().sum() + sc_mask_c.float().sum())
-                    / (2 * batch_size)
+                    / (2 * batch_size * n_pairs)
                 ).detach()
             else:
                 sc_mask_m = sc_mask_c = None
@@ -708,10 +872,9 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             sc_toks_m=sc_toks_m, sc_toks_c=sc_toks_c,
         )
         targets_ar = x
-        targets_query = torch.stack([
-            x[:, 2 * T_query],
-            x[:, 2 * T_query + 1],
-        ], dim=1)
+        targets_query = torch.cat(
+            [x[:, 2 * t_j:2 * t_j + 2] for t_j in tq], dim=1,
+        )                                                  # [B, 2Q, S]
 
         # --- AR loss (unchanged from parent) ---
         per_token_ar = F.cross_entropy(
@@ -748,7 +911,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             targets_query.reshape(-1),
             ignore_index=self.tokenizer.pad_token,
             reduction='none',
-        ).view(batch_size, 2, subseq_len)
+        ).view(batch_size, 2 * n_pairs, subseq_len)
         non_pad_q = (targets_query != self.tokenizer.pad_token).float()
         keep_q = self._query_loss_keep_mask(non_pad_q)
         norm_q = keep_q.sum().clamp_min(1.0)
@@ -769,7 +932,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self._last_ar_loss_content = ar_loss_content.detach()
         self._last_ar_loss_eos = ar_loss_eos.detach()
         self._last_query_loss = query_loss.detach()
-        self._last_T_query = T_query
+        self._last_T_query = tq[0]
+        self._last_n_pairs = n_pairs
         self._last_mean_k_m = mean_k_m.detach()
         self._last_mean_k_c = mean_k_c.detach()
 
@@ -798,6 +962,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.log('train_mean_k_c', self._last_mean_k_c)
         self.log('train_selfcond_frac', self._last_selfcond_frac)
         self.log('train_query_kept_frac', self._last_query_kept_frac)
+        self.log('train_query_pairs', float(self._last_n_pairs))
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -1011,6 +1176,24 @@ if __name__ == '__main__':
                              'arm-set or none. Run dirs get a "qm" '
                              'marker; carried in the ckpt as the '
                              'mask_revealed_query_loss_flag buffer.')
+    parser.add_argument('--query_pairs', type=int, default=1,
+                        help='Q: how many DISTINCT frames each training '
+                             'forward supervises at the query slots. '
+                             'Q=1 (default) is the historical behaviour '
+                             'and is reproduced bit-for-bit. Q>1 '
+                             'appends Q query pairs, each with its own '
+                             'visibility window, its own (k_m, k_c) '
+                             'draw and its own loss, so the frame pass '
+                             'gets Qx the gradient for a few percent '
+                             'more attention (L: 2T+2 -> 2T+2Q; at '
+                             'TRAIN_LENGTH=384, Q=8 is +2% sequence, '
+                             '+3.7% attention). Pairs are blind to each '
+                             'other. Training-only: inference decodes '
+                             'one frame at a time, so parameters, the '
+                             'ckpt and the decode path are unchanged, '
+                             'and validation stays at Q=1 so val_loss '
+                             'remains comparable. Run dirs get a "qN" '
+                             'marker for Q>1.')
     parser.add_argument('--fresh_schedule', action='store_true', default=False)
     args = parser.parse_args()
 
@@ -1037,7 +1220,8 @@ if __name__ == '__main__':
              ('mg' if args.moe_modality_gates else '') + \
              ('hr' if args.moe_modality_hard_route else '') + \
              ('tk' if args.token_level_mask else '') + \
-             ('qm' if args.mask_revealed_query_loss else '')
+             ('qm' if args.mask_revealed_query_loss else '') + \
+             (f'q{args.query_pairs}' if args.query_pairs > 1 else '')
     default_name = (f"m2c_duet_block_diffusion_{scheme_version}_{args.model_size}_"
                     f"gnl{gnl}_K{args.diffusion_K}{mb_tag}_{task.name}{tag}_"
                     f"batch_{args.batch_size * n_gpus}_schedule")
@@ -1071,6 +1255,7 @@ if __name__ == '__main__':
         moe_modality_hard_route=bool(args.moe_modality_hard_route),
         token_level_mask=bool(args.token_level_mask),
         mask_revealed_query_loss=bool(args.mask_revealed_query_loss),
+        query_pairs=args.query_pairs,
     )
     print(f'[scheme] {scheme_version}: slot_rope_aligned={not args.legacy_slot_rope}  '
           f'time_rope_aligned={bool(args.time_rope_aligned)}  '
@@ -1084,7 +1269,8 @@ if __name__ == '__main__':
           f'token_level_mask={bool(args.token_level_mask)}'
           f'{" (A.4)" if args.token_level_mask else ""}\n'
           f'mask_revealed_query_loss='
-          f'{bool(args.mask_revealed_query_loss)}')
+          f'{bool(args.mask_revealed_query_loss)}  '
+          f'query_pairs={args.query_pairs}')
     print(f'Architecture: M2CDuetBlockDiffusion (A.3)  K={args.diffusion_K}  '
           f'3-pass (intra/cross/frame) + 2 gates + query slots with per-item '
           f'noise levels + k-embedding')
@@ -1184,6 +1370,7 @@ if __name__ == '__main__':
                     'token_level_mask': bool(args.token_level_mask),
                     'mask_revealed_query_loss':
                         bool(args.mask_revealed_query_loss),
+                    'query_pairs': args.query_pairs,
                     'run_tag': args.run_tag,
                 },
             ) if args.wandb else TensorBoardLogger('tb_logs', name=model_name)
