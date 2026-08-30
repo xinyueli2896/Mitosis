@@ -114,34 +114,30 @@ makes the claim falsifiable.
 
 ### Abstract draft (placeholders marked)
 
-> Multi-track symbolic music generation predominantly models every
-> track with one shared network, differentiating tracks only at the
-> input, through an instrument or track-identity token. But tracks are
-> not merely different timbres: they carry distinct functional roles —
-> melody, harmony, accompaniment — each governed by its own grammar,
-> from melodic contour and phrase structure to voice-leading and
-> harmonic rhythm. Sharing all parameters across roles differentiates
-> *what the model reads*, not *how it computes*, leaving role-specific
-> structure nowhere to form.
->
-> We give each part its own computation while keeping the parts
-> mutually attentive. Specialization is carried by a sparsely-gated
-> mixture-of-experts layer with a **separate router per part** over a
-> **shared, unassigned expert pool**: which experts a part recruits —
-> and whether any expert serves both — is learned rather than imposed,
-> unlike architectures that partition experts by track a priori. A
-> three-pass attention design (within-part, cross-part causal, and
-> same-instant) keeps the parts coordinated at every step, including
-> mutual conditioning *within* a single time step, which a causal
-> interleaved sequence otherwise forbids.
->
-> On melody-chord co-generation over POP909, Nottingham and Pop1K7,
-> **[RESULT]**. Routing analysis confirms the specialization is real
-> and content-driven rather than an artifact of stream identity:
-> **[INTERPRETABILITY RESULT]**.
+Single paragraph, ICASSP register. ~195 words.
 
-~205 words; trim one clause if the venue enforces 200. Open
-placeholders: `[RESULT]` (E1 co-generation vs the SOTA lead-sheet
+> Multi-track symbolic music generation predominantly models all tracks
+> with a single shared network, distinguishing them only at the input by
+> an instrument or track-identity token. Tracks, however, correspond to
+> distinct functional roles - melody, harmony, accompaniment - each
+> governed by its own grammar, from melodic contour and phrase structure
+> to voice-leading and harmonic rhythm; sharing every parameter across
+> roles differentiates what the model reads rather than how it computes.
+> We propose a two-stream architecture in which each part is afforded
+> its own computation while remaining mutually attentive. Role
+> specialization is realized by a sparsely gated mixture-of-experts
+> layer with a separate router per part over a shared, unassigned expert
+> pool, so that the experts a part recruits, and whether any expert
+> serves both parts, are learned rather than imposed a priori. A
+> three-pass attention scheme - within-part, cross-part causal, and
+> same-instant - preserves coordination at every time step, including
+> mutual conditioning within a single step, which a causally interleaved
+> sequence otherwise precludes. On melody-chord co-generation over
+> POP909, Nottingham, and Pop1K7, [RESULT]. Routing analysis indicates
+> that the resulting specialization is content-driven rather than an
+> artifact of stream identity: [INTERPRETABILITY RESULT].
+
+Open placeholders: `[RESULT]` (E1 co-generation vs the SOTA lead-sheet
 references of 2.6) and `[INTERPRETABILITY RESULT]` (E6, per Decision 3).
 
 ---
