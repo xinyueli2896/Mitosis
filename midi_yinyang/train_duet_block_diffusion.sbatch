@@ -129,6 +129,25 @@
 #                           confidence-based per-token re-masking
 #                           across refinement rounds (A3_TOKEN_REMASK=0
 #                           to disable).
+#   --export=ALL,MASK_REVEALED_QUERY_LOSS=1  score the query loss ONLY
+#                           where the query slot did not already hand
+#                           the model its own target. The slot is both
+#                           the conditioning input for the target frame
+#                           and the thing whose target is predicted, so
+#                           at k=0 -- and, under A.4, at every token
+#                           that survived the draw -- the target is a
+#                           free copy. D3PM / MDLM / MaskGIT all score
+#                           corrupted positions only; we did not, which
+#                           lets the copy path compete for gradient with
+#                           the "infer it from the partner's draft"
+#                           path, the only one that exists at
+#                           inference. Self-conditioned items are kept
+#                           (their slot holds a draft that may be
+#                           wrong). OFF by default because it changes
+#                           the objective -- val_loss is NOT comparable
+#                           across the two, so turn it on for a WHOLE
+#                           arm-set (all four E6 arms, say) or none.
+#                           Run dirs get a 'qm' marker.
 #   --export=ALL,FRESH_SCHEDULE=1    opt-in: load weights only, drop
 #                           optimizer + scheduler + step counter, run a
 #                           brand-new OneCycle from step 0. NOT the
@@ -226,6 +245,9 @@ MOE_MODALITY_HARD_ROUTE="${MOE_MODALITY_HARD_ROUTE:-0}"
 # A.4: token-level masking at the query slots (see header). Marks the
 # run dir with 'tk'.
 TOKEN_LEVEL_MASK="${TOKEN_LEVEL_MASK:-0}"
+# Score the query loss only where the slot did NOT already hand the
+# model its own target (see header). Marks the run dir with 'qm'.
+MASK_REVEALED_QUERY_LOSS="${MASK_REVEALED_QUERY_LOSS:-0}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_block_diffusion_${SLURM_JOB_ID}}"
 # Data polyphony per stream (drives the sample-dump reshape, not the model):
@@ -285,6 +307,7 @@ MB_TAG=""
 [[ "$MOE_MODALITY_GATES" == "1" ]] && MB_TAG="${MB_TAG}mg"
 [[ "$MOE_MODALITY_HARD_ROUTE" == "1" ]] && MB_TAG="${MB_TAG}hr"
 [[ "$TOKEN_LEVEL_MASK" == "1" ]] && MB_TAG="${MB_TAG}tk"
+[[ "$MASK_REVEALED_QUERY_LOSS" == "1" ]] && MB_TAG="${MB_TAG}qm"
 RUN_DIR="ckpt/m2c_duet_block_diffusion_${SCHEME_VERSION}_large_gnl12_K${DIFFUSION_K}${MB_TAG}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
     CKPT="$RUN_DIR/last.ckpt"
@@ -325,7 +348,7 @@ fi
 
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
-echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K  moe_modality_bias=$MOE_MODALITY_BIAS  moe_modality_gates=$MOE_MODALITY_GATES  moe_modality_hard_route=$MOE_MODALITY_HARD_ROUTE  token_level_mask=$TOKEN_LEVEL_MASK${MB_TAG:+  [$MB_TAG]}"
+echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K  moe_modality_bias=$MOE_MODALITY_BIAS  moe_modality_gates=$MOE_MODALITY_GATES  moe_modality_hard_route=$MOE_MODALITY_HARD_ROUTE  token_level_mask=$TOKEN_LEVEL_MASK  mask_revealed_query_loss=$MASK_REVEALED_QUERY_LOSS${MB_TAG:+  [$MB_TAG]}"
 echo "MoE: experts=$MOE_NUM_EXPERTS topk=$MOE_TOPK intermediate=${MOE_INTERMEDIATE_SIZE:-<default 3072/expert>}  RUN_TAG=${RUN_TAG:-<none>}"
 echo "Task:    $TASK   (data max_polyphony: $MAX_POLYPHONY)"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
@@ -423,6 +446,7 @@ COMMON_ARGS=(
     --moe_modality_gates "$MOE_MODALITY_GATES"
     --moe_modality_hard_route "$MOE_MODALITY_HARD_ROUTE"
     --token_level_mask "$TOKEN_LEVEL_MASK"
+    --mask_revealed_query_loss "$MASK_REVEALED_QUERY_LOSS"
     --diffusion_K "$DIFFUSION_K"
     --checkpoint_path "$TRAIN_CKPT"
     --wandb

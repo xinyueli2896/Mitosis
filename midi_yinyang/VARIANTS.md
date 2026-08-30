@@ -348,6 +348,57 @@ run on-cluster. Second-degree relative to the E6/paper scope —
 registered so the naturalness argument has a concrete, costed
 counterpart.
 
+### A.5 — query loss on corrupted positions only (2026-08-30)
+
+Opt-in (`--mask_revealed_query_loss` / sbatch
+`MASK_REVEALED_QUERY_LOSS=1`), run-dir tag `qm`, carried in ckpts by the
+`mask_revealed_query_loss_flag` buffer. Applies to the plain (A.2/A.3)
+and A.4 slot constructions alike.
+
+**The problem.** The query slot is simultaneously (a) the model's
+conditioning input for the target frame and (b) the thing whose target
+the query loss scores. Wherever the slot carries un-corrupted ground
+truth, predicting that target is a free copy — at k=0 the *entire*
+frame is handed over, and under A.4 every token that survived the draw
+is handed over individually. The loss scored those positions anyway.
+
+That is not merely a diluted average. The copy path and the "infer it
+from the partner's draft" path compete for the same gradient, and only
+the second one exists at inference, where the slot holds the model's own
+draft and never the answer. A model that learns to read the slot rather
+than reason about it looks fine on `val_query_loss` and generates badly
+— which is a candidate explanation for the query head's weak
+contribution across the whole A.2 family, independent of A.4.
+
+**The fix.** Score only positions the slot did not reveal. This is
+standard: D3PM, MDLM and MaskGIT all compute the denoising loss on
+corrupted positions only. Self-conditioned items are *kept* — their slot
+holds a model draft that may be wrong, so correcting it is real signal,
+and arguably the most valuable signal in the objective. We take the
+plain mean over kept positions (MaskGIT) rather than the 1/p importance
+weighting of the MDLM/D3PM ELBO: the goal is a training signal, not a
+likelihood bound, and the reweighting adds variance at small k for no
+benefit here.
+
+Interaction with A.4's FIX 2: programs and EOS are exempt from
+corruption, hence always revealed, hence dropped from the query loss at
+every k < K. Frame *length* is therefore supervised only on
+fully-masked items — which is coherent, since k=K is exactly the regime
+where round 1 decides how many notes the frame has.
+
+`train_query_kept_frac` / `val_query_kept_frac` log the surviving
+fraction; expect roughly 1/2 under uniform k at K=4 with A.4, and
+K/(K+1) under the frame-level variant.
+
+**Off by default, deliberately.** It changes the objective, so
+`val_loss` is not comparable across the two settings. Enable it for a
+whole arm-set (all four E6 arms, say) or none — a mixed comparison is a
+confound.
+
+**Audited** by `audit_a4_token_mask.py` check group 11.
+
+**Status.** Implemented, unrun.
+
 ### A.2.moe_improved — modality-bias MoE router (2026-08-24)
 
 An opt-in change to A.2 (`M2CDuetBlockDiffusion`), motivated directly by

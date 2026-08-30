@@ -39,6 +39,14 @@ Claims checked:
      key presence; verified for both.
   7. LOUD MISUSE. with_velocity + token_level_mask raises (that vocab
      has no free id).
+  11. QUERY-LOSS KEEP MASK. The query slot is both the conditioning
+     input and the thing being predicted, so wherever it carries
+     un-corrupted ground truth the target is a free copy. With
+     --mask_revealed_query_loss those positions are dropped: everything
+     at k=0, nothing at k=K, and exactly the un-drawn tokens in between
+     (which under FIX 2 always includes the programs and the EOS).
+     Self-conditioned items are KEPT -- their slot holds a draft that
+     may be wrong. Off by default, in which case the mask is inert.
   8. DECODE HELPERS. _remask_lowest masks exactly the n lowest-
      confidence non-pad tokens (n = round(frac * maskable)), never a
      pad, and frac=0 is a no-op; _token_confidences returns +inf on
@@ -66,13 +74,14 @@ def check(cond, msg):
         fails.append(msg)
 
 
-def build(token_level_mask):
+def build(token_level_mask, mask_revealed_query_loss=False):
     torch.manual_seed(0)
     net = M2CDuetBlockDiffusion(
         large=False, with_velocity=False,
         moe_num_experts=4, moe_topk=2,
         global_num_layers=2, diffusion_K=4,
         token_level_mask=token_level_mask,
+        mask_revealed_query_loss=mask_revealed_query_loss,
     )
     net.eval()
     return net
@@ -124,7 +133,8 @@ net_plain = build(False)
 # Copy the WEIGHTS across, never the scheme flags: token_level_mask_flag
 # is 0 in the plain model and copying it would silently turn net_a4 into
 # a plain model for every check below.
-SCHEME_FLAGS = ('token_level_mask_flag', 'frame_mask_row_init_flag')
+SCHEME_FLAGS = ('token_level_mask_flag', 'frame_mask_row_init_flag',
+                'mask_revealed_query_loss_flag')
 net_a4.load_state_dict(
     {k: v for k, v in net_plain.state_dict().items()
      if k not in SCHEME_FLAGS}, strict=False)
@@ -159,7 +169,7 @@ k_t = torch.full((B,), 2, dtype=torch.long)
 n_trials, frac_sum, bad_pad, bad_id, bad_struct = 400, 0.0, 0, 0, 0
 for i in range(n_trials):
     torch.manual_seed(100 + i)
-    corrupted, _ = net_a4._corrupt_frame_tokens(frame, k_t)
+    corrupted, _, _ = net_a4._corrupt_frame_tokens(frame, k_t)
     drawn = corrupted == mid
     frac_sum += (drawn.float().sum() / maskable.float().sum()).item()
     bad_pad += int((drawn & (frame == tok.pad_token)).sum())
@@ -178,11 +188,11 @@ eos_kept = 0
 for i in range(200):
     torch.manual_seed(500 + i)
     for kk in range(K + 1):
-        c, _ = net_a4._corrupt_frame_tokens(
+        c, _, _ = net_a4._corrupt_frame_tokens(
             frame, torch.full((B,), kk, dtype=torch.long))
         eos_kept += int(((frame == tok.eos_token) & (c == mid)).sum())
 check(eos_kept == 0, 'the terminating EOS survives at EVERY k (0..K)')
-c_full, fully_full = net_a4._corrupt_frame_tokens(
+c_full, fully_full, _ = net_a4._corrupt_frame_tokens(
     frame, torch.full((B,), K, dtype=torch.long))
 check(bool((c_full[maskable] == mid).all()),
       'k=K masks every pitch-dur token')
@@ -196,15 +206,19 @@ draft[:, 1] = 999                                 # visibly different pd
 sc_mask = torch.tensor([True] + [False] * (B - 1))
 with torch.no_grad():
     torch.manual_seed(3)
-    slot_draft = net_a4._token_level_slot(frame, sc_mask, draft,
-                                           torch.zeros(B, dtype=torch.long), 0)
+    slot_draft, rev_draft = net_a4._token_level_slot(
+        frame, sc_mask, draft, torch.zeros(B, dtype=torch.long), 0)
     torch.manual_seed(3)
-    slot_gt = net_a4._token_level_slot(frame, None, None,
-                                        torch.zeros(B, dtype=torch.long), 0)
+    slot_gt, rev_gt = net_a4._token_level_slot(
+        frame, None, None, torch.zeros(B, dtype=torch.long), 0)
 check(not torch.allclose(slot_draft[0], slot_gt[0]),
       'flagged item encodes the draft tokens, not ground truth')
 check(torch.allclose(slot_draft[1:], slot_gt[1:], atol=1e-6),
       'unflagged items are untouched by the override')
+check(not bool(rev_draft[0].any()) and bool(rev_draft[1:].all()),
+      'the self-conditioned item reveals nothing; its unflagged '
+      'neighbours at k=0 reveal everything')
+check(bool(rev_gt.all()), 'without self-conditioning, k=0 reveals the frame')
 
 print('\n=== 6. flag travels by value ===')
 sd_plain, sd_a4 = net_plain.state_dict(), net_a4.state_dict()
@@ -254,6 +268,80 @@ check(c.shape == tokens.shape, '_token_confidences returns [B, S]')
 check(bool(torch.isinf(c[tokens == tok.pad_token]).all()),
       'pad positions get +inf confidence (never re-masked)')
 
+print('\n=== 11. query-loss keep mask ===')
+net_qm = build(True, mask_revealed_query_loss=True)
+net_qm.load_state_dict(
+    {k: v for k, v in net_plain.state_dict().items()
+     if k not in SCHEME_FLAGS}, strict=False)
+check(net_qm.mask_revealed_query_loss and net_qm.token_level_mask,
+      'net_qm is an A.4 model with the keep mask enabled')
+
+zeros_b = torch.zeros(B, dtype=torch.long)
+with torch.no_grad():
+    _, rev_k0 = net_qm._token_level_slot(frame, None, None, zeros_b, 0)
+    _, rev_kK = net_qm._token_level_slot(
+        frame, None, None, torch.full((B,), K, dtype=torch.long), 0)
+check(bool(rev_k0.all()), 'k=0 reveals the whole frame (nothing to score)')
+check(not bool(rev_kK.any()), 'k=K reveals nothing (score every token)')
+# 0 < k < K, over many draws: `revealed` must be exactly the tokens
+# that survived the draw on a frame that was not wholesale masked.
+# Seeding identically before each call reproduces the same draw, since
+# _token_level_slot's only randomness IS _corrupt_frame_tokens.
+k_mid = torch.full((B,), 2, dtype=torch.long)
+mismatches, rev_sum, rev_n, partial_trials = 0, 0, 0, 0
+for i in range(200):
+    torch.manual_seed(2000 + i)
+    with torch.no_grad():
+        _, rev = net_qm._token_level_slot(frame, None, None, k_mid, 0)
+    torch.manual_seed(2000 + i)
+    _, fully_i, drawn_i = net_qm._corrupt_frame_tokens(frame, k_mid)
+    expected = (~drawn_i) & (~fully_i).view(B, 1)
+    mismatches += int((rev != expected).sum())
+    rev_sum += int(rev.sum())
+    rev_n += rev.numel()
+    partial_trials += int(((rev.sum(dim=1) > 0)
+                           & (rev.sum(dim=1) < S)).sum())
+check(mismatches == 0,
+      'revealed == survived-the-draw AND not wholesale masked, over 200 draws')
+rev_rate = rev_sum / rev_n
+check(0.0 < rev_rate < 1.0,
+      f'at k=2/K=4 the frame is partly revealed, partly not ({rev_rate:.3f})')
+check(partial_trials > 0,
+      'partially-revealed frames do occur (the graded regime is reached)')
+with torch.no_grad():
+    _, rev_sc = net_qm._token_level_slot(
+        frame, torch.ones(B, dtype=torch.bool), frame.clone(), zeros_b, 0)
+check(not bool(rev_sc.any()),
+      'self-conditioned items reveal nothing (a draft may be wrong, so '
+      'correcting it is real signal)')
+
+# The stash and the mask itself, through a real forward.
+with torch.no_grad():
+    net_qm.forward(x, T_query=3, k_m=0, k_c=0)
+stash = net_qm._last_query_revealed
+check(tuple(stash.shape) == (B, 2, S),
+      f'forward stashes _last_query_revealed as [B, 2, S] {tuple(stash.shape)}')
+targets_q = torch.stack([x[:, 6], x[:, 7]], dim=1)
+non_pad_q = (targets_q != tok.pad_token).float()
+keep_on = net_qm._query_loss_keep_mask(non_pad_q)
+check(float(keep_on.sum()) == 0.0,
+      'at k=0 every query position is dropped -- the loss that used to '
+      'be scored there was a pure copy')
+with torch.no_grad():
+    net_qm.forward(x, T_query=3, k_m=K, k_c=K)
+keep_full = net_qm._query_loss_keep_mask(non_pad_q)
+check(torch.equal(keep_full, non_pad_q),
+      'at k=K the keep mask is exactly the non-pad mask (nothing dropped)')
+
+# Flag off -> inert, and the old behaviour is reproduced exactly.
+net_a4._last_query_revealed = torch.ones(B, 2, S, dtype=torch.bool)
+check(torch.equal(net_a4._query_loss_keep_mask(non_pad_q), non_pad_q),
+      'with the flag off the keep mask is inert (old objective intact)')
+check('mask_revealed_query_loss_flag' in net_a4.state_dict()
+      and int(net_a4.state_dict()['mask_revealed_query_loss_flag']) == 0
+      and int(net_qm.state_dict()['mask_revealed_query_loss_flag']) == 1,
+      'the objective a ckpt was trained under travels inside it')
+
 print('\n=== 9. mask row init (FIX 1) ===')
 net_fresh = build(True)
 emb = net_fresh.local_embedding.weight
@@ -291,18 +379,18 @@ check('frame_mask_row_init_flag' in net_plain.state_dict()
 print('\n=== 10. silent frames ===')
 silent = make_frame(net_a4, 0, 24).view(1, -1).expand(4, -1).contiguous()
 n_sil = silent.shape[0]
-c0, f0 = net_a4._corrupt_frame_tokens(silent, torch.zeros(n_sil,
-                                                          dtype=torch.long))
+c0, f0, _ = net_a4._corrupt_frame_tokens(
+    silent, torch.zeros(n_sil, dtype=torch.long))
 check(torch.equal(c0, silent) and not bool(f0.any()),
       'k=0 leaves a silent frame clean and unflagged')
-cK, fK = net_a4._corrupt_frame_tokens(
+cK, fK, _ = net_a4._corrupt_frame_tokens(
     silent, torch.full((n_sil,), K, dtype=torch.long))
 check(bool(fK.all()),
       'k=K flags it, so it cannot reveal its silence at the endpoint')
 hits = 0
 for i in range(400):
     torch.manual_seed(900 + i)
-    _, f = net_a4._corrupt_frame_tokens(
+    _, f, _ = net_a4._corrupt_frame_tokens(
         silent, torch.full((n_sil,), 2, dtype=torch.long))
     hits += int(f.sum())
 rate = hits / (400 * n_sil)

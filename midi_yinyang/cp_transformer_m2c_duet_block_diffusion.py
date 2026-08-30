@@ -121,7 +121,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
 
     def __init__(self, *args, diffusion_K=4, slot_rope_aligned=True,
                  time_rope_aligned=False, self_cond_prob=0.5,
-                 token_level_mask=False, **kwargs):
+                 token_level_mask=False, mask_revealed_query_loss=False,
+                 **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- A.4: token-level masking inside the frame ----------------
@@ -159,6 +160,15 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.register_buffer(
             'frame_mask_row_init_flag',
             torch.tensor(0, dtype=torch.long),
+        )
+        # Score the query loss only where the slot did NOT hand the
+        # model its own target -- see _query_loss_keep_mask. Stored as a
+        # buffer so the objective a checkpoint was trained under travels
+        # inside it (val_loss is not comparable across the two).
+        self.register_buffer(
+            'mask_revealed_query_loss_flag',
+            torch.tensor(1 if mask_revealed_query_loss else 0,
+                         dtype=torch.long),
         )
         # Per-modality commitment-level embeddings (the diffusion
         # "timestep" analogue -- see the TERMINOLOGY note in the module
@@ -226,6 +236,10 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
     def token_level_mask(self):
         return bool(self.token_level_mask_flag.item())
 
+    @property
+    def mask_revealed_query_loss(self):
+        return bool(self.mask_revealed_query_loss_flag.item())
+
     def _init_frame_mask_row(self):
         """A.4 FIX 1: give the MASK id a trained-model-like embedding.
 
@@ -290,17 +304,29 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         included, so a silent frame cannot leak its silence at k=K);
         k=0 masks nothing and encodes the clean frame.
 
-        Returns [B, 1, H] (WITHOUT the k-embedding; caller adds it).
+        Returns (slot [B, 1, H] WITHOUT the k-embedding -- the caller
+        adds it -- and revealed [B, S] bool, the positions whose GROUND
+        TRUTH was handed to the model inside the slot; see
+        _query_loss_keep_mask for why the loss must drop those).
         """
-        B = content_tokens.shape[0]
+        B, S = content_tokens.shape
+        is_sc = (torch.zeros(B, dtype=torch.bool, device=content_tokens.device)
+                 if sc_mask is None else sc_mask)
         if sc_mask is not None and sc_toks is not None:
             content_tokens = torch.where(
                 sc_mask.view(B, 1), sc_toks, content_tokens)
-        corrupted, fully = self._corrupt_frame_tokens(content_tokens, k_t)
+        corrupted, fully, drawn = self._corrupt_frame_tokens(
+            content_tokens, k_t)
         enc = self._encode_frame(corrupted, mod)               # [B, 1, H]
         mask_emb = (self.mask_m_emb if mod == 0 else self.mask_c_emb)
         mask_emb = mask_emb.view(1, 1, -1).expand(B, 1, -1).to(enc.dtype)
-        return torch.where(fully.view(B, 1, 1), mask_emb, enc)
+        slot = torch.where(fully.view(B, 1, 1), mask_emb, enc)
+        # A token is REVEALED when it survived the draw, the slot was
+        # not replaced wholesale by the mask embedding, and the content
+        # is ground truth rather than a self-conditioning draft (a draft
+        # token may be wrong, so predicting it is not free).
+        revealed = (~drawn) & (~fully).view(B, 1) & (~is_sc).view(B, 1)
+        return slot, revealed.expand(B, S)
 
     def _corrupt_frame_tokens(self, content_tokens, k_t):
         """Draw the per-token absorbing corruption for one slot.
@@ -308,9 +334,11 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         Split out of _token_level_slot so the audit can exercise the
         real draw instead of a copy of it.
 
-        Returns (corrupted [B, S], fully [B] bool) where `fully` marks
-        the items whose slot must fall back to the whole-frame mask
-        embedding rather than the encoding of `corrupted`.
+        Returns (corrupted [B, S], fully [B] bool, drawn [B, S] bool)
+        where `fully` marks the items whose slot must fall back to the
+        whole-frame mask embedding rather than the encoding of
+        `corrupted`, and `drawn` marks the individual tokens that were
+        replaced by the mask id.
         """
         B, S = content_tokens.shape
         device = content_tokens.device
@@ -343,7 +371,45 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         silent_drawn = (n_maskable == 0) & (
             torch.rand(B, device=device) < p.view(B))
         fully = (k_t == self.diffusion_K) | all_drawn | silent_drawn
-        return corrupted, fully
+        return corrupted, fully, drawn
+
+    def _query_loss_keep_mask(self, non_pad_q):
+        """Which query-slot positions the query loss may score.
+
+        The query slot is BOTH the model's conditioning input for the
+        target frame AND the thing whose target it predicts. Wherever
+        the slot carries un-corrupted ground truth, predicting that
+        target is a free copy: at k=0 the whole frame is handed over,
+        and under A.4 every token that survived the draw is handed over
+        individually.
+
+        Scoring those positions is not just a diluted average. The copy
+        path and the "infer it from the partner's draft" path compete
+        for the same gradient, and only the second one exists at
+        inference -- where the slot holds the model's own draft, never
+        the answer. D3PM, MDLM and MaskGIT all score the denoising loss
+        on corrupted positions only, for exactly this reason.
+
+        So: drop the revealed positions. Self-conditioned items are
+        NOT dropped -- their slot holds a model draft that may be wrong,
+        so correcting it is real signal, and arguably the most valuable
+        signal in the objective.
+
+        We take the plain mean over the kept positions (MaskGIT) rather
+        than the 1/p importance weighting of the MDLM/D3PM ELBO: we want
+        a training signal, not a likelihood bound, and the reweighting
+        adds variance at small k for no benefit here.
+
+        Off by default: it changes the objective, so a checkpoint
+        trained with it is not val_loss-comparable to one without. Turn
+        it on for a WHOLE arm-set (e.g. all four E6 arms) or none.
+        """
+        if not self.mask_revealed_query_loss:
+            return non_pad_q
+        revealed = getattr(self, '_last_query_revealed', None)
+        if revealed is None:
+            return non_pad_q
+        return non_pad_q * (~revealed).to(non_pad_q.dtype)
 
     def _run_global_stack(self, h, T_query):
         """Override: slot-aligned (v1.1) / time-aligned (v1.2) RoPE.
@@ -453,12 +519,14 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             # A.4: per-token absorbing corruption of the target frame,
             # locally encoded -- intermediate k are genuinely partial
             # frames. Self-conditioning overrides at the TOKEN level.
-            slot_m = self._token_level_slot(
+            slot_m, revealed_m = self._token_level_slot(
                 x[:, 2 * T_query], sc_mask_m, sc_toks_m, k_m_t, 0,
-            ).to(h.dtype)
-            slot_c = self._token_level_slot(
+            )
+            slot_c, revealed_c = self._token_level_slot(
                 x[:, 2 * T_query + 1], sc_mask_c, sc_toks_c, k_c_t, 1,
-            ).to(h.dtype)
+            )
+            slot_m = slot_m.to(h.dtype)
+            slot_c = slot_c.to(h.dtype)
         else:
             # Ground-truth frame embeddings at T_query, with optional
             # self-conditioning override (model-generated frame
@@ -490,6 +558,19 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             slot_m = is_masked_m * mask_m_expand + (1.0 - is_masked_m) * gt_m
             slot_c = is_masked_c * mask_c_expand + (1.0 - is_masked_c) * gt_c
 
+            # Frame-level corruption is all-or-nothing, so an unmasked
+            # slot reveals the WHOLE target frame -- unless it was
+            # overridden by a self-conditioning draft, which may be
+            # wrong. [B] -> [B, S].
+            unmasked_m = is_masked_m.view(batch_size) == 0
+            unmasked_c = is_masked_c.view(batch_size) == 0
+            if sc_mask_m is not None:
+                unmasked_m = unmasked_m & ~sc_mask_m
+            if sc_mask_c is not None:
+                unmasked_c = unmasked_c & ~sc_mask_c
+            revealed_m = unmasked_m.view(batch_size, 1).expand(-1, subseq_len)
+            revealed_c = unmasked_c.view(batch_size, 1).expand(-1, subseq_len)
+
         # Add per-item k-embeddings -- the commitment tag. Crucial for
         # iterative refinement at inference, where the same slot input
         # can mean very different things depending on where in the
@@ -500,6 +581,12 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         k_c_e = self.k_emb_c(k_c_t).view(batch_size, 1, -1).to(h.dtype)
         slot_m = slot_m + k_m_e
         slot_c = slot_c + k_c_e
+
+        # Stash for the loss. Set on EVERY forward, so the no-grad
+        # self-conditioning forward's value is overwritten by the real
+        # one that follows it -- loss() reads it after that second call.
+        self._last_query_revealed = torch.stack(
+            [revealed_m, revealed_c], dim=1)               # [B, 2, S]
 
         h_full = torch.cat([h_clean, slot_m, slot_c], dim=1)
         # h_full: [B, 2T_full + 2, H]   (same shape as parent)
@@ -663,8 +750,11 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             reduction='none',
         ).view(batch_size, 2, subseq_len)
         non_pad_q = (targets_query != self.tokenizer.pad_token).float()
-        norm_q = non_pad_q.sum().clamp_min(1.0)
-        query_loss = (per_token_q * non_pad_q).sum() / norm_q
+        keep_q = self._query_loss_keep_mask(non_pad_q)
+        norm_q = keep_q.sum().clamp_min(1.0)
+        query_loss = (per_token_q * keep_q).sum() / norm_q
+        self._last_query_kept_frac = (
+            keep_q.sum() / non_pad_q.sum().clamp_min(1.0)).detach()
 
         # Diagnostic split: average query CE by noise-level bin per slot.
         # Useful for spotting "model only learns at k=0 / k=K" failure modes.
@@ -707,6 +797,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.log('train_mean_k_m', self._last_mean_k_m)
         self.log('train_mean_k_c', self._last_mean_k_c)
         self.log('train_selfcond_frac', self._last_selfcond_frac)
+        self.log('train_query_kept_frac', self._last_query_kept_frac)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -716,6 +807,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.log('val_ar_loss_content', self._last_ar_loss_content)
         self.log('val_ar_loss_eos', self._last_ar_loss_eos)
         self.log('val_query_loss', self._last_query_loss)
+        self.log('val_query_kept_frac', self._last_query_kept_frac)
         self.log('val_moe_aux_loss', aux_loss.detach())
         return loss
 
@@ -898,6 +990,27 @@ if __name__ == '__main__':
                              'auto-detects and enables confidence-based '
                              'per-token re-masking across rounds. '
                              'melchord (with_velocity=False) only.')
+    parser.add_argument('--mask_revealed_query_loss', type=int, default=0,
+                        help='1 = score the query loss ONLY where the '
+                             'query slot did not already hand the model '
+                             'its own target. The slot is both the '
+                             'conditioning input and the thing being '
+                             'predicted, so at k=0 (and, under A.4, at '
+                             'every token that survived the draw) the '
+                             'target is a free copy. D3PM / MDLM / '
+                             'MaskGIT all score corrupted positions '
+                             'only; we did not, which lets the copy '
+                             'path compete for gradient with the '
+                             '"infer it from the partner draft" path -- '
+                             'the only one that exists at inference. '
+                             'Self-conditioned items are kept (their '
+                             'slot holds a draft that may be wrong). '
+                             'OFF by default because it changes the '
+                             'objective: val_loss is not comparable '
+                             'across the two, so enable it for a WHOLE '
+                             'arm-set or none. Run dirs get a "qm" '
+                             'marker; carried in the ckpt as the '
+                             'mask_revealed_query_loss_flag buffer.')
     parser.add_argument('--fresh_schedule', action='store_true', default=False)
     args = parser.parse_args()
 
@@ -923,7 +1036,8 @@ if __name__ == '__main__':
     mb_tag = ('mb' if args.moe_modality_bias else '') + \
              ('mg' if args.moe_modality_gates else '') + \
              ('hr' if args.moe_modality_hard_route else '') + \
-             ('tk' if args.token_level_mask else '')
+             ('tk' if args.token_level_mask else '') + \
+             ('qm' if args.mask_revealed_query_loss else '')
     default_name = (f"m2c_duet_block_diffusion_{scheme_version}_{args.model_size}_"
                     f"gnl{gnl}_K{args.diffusion_K}{mb_tag}_{task.name}{tag}_"
                     f"batch_{args.batch_size * n_gpus}_schedule")
@@ -956,6 +1070,7 @@ if __name__ == '__main__':
         moe_modality_gates=bool(args.moe_modality_gates),
         moe_modality_hard_route=bool(args.moe_modality_hard_route),
         token_level_mask=bool(args.token_level_mask),
+        mask_revealed_query_loss=bool(args.mask_revealed_query_loss),
     )
     print(f'[scheme] {scheme_version}: slot_rope_aligned={not args.legacy_slot_rope}  '
           f'time_rope_aligned={bool(args.time_rope_aligned)}  '
@@ -967,7 +1082,9 @@ if __name__ == '__main__':
           f'moe_modality_hard_route={bool(args.moe_modality_hard_route)}'
           f'{" (A.2.moe_hardroute)" if args.moe_modality_hard_route else ""}  '
           f'token_level_mask={bool(args.token_level_mask)}'
-          f'{" (A.4)" if args.token_level_mask else ""}')
+          f'{" (A.4)" if args.token_level_mask else ""}\n'
+          f'mask_revealed_query_loss='
+          f'{bool(args.mask_revealed_query_loss)}')
     print(f'Architecture: M2CDuetBlockDiffusion (A.3)  K={args.diffusion_K}  '
           f'3-pass (intra/cross/frame) + 2 gates + query slots with per-item '
           f'noise levels + k-embedding')
@@ -1065,6 +1182,8 @@ if __name__ == '__main__':
                     'moe_modality_hard_route': bool(
                         args.moe_modality_hard_route),
                     'token_level_mask': bool(args.token_level_mask),
+                    'mask_revealed_query_loss':
+                        bool(args.mask_revealed_query_loss),
                     'run_tag': args.run_tag,
                 },
             ) if args.wandb else TensorBoardLogger('tb_logs', name=model_name)
