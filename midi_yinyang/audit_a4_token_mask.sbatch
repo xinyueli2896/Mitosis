@@ -8,6 +8,18 @@
 # self-conditioning, value-carried flag detection, the with_velocity
 # guard, and the decode-time confidence re-masking helpers.
 #
+# Also covers the two fixes made after the first A.4 run decoded to
+# dense, messy music:
+#   FIX 1  the MASK id's embedding row is initialised to the mean of the
+#          real token rows, once, from on_train_start (so the warm-start
+#          state_dict cannot overwrite it) -- it used to arrive as an
+#          untrained vector fed into a pretrained local encoder.
+#   FIX 2  only odd (pitch-dur) positions are maskable; programs and the
+#          terminating EOS are exempt. A masked EOS reads as "frame not
+#          finished" and inflates note density across refinement rounds.
+# Plus silent frames, which have no maskable token and are therefore
+# masked all-or-nothing at rate k/K instead of revealing their silence.
+#
 # Takes seconds. Run after any change to
 # cp_transformer_m2c_duet_block_diffusion{.py,_inference.py}, and before
 # launching the first TOKEN_LEVEL_MASK=1 training run.

@@ -272,14 +272,14 @@ VECTOR, corrupt at the TOKEN level instead. Opt-in
 `tk`, carried in ckpts by the `token_level_mask_flag` buffer (stored
 by VALUE -- plain ckpts carry it as 0; detection must read the value).
 
-**Training.** At commitment level k, each non-pad token of the target
-frame is masked independently with prob k/K and the local encoder
-embeds the partially-masked frame: intermediate k are genuinely
+**Training.** At commitment level k, each *pitch-dur* token of the
+target frame is masked independently with prob k/K and the local
+encoder embeds the partially-masked frame: intermediate k are genuinely
 intermediate states ("chord root known, upper voices open").
 Self-conditioning applies at the token level (the draft's tokens are
 corrupted, not its encoding). Endpoints are preserved exactly -- an
-all-masked draw falls back to the learned `mask_*_emb` (deterministic
-at k=K) and k=0 encodes the clean frame -- so the fully-unknown and
+all-masked draw falls back to the learned `mask_*_emb` (forced at k=K)
+and k=0 encodes the clean frame -- so the fully-unknown and
 fully-known states remain the trained ones and the variant is a strict
 generalisation of the plain schedule.
 
@@ -299,14 +299,54 @@ re-encoding -- per-frame MaskGIT, matching the graded corruption the
 model trained on. `A3_TOKEN_REMASK=0` falls back to full-draft
 re-embedding.
 
+**First run failed; two fixes (2026-08-30).** The first A.4 run (tag
+`mgtk`) decoded to dense, messy music — worse than A.2, and worse in a
+specific way: note density inflated and phrase boundaries dissolved.
+Per-token absorbing corruption is the standard recipe (D3PM, MaskGIT,
+MDLM), so the idea is not what failed; the recipe has two prerequisites
+this implementation violated.
+
+- **Fix 1 — the `[MASK]` embedding must be trained, not borrowed.** In
+  the literature `[MASK]` is a first-class vocabulary entry whose row is
+  learned from initialisation. A.4 reused a *dead* id (3327), so its row
+  arrived from the pretrained checkpoint untouched by any gradient — an
+  arbitrary vector pushed through a local encoder that had never seen
+  it, i.e. every corrupted frame was encoded out of distribution.
+  `_init_frame_mask_row()` now sets that row to the mean of the real
+  token embeddings (ids 0..3199), once, from `on_train_start` — after
+  the warm-start `state_dict` has loaded, since doing it in `__init__`
+  would be overwritten by the checkpoint's own `local_embedding` table.
+  A `frame_mask_row_init_flag` buffer makes it idempotent, so a resumed
+  run keeps the row it has since trained.
+- **Fix 2 — structural tokens must be exempt.** A cp frame is
+  (program, pitch-dur) pairs terminated by EOS: even positions are
+  programs and the EOS, odd positions are pitch-durs. The first run
+  masked all of them, so EOS itself could be masked — and a frame whose
+  terminator is unknown reads as *unfinished*, biasing the next
+  refinement round toward more notes and compounding over rounds. That
+  is the density inflation that was actually heard. Only odd positions
+  are maskable now, so corruption destroys *which* notes while
+  preserving *how many* and on which instrument — also the musically
+  meaningful partial state.
+
+A frame with no pitch-dur token at all (silence) has nothing to corrupt,
+so it is masked all-or-nothing at the same rate k/K rather than
+revealing its silence for free at every k &lt; K. Both endpoints stay
+exact under all three changes, so a warm start from an A.2 checkpoint
+still reproduces A.2 at k=K.
+
 **Audited** by `audit_a4_token_mask.py` / `.sbatch`: mask-id safety,
 bit-exact endpoint equivalence with the plain variant at k=K and k=0,
-masked-fraction statistics, token-level self-conditioning, value-based
-flag detection, the velocity guard, and the re-masking helpers.
+masked-fraction statistics, the structural exemption (programs and EOS
+survive every k), the mask-row initialisation and its idempotence,
+silent-frame handling, token-level self-conditioning, value-based flag
+detection, the velocity guard, and the re-masking helpers.
 
-**Status.** Implemented; audit not yet run on-cluster; no training run
-yet. Second-degree relative to the E6/paper scope -- registered so the
-naturalness argument has a concrete, costed counterpart.
+**Status.** Fixed and awaiting a retrain under a *new* `RUN_TAG` (the
+old one would resume into the degraded run's directory). Audit still not
+run on-cluster. Second-degree relative to the E6/paper scope —
+registered so the naturalness argument has a concrete, costed
+counterpart.
 
 ### A.2.moe_improved — modality-bias MoE router (2026-08-24)
 

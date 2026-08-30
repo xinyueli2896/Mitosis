@@ -104,11 +104,21 @@
 #                           responsiveness and quality instead.
 #   --export=ALL,TOKEN_LEVEL_MASK=1  A.4: per-token absorbing corruption
 #                           of the query-slot frame -- at commitment
-#                           level k each non-pad token is masked with
+#                           level k each PITCH-DUR token is masked with
 #                           prob k/K and the local encoder embeds the
 #                           partial frame, so intermediate k are
 #                           genuinely intermediate ("chord root known,
-#                           upper voices open"). Endpoints match the
+#                           upper voices open"). Programs and the
+#                           terminating EOS (the even positions) are
+#                           exempt, and the MASK id's embedding row is
+#                           initialised to the mean of the real token
+#                           rows at on_train_start -- the two fixes
+#                           made after the first A.4 run ('mgtk')
+#                           decoded to dense, messy music; see the A.4
+#                           FAILURE ANALYSIS note in the model file.
+#                           Use a NEW RUN_TAG so the retrain does not
+#                           resume into that run's directory.
+#                           Endpoints match the
 #                           plain variant exactly (all-masked ->
 #                           mask_*_emb; k=0 -> clean), so shared/mg
 #                           ckpts warm-start cleanly. Uses the free

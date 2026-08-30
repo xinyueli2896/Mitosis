@@ -49,6 +49,39 @@ A.4, run-dir tag 'tk') restores genuinely graded corruption -- per-token
 masking inside the frame -- and makes the diffusion reading literal;
 see the A.4 note in __init__.
 
+A.4 FAILURE ANALYSIS (first run, tag 'mgtk')
+--------------------------------------------
+The first A.4 run decoded to dense, messy music -- worse than A.2, and
+worse in a specific way (note density inflated, phrase boundaries gone).
+Per-token absorbing corruption is the standard recipe (D3PM, MaskGIT,
+MDLM), so the variant did not fail because the idea is wrong; it failed
+because that recipe has two prerequisites this implementation violated.
+
+  FIX 1 -- the [MASK] embedding must be trained, not borrowed. In the
+  literature [MASK] is a first-class vocabulary entry whose row is
+  learned from initialisation. A.4 instead reused a dead id in the
+  instrument-padding range (3327), so its embedding row arrived from the
+  pretrained checkpoint untouched by any gradient -- an arbitrary vector
+  pushed through a local encoder that had never seen it. Every corrupted
+  frame was therefore encoded through an out-of-distribution input.
+  Fixed by _init_frame_mask_row(): set the row to the mean of the real
+  token embeddings once, on_train_start, after the warm-start load.
+
+  FIX 2 -- structural tokens must be exempt from corruption. A cp frame
+  is (program, pitch-dur) pairs terminated by EOS: even positions are
+  programs and the EOS, odd positions are pitch-durs. The first run
+  masked all of them, so EOS itself could be masked -- and a frame whose
+  terminator is unknown reads as unfinished, which biases the next
+  refinement round toward more notes and compounds over rounds. That is
+  the density inflation that was actually heard. Fixed in
+  _token_level_slot(): only odd (pitch-dur) positions are maskable, so
+  corruption destroys WHICH notes while preserving HOW MANY and on which
+  instrument -- also the musically meaningful partial state.
+
+Both endpoints remain exact under the fixes (k=0 clean, k=K the learned
+whole-frame mask embedding, silent frames included), so a warm start
+from an A.2 checkpoint still reproduces A.2 at k=K.
+
 Both schedules (parallel diffusion, MaskGIT) become valid inference
 strategies on the same trained checkpoint -- the user can experiment
 with either without retraining.
@@ -118,6 +151,15 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                     'x 16 velocities fills the padded range).'
                 )
             self.frame_mask_token = self.tokenizer.n_normal_tokens - 1
+        # A.4 FIX 1 (see the FAILURE ANALYSIS note below): the MASK id's
+        # embedding row must not start as an untrained random vector.
+        # Set once, AFTER weights load (on_train_start) -- doing it here
+        # would be overwritten by the warm-start state_dict, which
+        # carries the whole local_embedding table.
+        self.register_buffer(
+            'frame_mask_row_init_flag',
+            torch.tensor(0, dtype=torch.long),
+        )
         # Per-modality commitment-level embeddings (the diffusion
         # "timestep" analogue -- see the TERMINOLOGY note in the module
         # docstring), indexed by k in {0, ..., K}. Zero-init: a
@@ -184,38 +226,124 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
     def token_level_mask(self):
         return bool(self.token_level_mask_flag.item())
 
+    def _init_frame_mask_row(self):
+        """A.4 FIX 1: give the MASK id a trained-model-like embedding.
+
+        Standard absorbing-state discrete diffusion (D3PM, MaskGIT,
+        MDLM) carries [MASK] as a first-class vocabulary entry whose
+        embedding is learned from the start. A.4 instead repurposed a
+        dead id in the instrument-padding range, so its row arrived at
+        training as the pretrained checkpoint left it: never updated by
+        any real data, i.e. effectively random -- a stray vector shoved
+        into a PRETRAINED local encoder that had never seen it. That is
+        the leading explanation for the first A.4 run's collapse.
+
+        Fix: initialise the row to the MEAN of the real token
+        embeddings (programs 0..127 and pitch-durs 128..3199), so the
+        mask starts as a neutral, in-distribution "average token"
+        rather than noise, and learns away from there. Runs once, from
+        on_train_start (after the warm-start state_dict has loaded --
+        doing it in __init__ would be overwritten), and records itself
+        in a buffer so a resumed run does not re-initialise a row that
+        has since trained.
+        """
+        if not self.token_level_mask:
+            return
+        if bool(self.frame_mask_row_init_flag.item()):
+            return
+        with torch.no_grad():
+            emb = self.local_embedding.weight
+            real = emb[:128 * 25]        # programs + pitch-durs, no padding
+            emb[self.frame_mask_token] = real.mean(dim=0)
+            self.frame_mask_row_init_flag.fill_(1)
+        print(f'[A.4] frame mask row {self.frame_mask_token} initialised to '
+              f'the mean of {real.shape[0]} real token embeddings')
+
+    def on_train_start(self):
+        hook = getattr(super(), 'on_train_start', None)
+        if callable(hook):
+            hook()
+        self._init_frame_mask_row()
+
     def _token_level_slot(self, content_tokens, sc_mask, sc_toks, k_t, mod):
         """A.4 slot construction: per-token absorbing corruption.
 
         content_tokens: [B, S] the target frame's tokens (or, where
             sc_mask is set, the self-conditioning draft's tokens).
-        k_t: LongTensor[B] commitment levels. Each non-pad token is
-            masked independently with prob k/K. An all-masked draw
-            falls back to mask_*_emb so the fully-unknown state stays
-            the trained one; k=0 encodes the clean frame.
+        k_t: LongTensor[B] commitment levels.
+
+        A.4 FIX 2: only PITCH-DURATION tokens are maskable. A cp frame
+        is (program, pitch-dur) pairs terminated by EOS, so programs sit
+        at even positions and EOS at the even position after the last
+        pair. The first A.4 run masked those too, and a frame whose EOS
+        is masked reads as "not finished" -- which biases the next
+        refinement round toward more notes and compounds across rounds.
+        That is the density inflation heard on that run. Masking only
+        the odd (pitch-dur) positions preserves each frame's INSTRUMENT
+        and LENGTH while corrupting its CONTENT, which is both the
+        musically meaningful partial state ("how many notes is settled,
+        which notes is not") and the standard practice of leaving
+        structural tokens out of the corruption process.
+
+        Endpoints stay exact: k=K masks every pitch-dur token and falls
+        back to the learned whole-frame mask_*_emb (silent frames
+        included, so a silent frame cannot leak its silence at k=K);
+        k=0 masks nothing and encodes the clean frame.
+
         Returns [B, 1, H] (WITHOUT the k-embedding; caller adds it).
         """
-        B, S = content_tokens.shape
+        B = content_tokens.shape[0]
         if sc_mask is not None and sc_toks is not None:
             content_tokens = torch.where(
                 sc_mask.view(B, 1), sc_toks, content_tokens)
+        corrupted, fully = self._corrupt_frame_tokens(content_tokens, k_t)
+        enc = self._encode_frame(corrupted, mod)               # [B, 1, H]
+        mask_emb = (self.mask_m_emb if mod == 0 else self.mask_c_emb)
+        mask_emb = mask_emb.view(1, 1, -1).expand(B, 1, -1).to(enc.dtype)
+        return torch.where(fully.view(B, 1, 1), mask_emb, enc)
+
+    def _corrupt_frame_tokens(self, content_tokens, k_t):
+        """Draw the per-token absorbing corruption for one slot.
+
+        Split out of _token_level_slot so the audit can exercise the
+        real draw instead of a copy of it.
+
+        Returns (corrupted [B, S], fully [B] bool) where `fully` marks
+        the items whose slot must fall back to the whole-frame mask
+        embedding rather than the encoding of `corrupted`.
+        """
+        B, S = content_tokens.shape
+        device = content_tokens.device
         denom = max(self.diffusion_K, 1)
         p = (k_t.float() / denom).view(B, 1)
-        maskable = content_tokens != self.tokenizer.pad_token
-        drawn = (torch.rand(B, S, device=content_tokens.device) < p) & maskable
+        # Odd positions are pitch-dur; even positions carry programs and
+        # the terminating EOS and are never corrupted (FIX 2).
+        is_pd = (torch.arange(S, device=device) % 2 == 1).view(1, S)
+        maskable = is_pd & (content_tokens != self.tokenizer.pad_token)
+        drawn = (torch.rand(B, S, device=device) < p) & maskable
         corrupted = torch.where(
             drawn,
             torch.full_like(content_tokens, self.frame_mask_token),
             content_tokens,
         )
-        # Fully-masked fallback: every maskable token drawn -> the
-        # learned whole-frame mask embedding (endpoint equivalence with
-        # the pre-A.4 behaviour; at k=K this happens deterministically).
-        fully = (drawn | ~maskable).all(dim=1)
-        enc = self._encode_frame(corrupted, mod)               # [B, 1, H]
-        mask_emb = (self.mask_m_emb if mod == 0 else self.mask_c_emb)
-        mask_emb = mask_emb.view(1, 1, -1).expand(B, 1, -1).to(enc.dtype)
-        return torch.where(fully.view(B, 1, 1), mask_emb, enc)
+        # Fully-unknown fallback -> the learned whole-frame mask
+        # embedding, in three cases:
+        #   k = K            endpoint, forced, so it is exact for EVERY
+        #                    frame including silent ones;
+        #   every pd drawn   the frame carries no content any more;
+        #   silent frame     a frame with no pitch-dur token at all has
+        #                    nothing to corrupt, so encoding it cleanly
+        #                    would reveal its silence for free at every
+        #                    k < K. Corrupt it all-or-nothing with the
+        #                    same probability p instead, which keeps the
+        #                    reveal rate monotone in k and both
+        #                    endpoints exact (p=0 at k=0, p=1 at k=K).
+        n_maskable = maskable.sum(dim=1)
+        all_drawn = (n_maskable > 0) & (drawn.sum(dim=1) == n_maskable)
+        silent_drawn = (n_maskable == 0) & (
+            torch.rand(B, device=device) < p.view(B))
+        fully = (k_t == self.diffusion_K) | all_drawn | silent_drawn
+        return corrupted, fully
 
     def _run_global_stack(self, h, T_query):
         """Override: slot-aligned (v1.1) / time-aligned (v1.2) RoPE.
