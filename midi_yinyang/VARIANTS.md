@@ -458,8 +458,13 @@ fully-masked items — which is coherent, since k=K is exactly the regime
 where round 1 decides how many notes the frame has.
 
 `train_query_kept_frac` / `val_query_kept_frac` log the surviving
-fraction; expect roughly 1/2 under uniform k at K=4 with A.4, and
-K/(K+1) under the frame-level variant.
+fraction. With k uniform on {0..K} the masked fraction is 1/2 in
+expectation regardless of K, and self-conditioned items are kept on top
+of that, so at the default `self_cond_prob=0.5` expect roughly 0.75
+under the frame-level variant and somewhat less under A.4 (where the
+structural exemption leaves programs and EOS permanently revealed). The
+diagnostic value is the shape, not the exact number: near 0 or near 1
+means the reveal mask is wrong.
 
 **Off by default, deliberately.** It changes the objective, so
 `val_loss` is not comparable across the two settings. Enable it for a
