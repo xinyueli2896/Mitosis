@@ -55,6 +55,97 @@ conditioning-balance knob (E3 side note), non-aligned modalities
 
 ---
 
+## Paper writing decisions (ICASSP, registered 2026-08-30)
+
+Target venue ICASSP; the paper stays **inside symbolic music** and makes
+no multimodal claim. Framing, motivation and the three decisions below
+are settled — revisit only with a reason.
+
+### Framing
+
+The gap is not that prior work fails to distinguish tracks; it is that
+it distinguishes them **at the input only**. MMM, MMT, FIGARO, MuseNet
+and similar systems put every track through one shared network and
+separate them with an instrument or track-identity token. Say
+"predominantly", not "most", and locate the gap in *parameter* sharing:
+prior work differentiates what the model reads, not how it computes.
+
+The motivating claim is that tracks carry distinct **functional roles**
+— melody, harmony, accompaniment — each with its own grammar (melodic
+contour and phrase structure; voice-leading and harmonic rhythm;
+textural patterning). One shared parameter set gives role-specific
+structure nowhere to form.
+
+### Decision 1 — never write "modality" in the paper
+
+Internally the arm is `moe_modality_gates` (D.3). In the prose it is a
+**per-part** or **role-specific router**. "Modality-specific" in a
+symbolic-music paper either confuses the reader or reads as the
+multimodal claim we are explicitly not making yet. Code names stay in
+the repo; "part" / "role" goes in the paper. This also leaves the
+multimodal extension available as future work without pre-claiming it.
+
+### Decision 2 — the "unassigned pool" clause is load-bearing
+
+The router is per-part but the expert pool is **shared and unassigned**:
+which experts a part recruits, and whether any expert serves both, is
+LEARNED, not imposed. That is what separates this from MoMa / VL-MoE
+style architectures that partition experts by track a priori. Keep the
+clause in the abstract. D.2 (hard route, disjoint pools) is the
+ablation that backs it; if D.2 does not land in time the clause is
+still a defensible design claim, just weaker.
+
+### Decision 3 — what the interpretability result must say
+
+When the MoE experiments complete, `[INTERPRETABILITY RESULT]` has to
+make TWO moves in one sentence, or the claim collapses into "we added
+MoE and it helped":
+
+1. under the **shared** router, a large share of expert separation is
+   explained by stream identity alone (the stamp-share probes
+   178945/178946 gave ~69% — re-measure on the final config, do not
+   reuse the old number blindly);
+2. **per-part** routers reallocate that capacity to content (chord
+   frames route by register in 9 of 12 layers versus 5 for the shared
+   router).
+
+If the final numbers move, preserve the two-part shape. It is what
+makes the claim falsifiable.
+
+### Abstract draft (placeholders marked)
+
+> Multi-track symbolic music generation predominantly models every
+> track with one shared network, differentiating tracks only at the
+> input, through an instrument or track-identity token. But tracks are
+> not merely different timbres: they carry distinct functional roles —
+> melody, harmony, accompaniment — each governed by its own grammar,
+> from melodic contour and phrase structure to voice-leading and
+> harmonic rhythm. Sharing all parameters across roles differentiates
+> *what the model reads*, not *how it computes*, leaving role-specific
+> structure nowhere to form.
+>
+> We give each part its own computation while keeping the parts
+> mutually attentive. Specialization is carried by a sparsely-gated
+> mixture-of-experts layer with a **separate router per part** over a
+> **shared, unassigned expert pool**: which experts a part recruits —
+> and whether any expert serves both — is learned rather than imposed,
+> unlike architectures that partition experts by track a priori. A
+> three-pass attention design (within-part, cross-part causal, and
+> same-instant) keeps the parts coordinated at every step, including
+> mutual conditioning *within* a single time step, which a causal
+> interleaved sequence otherwise forbids.
+>
+> On melody-chord co-generation over POP909, Nottingham and Pop1K7,
+> **[RESULT]**. Routing analysis confirms the specialization is real
+> and content-driven rather than an artifact of stream identity:
+> **[INTERPRETABILITY RESULT]**.
+
+~205 words; trim one clause if the venue enforces 200. Open
+placeholders: `[RESULT]` (E1 co-generation vs the SOTA lead-sheet
+references of 2.6) and `[INTERPRETABILITY RESULT]` (E6, per Decision 3).
+
+---
+
 ## 1. Tasks, data, splits
 
 | | drumnondrum | melchord |
