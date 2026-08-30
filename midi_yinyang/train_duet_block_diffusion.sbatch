@@ -185,6 +185,11 @@ LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-}"
 # place the saved checkpoint badly. Lower it on the small melchord
 # corpora (VAL_CHECK_INTERVAL=100).
 VAL_CHECK_INTERVAL="${VAL_CHECK_INTERVAL:-500}"
+# Validation is DETERMINISTIC (fixed sample order and crop offsets), so
+# this sets how much of the val split the metric covers, not how noisy
+# it is. 25 is the historical default; raise it (100+) when val_loss
+# must be comparable ACROSS runs.
+LIMIT_VAL_BATCHES="${LIMIT_VAL_BATCHES:-25}"
 MAX_LR="${MAX_LR:-}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GATE_INIT_BIAS="${GATE_INIT_BIAS:--10.0}"
@@ -394,6 +399,7 @@ COMMON_ARGS=(
     --max_lr "$MAX_LR"
     --lr_total_steps "$LR_TOTAL_STEPS" \
     --val_check_interval "$VAL_CHECK_INTERVAL"
+    --limit_val_batches "$LIMIT_VAL_BATCHES"
     --gradient_clip_val 1.0
     --aux_loss_weight 0.01
     --moe_monitor_every_n_steps 500
