@@ -513,7 +513,41 @@ or none — otherwise arms differ by more than their router.
 
 **Audited** by `audit_a4_token_mask.py` check group 11.
 
-**Status.** Implemented, unrun.
+**Status: trained 2026-08-31; NEGATIVE by ear — worse than A.3.**
+
+**Post-mortem hypothesis (recorded before the confirming experiment).**
+The copy path is load-bearing at frame level, and A.5 removed its only
+training signal. The refinement decode re-samples BOTH slots every
+round from the query logits — `encode(prev_draft) + k_emb(r)` in, whole
+frame out — nothing is frozen externally. So carrying a draft through
+rounds relies on the model REPRODUCING its slot content at low k, and
+A.3's k=0 free-copy items were precisely the training of that
+near-identity behaviour. Under A.5, k=0 items contribute zero query
+gradient; the content-in-slot branch is trained only by
+self-conditioned items, whose drafts (no-grad, round-one-condition
+argmax) are poor early in training — teaching the model that low-k slot
+content is unreliable, i.e. NOT to commit to its own draft. Result:
+refinement rounds drift instead of anneal.
+
+MaskGIT does not have this problem because its canvas freezes committed
+tokens; the network never needs to copy. A.5 borrowed MaskGIT's loss
+without MaskGIT's canvas.
+
+**Falsifiable check** (before any conclusions): decode the A.5 ckpt at
+`A3_REFINE_STEPS=0` (pure AR, slots unused) vs `=4`. The AR stream
+trained identically to A.3's, so if 0 sounds fine and 4 sounds bad the
+damage is localised to the refinement contract — hypothesis confirmed.
+If BOTH sound bad, the hypothesis is wrong.
+
+**Consequences if confirmed.** (a) At frame level the A.3 objective
+stands; A.5-on-A.3 is a recorded negative. (b) The literature-coherent
+package is A.4 PLUS a canvas decode: freeze the un-remasked draft
+tokens in the OUTPUT (only sample the masked ones), so the identity
+burden moves from the model to the decode procedure — then scoring only
+corrupted positions is exactly right. Needs a small inference change.
+(c) A softer alternative: downweight revealed positions (λ≈0.2) instead
+of dropping them, keeping identity training while shifting gradient
+share.
 
 ### A.2.moe_improved — modality-bias MoE router (2026-08-24)
 
