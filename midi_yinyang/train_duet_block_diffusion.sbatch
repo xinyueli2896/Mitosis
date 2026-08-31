@@ -68,7 +68,9 @@
 #                           the content-pathway stamp share should be
 #                           near zero. OUTCOME (probes 179683/179684):
 #                           offered, not used. Kept for ablations.
-#   --export=ALL,MOE_MODALITY_GATES=1  A.2.moe_permod: per-modality
+#   --export=ALL,MOE_MODALITY_GATES=1  (THE DEFAULT since 2026-08-31;
+#                           set =0 for the shared-router ablation arm)
+#                           A.2.moe_permod: per-modality
 #                           router matrices gate_m/gate_c replacing the
 #                           shared gate (the q_m/q_c move applied to the
 #                           router). Each gate only scores its own
@@ -267,7 +269,10 @@ TIME_ROPE_ALIGNED="${TIME_ROPE_ALIGNED:-0}"
 MOE_MODALITY_BIAS="${MOE_MODALITY_BIAS:-0}"
 # A.2.moe_permod: per-modality router matrices over a fully shared,
 # unassigned expert pool (see header). Marks the run dir with 'mg'.
-MOE_MODALITY_GATES="${MOE_MODALITY_GATES:-0}"
+# DEFAULT IS NOW 1 (2026-08-31): per-modality gates are the system's
+# standard router -- the paper's model -- not an ablation arm. Pass
+# MOE_MODALITY_GATES=0 explicitly to train the shared-router ablation.
+MOE_MODALITY_GATES="${MOE_MODALITY_GATES:-1}"
 # A.2.moe_hardroute: disjoint per-modality expert pools (see header).
 # Marks the run dir with 'hr'.
 MOE_MODALITY_HARD_ROUTE="${MOE_MODALITY_HARD_ROUTE:-0}"

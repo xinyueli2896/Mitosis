@@ -76,6 +76,23 @@ contour and phrase structure; voice-leading and harmonic rhythm;
 textural patterning). One shared parameter set gives role-specific
 structure nowhere to form.
 
+### Decision 0 — per-part gates are the DEFAULT, not an arm (2026-08-31)
+
+The per-modality-gate router (`MOE_MODALITY_GATES=1`, run-dir marker
+`mg`) is the system's standard configuration — the model the paper
+presents — and `train_duet_block_diffusion.sbatch` now defaults to it.
+Stop calling it "the D3 arm" in prose and conversation: it is simply
+the model. E6's ablation arms are the DEPARTURES from it:
+
+| ablation arm | flags | what it removes |
+|---|---|---|
+| shared router | `MOE_MODALITY_GATES=0` | the per-part gates |
+| dense (no MoE) | `MOE_NUM_EXPERTS=1,MOE_TOPK=1,MOE_INTERMEDIATE_SIZE=6144` | routing entirely |
+| hard route | `MOE_MODALITY_HARD_ROUTE=1` | the learned (vs imposed) split |
+
+The historical codenames (A2/D1/D2/D3) remain in older notes and run
+dirs; going forward the table above is the naming.
+
 ### Decision 1 — never write "modality" in the paper
 
 Internally the arm is `moe_modality_gates` (D.3). In the prose it is a
