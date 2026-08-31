@@ -466,10 +466,12 @@ structural exemption leaves programs and EOS permanently revealed). The
 diagnostic value is the shape, not the exact number: near 0 or near 1
 means the reveal mask is wrong.
 
-**Off by default, deliberately.** It changes the objective, so
-`val_loss` is not comparable across the two settings. Enable it for a
-whole arm-set (all four E6 arms, say) or none — a mixed comparison is a
-confound.
+**Off by default, deliberately.** `val_loss` stays directly comparable
+across the flag — validation pins k=K, where nothing is revealed and
+the keep mask degenerates to the non-pad mask, so the metric is
+computed identically either way. What differs is the *training*
+objective, so for E6 enable it for a whole arm-set (all four arms, say)
+or none — otherwise arms differ by more than their router.
 
 **Audited** by `audit_a4_token_mask.py` check group 11.
 

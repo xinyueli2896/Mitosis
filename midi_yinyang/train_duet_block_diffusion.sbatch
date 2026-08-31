@@ -143,11 +143,13 @@
 #                           path, the only one that exists at
 #                           inference. Self-conditioned items are kept
 #                           (their slot holds a draft that may be
-#                           wrong). OFF by default because it changes
-#                           the objective -- val_loss is NOT comparable
-#                           across the two, so turn it on for a WHOLE
-#                           arm-set (all four E6 arms, say) or none.
-#                           Run dirs get a 'qm' marker.
+#                           wrong). OFF by default. val_loss stays
+#                           comparable across the flag (eval pins k=K,
+#                           where nothing is revealed and the keep mask
+#                           degenerates to non-pad), but the TRAINING
+#                           objective differs -- so turn it on for a
+#                           WHOLE arm-set (all four E6 arms, say) or
+#                           none. Run dirs get a 'qm' marker.
 #   --export=ALL,QUERY_PAIRS=N       Q: how many DISTINCT frames each
 #                           training forward supervises at the query
 #                           slots. Training supervises ONE frame per

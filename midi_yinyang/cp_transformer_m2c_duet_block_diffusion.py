@@ -194,7 +194,10 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         # Score the query loss only where the slot did NOT hand the
         # model its own target -- see _query_loss_keep_mask. Stored as a
         # buffer so the objective a checkpoint was trained under travels
-        # inside it (val_loss is not comparable across the two).
+        # inside it. NOTE: validation pins k=K, where nothing is
+        # revealed and the keep mask degenerates to the non-pad mask,
+        # so val_loss stays computed identically across the flag --
+        # only the TRAINING objective differs.
         self.register_buffer(
             'mask_revealed_query_loss_flag',
             torch.tensor(1 if mask_revealed_query_loss else 0,
@@ -458,9 +461,13 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         a training signal, not a likelihood bound, and the reweighting
         adds variance at small k for no benefit here.
 
-        Off by default: it changes the objective, so a checkpoint
-        trained with it is not val_loss-comparable to one without. Turn
-        it on for a WHOLE arm-set (e.g. all four E6 arms) or none.
+        Off by default. Validation is unaffected either way -- eval
+        pins k=K, nothing is revealed there, and the keep mask
+        degenerates to the non-pad mask, so val_loss stays directly
+        comparable across the flag. What the flag changes is the
+        TRAINING objective, so for the E6 arm comparison turn it on for
+        a WHOLE arm-set (e.g. all four arms) or none -- otherwise arms
+        differ by more than their router.
         """
         if not self.mask_revealed_query_loss:
             return non_pad_q
@@ -1170,12 +1177,14 @@ if __name__ == '__main__':
                              'the only one that exists at inference. '
                              'Self-conditioned items are kept (their '
                              'slot holds a draft that may be wrong). '
-                             'OFF by default because it changes the '
-                             'objective: val_loss is not comparable '
-                             'across the two, so enable it for a WHOLE '
-                             'arm-set or none. Run dirs get a "qm" '
-                             'marker; carried in the ckpt as the '
-                             'mask_revealed_query_loss_flag buffer.')
+                             'OFF by default. val_loss stays '
+                             'comparable across the flag (eval pins '
+                             'k=K, where nothing is revealed), but the '
+                             'TRAINING objective differs -- so enable '
+                             'it for a WHOLE arm-set or none. Run dirs '
+                             'get a "qm" marker; carried in the ckpt '
+                             'as the mask_revealed_query_loss_flag '
+                             'buffer.')
     parser.add_argument('--query_pairs', type=int, default=1,
                         help='Q: how many DISTINCT frames each training '
                              'forward supervises at the query slots. '
