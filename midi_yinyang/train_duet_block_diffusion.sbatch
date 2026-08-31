@@ -337,16 +337,32 @@ GLOBAL_BATCH=$((BATCH_SIZE * NGPUS))
 # (v1.2 when TIME_ROPE_ALIGNED=1, else v1.1) or auto-resume looks in
 # the wrong directory.
 if [[ "$TIME_ROPE_ALIGNED" == "1" ]]; then SCHEME_VERSION=v1.2; else SCHEME_VERSION=v1.1; fi
-# 'mb'/'mg' markers must match the python side's default_name derivation
-# (mb_tag concatenates in that order).
-MB_TAG=""
-[[ "$MOE_MODALITY_BIAS" == "1" ]] && MB_TAG="${MB_TAG}mb"
-[[ "$MOE_MODALITY_GATES" == "1" ]] && MB_TAG="${MB_TAG}mg"
-[[ "$MOE_MODALITY_HARD_ROUTE" == "1" ]] && MB_TAG="${MB_TAG}hr"
-[[ "$TOKEN_LEVEL_MASK" == "1" ]] && MB_TAG="${MB_TAG}tk"
-[[ "$MASK_REVEALED_QUERY_LOSS" == "1" ]] && MB_TAG="${MB_TAG}qm"
-[[ "$QUERY_PAIRS" != "1" ]] && MB_TAG="${MB_TAG}q${QUERY_PAIRS}"
-RUN_DIR="ckpt/m2c_duet_block_diffusion_${SCHEME_VERSION}_large_gnl12_K${DIFFUSION_K}${MB_TAG}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
+# MODEL ABBREVIATION (2026-08-31): the run dir carries ONE model name
+# from the VARIANTS.md codename ledger -- the old concatenated flag
+# markers (mg/tk/qm/qN) are abolished. The name is DERIVED from the
+# flags (passed to python as --model_abbr so both sides agree), so
+# mismatched configs still can never auto-resume into each other.
+# Existing runs keep their old-style directories; to EXTEND one, pass
+# CKPT=<old dir>/last.ckpt explicitly.
+if [[ -z "${MODEL_ABBR:-}" ]]; then
+    if [[ "$TOKEN_LEVEL_MASK" == "1" && "$MASK_REVEALED_QUERY_LOSS" == "1" ]]; then FAM="A4f"
+    elif [[ "$TOKEN_LEVEL_MASK" == "1" ]]; then FAM="A4"
+    elif [[ "$MASK_REVEALED_QUERY_LOSS" == "1" && "$QUERY_PAIRS" != "1" ]]; then FAM="A6"
+    elif [[ "$MASK_REVEALED_QUERY_LOSS" == "1" ]]; then FAM="A5"
+    elif [[ "$QUERY_PAIRS" != "1" ]]; then FAM="A3q${QUERY_PAIRS}"
+    else FAM="A3"
+    fi
+    ARM=""
+    if [[ "$MOE_NUM_EXPERTS" == "1" ]]; then ARM="D1"
+    elif [[ "$MOE_MODALITY_HARD_ROUTE" == "1" ]]; then ARM="D2"
+    elif [[ "$MOE_MODALITY_GATES" != "1" ]]; then ARM="A2"
+    fi
+    [[ "$MOE_MODALITY_BIAS" == "1" ]] && ARM="${ARM}mb"
+    MODEL_ABBR="${ARM}${FAM}"
+    [[ "$DIFFUSION_K" != "4" ]] && MODEL_ABBR="${MODEL_ABBR}K${DIFFUSION_K}"
+    [[ "$FAM" == "A6" && "$QUERY_PAIRS" != "8" ]] && MODEL_ABBR="${MODEL_ABBR}q${QUERY_PAIRS}"
+fi
+RUN_DIR="ckpt/m2c_duet_block_diffusion_${SCHEME_VERSION}_large_gnl12_${MODEL_ABBR}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
     CKPT="$RUN_DIR/last.ckpt"
     echo "[auto-resume] found $CKPT  (run dir: $RUN_DIR)"
@@ -388,6 +404,7 @@ echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
 echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K  moe_modality_bias=$MOE_MODALITY_BIAS  moe_modality_gates=$MOE_MODALITY_GATES  moe_modality_hard_route=$MOE_MODALITY_HARD_ROUTE  token_level_mask=$TOKEN_LEVEL_MASK  mask_revealed_query_loss=$MASK_REVEALED_QUERY_LOSS  query_pairs=$QUERY_PAIRS${MB_TAG:+  [$MB_TAG]}"
 echo "MoE: experts=$MOE_NUM_EXPERTS topk=$MOE_TOPK intermediate=${MOE_INTERMEDIATE_SIZE:-<default 3072/expert>}  RUN_TAG=${RUN_TAG:-<none>}"
+echo "MODEL_ABBR=$MODEL_ABBR  ->  $RUN_DIR"
 echo "Task:    $TASK   (data max_polyphony: $MAX_POLYPHONY)"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
 echo "Effective max_lr: $MAX_LR   gate_init_bias: $GATE_INIT_BIAS   query_loss_weight: $QUERY_LOSS_WEIGHT"
@@ -486,6 +503,7 @@ COMMON_ARGS=(
     --token_level_mask "$TOKEN_LEVEL_MASK"
     --mask_revealed_query_loss "$MASK_REVEALED_QUERY_LOSS"
     --query_pairs "$QUERY_PAIRS"
+    --model_abbr "$MODEL_ABBR"
     --diffusion_K "$DIFFUSION_K"
     --checkpoint_path "$TRAIN_CKPT"
     --wandb

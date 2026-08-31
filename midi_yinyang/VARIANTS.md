@@ -270,14 +270,26 @@ configuration, and the flags below are merely how the trainer builds
 it. Say "I trained A.5", never "I turned on the A.5 flag". All of them
 run on the melchord cp4 / v1.2 / per-part-gate defaults.
 
-| model | is | build (on top of the defaults) | dir marker | status |
+| model | is | build (on top of the defaults) | run-dir name | status |
 |---|---|---|---|---|
 | **A.2** | query slots always fully masked | `train_duet_block.sbatch` | — | early runs; query slots collapsed — superseded |
-| **A.3** | A.2 + commitment levels k | diffusion trainer, no extra flags | `K4mg` | trained (the `mg long` run) |
-| **A.4** | A.3 + token-level slot corruption | `TOKEN_LEVEL_MASK=1` | `mgtk` | trained; FAILED (dense/messy output) |
-| **A.5** | A.3 + query loss on corrupted positions only | `MASK_REVEALED_QUERY_LOSS=1` | `mgqm` | trained 2026-08-31 |
-| **A.6** | A.5 + 8 query pairs per forward | `+ QUERY_PAIRS=8` | `mgqmq8` | planned |
-| **A.4-fixed** | A.5 + token-level corruption, with the two A.4 bug fixes | `+ TOKEN_LEVEL_MASK=1` | `mgtkqm` | planned |
+| **A.3** | A.2 + commitment levels k | diffusion trainer, no extra flags | `A3` | trained (legacy dir `K4mg...long`) |
+| **A.4** | A.3 + token-level slot corruption | `TOKEN_LEVEL_MASK=1` | `A4` | trained; FAILED (legacy dir `K4mgtk...long`) |
+| **A.5** | A.3 + query loss on corrupted positions only | `MASK_REVEALED_QUERY_LOSS=1` | `A5` | trained 2026-08-31 (legacy dir `K4mgqm...long`) |
+| **A.6** | A.5 + 8 query pairs per forward | `+ QUERY_PAIRS=8` | `A6` | planned |
+| **A.4f** (A.4-fixed) | A.5 + token-level corruption, with the two A.4 bug fixes | `+ TOKEN_LEVEL_MASK=1` | `A4f` | planned |
+
+**Run-dir naming (2026-08-31): the concatenated flag markers
+(`mg`/`tk`/`qm`/`qN`) are ABOLISHED.** A run dir now carries exactly one
+model abbreviation from this ledger, derived automatically from the
+flags (so mismatched configs still can never auto-resume into each
+other): `..._gnl12_A5_melchord_<RUN_TAG>_batch_8_schedule`. Departures
+from the per-part-gate default prefix the arm: `A2` shared router, `D1`
+dense, `D2` hard route (e.g. `A2A5`, `D1A3`). Non-default settings
+suffix: `K8` for K≠4, `q4` for A.6 at Q≠8. Override with
+`MODEL_ABBR=`. Runs trained before this date keep their old-style
+directories — to EXTEND one, pass `CKPT=<old dir>/last.ckpt`
+explicitly, because auto-resume now looks for the new-style name.
 
 The lineage forks at A.3: A.4 branched off with token-level corruption
 and failed; the main line continued A.3 → A.5 → A.6, each strictly

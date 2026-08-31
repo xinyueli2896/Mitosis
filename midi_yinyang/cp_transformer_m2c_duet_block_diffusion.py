@@ -1010,6 +1010,14 @@ if __name__ == '__main__':
     parser.add_argument('--path_to_dataset', type=str, default=None)
     parser.add_argument('--mod_a_path', type=str, default=None)
     parser.add_argument('--model_name', type=str, default=None)
+    parser.add_argument('--model_abbr', type=str, default=None,
+                        help='Model abbreviation used in the run-dir name '
+                             '(A3/A4/A4f/A5/A6, arm-prefixed for '
+                             'departures from the per-part-gate default: '
+                             'A2=shared router, D1=dense, D2=hard route). '
+                             'Default: derived from the flags, so '
+                             'mismatched configs never share a dir. '
+                             'Override only to pin a legacy name.')
     parser.add_argument('--checkpoint_path', type=str, default=None)
     parser.add_argument('--wandb', action='store_true', default=False)
     parser.add_argument('--moe_num_experts', type=int, default=4)
@@ -1215,24 +1223,55 @@ if __name__ == '__main__':
     mod_a_path = args.mod_a_path if args.mod_a_path is not None else task.mod_a_path
     mod_b_path = args.path_to_dataset if args.path_to_dataset is not None else task.mod_b_path
 
+    def derive_model_abbr(a):
+        """ONE abbreviation per model configuration -- the run-dir name.
+
+        Names come from the codename ledger in VARIANTS.md. The old
+        concatenated flag markers (mg/tk/qm/qN) are ABOLISHED
+        (2026-08-31): a run dir carries its model's name, and the name
+        is DERIVED from the flags so mismatched configs still can never
+        auto-resume into each other. Suffixes appear only for
+        non-default settings (K != 4; A.6 at Q != 8).
+        """
+        if a.token_level_mask and a.mask_revealed_query_loss:
+            fam = 'A4f'                        # A.4-fixed: A.5 + token corruption
+        elif a.token_level_mask:
+            fam = 'A4'
+        elif a.mask_revealed_query_loss and a.query_pairs > 1:
+            fam = 'A6'
+        elif a.mask_revealed_query_loss:
+            fam = 'A5'
+        elif a.query_pairs > 1:
+            fam = f'A3q{a.query_pairs}'        # unnamed combo, kept unique
+        else:
+            fam = 'A3'
+        # E6 ablation arms = departures from the per-part-gate default.
+        if a.moe_num_experts == 1:
+            arm = 'D1'                         # dense / no MoE
+        elif a.moe_modality_hard_route:
+            arm = 'D2'                         # imposed split
+        elif not a.moe_modality_gates:
+            arm = 'A2'                         # shared router
+        else:
+            arm = ''                           # the default model
+        if a.moe_modality_bias:
+            arm += 'mb'
+        abbr = arm + fam
+        if a.diffusion_K != 4:
+            abbr += f'K{a.diffusion_K}'
+        if fam == 'A6' and a.query_pairs != 8:
+            abbr += f'q{a.query_pairs}'
+        return abbr
+
     tag = f'_{args.run_tag}' if args.run_tag else ''
     if args.time_rope_aligned and args.legacy_slot_rope:
         raise SystemExit('--time_rope_aligned and --legacy_slot_rope are '
                          'mutually exclusive (v1.2 vs v1.0).')
     scheme_version = ('v1.2' if args.time_rope_aligned
                       else 'v1.0' if args.legacy_slot_rope else 'v1.1')
-    # A.2.moe_improved ('mb') / A.2.moe_permod ('mg') runs get their own
-    # run-dir families: the ckpts carry different router parameters, so
-    # resuming across configs must fail loudly instead of finding each
-    # other's last.ckpt.
-    mb_tag = ('mb' if args.moe_modality_bias else '') + \
-             ('mg' if args.moe_modality_gates else '') + \
-             ('hr' if args.moe_modality_hard_route else '') + \
-             ('tk' if args.token_level_mask else '') + \
-             ('qm' if args.mask_revealed_query_loss else '') + \
-             (f'q{args.query_pairs}' if args.query_pairs > 1 else '')
+    model_abbr = args.model_abbr or derive_model_abbr(args)
     default_name = (f"m2c_duet_block_diffusion_{scheme_version}_{args.model_size}_"
-                    f"gnl{gnl}_K{args.diffusion_K}{mb_tag}_{task.name}{tag}_"
+                    f"gnl{gnl}_{model_abbr}_{task.name}{tag}_"
                     f"batch_{args.batch_size * n_gpus}_schedule")
     model_name = args.model_name if args.model_name is not None else default_name
 
@@ -1381,6 +1420,7 @@ if __name__ == '__main__':
                         bool(args.mask_revealed_query_loss),
                     'query_pairs': args.query_pairs,
                     'run_tag': args.run_tag,
+                    'model_abbr': model_abbr,
                 },
             ) if args.wandb else TensorBoardLogger('tb_logs', name=model_name)
         ),
