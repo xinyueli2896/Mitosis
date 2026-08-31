@@ -32,6 +32,55 @@ except ImportError:
              'pip install -U huggingface_hub')
 
 
+def resolve_token():
+    """Find a WORKING write token, trying every place one could live.
+
+    huggingface_hub's own lookup is: HF_TOKEN env var first, then the
+    token file under HF_HOME (only falling back to ~/.cache/huggingface
+    when HF_HOME is unset). On this cluster HF_HOME points into
+    /scratch, which may be node-local -- so a login-node login can be
+    invisible to a compute node, and a stale HF_TOKEN in ~/.bashrc
+    silently overrides a good file. Instead of trusting the implicit
+    lookup, try each candidate, VALIDATE it with whoami(), and say
+    which one won (or why every one failed).
+    """
+    cands = []
+    for var in ('HF_TOKEN', 'HUGGING_FACE_HUB_TOKEN'):
+        v = os.environ.get(var)
+        if v is not None:
+            cands.append((f'env {var}', v.strip()))
+    file_cands = []
+    if os.environ.get('HF_TOKEN_PATH'):
+        file_cands.append(os.environ['HF_TOKEN_PATH'])
+    if os.environ.get('HF_HOME'):
+        file_cands.append(os.path.join(os.environ['HF_HOME'], 'token'))
+    file_cands.append(os.path.expanduser('~/.cache/huggingface/token'))
+    user = os.environ.get('USER', '')
+    if user:
+        file_cands.append(f'/scratch/{user}/cache/huggingface/token')
+    for f in file_cands:
+        if os.path.isfile(f):
+            with open(f) as fh:
+                cands.append((f'file {f}', fh.read().strip()))
+    if not cands:
+        sys.exit('[auth] no token found anywhere (no HF_TOKEN env, no '
+                 'token file). Run `huggingface-cli login` on the login '
+                 'node first.')
+    for src, tok in cands:
+        if not tok:
+            print(f'[auth] {src}: EMPTY -- skipping (an empty env var '
+                  f'overrides good file tokens in the default lookup!)')
+            continue
+        try:
+            who = HfApi(token=tok).whoami()
+            print(f'[auth] {src}: VALID, user={who["name"]}')
+            return tok
+        except Exception as e:                        # noqa: BLE001
+            print(f'[auth] {src}: rejected by the Hub ({e})')
+    sys.exit('[auth] every candidate token failed validation -- '
+             're-create a WRITE token and re-run huggingface-cli login.')
+
+
 def local_files(root):
     out = {}
     for dirpath, _dirs, files in os.walk(root):
@@ -89,8 +138,10 @@ def main():
         print('[dry-run] stopping before any upload.')
         return
 
-    api = HfApi()
-    create_repo(args.repo, repo_type='model', private=True, exist_ok=True)
+    token = resolve_token()
+    api = HfApi(token=token)
+    create_repo(args.repo, repo_type='model', private=True, exist_ok=True,
+                token=token)
 
     failures = []
     for d, want, sz in plans:
