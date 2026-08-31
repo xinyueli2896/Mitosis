@@ -50,8 +50,9 @@ conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
 mkdir -p /home/xinyue.li/logs
 
-if [[ -z "${HF_REPO:-}" ]]; then
-    echo "ERROR: set HF_REPO=<hf-username>/<repo-name>"
+if [[ -z "${HF_REPO:-}" || "$HF_REPO" == YOURNAME/* ]]; then
+    echo "ERROR: set HF_REPO to YOUR real namespace, e.g."
+    echo "       HF_REPO=\$(huggingface-cli whoami | head -1)/mitosis-ckpt-archive"
     exit 1
 fi
 PATTERNS="${PATTERNS:-m2c_duet_anticipatory_* m2c_duet_rehearsal_* m2c_duet_prefix_*}"
