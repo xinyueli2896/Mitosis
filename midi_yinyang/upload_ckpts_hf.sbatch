@@ -57,10 +57,15 @@ if [[ -z "${HF_REPO:-}" || "$HF_REPO" == YOURNAME/* ]]; then
 fi
 PATTERNS="${PATTERNS:-m2c_duet_anticipatory_* m2c_duet_rehearsal_* m2c_duet_prefix_*}"
 
-# Faster multipart uploads when the plugin is present; harmless if not.
-python - <<'PY' && export HF_HUB_ENABLE_HF_TRANSFER=1 || true
-import hf_transfer  # noqa: F401
-PY
+# Faster multipart uploads when the plugin is present; absent is fine
+# (the probe's ImportError is expected and silenced -- it previously
+# printed a scary but harmless traceback to the error log).
+if python -c 'import hf_transfer' 2>/dev/null; then
+    export HF_HUB_ENABLE_HF_TRANSFER=1
+    echo "[speed] hf_transfer present -> multipart uploads enabled"
+else
+    echo "[speed] hf_transfer not installed -> single-stream uploads (fine)"
+fi
 
 EXTRA=()
 [[ "${DRY_RUN:-0}" == "1" ]] && EXTRA+=(--dry-run)
