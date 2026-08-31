@@ -41,8 +41,17 @@ import torch
 import torch.nn.functional as F
 
 from cp_transformer_m2c_moe import FramedDataset, TRAIN_LENGTH
+import cp_transformer_m2c_duet_block_diffusion_inference as _inf
 from cp_transformer_m2c_duet_block_diffusion_inference import load_model
 from tasks import get_task
+
+# load_model() runs resolve_best_ckpt even on an explicit FILE path,
+# which silently swaps last.ckpt for the directory's best val-tagged
+# file (observed in job 195326). This diagnostic must analyse exactly
+# the file it is given, so pin the resolver to identity for files.
+_orig_resolve = _inf.resolve_best_ckpt
+_inf.resolve_best_ckpt = (
+    lambda p: p if os.path.isfile(p) else _orig_resolve(p))
 
 
 def collect_batches(task, batch_size, n_batches):
