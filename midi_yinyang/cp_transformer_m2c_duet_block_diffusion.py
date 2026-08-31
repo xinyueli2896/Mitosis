@@ -1346,11 +1346,21 @@ if __name__ == '__main__':
               f'implied_epochs={implied_epochs:.2f}')
 
     ckpt_dir = args.ckpt_dir or f'ckpt/{model_name}'
+    # {step} in the filename is NOT cosmetic. With an iterable dataset
+    # the epoch counter can sit at 00 for the whole run, so filenames
+    # built from (epoch, rounded val_loss) alone COLLIDE whenever two
+    # checkpoints round to the same 5-decimal val_loss -- and with
+    # enable_version_counter=False Lightning then OVERWRITES the file:
+    # best_k_models ends up holding two entries that point at one file
+    # on disk (observed on the first A.5 run: save_top_k=2, one
+    # val-tagged file). The strictly increasing step makes every save
+    # path unique. Keep {step} BEFORE {val_loss}: resolve_best_ckpt
+    # parses the metric tag at the END of the filename.
     checkpoint_callback = L.callbacks.ModelCheckpoint(
         monitor='val_loss', save_top_k=args.save_top_k, save_last=True,
         enable_version_counter=False,
         dirpath=ckpt_dir,
-        filename=model_name + '.{epoch:02d}.{val_loss:.5f}',
+        filename=model_name + '.{epoch:02d}.{step}.{val_loss:.5f}',
     )
 
     if n_gpus > 1:
