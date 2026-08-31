@@ -1,0 +1,142 @@
+% ---------------------------------------------------------------
+% Methodology: role specialization via per-part expert routing.
+% Terminology per EXPERIMENTS.md Decision 1: "part" / "role", never
+% "modality". Matches SimpleMoEFFN (cp_transformer_m2c_jointattn.py):
+% E=4 experts, top-k=2, routers bias-free, Switch aux at 0.01,
+% post-LN residual, gate_c seeded from gate_m at warm start.
+% ---------------------------------------------------------------
+\subsection{Role specialization via per-part expert routing}
+\label{sec:permod_moe}
+
+Let $\mathbf{x}_t \in \mathbb{R}^{d}$ denote the hidden state at
+position $t$ of the interleaved sequence, and let
+$\rho_t \in \{\mathrm{mel}, \mathrm{har}\}$ be the \emph{part label}
+of that position (melody and harmony frames alternate; the appended
+query slots inherit the label of the frame they predict). Every
+transformer block ends in a sparsely gated mixture-of-experts (MoE)
+feed-forward layer with a pool of $E$ experts
+\begin{equation}
+  \mathrm{FFN}_i(\mathbf{x})
+  \;=\;
+  \mathbf{W}^{(2)}_i\,
+  \sigma\!\bigl(\mathbf{W}^{(1)}_i \mathbf{x}\bigr),
+  \qquad i = 1, \dots, E,
+  \label{eq:expert}
+\end{equation}
+where $\mathbf{W}^{(1)}_i \in \mathbb{R}^{d_f \times d}$,
+$\mathbf{W}^{(2)}_i \in \mathbb{R}^{d \times d_f}$, and $\sigma$ is
+the GELU nonlinearity.
+
+\paragraph{Shared router.}
+The conventional layer scores every token with a single router
+$\mathbf{G} \in \mathbb{R}^{E \times d}$,
+\begin{equation}
+  \mathbf{p}_t = \operatorname{softmax}\bigl(\mathbf{G}\,
+  \mathbf{x}_t\bigr) .
+  \label{eq:shared_router}
+\end{equation}
+Because the per-part attention projections imprint the part label
+into the hidden state, $\mathbf{x}_t$ decomposes as
+$\mathbf{x}_t = \mathbf{c}_t + \mathbf{s}_{\rho_t}$, a content
+component plus a part-conditional offset (the ``stamp''), and the
+router's logits inherit an identity term
+$\mathbf{G}\,\mathbf{s}_{\rho_t}$ that separates the two parts
+regardless of content. In our routing analysis
+(Sec.~\ref{sec:routing}) this identity term accounts for the
+majority of the shared router's expert separation: the router spends
+its capacity re-deriving \emph{which part a token belongs to} --- a
+bit the input already carries --- rather than \emph{what the token
+contains}.
+
+\paragraph{Per-part routers over a shared pool.}
+We therefore give each part its own router,
+$\mathbf{G}^{(\mathrm{mel})}, \mathbf{G}^{(\mathrm{har})}
+\in \mathbb{R}^{E \times d}$, and score every token with the router
+of its own part:
+\begin{equation}
+  \mathbf{p}_t = \operatorname{softmax}\bigl(
+  \mathbf{G}^{(\rho_t)}\,\mathbf{x}_t\bigr)
+  = \operatorname{softmax}\bigl(
+  \mathbf{G}^{(\rho_t)}\mathbf{c}_t
+  + \mathbf{G}^{(\rho_t)}\mathbf{s}_{\rho_t}\bigr).
+  \label{eq:permod_router}
+\end{equation}
+Within the population a given router ever scores, the stamp term
+$\mathbf{G}^{(\rho)}\mathbf{s}_{\rho}$ is a \emph{constant} logit
+offset: it can bias which experts a part prefers overall, but it
+cannot make two tokens of the same part route differently. All
+routing \emph{variation} within a part is thus content-driven by
+construction, and the identity bit stops consuming router capacity.
+
+Crucially, the expert pool itself remains \emph{shared and
+unassigned}: both routers score the same $E$ experts, so which
+experts a part recruits --- and whether any expert serves both parts,
+acting as an integrator --- is learned rather than imposed. This is
+the designed contrast with hard-partitioned designs
+(part-specific experts in the sense of MoMa or VL-MoE), which we
+ablate by masking each part to a disjoint half of the pool,
+\begin{equation}
+  \tilde{g}_{t,i} =
+  \begin{cases}
+    \bigl[\mathbf{G}\,\mathbf{x}_t\bigr]_i, &
+      i \in \mathcal{P}(\rho_t),\\[2pt]
+    -\infty, & \text{otherwise},
+  \end{cases}
+  \label{eq:hardroute}
+\end{equation}
+with $\mathcal{P}(\mathrm{mel}) \cap \mathcal{P}(\mathrm{har}) =
+\varnothing$: same parameters and activated compute, but an
+integrator is no longer representable.
+
+\paragraph{Dispatch and objective.}
+Each token is dispatched to its top-$k$ experts
+$\mathcal{S}_t = \operatorname{top}\text{-}k(\mathbf{p}_t)$ with
+renormalized weights, and the layer output is the residually
+connected mixture
+\begin{equation}
+  \mathbf{y}_t = \mathrm{LN}\Bigl(\mathbf{x}_t +
+  \sum_{i \in \mathcal{S}_t}
+  \frac{p_{t,i}}{\sum_{j \in \mathcal{S}_t} p_{t,j}}\,
+  \mathrm{FFN}_i(\mathbf{x}_t)\Bigr).
+  \label{eq:dispatch}
+\end{equation}
+Load is balanced with the standard auxiliary term
+\cite{fedus2022switch},
+\begin{equation}
+  \mathcal{L}_{\mathrm{bal}}
+  = E \sum_{i=1}^{E} f_i\, P_i,
+  \qquad
+  f_i = \tfrac{1}{|\mathcal{B}|}\textstyle\sum_t
+        \mathbb{1}\bigl[i = \arg\max_j p_{t,j}\bigr],
+  \quad
+  P_i = \tfrac{1}{|\mathcal{B}|}\textstyle\sum_t p_{t,i},
+  \label{eq:aux}
+\end{equation}
+computed over the tokens $\mathcal{B}$ of a batch, averaged across
+layers, and added to the training loss with weight
+$\lambda_{\mathrm{bal}} = 0.01$. (In the hard-partition ablation,
+Eq.~\eqref{eq:aux} is computed \emph{within each pool} and averaged;
+the all-expert form would demand a uniform load that the masked
+routing cannot produce, penalizing that arm for its own
+architecture.)
+
+\paragraph{Parity.}
+Replacing Eq.~\eqref{eq:shared_router} with
+Eq.~\eqref{eq:permod_router} adds one bias-free $E \times d$ routing
+matrix per layer ($Ed$ parameters, ${\approx}10^{-3}$ of the layer)
+and changes neither the expert pool, the number of experts activated
+per token ($k$ of $E$), nor any other computation, so comparisons
+against the shared-router and hard-partition arms are at parameter
+and compute parity. At initialization the two routers are copies of
+the pretrained shared router, making the first optimization step
+identical to the shared-gate model's; they diverge only as their
+parts' gradients differ. We use $E = 4$, $k = 2$, $d_f = 3d$
+throughout.
+% ---------------------------------------------------------------
+% BibTeX entry expected by \cite{fedus2022switch}:
+% @article{fedus2022switch, title={Switch transformers: Scaling to
+%   trillion parameter models with simple and efficient sparsity},
+%   author={Fedus, William and Zoph, Barret and Shazeer, Noam},
+%   journal={JMLR}, volume={23}, number={120}, pages={1--39},
+%   year={2022}}
+% ---------------------------------------------------------------
