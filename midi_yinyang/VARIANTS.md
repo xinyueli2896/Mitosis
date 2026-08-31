@@ -263,6 +263,29 @@ checkpoint. Full rationale: the TERMINOLOGY note in
 genuinely graded corruption is now implemented as **A.4** (next
 section).
 
+### Model codename ledger (A-family, pinned 2026-08-31)
+
+A.2 through A.6 are MODELS — each is a trainable, checkpointable
+configuration, and the flags below are merely how the trainer builds
+it. Say "I trained A.5", never "I turned on the A.5 flag". All of them
+run on the melchord cp4 / v1.2 / per-part-gate defaults.
+
+| model | is | build (on top of the defaults) | dir marker | status |
+|---|---|---|---|---|
+| **A.2** | query slots always fully masked | `train_duet_block.sbatch` | — | early runs; query slots collapsed — superseded |
+| **A.3** | A.2 + commitment levels k | diffusion trainer, no extra flags | `K4mg` | trained (the `mg long` run) |
+| **A.4** | A.3 + token-level slot corruption | `TOKEN_LEVEL_MASK=1` | `mgtk` | trained; FAILED (dense/messy output) |
+| **A.5** | A.3 + query loss on corrupted positions only | `MASK_REVEALED_QUERY_LOSS=1` | `mgqm` | trained 2026-08-31 |
+| **A.6** | A.5 + 8 query pairs per forward | `+ QUERY_PAIRS=8` | `mgqmq8` | planned |
+| **A.4-fixed** | A.5 + token-level corruption, with the two A.4 bug fixes | `+ TOKEN_LEVEL_MASK=1` | `mgtkqm` | planned |
+
+The lineage forks at A.3: A.4 branched off with token-level corruption
+and failed; the main line continued A.3 → A.5 → A.6, each strictly
+containing the previous. A.4-fixed re-bases the token-corruption idea
+onto A.5, because without A.5's loss the copy shortcut is at maximum
+strength under token-level corruption and the idea is not cleanly
+testable.
+
 ### A.4 — token-level commitment (graded within-frame corruption, 2026-08-28)
 
 The naturalness fix that follows from the terminology note above: if
