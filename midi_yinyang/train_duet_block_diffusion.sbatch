@@ -345,8 +345,8 @@ if [[ "$TIME_ROPE_ALIGNED" == "1" ]]; then SCHEME_VERSION=v1.2; else SCHEME_VERS
 # Existing runs keep their old-style directories; to EXTEND one, pass
 # CKPT=<old dir>/last.ckpt explicitly.
 if [[ -z "${MODEL_ABBR:-}" ]]; then
-    if [[ "$TOKEN_LEVEL_MASK" == "1" && "$MASK_REVEALED_QUERY_LOSS" == "1" ]]; then FAM="A4f"
-    elif [[ "$TOKEN_LEVEL_MASK" == "1" ]]; then FAM="A4"
+    if [[ "$TOKEN_LEVEL_MASK" == "1" && "$MASK_REVEALED_QUERY_LOSS" == "1" ]]; then FAM="A4"
+    elif [[ "$TOKEN_LEVEL_MASK" == "1" ]]; then FAM="A4legacy"
     elif [[ "$MASK_REVEALED_QUERY_LOSS" == "1" && "$QUERY_PAIRS" != "1" ]]; then FAM="A6"
     elif [[ "$MASK_REVEALED_QUERY_LOSS" == "1" ]]; then FAM="A5"
     elif [[ "$QUERY_PAIRS" != "1" ]]; then FAM="A3q${QUERY_PAIRS}"

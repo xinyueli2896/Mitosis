@@ -1012,7 +1012,7 @@ if __name__ == '__main__':
     parser.add_argument('--model_name', type=str, default=None)
     parser.add_argument('--model_abbr', type=str, default=None,
                         help='Model abbreviation used in the run-dir name '
-                             '(A3/A4/A4f/A5/A6, arm-prefixed for '
+                             '(A3/A4/A5/A6, arm-prefixed for '
                              'departures from the per-part-gate default: '
                              'A2=shared router, D1=dense, D2=hard route). '
                              'Default: derived from the flags, so '
@@ -1234,9 +1234,11 @@ if __name__ == '__main__':
         non-default settings (K != 4; A.6 at Q != 8).
         """
         if a.token_level_mask and a.mask_revealed_query_loss:
-            fam = 'A4f'                        # A.4-fixed: A.5 + token corruption
+            fam = 'A4'                         # A.4 = A.5 + token corruption
         elif a.token_level_mask:
-            fam = 'A4'
+            fam = 'A4legacy'                   # deprecated: token corruption
+                                               # without A.5's loss -- the
+                                               # bugged first run's config
         elif a.mask_revealed_query_loss and a.query_pairs > 1:
             fam = 'A6'
         elif a.mask_revealed_query_loss:

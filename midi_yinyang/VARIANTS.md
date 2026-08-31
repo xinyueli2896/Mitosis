@@ -274,10 +274,16 @@ run on the melchord cp4 / v1.2 / per-part-gate defaults.
 |---|---|---|---|---|
 | **A.2** | query slots always fully masked | `train_duet_block.sbatch` | — | early runs; query slots collapsed — superseded |
 | **A.3** | A.2 + commitment levels k | diffusion trainer, no extra flags | `A3` | trained (legacy dir `K4mg...long`) |
-| **A.4** | A.3 + token-level slot corruption | `TOKEN_LEVEL_MASK=1` | `A4` | trained; FAILED (legacy dir `K4mgtk...long`) |
+| **A.4** | A.5 + token-level slot corruption (bug fixes included) | `TOKEN_LEVEL_MASK=1 MASK_REVEALED_QUERY_LOSS=1` | `A4` | first attempt (pre-fix, without A.5's loss) FAILED — legacy dir `K4mgtk...long`; retrain pending |
 | **A.5** | A.3 + query loss on corrupted positions only | `MASK_REVEALED_QUERY_LOSS=1` | `A5` | trained 2026-08-31 (legacy dir `K4mgqm...long`) |
-| **A.6** | A.5 + 8 query pairs per forward | `+ QUERY_PAIRS=8` | `A6` | planned |
-| **A.4f** (A.4-fixed) | A.5 + token-level corruption, with the two A.4 bug fixes | `+ TOKEN_LEVEL_MASK=1` | `A4f` | planned |
+| **A.6** | A.5 + 8 query pairs per forward | `MASK_REVEALED_QUERY_LOSS=1 QUERY_PAIRS=8` | `A6` | planned |
+
+There is ONE A.4. The bugged first implementation does not keep the
+name; A.4 *means* the corrected model — token-level corruption with the
+trained MASK row, the structural exemption, and A.5's loss underneath
+(without which the copy shortcut is at maximum strength and the idea is
+untestable). Token corruption without A.5's loss is a deprecated
+configuration and deliberately derives the ugly name `A4legacy`.
 
 **Run-dir naming (2026-08-31): the concatenated flag markers
 (`mg`/`tk`/`qm`/`qN`) are ABOLISHED.** A run dir now carries exactly one
@@ -291,12 +297,9 @@ suffix: `K8` for K≠4, `q4` for A.6 at Q≠8. Override with
 directories — to EXTEND one, pass `CKPT=<old dir>/last.ckpt`
 explicitly, because auto-resume now looks for the new-style name.
 
-The lineage forks at A.3: A.4 branched off with token-level corruption
-and failed; the main line continued A.3 → A.5 → A.6, each strictly
-containing the previous. A.4-fixed re-bases the token-corruption idea
-onto A.5, because without A.5's loss the copy shortcut is at maximum
-strength under token-level corruption and the idea is not cleanly
-testable.
+The main line is A.3 → A.5 → A.6, each strictly containing the
+previous; A.4 sits on that line too (it contains A.5), adding
+token-level corruption on top.
 
 ### A.4 — token-level commitment (graded within-frame corruption, 2026-08-28)
 
