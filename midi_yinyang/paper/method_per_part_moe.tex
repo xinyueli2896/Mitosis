@@ -4,6 +4,9 @@
 % "modality". Matches SimpleMoEFFN (cp_transformer_m2c_jointattn.py):
 % E=4 experts, top-k=2, routers bias-free, Switch aux at 0.01,
 % post-LN residual, gate_c seeded from gate_m at warm start.
+% Preamble requirements: amsmath, amssymb, and bbm (for \mathbbm{1}).
+% The ICASSP spconf template already loads the first two. If bbm is
+% unavailable, replace \mathbbm{1} with a plain \mathbf{1}.
 % ---------------------------------------------------------------
 \subsection{Role specialization via per-part expert routing}
 \label{sec:permod_moe}
@@ -107,7 +110,7 @@ Load is balanced with the standard auxiliary term
   = E \sum_{i=1}^{E} f_i\, P_i,
   \qquad
   f_i = \tfrac{1}{|\mathcal{B}|}\textstyle\sum_t
-        \mathbb{1}\bigl[i = \arg\max_j p_{t,j}\bigr],
+        \mathbbm{1}\bigl[i = \arg\max_j p_{t,j}\bigr],
   \quad
   P_i = \tfrac{1}{|\mathcal{B}|}\textstyle\sum_t p_{t,i},
   \label{eq:aux}
