@@ -534,10 +534,40 @@ tokens; the network never needs to copy. A.5 borrowed MaskGIT's loss
 without MaskGIT's canvas.
 
 **Falsifiable check** (before any conclusions): decode the A.5 ckpt at
-`A3_REFINE_STEPS=0` (pure AR, slots unused) vs `=4`. The AR stream
-trained identically to A.3's, so if 0 sounds fine and 4 sounds bad the
-damage is localised to the refinement contract — hypothesis confirmed.
+`A3_REFINE_STEPS=0` (pure AR, slots unused) vs `=4`. If 0 sounds fine
+and 4 sounds bad the damage is localised to the refinement contract.
 If BOTH sound bad, the hypothesis is wrong.
+
+**OUTCOME (2026-08-31): FALSIFIED. REFINE_STEPS=0 is also worse than
+A.3 by ear.** The damage is in training, not (only) the decode. The
+copy-path post-mortem above rested on a wrong premise: "the AR stream
+trained identically to A.3's" is false — the AR loss TERM is identical,
+but the query loss's gradient flows into the same shared backbone
+(global stack, local encoder/decoder, gates). Corrected suspects, in
+order:
+
+1. *Effective re-weighting (leading).* A.3's query loss averaged over
+   all non-pad positions, ~half of them free copies with near-zero CE
+   once learned; A.5 averages over only the hard, corrupted positions.
+   Same `query_loss_weight=1.0`, but the term's magnitude — and its
+   gradient share on the shared backbone — roughly doubled. The noisy
+   "predict a frame from past + partner draft" gradient at 2x share
+   can degrade the AR grammar itself. Checkable NOW in wandb:
+   `train_query_loss` of the A.5 run vs the A.3 run, and `val_ar_loss`
+   between the two (directly comparable — eval is identical).
+2. *Implementation bug.* The A.5 run launched UNAUDITED (the audit has
+   still never executed on-cluster). A sign-flipped keep mask would
+   train the copy positions ONLY — checkable in seconds:
+   `train_query_kept_frac` should read ~0.75; ~0.25 means inverted.
+3. *Unfinished run / ckpt choice* — confirm the inference ckpt's step
+   count vs the A.3 run's.
+
+If (1) holds, the honest summary is that A.5 changed two things at
+once: WHICH positions are scored and HOW MUCH the query term weighs.
+The controlled version would pair the keep-mask with
+`query_loss_weight` scaled down by the kept fraction. Whether that is
+worth a third run, given the paper scope, is a priority call — A.5
+stands as a recorded negative until then.
 
 **Consequences if confirmed.** (a) At frame level the A.3 objective
 stands; A.5-on-A.3 is a recorded negative. (b) The literature-coherent
