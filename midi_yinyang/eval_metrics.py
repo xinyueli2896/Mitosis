@@ -14,6 +14,21 @@ supporting diagnostics.
   H2 (inter-stream fit)
     * chord_tone_cov_delta  melody-note chord-tone coverage minus the
                             SAME statistic on the reference pair
+      ctnctr_delta          chord-tone/non-chord-tone ratio with the
+                            proper-passing-tone allowance (Yeh et al.
+                            2021), vs ref
+      pcs_delta             duration-weighted pitch consonance score
+                            (Yeh et al. 2021), vs ref
+      mctd_delta            duration-weighted melody-chord tonal
+                            distance in Harte centroid space (lower =
+                            closer), vs ref
+      coupling_delta        THE mechanism-sensitive one: coverage on
+                            the true pairing minus coverage with the
+                            chord track circularly shifted 2 bars.
+                            Generic all-purpose harmony scores ~0
+                            however consonant it is; streams that
+                            genuinely track each other score positive.
+                            Reported vs the reference pair's coupling.
       (drumnondrum: * onset_sync_delta -- nondrum onsets within +-1
        frame of a drum onset, minus reference rate)
   H1 (per-stream role & texture integrity)
@@ -253,6 +268,119 @@ def chord_tone_coverage(mel, chord):
     return hits / total if total else float('nan')
 
 
+def _melody_seq(mel):
+    """Ordered (frame, pitch) of the melody line: top note per onset frame."""
+    return [(f, max(ps)) for f, ps in enumerate(mel.onsets) if ps]
+
+
+def ctnctr(mel, chord):
+    """Chord-tone / non-chord-tone ratio (Yeh et al. 2021).
+
+    (n_chord_tones + n_proper_nonchord) / (n_chord_tones + n_nonchord),
+    where a non-chord tone is PROPER when the next melody note resolves
+    it by step (<= 2 semitones). Distinguishes passing tones from
+    genuine harmonic clashes, which plain coverage cannot.
+    """
+    seq = _melody_seq(mel)
+    n_c = n_n = n_p = 0
+    for i, (f, p) in enumerate(seq):
+        if not chord.sounding[f]:
+            continue
+        if p % 12 in chord.sounding[f]:
+            n_c += 1
+        else:
+            n_n += 1
+            if i + 1 < len(seq) and abs(seq[i + 1][1] - p) <= 2:
+                n_p += 1
+    denom = n_c + n_n
+    return (n_c + n_p) / denom if denom else float('nan')
+
+
+# Interval consonance (mod-12 distance melody-pc minus chord-pc):
+# unison/3rds/P5/6ths +1, perfect 4th 0, everything else -1.
+_PCS_SCORE = {0: 1.0, 3: 1.0, 4: 1.0, 7: 1.0, 8: 1.0, 9: 1.0, 5: 0.0}
+
+
+def pcs(mel, chord):
+    """Pitch consonance score (Yeh et al. 2021), duration-weighted.
+
+    Every (sounding melody pc, sounding chord pc) pair on every frame
+    contributes one consonance score; iterating frames IS the duration
+    weighting. Range [-1, 1], higher = more consonant.
+    """
+    total = w = 0.0
+    for f in range(mel.n_frames):
+        if not mel.sounding[f] or not chord.sounding[f]:
+            continue
+        for mp in mel.sounding[f]:
+            for cp in chord.sounding[f]:
+                total += _PCS_SCORE.get((mp - cp) % 12, -1.0)
+                w += 1.0
+    return total / w if w else float('nan')
+
+
+def _tonal_centroid(pcs_set):
+    """Harte (2006) 6-D tonal centroid of a pitch-class set.
+
+    Three circles -- fifths (r=1), minor thirds (r=1), major thirds
+    (r=0.5) -- averaged over the set's chroma.
+    """
+    v = np.zeros(6)
+    for pc in pcs_set:
+        v += np.array([
+            math.sin(pc * 7 * math.pi / 6), math.cos(pc * 7 * math.pi / 6),
+            math.sin(pc * 3 * math.pi / 2), math.cos(pc * 3 * math.pi / 2),
+            0.5 * math.sin(pc * 2 * math.pi / 3),
+            0.5 * math.cos(pc * 2 * math.pi / 3),
+        ])
+    return v / len(pcs_set)
+
+
+def mctd(mel, chord):
+    """Melody-chord tonal distance (Yeh et al. 2021), duration-weighted.
+
+    Per-frame Euclidean distance between the tonal centroids of the
+    sounding melody pcs and the sounding chord pcs, averaged over
+    frames where both sound. Lower = closer harmony; unlike coverage it
+    grades HOW far a clash is, not just whether one exists.
+    """
+    dists = []
+    for f in range(mel.n_frames):
+        if mel.sounding[f] and chord.sounding[f]:
+            dists.append(float(np.linalg.norm(
+                _tonal_centroid(mel.sounding[f])
+                - _tonal_centroid(chord.sounding[f]))))
+    return float(np.mean(dists)) if dists else float('nan')
+
+
+def _shift_stream(s, frames):
+    """Circularly shift a stream in time (the mismatched-pair control)."""
+    out = Stream([], 1.0, s.n_frames)
+    k = frames % max(s.n_frames, 1)
+    out.onsets = s.onsets[-k:] + s.onsets[:-k]
+    out.sounding = s.sounding[-k:] + s.sounding[:-k]
+    out.durations = s.durations
+    return out
+
+
+def harmonic_coupling(mel, chord, shift=None):
+    """Coverage on the TRUE pairing minus coverage on a 2-bar-shifted one.
+
+    Absolute consistency is gameable: a stream of all-purpose harmony
+    (or a melody of endless chord tones) scores high coverage against
+    ANY chord track. Coupling asks the question the query slots exist
+    to answer -- does the chord track fit THIS melody at THIS moment
+    better than the same music two bars away? Generic output scores
+    ~0; genuinely co-ordinated streams score positive.
+    """
+    shift = 2 * FRAMES_PER_BAR if shift is None else shift
+    true = chord_tone_coverage(mel, chord)
+    ctrl = chord_tone_coverage(mel, _shift_stream(chord, shift))
+    if math.isnan(true) or math.isnan(ctrl):
+        return float('nan')
+    return true - ctrl
+
+
 def onset_synchrony(lead, follow, window=1):
     """Fraction of follower onset frames within +-window of a leader onset."""
     lead_frames = set(lead.onset_frames())
@@ -267,11 +395,14 @@ def onset_synchrony(lead, follow, window=1):
 def h2_metrics(gen_a, gen_b, ref_a, ref_b, task):
     out = {}
     if task == 'melchord':
-        g = chord_tone_coverage(gen_a, gen_b)
-        r = chord_tone_coverage(ref_a, ref_b)
-        out['chord_tone_cov'] = g
-        out['chord_tone_cov_ref'] = r
-        out['chord_tone_cov_delta'] = g - r
+        for name, fn in (('chord_tone_cov', chord_tone_coverage),
+                         ('ctnctr', ctnctr), ('pcs', pcs), ('mctd', mctd),
+                         ('coupling', harmonic_coupling)):
+            g = fn(gen_a, gen_b)
+            r = fn(ref_a, ref_b)
+            out[name] = g
+            out[name + '_ref'] = r
+            out[name + '_delta'] = g - r
     else:
         g = onset_synchrony(gen_a, gen_b)
         r = onset_synchrony(ref_a, ref_b)
@@ -356,6 +487,10 @@ H_GROUPS = {
            'onset_grid_jsd_a', 'onset_grid_jsd_b',
            'duration_jsd_a', 'duration_jsd_b'],
     'H2': ['chord_tone_cov', 'chord_tone_cov_ref', 'chord_tone_cov_delta',
+           'ctnctr', 'ctnctr_ref', 'ctnctr_delta',
+           'pcs', 'pcs_ref', 'pcs_delta',
+           'mctd', 'mctd_ref', 'mctd_delta',
+           'coupling', 'coupling_ref', 'coupling_delta',
            'onset_sync', 'onset_sync_ref', 'onset_sync_delta'],
     'H1': ['survival_min', 'survival_a', 'survival_b', 'mel_poly_rate',
            'density_ratio_a', 'density_ratio_b',
@@ -389,6 +524,10 @@ STREAM_OF = {
     'duration_jsd_a': 'a', 'duration_jsd_b': 'b',
     'chord_tone_cov': None, 'chord_tone_cov_delta': None,
     'chord_tone_cov_ref': 'ref',
+    'ctnctr': None, 'ctnctr_delta': None, 'ctnctr_ref': 'ref',
+    'pcs': None, 'pcs_delta': None, 'pcs_ref': 'ref',
+    'mctd': None, 'mctd_delta': None, 'mctd_ref': 'ref',
+    'coupling': None, 'coupling_delta': None, 'coupling_ref': 'ref',
     'onset_sync': None, 'onset_sync_delta': None, 'onset_sync_ref': 'ref',
     'survival_min': None, 'survival_a': 'a', 'survival_b': 'b',
     'mel_poly_rate': 'a',
