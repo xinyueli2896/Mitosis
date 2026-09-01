@@ -78,10 +78,18 @@ def read_pop909_key(song_id, pop909_dirs):
             with open(f) as fh:
                 line = fh.readline().split()
             if len(line) >= 3:                    # start end key
-                key = line[2]                     # e.g. 'C:maj' / 'A:min'
-                m = re.match(r'([A-Ga-g][#b]?):?(maj|min)?', key)
+                key = line[2]                     # e.g. 'Gb:maj' / 'A:min'
+                m = re.match(r'([A-Ga-g])([#b]?):?(maj|min)?', key)
                 if m:
-                    return m.group(1).upper(), (m.group(2) or 'maj')
+                    # Uppercase the LETTER only ('Gb' must not become
+                    # 'GB'), then map flats to their sharp enharmonics
+                    # for chorderator's Key vocabulary.
+                    tonic = m.group(1).upper() + m.group(2)
+                    flat2sharp = {'Cb': 'B', 'Db': 'C#', 'Eb': 'D#',
+                                  'Fb': 'E', 'Gb': 'F#', 'Ab': 'G#',
+                                  'Bb': 'A#'}
+                    tonic = flat2sharp.get(tonic, tonic)
+                    return tonic, (m.group(3) or 'maj')
     return None
 
 
