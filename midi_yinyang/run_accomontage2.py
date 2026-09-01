@@ -169,6 +169,28 @@ def normalize_label(label, target_bars):
     return ''.join(f'{l}{n}' for l, n in snapped)
 
 
+def fallback_label(norm):
+    """Decompose every phrase longer than 8 bars into 8+remainder chunks.
+
+    chorderator's DP solver keeps only templates whose TOTAL length
+    exactly matches each phrase (DP.pick_templates); lengths 12/16/24/32
+    pass its input validation (Error 312) but are not guaranteed any
+    coverage in the shipped template library -- a phrase with zero
+    length-matching templates crashes the solver with
+    'max() arg is an empty sequence' (DP.py:133/153) after printing
+    'no matched length'. 4- and 8-bar phrases are the empirically
+    covered set, and every multiple of 4 decomposes into 8s + one 4.
+    """
+    out = []
+    for l, n in re.findall(r'([A-Za-z])(\d+)', norm):
+        n = int(n)
+        while n > 8:
+            out.append(f'{l}8')
+            n -= 8
+        out.append(f'{l}{n}')
+    return ''.join(out)
+
+
 def melody_bar_count(midi_path):
     import pretty_midi
     pm = pretty_midi.PrettyMIDI(midi_path)
@@ -221,6 +243,30 @@ def main():
         melodies = melodies[:args.limit]
     os.makedirs(args.out_dir, exist_ok=True)
 
+    def harmonize(mel_path, tonic, mode, seg, out_name):
+        """One full chorderator pass; every set_* re-issued so a retry
+        after a mid-generate crash starts from clean state."""
+        cdt.set_melody(mel_path)
+        cdt.set_meta(tonic=tonic,
+                     mode=('min' if mode.startswith('min') else 'maj'))
+        cdt.set_segmentation(seg)
+        cdt.set_note_shift(0)
+        cdt.set_output_style(cdt.Style.POP_STANDARD)
+        # We only need the harmonization (chord_gen.mid). The texture
+        # stage additionally loads phrase-donor "Reference Data" that
+        # the repo does not ship at the expected path (FileNotFoundError
+        # after chord retrieval, job 197256) -- and we would discard its
+        # output anyway. Ask for the chord-only task; fall back to the
+        # full pipeline only if this version rejects the task name.
+        try:
+            cdt.generate_save(out_name, task='chord', log=True, wav=False)
+        except Exception as te:                    # noqa: BLE001
+            if 'task' not in str(te).lower():
+                raise
+            print(f'  [task=chord rejected ({te}); running full pipeline]')
+            cdt.generate_save(out_name, task='chord_and_textured_chord',
+                              log=True, wav=False)
+
     ok, failed = [], []
     for fname in melodies:
         stem = os.path.splitext(fname)[0]
@@ -229,6 +275,10 @@ def main():
         mel_path = os.path.join(args.melody_dir, fname)
         out_name = os.path.join(args.out_dir, song_id)
         print(f'\n=== {song_id} ({fname}) ===', flush=True)
+        if os.path.isfile(os.path.join(out_name, 'chord_gen.mid')):
+            print('  SKIP (chord_gen.mid already exists)')
+            ok.append(song_id)
+            continue
         try:
             label = read_phrase_label(song_id, args.labels_dir)
             if not label:
@@ -248,29 +298,22 @@ def main():
             print(f'  melody  : {mb} bars')
             print(f'  key     : {tonic} {mode}  [{src}]')
 
-            cdt.set_melody(mel_path)
-            cdt.set_meta(tonic=tonic,
-                         mode=('min' if mode.startswith('min') else 'maj'))
-            cdt.set_segmentation(norm)
-            cdt.set_note_shift(0)
-            cdt.set_output_style(cdt.Style.POP_STANDARD)
-            # We only need the harmonization (chord_gen.mid). The
-            # texture stage additionally loads phrase-donor "Reference
-            # Data" that the repo does not ship at the expected path
-            # (FileNotFoundError after chord retrieval, job 197256) --
-            # and we would discard its output anyway. Ask for the
-            # chord-only task; fall back to the full pipeline only if
-            # this version rejects the task name.
             try:
-                cdt.generate_save(out_name, task='chord',
-                                  log=True, wav=False)
-            except Exception as te:                # noqa: BLE001
-                if 'task' not in str(te).lower():
+                harmonize(mel_path, tonic, mode, norm, out_name)
+            except ValueError as ve:
+                # DP.pick_templates returns [] for a phrase length with
+                # no template coverage (prints 'no matched length');
+                # the solver then dies on max()-of-empty. Retry once
+                # with every phrase decomposed to <=8 bars.
+                if 'empty sequence' not in str(ve):
                     raise
-                print(f'  [task=chord rejected ({te}); running full '
-                      f'pipeline]')
-                cdt.generate_save(out_name, task='chord_and_textured_chord',
-                                  log=True, wav=False)
+                fb = fallback_label(norm)
+                if fb == norm:
+                    raise
+                print(f'  [solver had no templates for a phrase length '
+                      f'in {norm}; retrying with {fb}]')
+                shutil.rmtree(out_name, ignore_errors=True)
+                harmonize(mel_path, tonic, mode, fb, out_name)
 
             produced = [p for p in os.listdir(out_name)
                         if p.endswith('.mid')] if os.path.isdir(out_name) else []
