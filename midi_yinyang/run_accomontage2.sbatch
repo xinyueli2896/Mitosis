@@ -54,6 +54,21 @@ echo "MELODY_DIR=$MELODY_DIR"
 echo "OUT_DIR=$OUT_DIR"
 echo "================================================================"
 
+# Key-annotation source: the FULL POP909 dataset clone. Used ONLY for
+# key_audio.txt -- its midis are not beat aligned and are never fed to
+# harmonization; melodies always come from MELODY_DIR (our aligned
+# split). Cloned here idempotently.
+P909="$MY/external/POP909-Dataset"
+if [[ ! -d "$P909/.git" ]]; then
+    git clone https://github.com/music-x-lab/POP909-Dataset "$P909" \
+        || echo "WARNING: POP909-Dataset clone failed; keys will be KS-estimated"
+fi
+if [[ -f "$P909/POP909/001/key_audio.txt" ]]; then
+    echo "[keys] key_audio.txt available (e.g. $(head -1 "$P909/POP909/001/key_audio.txt"))"
+else
+    echo "[keys] key_audio.txt NOT found in the clone; falling back to KS estimation"
+fi
+
 [[ -d "$AM/.venv" ]] || { echo "ERROR: run setup_accomontage2.sbatch first"; exit 1; }
 # shellcheck disable=SC1091
 source "$AM/.venv/bin/activate"
@@ -64,6 +79,7 @@ python "$MY/run_accomontage2.py" \
     --melody-dir "$MELODY_DIR" \
     --labels-dir "$MY/external/hierarchical-structure-analysis/POP909" \
     --out-dir "$OUT_DIR" \
+    --pop909-dirs "$P909/POP909" \
     --limit "$LIMIT"
 
 echo "================================================================"

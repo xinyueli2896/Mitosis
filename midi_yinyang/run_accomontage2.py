@@ -65,7 +65,13 @@ def ks_estimate_key(midi_path):
 
 
 def read_pop909_key(song_id, pop909_dirs):
-    """Return (tonic, mode) from a POP909 key annotation if one exists."""
+    """Return (tonic, mode) from a POP909 key annotation if one exists.
+
+    CONTRACT (registered with the user): the POP909-Dataset clone under
+    external/ is a KEY-ANNOTATION SOURCE ONLY. Its midis are NOT beat
+    aligned and must never be fed to harmonization -- melodies always
+    come from --melody-dir (our beat-aligned extracted split).
+    """
     for root in pop909_dirs:
         f = os.path.join(root, song_id, 'key_audio.txt')
         if os.path.isfile(f):
@@ -109,10 +115,11 @@ def main():
     ap.add_argument('--melody-dir', required=True)
     ap.add_argument('--labels-dir', required=True)
     ap.add_argument('--out-dir', required=True)
-    ap.add_argument('--pop909-dirs', nargs='*', default=[
-        os.path.expanduser('~/POP909-Dataset/POP909'),
-        'external/POP909-Dataset/POP909',
-    ])
+    ap.add_argument('--pop909-dirs', nargs='*', default=[],
+                    help='key_audio.txt sources ONLY (never melodies); '
+                         'the sbatch passes the external/ clone '
+                         'explicitly because the job runs from the '
+                         'accomontage2 repo root')
     ap.add_argument('--limit', type=int, default=0,
                     help='>0: smoke test on the first N songs only')
     args = ap.parse_args()
