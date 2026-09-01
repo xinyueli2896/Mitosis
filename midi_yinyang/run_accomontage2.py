@@ -198,6 +198,23 @@ def main():
 
     import chorderator as cdt
 
+    # UPSTREAM BUG SHIM (documented, their tree left unmodified):
+    # pipeline.py:65's with_texture=False branch calls
+    # __add_textures(output, do_add_textures=False) without the required
+    # positional `log` -- the no-texture path was never exercised
+    # upstream (TypeError, job at 18:08). In that path `log` is unused
+    # (the function just tempo-normalizes and combines melody+chords),
+    # so defaulting it to None is exact. Name-mangled attribute patch.
+    from chorderator.utils.pipeline import Pipeline
+    _orig_add_textures = Pipeline._Pipeline__add_textures
+
+    def _add_textures_fixed(self, output, log=None, melo=None,
+                            do_add_textures=True, **kw):
+        return _orig_add_textures(self, output, log, melo=melo,
+                                  do_add_textures=do_add_textures, **kw)
+
+    Pipeline._Pipeline__add_textures = _add_textures_fixed
+
     melodies = sorted(
         f for f in os.listdir(args.melody_dir) if f.lower().endswith('.mid'))
     if args.limit > 0:
