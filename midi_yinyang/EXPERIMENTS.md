@@ -129,6 +129,28 @@ MoE and it helped":
 If the final numbers move, preserve the two-part shape. It is what
 makes the claim falsifiable.
 
+### Decision 4 — E1 fields ONE system; A.3-A.6 are engineering, not content (2026-09-01)
+
+The A.3/A.4/A.5/A.6 series is internal exploration of the query-slot
+training recipe — pure engineering. None of it appears in the paper as
+an ablation. E1 co-generation fields ONE system: the best-performing
+(checkpoint, decode schedule) combo, and the Methods section describes
+that winner's recipe plainly as *the* training scheme (one paragraph,
+one D3PM/MaskGIT-practice citation, no variant names, no alternatives).
+
+Selection protocol (so "how did you choose?" has a clean answer):
+pick on DEV evidence — best-val CE (directly comparable across all
+four), a ~20-song co-generation decode at REFINE_STEPS 4 and 0, the
+eval-harness numbers on those, ears — then FREEZE the choice and run
+the full E1 against the baselines exactly once. Never select on the
+E1 test comparison itself.
+
+Distinct and still in: the decode-time mechanism ablation
+(REFINE_STEPS=0 vs 4 on the SAME final checkpoint, RQ4) — it ablates
+the same-instant-conditioning claim, not the recipe history. One row.
+
+The frozen winner gets recorded here when the bake-off concludes.
+
 ### Abstract draft (placeholders marked)
 
 Single paragraph, ICASSP register. ~195 words.
