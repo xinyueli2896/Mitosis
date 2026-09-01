@@ -86,7 +86,7 @@ print(f'[gpu] {torch.cuda.device_count()} visible; {torch.cuda.get_device_name(0
 # ---- 1. co-generation decodes, sequential ------------------------------
 MODELS=(A3 A4 A5 A6)
 declare -A CKPTS=(
-    [A3]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord_long_batch_8_schedule
+    [A3]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord_pop909_pop1k7_combined_long_batch_8_schedule
     [A4]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A4_melchord_long_batch_8_schedule
     [A5]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A5_melchord_long_batch_8_schedule
     [A6]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A6_melchord_long_batch_8_schedule
