@@ -403,20 +403,29 @@ measures continuation) is explicitly NOT released.** Trained on POP909.
 
 **Decisions (a)-(d), resolved:**
 
-- (a)/(b) **AccoMontage: OUT of this paper's tables.** No melchord arm
-  exists for it; its slot is the future accompaniment task (already
-  registered second-degree). It appears in related work only.
-- (c) **Unconditional protocol.** Since their prompted mode is not
-  released, the whole-song comparison is a separate UNCONDITIONAL row:
-  their cascade generates from scratch; OUR system also generates from
-  scratch (no prompt) for that row. The prompted-continuation rows
-  (ours vs S0/S1/S-scratch) stay a separate table block. Never mixed.
-  Hacking their cascade into a prompted mode is explicitly rejected —
-  misrepresentation risk exceeds the value.
-- (d) **Regenerate locally.** MIT license + released ckpts + the need
-  for budget parity and our-grid scoring make local generation the
-  defensible choice. Fallback if the released ckpt subset does not
-  cover levels 1-3: demo-page samples, clearly labeled as such.
+- (a)/(b) REVISED 2026-09-01: **AccoMontage2 is IN — as the
+  harmonization-row baseline.** AccoMontage2 (Yi, Hu, Zhao & Xia,
+  ISMIR 2022; repo github.com/billyblu2000/accomontage2, code+dataset
+  released) adds a harmonization module: given a lead MELODY it
+  generates a full-length chord progression (micro dissonance + meso
+  phrase-template + macro coherency losses), then accompaniment. It
+  cannot co-generate melody, so it enters a third, MELODY-GIVEN block:
+  our `mel2chord` mode vs AccoMontage2's harmonization, both fed the
+  same test melodies. The accompaniment task itself stays out
+  (second-degree); original AccoMontage (ISMIR 2021) stays related
+  work only.
+- (c) **Protocol = three blocks, each system in its native mode,
+  never mixed:** (i) prompted continuation — ours vs S0/S1/S-scratch;
+  (ii) unconditional — ours vs the whole-song cascade (its prompted
+  mode is not released; hacking its inpainting into one is rejected);
+  (iii) melody-given harmonization — ours (mel2chord) vs AccoMontage2.
+  Our one checkpoint serves all three blocks (co, unconditional co,
+  mel2chord are decode modes of the same model — worth one sentence in
+  the paper, since neither baseline can do that).
+- (d) **Regenerate locally** for both externals. Whole-song: MIT +
+  released ckpts. AccoMontage2: code+dataset released; verify it runs
+  headless (it ships a GUI — a scriptable path must exist or be
+  extracted). Fallbacks: demo/released samples, clearly labeled.
 
 **Integration tasks:**
 
@@ -435,6 +444,18 @@ measures continuation) is explicitly NOT released.** Trained on POP909.
   of each song, same window as ours.
 - **T5 ours-unconditional**: verify/enable prompt-free co generation
   in our inference (minimal seed), same 384-frame budget.
+- **T7 AccoMontage2 setup**: clone, deps, verify headless/scriptable
+  harmonization (GUI is the documented interface); check whether its
+  harmonizer needs phrase annotations for the input melody (its meso
+  loss is phrase-template based -- POP909's phrase-annotation dataset
+  covers our test songs if so).
+- **T8 harmonization row**: feed both systems the same POP909 test
+  melodies; convert AccoMontage2's chord output to our chord-track
+  midi layout; score with the harness's conditional machinery
+  (GIVEN_STREAM_BY_MODE already handles melody-given rows: chord-side
+  and inter-stream metrics only, melody rows excluded as copied
+  input). Contamination label as for the whole-song model (POP909-
+  trained).
 - **T6 eval-harness corpus-reference mode**: unconditional outputs
   have no paired reference song, so the *_ref/*_delta metrics need
   corpus-level reference statistics (distributions pooled over the
