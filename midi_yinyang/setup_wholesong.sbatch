@@ -70,32 +70,48 @@ else
     echo "[deps] no requirements file found; listing imports the scripts use:"
     grep -rhoE '^(import|from) [a-zA-Z0-9_]+' "$WS"/*.py 2>/dev/null | sort -u | head -30
 fi
-pip install --quiet gdown 2>/dev/null || true
+# Force a CURRENT gdown: job 196788 failed because an old gdown in the
+# venv rejected --fuzzy (the error went to the .err file). We now
+# upgrade explicitly, extract the bare file ID ourselves (works on any
+# gdown version), and show gdown's own output in this log.
+pip install -q --upgrade gdown || true
+echo "[deps] gdown version: $(gdown --version 2>&1 | head -1)"
 
 # ---- T1c: checkpoint download ------------------------------------------
 echo "----------------------------------------------------------------"
 echo "[ckpt] looking for the documented download pointers..."
-LINKFILES=$(find "$WS" -maxdepth 3 -iname '*download*' -type f)
-if [[ -n "$LINKFILES" ]]; then
-    for f in $LINKFILES; do
-        echo "[ckpt] ---- $f ----"
-        cat "$f"
-        # Auto-fetch any Google Drive links via gdown (folder or file).
-        grep -oE 'https://drive\.google\.com[^ )"]*' "$f" | while read -r url; do
-            echo "[ckpt] gdown: $url"
-            if [[ "$url" == *"/folders/"* ]]; then
-                gdown --folder --fuzzy -O "$WS/results_default" "$url" \
-                    || echo "[ckpt] WARNING: gdown folder fetch failed for $url"
-            else
-                gdown --fuzzy -O "$WS/" "$url" \
-                    || echo "[ckpt] WARNING: gdown fetch failed for $url"
-            fi
-        done
+# Each download_link.txt sits in the directory its payload belongs to
+# (pretrained_models/, results_default/, data/). data/ is training data
+# and is SKIPPED -- inference does not need it; remove the skip if a
+# later inference error proves otherwise.
+for f in $(find "$WS" -maxdepth 3 -iname '*download*' -type f); do
+    tgt=$(dirname "$f")
+    echo "[ckpt] ---- $f  (target: $tgt) ----"
+    cat "$f"; echo
+    if [[ "$(basename "$tgt")" == "data" ]]; then
+        echo "[ckpt] SKIPPED (training data; not needed for inference)"
+        continue
+    fi
+    grep -oE 'https://drive\.google\.com[^ )"[:space:]]*' "$f" | while read -r url; do
+        id=$(echo "$url" | sed -E 's#.*/d/([A-Za-z0-9_-]+).*#\1#')
+        if [[ "$id" == "$url" ]]; then
+            id=$(echo "$url" | grep -oE 'id=[A-Za-z0-9_-]+' | cut -d= -f2)
+        fi
+        echo "[ckpt] file id: $id"
+        out="$tgt/gdown_$id.bin"
+        if [[ -s "$out" ]]; then
+            echo "[ckpt] already downloaded: $out ($(du -h "$out" | cut -f1))"
+        else
+            gdown "$id" -O "$out" 2>&1 || { echo "[ckpt] FAILED for $id"; rm -f "$out"; continue; }
+        fi
+        # Unzip archives into the target directory.
+        case "$(file -b "$out" 2>/dev/null)" in
+            Zip*)  echo "[ckpt] unzipping into $tgt"; unzip -o -q "$out" -d "$tgt" ;;
+            gzip*) echo "[ckpt] untarring into $tgt"; tar xzf "$out" -C "$tgt" ;;
+            *)     echo "[ckpt] payload type: $(file -b "$out" 2>/dev/null)" ;;
+        esac
     done
-else
-    echo "[ckpt] no download-link file found in the tree; README instructions:"
-    find "$WS" -maxdepth 1 -iname 'readme*' -exec sed -n 1,60p {} \;
-fi
+done
 
 # ---- T2: coverage verdict ----------------------------------------------
 echo "================================================================"

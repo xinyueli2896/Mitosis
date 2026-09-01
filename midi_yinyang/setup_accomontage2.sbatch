@@ -111,10 +111,34 @@ echo "[data] bundled dataset/resources:"
 du -sh "$AM" 2>/dev/null
 find "$AM" -maxdepth 2 -type d | sed "s|$AM|.|" | head -25
 
+# ---- T8 staging: per-song phrase strings + tonic keys ------------------
+echo "----------------------------------------------------------------"
+echo "[T8] phrase annotations (Dai et al., same lab; the 'A8B8' format"
+echo "     AccoMontage2's set_segmentation expects, labels for all 909):"
+HSA="$EXT/hierarchical-structure-analysis"
+if [[ ! -d "$HSA/.git" ]]; then
+    git clone https://github.com/Dsqvival/hierarchical-structure-analysis "$HSA" \
+        || echo "[T8] WARNING: phrase-annotation clone failed"
+fi
+if [[ -d "$HSA" ]]; then
+    sample=$(find "$HSA" -name 'human_label*.txt' | head -1)
+    echo "[T8] sample label file: ${sample:-<none found>}"
+    [[ -n "$sample" ]] && { echo "[T8] contents:"; head -3 "$sample"; }
+    echo "[T8] labeled songs: $(find "$HSA" -name 'human_label*.txt' | wc -l) files"
+fi
+echo "[T8] tonic keys: POP909 ships per-song key annotations; checking"
+echo "     known checkout locations..."
+for loc in "$REPO_DIR/POP909-Dataset/POP909" "$HOME/POP909-Dataset/POP909" "$HOME/pop909/POP909"; do
+    if [[ -d "$loc/001" ]]; then
+        echo "[T8] found POP909 at $loc; song 001 files:"
+        ls "$loc/001"
+        break
+    fi
+done
+
 echo "================================================================"
 echo "VERDICT: if 'import chorderator' printed [ok] and generate/save"
-echo "functions listed above, the headless path (T8) is GO. Remaining"
-echo "per-song inputs: melody midi (we have), phrase segmentation"
-echo "string, tonic key -- stage POP909 phrase annotations next if the"
-echo "grep above confirms the segmentation string is mandatory."
+echo "functions listed above, the headless path (T8) is GO. The T8"
+echo "sections above report where the per-song phrase strings and keys"
+echo "will come from."
 echo "================================================================"
