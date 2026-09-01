@@ -454,8 +454,25 @@ measures continuation) is explicitly NOT released.** Trained on POP909.
   midi layout; score with the harness's conditional machinery
   (GIVEN_STREAM_BY_MODE already handles melody-given rows: chord-side
   and inter-stream metrics only, melody rows excluded as copied
-  input). Contamination label as for the whole-song model (POP909-
-  trained).
+  input).
+  **T8 status 2026-09-01: generation + conversion DONE (5/5 test
+  songs, `temp/accomontage2_pop909_eval/`).** Integration notes, all
+  uniformly applied and to be stated as baseline-interface
+  limitations: phrase labels snapped to chorderator's {4..32}
+  grid; on solver failure (a phrase length with zero library
+  templates: 'no matched length' -> max()-of-empty crash) the song is
+  retried once with phrases decomposed to <=8 bars (hit song 005);
+  chord-only task (its texture stage needs unshipped reference data
+  and is not scored anyway).
+  **Data-overlap audit (job 197554): the harmonization row is
+  POP909-clean.** The DP's retrieval space (`rep`, 537 representative
+  progressions) contains zero POP909-derived entries — all commercial
+  chord-pack sources — so no output can retrieve a test song's own
+  progression; the POP909-derived material in their repo feeds only
+  the texture stage we bypass. Contamination sentence is therefore
+  needed only for the whole-song model (POP909-trained; unconditional
+  corpus-level block; exposure favors the baseline, so reported gaps
+  are conservative).
 - **T6 eval-harness corpus-reference mode**: unconditional outputs
   have no paired reference song, so the *_ref/*_delta metrics need
   corpus-level reference statistics (distributions pooled over the
