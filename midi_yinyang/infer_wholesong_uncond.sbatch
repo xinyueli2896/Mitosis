@@ -101,8 +101,8 @@ python inference_whole_song.py --nsample "$NSAMPLE" --demo_dir "$DEMO_DIR"
 
 echo "================================================================"
 echo "Produced:"
-find "$DEMO_DIR" -name '*.mid' -newer "$WS/.venv" 2>/dev/null | tail -30 || true
-find "$DEMO_DIR" -maxdepth 1 -type d | tail -5
+ls -lt "$DEMO_DIR" | head -8
+find "$DEMO_DIR" -name '*.mid' | head -30
 echo "----------------------------------------------------------------"
 echo "Output midi track layout (from their output(), for the T4"
 echo "converter): ins0=melody, ins1=reduced chords, ins2=melody (dup),"
