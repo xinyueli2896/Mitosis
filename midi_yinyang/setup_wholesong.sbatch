@@ -12,6 +12,9 @@
 #     NOT needed (accompaniment is out of scope). The repo releases only
 #     a subset "sufficient for testing", so this verdict decides whether
 #     local regeneration works or we fall back to released samples.
+#     Also fetches the data/ payload: the prompted-continuation protocol
+#     (T3') encodes prompts with the authors' own data pipeline, which
+#     needs their processed POP909 data.
 #
 # The job is REPORT-ORIENTED: download failures do not kill it; every
 # step prints what it found so the log is the deliverable.
@@ -81,17 +84,15 @@ echo "[deps] gdown version: $(gdown --version 2>&1 | head -1)"
 echo "----------------------------------------------------------------"
 echo "[ckpt] looking for the documented download pointers..."
 # Each download_link.txt sits in the directory its payload belongs to
-# (pretrained_models/, results_default/, data/). data/ is training data
-# and is SKIPPED -- inference does not need it; remove the skip if a
-# later inference error proves otherwise.
+# (pretrained_models/, results_default/, data/). data/ WAS skipped when
+# only unconditional inference was planned; the prompted-continuation
+# protocol (2.6 T3', decision (c) rev. 2026-09-01) encodes our prompt
+# bars with THEIR data pipeline (read_pop909_data + tonal_reduction),
+# which reads the processed POP909 payload under data/ -- so fetch it.
 for f in $(find "$WS" -maxdepth 3 -iname '*download*' -type f); do
     tgt=$(dirname "$f")
     echo "[ckpt] ---- $f  (target: $tgt) ----"
     cat "$f"; echo
-    if [[ "$(basename "$tgt")" == "data" ]]; then
-        echo "[ckpt] SKIPPED (training data; not needed for inference)"
-        continue
-    fi
     grep -oE 'https://drive\.google\.com[^ )"[:space:]]*' "$f" | while read -r url; do
         id=$(echo "$url" | sed -E 's#.*/d/([A-Za-z0-9_-]+).*#\1#')
         if [[ "$id" == "$url" ]]; then

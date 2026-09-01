@@ -415,13 +415,37 @@ measures continuation) is explicitly NOT released.** Trained on POP909.
   (second-degree); original AccoMontage (ISMIR 2021) stays related
   work only.
 - (c) **Protocol = three blocks, each system in its native mode,
-  never mixed:** (i) prompted continuation — ours vs S0/S1/S-scratch;
-  (ii) unconditional — ours vs the whole-song cascade (its prompted
-  mode is not released; hacking its inpainting into one is rejected);
-  (iii) melody-given harmonization — ours (mel2chord) vs AccoMontage2.
+  never mixed:** (i) prompted continuation — ours vs S0/S1/S-scratch
+  AND the whole-song cascade (see rev. below); (ii) unconditional —
+  ours vs the whole-song cascade; (iii) melody-given harmonization —
+  ours (mel2chord) vs AccoMontage2.
   Our one checkpoint serves all three blocks (co, unconditional co,
   mel2chord are decode modes of the same model — worth one sentence in
   the paper, since neither baseline can do that).
+  **REVISED 2026-09-01 — whole-song enters block (i) too.** The
+  original rejection ("hacking its inpainting into continuation") was
+  based on the README's "prompted generation not released". Code
+  inspection shows continuation is IMPLEMENTED in the released
+  inference library, only unexposed: every level's `create_canvas`
+  takes `prompt=` (canvas written, mask=1 over the prompt region) and
+  the sampler's `generate` takes `orig_x`/`mask` as first-class
+  inpainting inputs — the segment loop already generates conditioned
+  on known regions; only the thin `WholeSongGeneration.main()` driver
+  hard-codes `prompt=None`. Enabling it = calling their functions with
+  the argument they accept, prompts encoded by THEIR data pipeline
+  (`read_pop909_data`, `tonal_reduction_algo`, `specify_form` with
+  ground-truth form+key). No custom sampling logic — fair adaptation,
+  disclosed in the paper as such. AccoMontage stays out of block (i):
+  nothing in that series models melody generation at all (capability
+  gap, not interface gap).
+  **Contamination note (block i/ii):** their POP909 split is
+  deterministic (seed=1234, 9:1); reproducing it puts our test songs
+  001/002/003/005 in their TRAIN set, 004 in their valid set (assumes
+  index i = song i+1; verify against their split.npz once data/ is
+  downloaded). For continuation, the ground-truth continuations of
+  four prompts are in their training data: if we match/beat them the
+  claim is maximally conservative; a loss on those four is
+  memorization-ambiguous. Report 004 separately as the clean point.
 - (d) **Regenerate locally** for both externals. Whole-song: MIT +
   released ckpts. AccoMontage2: code+dataset released; verify it runs
   headless (it ships a GUI — a scriptable path must exist or be
@@ -444,6 +468,15 @@ measures continuation) is explicitly NOT released.** Trained on POP909.
   of each song, same window as ours.
 - **T5 ours-unconditional**: verify/enable prompt-free co generation
   in our inference (minimal seed), same 384-frame budget.
+- **T3' whole-song PROMPTED continuation** (block (i) external; after
+  T2 GO + data/ payload): per test song — ground-truth form string
+  (Dai labels, same source we use) + key via `specify_form`; prompt
+  bars encoded to ctp/lsh languages with their data pipeline; run
+  ctp/lsh generation with `create_canvas(..., prompt=...)` (their
+  generation loop unchanged); export the lsh level; convert with the
+  T4 converter. Match our block-(i) prompt length; skip acc. Also
+  verify the split-contamination note against their shipped
+  split.npz.
 - **T7 AccoMontage2 setup**: clone, deps, verify headless/scriptable
   harmonization (GUI is the documented interface); check whether its
   harmonizer needs phrase annotations for the input melody (its meso
