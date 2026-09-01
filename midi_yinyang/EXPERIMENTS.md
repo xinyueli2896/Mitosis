@@ -353,13 +353,11 @@ RWC.
   the value of in-domain data; the S1→A.2 gap isolates the value of
   architectural stream separation.
 
-### 2.6 Planned external SOTA baselines — lead-sheet framing (SCOPING)
+### 2.6 External SOTA baseline — lead-sheet framing (PLANNED 2026-09-01)
 
-Status: **scoping only** — nothing downloaded, adapted, or run.
-Decision points for the two candidate systems are listed at the end.
-(Container access to arXiv is proxy-blocked, so citation details below
-are from memory and must be verified against the papers/repos before
-anything is claimed in writing.)
+Status: **planned** — decisions resolved, facts verified against the
+paper/repo (sources at the end of this section); integration tasks
+T1-T6 below, nothing downloaded or run yet.
 
 Our melchord co-generation IS lead-sheet generation (melody + chord
 jointly), which gives us a recognized task name and two natural
@@ -391,14 +389,60 @@ to our main corpus:
 4. *Decode budget parity*: sample counts, lengths and any cherry-pick
    policy matched to §4's frozen settings.
 
-**Decision points before work starts:** (a) which AccoMontage version
-is "the" baseline (original phrase-retrieval vs the later whole-song
-variants); (b) whether the accompaniment task (and hence Pop1K7 piano
-re-preprocessing) enters scope now or waits; (c) unconditional vs
-prompted protocol for the whole-song comparison; (d) whether baseline
-outputs are regenerated locally (needs their repos running in the
-cluster env) or taken from released samples (weaker, but zero
-integration risk).
+**Verified facts (2026-09-01).** Whole-song model: Wang, Min & Xia,
+"Whole-Song Hierarchical Generation of Symbolic Music Using Cascaded
+Diffusion Models," ICLR 2024. Four cascaded levels: Form -> Reduced
+Lead Sheet -> Lead Sheet -> Accompaniment; levels are image-diffusion
+models with scopes full-song(<=256 bars) / 32 bars / 8 bars / 8 bars;
+inference is quasi-autoregressive segment inpainting. Repo
+github.com/ZZWaang/whole-song-gen, MIT license, PARTIAL checkpoints
+released ("sufficient for testing"), inference via
+`inference_whole_song.py` with two modes: unconditional, and
+conditioned on a specified form+key. **Prompted generation (first-N-
+measures continuation) is explicitly NOT released.** Trained on POP909.
+
+**Decisions (a)-(d), resolved:**
+
+- (a)/(b) **AccoMontage: OUT of this paper's tables.** No melchord arm
+  exists for it; its slot is the future accompaniment task (already
+  registered second-degree). It appears in related work only.
+- (c) **Unconditional protocol.** Since their prompted mode is not
+  released, the whole-song comparison is a separate UNCONDITIONAL row:
+  their cascade generates from scratch; OUR system also generates from
+  scratch (no prompt) for that row. The prompted-continuation rows
+  (ours vs S0/S1/S-scratch) stay a separate table block. Never mixed.
+  Hacking their cascade into a prompted mode is explicitly rejected —
+  misrepresentation risk exceeds the value.
+- (d) **Regenerate locally.** MIT license + released ckpts + the need
+  for budget parity and our-grid scoring make local generation the
+  defensible choice. Fallback if the released ckpt subset does not
+  cover levels 1-3: demo-page samples, clearly labeled as such.
+
+**Integration tasks:**
+
+- **T1 setup** (CPU sbatch): clone into `external/whole_song_gen`,
+  resolve deps (own env if the mitosis env clashes), pull ckpts via
+  the repo's download_link.txt.
+- **T2 coverage check**: confirm the released ckpts include levels
+  1-3 (Form, Reduced LS, Lead Sheet). We do NOT need level 4
+  (accompaniment). If missing -> (d) fallback.
+- **T3 generate** (GPU sbatch): N unconditional songs matching Sec. 4's
+  frozen sample budget; determine their output format and export to
+  MIDI if the repo does not already.
+- **T4 convert**: `convert_wholesong_outputs.py` -> split melody/chord
+  midi on our 16th-note 4/4 grid (they are beat-quantized 4/4:
+  bookkeeping, not resampling). Score the first 384 frames (24 bars)
+  of each song, same window as ours.
+- **T5 ours-unconditional**: verify/enable prompt-free co generation
+  in our inference (minimal seed), same 384-frame budget.
+- **T6 eval-harness corpus-reference mode**: unconditional outputs
+  have no paired reference song, so the *_ref/*_delta metrics need
+  corpus-level reference statistics (distributions pooled over the
+  POP909 test set) instead of per-song pairs. coupling / ctnctr / pcs
+  / mctd absolutes are intra-output and need no change. Also run
+  structure_metrics on both systems -- their form stage should win
+  long-term structure, and reporting that honestly motivates the
+  future-work paragraph.
 
 ### 2.7 Tabled: non-aligned modalities (second-degree)
 
