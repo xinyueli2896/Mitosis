@@ -73,8 +73,12 @@ fi
 # shellcheck disable=SC1091
 source "$AM/.venv/bin/activate"
 
-# chorderator resolves its bundled resources relative to the repo root.
+# chorderator resolves its bundled resources relative to the repo root,
+# AND it is repo-local code (not pip-installed): running our driver by
+# absolute path puts the driver's directory on sys.path instead of the
+# cwd, so the repo root must be on PYTHONPATH explicitly.
 cd "$AM"
+export PYTHONPATH="$AM${PYTHONPATH:+:$PYTHONPATH}"
 python "$MY/run_accomontage2.py" \
     --melody-dir "$MELODY_DIR" \
     --labels-dir "$MY/external/hierarchical-structure-analysis/POP909" \
