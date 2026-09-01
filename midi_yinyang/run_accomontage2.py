@@ -105,6 +105,70 @@ def label_bar_count(label):
     return sum(int(n) for n in re.findall(r'[A-Za-z](\d+)', label))
 
 
+def normalize_label(label, target_bars):
+    """Snap a human phrase label to chorderator's supported grid.
+
+    chorderator (Error 312) accepts phrase lengths {4, 8, 12, 16, 24,
+    32} ONLY -- all multiples of 4 -- while the human labels carry
+    fragments like B9/X5/o3. Exact preservation is impossible, so:
+
+      1. uppercase letters (the tool's alphabet is case-blind in the
+         demo; variant markers like 'b' merge with their parent);
+      2. fold any fragment shorter than 4 bars into its left neighbor
+         (the leading intro folds right);
+      3. snap every length to the nearest multiple of 4 (floor 4) and
+         split anything over 32 into 16-bar chunks;
+      4. adjust +-4 on the largest/last segments until the total equals
+         the melody's bar count rounded down to a multiple of 4.
+
+    This is an interface limitation of the BASELINE, noted as such in
+    the paper; the normalized string is logged next to the raw one.
+    """
+    segs = [[l.upper(), int(n)]
+            for l, n in re.findall(r'([A-Za-z])(\d+)', label)]
+    if not segs:
+        return None
+    # fold <4 fragments
+    folded = []
+    for l, n in segs:
+        if n < 4 and folded:
+            folded[-1][1] += n
+        elif n < 4:
+            folded.append([l, n])          # leading fragment: fold right
+        else:
+            folded.append([l, n])
+    if len(folded) > 1 and folded[0][1] < 4:
+        folded[1][1] += folded[0][1]
+        folded = folded[1:]
+    # snap to multiples of 4, split >32
+    snapped = []
+    for l, n in folded:
+        n = max(4, 4 * round(n / 4))
+        while n > 32:
+            snapped.append([l, 16])
+            n -= 16
+        snapped.append([l, max(4, n)])
+    # match the total to the melody
+    target = max(8, 4 * (target_bars // 4))
+    total = sum(n for _, n in snapped)
+    while total > target:
+        cand = max((s for s in snapped if s[1] > 4),
+                   key=lambda s: s[1], default=None)
+        if cand is None:
+            snapped.pop()
+        else:
+            cand[1] -= 4
+        total = sum(n for _, n in snapped)
+    while total < target:
+        cand = next((s for s in reversed(snapped) if s[1] < 32), None)
+        if cand is None:
+            snapped.append([snapped[-1][0], 4])
+        else:
+            cand[1] += 4
+        total = sum(n for _, n in snapped)
+    return ''.join(f'{l}{n}' for l, n in snapped)
+
+
 def melody_bar_count(midi_path):
     import pretty_midi
     pm = pretty_midi.PrettyMIDI(midi_path)
@@ -159,17 +223,18 @@ def main():
                 src = 'KS-estimated'
             tonic, mode = key
             lb, mb = label_bar_count(label), melody_bar_count(mel_path)
+            norm = normalize_label(label, mb)
+            if not norm:
+                raise RuntimeError(f'unparseable label {label!r}')
             print(f'  label   : {label}  ({lb} bars)')
+            print(f'  normal  : {norm}  ({label_bar_count(norm)} bars)')
             print(f'  melody  : {mb} bars')
             print(f'  key     : {tonic} {mode}  [{src}]')
-            if abs(lb - mb) > 2:
-                print(f'  WARNING: bar-count mismatch (label {lb} vs '
-                      f'melody {mb}) -- alignment may be off')
 
             cdt.set_melody(mel_path)
             cdt.set_meta(tonic=tonic,
                          mode=('min' if mode.startswith('min') else 'maj'))
-            cdt.set_segmentation(label)
+            cdt.set_segmentation(norm)
             cdt.set_note_shift(0)
             cdt.set_output_style(cdt.Style.POP_STANDARD)
             cdt.generate_save(out_name, task='chord_and_textured_chord',
