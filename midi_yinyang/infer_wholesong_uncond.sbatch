@@ -67,6 +67,8 @@ source "$WS/.venv/bin/activate"
 # e.g. results_default/results_default/frm---; the code hard-codes the
 # flat layout (get_model_path('results_default/frm---/v-default'),
 # PROJECT/pretrained_models/*.pt, PROJECT/data/pop909_split/split.npz).
+shopt -s dotglob   # the zips carry dotfiles (.DS_Store & co.); a bare *
+                   # misses them and the rmdir below then fails
 for d in pretrained_models results_default data; do
     if [[ -d "$WS/$d/$d" ]]; then
         echo "[layout] flattening $d/$d -> $d"
@@ -74,6 +76,7 @@ for d in pretrained_models results_default data; do
         rmdir "$WS/$d/$d"
     fi
 done
+shopt -u dotglob
 echo "[layout] results_default now holds: $(ls "$WS/results_default" | tr '\n' ' ')"
 
 # ---- contamination check against their SHIPPED split -------------------
