@@ -237,8 +237,23 @@ def main():
             cdt.set_segmentation(norm)
             cdt.set_note_shift(0)
             cdt.set_output_style(cdt.Style.POP_STANDARD)
-            cdt.generate_save(out_name, task='chord_and_textured_chord',
-                              log=True, wav=False)
+            # We only need the harmonization (chord_gen.mid). The
+            # texture stage additionally loads phrase-donor "Reference
+            # Data" that the repo does not ship at the expected path
+            # (FileNotFoundError after chord retrieval, job 197256) --
+            # and we would discard its output anyway. Ask for the
+            # chord-only task; fall back to the full pipeline only if
+            # this version rejects the task name.
+            try:
+                cdt.generate_save(out_name, task='chord',
+                                  log=True, wav=False)
+            except Exception as te:                # noqa: BLE001
+                if 'task' not in str(te).lower():
+                    raise
+                print(f'  [task=chord rejected ({te}); running full '
+                      f'pipeline]')
+                cdt.generate_save(out_name, task='chord_and_textured_chord',
+                                  log=True, wav=False)
 
             produced = [p for p in os.listdir(out_name)
                         if p.endswith('.mid')] if os.path.isdir(out_name) else []
@@ -247,7 +262,8 @@ def main():
             print(f'  OK -> {out_name}: {sorted(produced)}')
             ok.append(song_id)
         except Exception as e:                    # noqa: BLE001
-            print(f'  FAILED: {e!r}')
+            fn = getattr(e, 'filename', None)
+            print(f'  FAILED: {e!r}{f"  (file: {fn})" if fn else ""}')
             traceback.print_exc(limit=3)
             failed.append((song_id, repr(e)))
             shutil.rmtree(out_name, ignore_errors=True)
