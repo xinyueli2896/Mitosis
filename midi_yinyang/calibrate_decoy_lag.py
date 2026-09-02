@@ -42,6 +42,9 @@ from eval_metrics import (
 LAGS = [1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 32, 40, 48, 64, 96, 128, 192, 256]
 N_RANDOM = 8          # random draws for the floor estimate
 MIN_FRAMES = 512      # skip songs shorter than this (32 bars)
+MAX_FRAMES = 8192     # cap the grid (512 bars): one corrupt note end or
+                      # bogus tempo otherwise inflates n_frames into the
+                      # hundreds of millions and OOMs the job (202260)
 RNG_SEED = 1234
 
 
@@ -57,6 +60,7 @@ def load_pair(mel_path, chord_path):
         if not notes:
             return None
         n = int(math.ceil(max(nt.end for nt in notes) / step)) + 1
+        n = min(n, MAX_FRAMES)
         n_frames = n if n_frames is None else min(n_frames, n)
         streams.append((notes, step))
     if n_frames < MIN_FRAMES:
@@ -94,8 +98,13 @@ def main():
     cov0_all, floor_all = [], []
     used = skipped = 0
     for stem in stems:
-        pair = load_pair(os.path.join(args.melody_dir, mel_files[stem]),
-                         os.path.join(args.chord_dir, chord_files[stem]))
+        try:
+            pair = load_pair(os.path.join(args.melody_dir, mel_files[stem]),
+                             os.path.join(args.chord_dir, chord_files[stem]))
+        except Exception as e:                    # noqa: BLE001
+            print(f'  [skip] {stem}: {e!r}')
+            skipped += 1
+            continue
         if pair is None:
             skipped += 1
             continue
