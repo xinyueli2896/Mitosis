@@ -1,8 +1,10 @@
 #!/bin/bash
 # SLURM (GPU): query-slot ablation, ONE JOB -- co-generation decodes for
-# A3/A4/A5/A6 on the POP909 test split, then the quantitative
-# melody-chord consistency scoring, all in a single allocation (the
-# 5-job chain version hit QOSMaxSubmitJobPerUserLimit).
+# A1 (intra-cross-attn, NO query slots: the control) and A3/A4/A5/A6 on
+# the POP909 test split, then the quantitative melody-chord consistency
+# scoring, all in a single allocation (the multi-job chain version hit
+# QOSMaxSubmitJobPerUserLimit). Tables: vs A3 (variant-level) and vs A1
+# (design-level: do query slots help at all?).
 #
 # Per model: co mode, 6-bar prompt (96 frames), 416 total frames,
 # 3 samples/song, identical decode schedule (REFINE 4, temp 0.9,
@@ -84,6 +86,30 @@ print(f'[gpu] {torch.cuda.device_count()} visible; {torch.cuda.get_device_name(0
 "
 
 # ---- 1. co-generation decodes, sequential ------------------------------
+# A1 first: intra-cross-attn, NO query slots at all -- the control the
+# whole query-slot line is measured against. Different inference script,
+# same decode knobs and output layout.
+A1_CKPT=ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_melchord_cp4tar_batch_8_schedule
+A1_OUT=temp/bakeoff/A1_co
+echo "----------------------------------------------------------------"
+if [[ "$FORCE" != "1" && -f "$A1_OUT/.done" ]]; then
+    echo "[A1] SKIP (marker $A1_OUT/.done present)"
+else
+    [[ -d "$A1_CKPT" ]] || { echo "ERROR: ckpt dir $A1_CKPT not found"; exit 1; }
+    echo "[A1] decoding from $A1_CKPT/ -> $A1_OUT"
+    python cp_transformer_m2c_intra_cross_attn_combined.py \
+        --ckpt "$A1_CKPT/" \
+        --mel-folder "$MEL_FOLDER" --chord-folder "$CHORD_FOLDER" \
+        --output-dir "$A1_OUT" \
+        --modes co \
+        --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
+        --temperature 1.0 --n-samples "$N_SAMPLES" \
+        --max-polyphony 4 \
+        --model-size large --moe-num-experts 4 --moe-topk 2
+    touch "$A1_OUT/.done"
+    echo "[A1] done"
+fi
+
 MODELS=(A3 A4 A5 A6)
 declare -A CKPTS=(
     [A3]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord_pop909_pop1k7_combined_long_batch_8_schedule
@@ -134,6 +160,7 @@ TABLE=results/queryablation_table.md
 
 echo "--- building manifest ---"
 python build_eval_manifest.py \
+    --source "A1:duet_multi:temp/bakeoff/A1_co" \
     --source "A3:duet_multi:temp/bakeoff/A3_co" \
     --source "A4:duet_multi:temp/bakeoff/A4_co" \
     --source "A5:duet_multi:temp/bakeoff/A5_co" \
@@ -155,9 +182,20 @@ python aggregate_eval_results.py --csv "$METRICS" \
     --task melchord --baseline "$BASELINE" --mode co \
     --out-md "${TABLE%.md}_twosided.md"
 
+# Second baseline: A1 = no query slots. "Does ANY query-slot design
+# improve melody-chord consistency over plain intra-cross-attn?" is the
+# design-level question; vs-A3 above is the variant-level one.
+echo "--- comparison table (paired Wilcoxon vs A1, no-query-slot control) ---"
+python aggregate_eval_results.py --csv "$METRICS" \
+    --task melchord --baseline A1 --mode co \
+    --one-sided --complete-cases --out-md "${TABLE%.md}_vsA1.md"
+
 echo "================================================================"
-echo "RESULT TABLE (one-sided, complete cases):"
+echo "RESULT TABLE (one-sided, complete cases, vs $BASELINE):"
 cat "$TABLE"
+echo "================================================================"
+echo "RESULT TABLE (one-sided, complete cases, vs A1 control):"
+cat "${TABLE%.md}_vsA1.md"
 echo "================================================================"
 echo "Listening midis: temp/bakeoff/<model>_co/<song>/co/sample_<i>_temp*.mid"
 echo "Focus rows for the query-slot hypothesis: harmonic_coupling,"
