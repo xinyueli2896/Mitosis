@@ -152,9 +152,61 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
     def __init__(self, *args, diffusion_K=4, slot_rope_aligned=True,
                  time_rope_aligned=False, self_cond_prob=0.5,
                  token_level_mask=False, mask_revealed_query_loss=False,
-                 query_pairs=1, **kwargs):
+                 query_pairs=1, decoy_corruption=False,
+                 decoy_mask_residual=0.25, decoy_lag_bins=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
+        # --- A.7: lag-graded DECOY corruption -------------------------
+        # The corruption states the refinement loop actually visits are
+        # COMPLETE frames that fail to match their partner (every draft
+        # comes out of the AR chain fluent and self-contained; what is
+        # missing is coordination) -- not frames with notes missing.
+        # A.7 therefore corrupts a slot by replacing its frame with the
+        # SAME stream's frame from t +- lag(k) in the training window:
+        # k=0 is the true frame; k=1..K-1 draw the lag from bins of
+        # rising width (calibrated so k is equally spaced in MEASURED
+        # harmonic decoherence -- see calibrate_decoy_lag.py); k=K
+        # draws a uniform lag over the window, plus a residual
+        # probability of the plain mask embedding so the no-information
+        # endpoint stays trained (seedless decode; A.2 warm-start
+        # compat). Every corrupted state is a real, musically
+        # self-contained frame; what k grades is how UNRECONCILED it is
+        # with the partner at this instant. The query target stays the
+        # true frame, so the trained operation at every k is revision
+        # toward coordination -- exactly the decode loop's job.
+        # TRAINING-ONLY branch: validation (and any eval-mode forward)
+        # falls through to the frame-level mask path, whose k=K
+        # fully-masked pin keeps val_loss computed identically across
+        # A.3/A.4/A.5/A.6/A.7.
+        self.register_buffer(
+            'decoy_corruption_flag',
+            torch.tensor(1 if decoy_corruption else 0, dtype=torch.long),
+        )
+        self.decoy_mask_residual = float(decoy_mask_residual)
+        if decoy_lag_bins is None:
+            # Placeholder defaults for K=4 pending calibration; the
+            # sbatch passes the calibrated bins explicitly.
+            decoy_lag_bins = [(1, 4), (8, 16), (24, 48)]
+        self.decoy_lag_bins = [tuple(int(v) for v in b)
+                               for b in decoy_lag_bins]
+        if decoy_corruption:
+            if len(self.decoy_lag_bins) != self.diffusion_K - 1:
+                raise ValueError(
+                    f'decoy_lag_bins needs exactly K-1='
+                    f'{self.diffusion_K - 1} (lo, hi) pairs for '
+                    f'k=1..K-1 (k=0 is the true frame, k=K is a '
+                    f'uniform lag), got {self.decoy_lag_bins}')
+            if token_level_mask:
+                raise ValueError('decoy_corruption and token_level_mask '
+                                 'are mutually exclusive corruption '
+                                 'kernels')
+            if mask_revealed_query_loss:
+                raise ValueError(
+                    'decoy_corruption requires the full-frame query '
+                    'loss: corrupted content is a WRONG frame, so '
+                    'scoring every position is where the revision '
+                    'signal lives (the keep-mask rationale does not '
+                    'apply)')
         # --- A.4: token-level masking inside the frame ----------------
         # Restores genuinely graded corruption: at commitment level k,
         # each TOKEN of the target frame is masked independently with
@@ -278,6 +330,77 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
     @property
     def mask_revealed_query_loss(self):
         return bool(self.mask_revealed_query_loss_flag.item())
+
+    @property
+    def decoy_corruption(self):
+        return bool(self.decoy_corruption_flag.item())
+
+    def _draw_decoy_lags(self, k_t, T_full):
+        """A.7: per-item signed lag for one slot. Split out so the audit
+        can exercise the real draw.
+
+        k=0 -> 0 (the true frame). k in 1..K-1 -> magnitude uniform in
+        decoy_lag_bins[k-1] (inclusive), random sign. k=K -> magnitude
+        uniform in [1, T_full-1] (any other frame of the window).
+        Returns LongTensor[B]; the caller wraps t+lag modulo T_full.
+        """
+        B = k_t.shape[0]
+        device = k_t.device
+        lags = torch.zeros(B, dtype=torch.long, device=device)
+        K = self.diffusion_K
+        for level in range(1, K + 1):
+            sel = k_t == level
+            n = int(sel.sum())
+            if n == 0:
+                continue
+            if level == K:
+                hi = max(T_full - 1, 1)
+                mag = torch.randint(1, hi + 1, (n,), device=device)
+            else:
+                lo, hi = self.decoy_lag_bins[level - 1]
+                mag = torch.randint(lo, hi + 1, (n,), device=device)
+            sign = torch.where(
+                torch.rand(n, device=device) < 0.5,
+                torch.full((n,), -1, dtype=torch.long, device=device),
+                torch.full((n,), 1, dtype=torch.long, device=device))
+            lags[sel] = mag * sign
+        return lags
+
+    def _decoy_frame_slot(self, h, t_j, k_t, sc_mask, sc_emb, mod,
+                          T_full, mask_emb):
+        """A.7 slot construction (frame-level decoy; k-embedding is
+        added by the caller, mirroring _token_level_slot's contract).
+
+        content = the SAME stream's frame at (t_j + lag(k)) mod T_full;
+        the self-conditioning override then replaces content where its
+        mask is set (the model's own draft is a decoy of the model's
+        own error distribution); finally, at k=K a residual coin sends
+        decoy_mask_residual of the items to the plain mask embedding so
+        the no-information endpoint stays trained.
+
+        Returns (slot [B, 1, H], revealed [B] bool). revealed is True
+        only where the slot verbatim carries its ground-truth target
+        (k=0 and no self-conditioning override).
+        """
+        B, _, H = h.shape
+        lags = self._draw_decoy_lags(k_t, T_full)
+        idx = (lags + int(t_j)) % T_full
+        pos = 2 * idx + mod                              # stream parity
+        content = torch.gather(
+            h, 1, pos.view(B, 1, 1).expand(-1, 1, H))    # [B, 1, H]
+        is_sc = torch.zeros(B, dtype=torch.bool, device=h.device) \
+            if sc_mask is None else sc_mask
+        if sc_mask is not None and sc_emb is not None:
+            content = torch.where(
+                sc_mask.view(B, 1, 1), sc_emb.to(dtype=content.dtype),
+                content)
+        resid = (k_t == self.diffusion_K) & (
+            torch.rand(B, device=h.device) < self.decoy_mask_residual)
+        slot = torch.where(
+            resid.view(B, 1, 1), mask_emb.to(dtype=content.dtype),
+            content)
+        revealed = (k_t == 0) & (~is_sc)
+        return slot, revealed
 
     def on_load_checkpoint(self, checkpoint):
         """Let a checkpoint that predates a scheme buffer still resume.
@@ -599,7 +722,24 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         for j, t_j in enumerate(tq):
             sc_m_j = None if sc_mask_m is None else sc_mask_m[:, j]
             sc_c_j = None if sc_mask_c is None else sc_mask_c[:, j]
-            if self.token_level_mask:
+            if self.decoy_corruption and self.training:
+                # A.7: lag-graded decoy corruption (see __init__ note).
+                # Training-only: eval falls through to the mask path
+                # below, whose k=K pin keeps val_loss comparable across
+                # the whole A-family.
+                slot_m, rev1_m = self._decoy_frame_slot(
+                    h, t_j, k_m_t[:, j], sc_m_j,
+                    self._sc_emb_slice(sc_emb_m, j), 0, T_full,
+                    mask_m_expand)
+                slot_c, rev1_c = self._decoy_frame_slot(
+                    h, t_j, k_c_t[:, j], sc_c_j,
+                    self._sc_emb_slice(sc_emb_c, j), 1, T_full,
+                    mask_c_expand)
+                slot_m = slot_m.to(h.dtype)
+                slot_c = slot_c.to(h.dtype)
+                rev_m = rev1_m.view(batch_size, 1).expand(-1, subseq_len)
+                rev_c = rev1_c.view(batch_size, 1).expand(-1, subseq_len)
+            elif self.token_level_mask:
                 # A.4: per-token absorbing corruption of the target
                 # frame, locally encoded -- intermediate k are genuinely
                 # partial frames. Self-conditioning at the TOKEN level.
@@ -1063,6 +1203,22 @@ if __name__ == '__main__':
     parser.add_argument('--dump_samples_every_n_epochs', type=int, default=None)
     parser.add_argument('--max_polyphony', type=int, default=16)
     parser.add_argument('--gate_init_bias', type=float, default=-10.0)
+    parser.add_argument('--decoy_corruption', type=int, default=0,
+                        help='A.7: corrupt query slots with the same '
+                             'stream\'s frame from t +- lag(k) instead '
+                             'of the mask embedding -- complete, '
+                             'self-contained frames whose harmonic '
+                             'agreement with the partner decays with k.')
+    parser.add_argument('--decoy_mask_residual', type=float, default=0.25,
+                        help='A.7: probability that a k=K slot draws the '
+                             'plain mask embedding instead of a random-'
+                             'lag decoy, keeping the no-information '
+                             'endpoint trained.')
+    parser.add_argument('--decoy_lag_bins', type=str, default='1:4,8:16,24:48',
+                        help='A.7: K-1 comma-separated lo:hi lag bins '
+                             '(frames, inclusive) for k=1..K-1; k=K is '
+                             'always a uniform lag. Set from '
+                             'calibrate_decoy_lag.py\'s [bins] block.')
     parser.add_argument('--query_loss_weight', type=float, default=1.0,
                         help='Weight on the query-slot CE term. Lower it '
                              'if the AR stream regresses while the model is '
@@ -1233,7 +1389,12 @@ if __name__ == '__main__':
         auto-resume into each other. Suffixes appear only for
         non-default settings (K != 4; A.6 at Q != 8).
         """
-        if a.token_level_mask and a.mask_revealed_query_loss:
+        if a.decoy_corruption:
+            fam = 'A7'                         # A.7 = A.3 scaffold +
+                                               # lag-graded decoy corruption
+                                               # (init rejects combining it
+                                               # with tk/qm flags)
+        elif a.token_level_mask and a.mask_revealed_query_loss:
             fam = 'A4'                         # A.4 = A.5 + token corruption
         elif a.token_level_mask:
             fam = 'A4legacy'                   # deprecated: token corruption
@@ -1306,6 +1467,10 @@ if __name__ == '__main__':
         token_level_mask=bool(args.token_level_mask),
         mask_revealed_query_loss=bool(args.mask_revealed_query_loss),
         query_pairs=args.query_pairs,
+        decoy_corruption=bool(args.decoy_corruption),
+        decoy_mask_residual=args.decoy_mask_residual,
+        decoy_lag_bins=[tuple(int(v) for v in b.split(':'))
+                        for b in args.decoy_lag_bins.split(',')],
     )
     print(f'[scheme] {scheme_version}: slot_rope_aligned={not args.legacy_slot_rope}  '
           f'time_rope_aligned={bool(args.time_rope_aligned)}  '
@@ -1320,7 +1485,10 @@ if __name__ == '__main__':
           f'{" (A.4)" if args.token_level_mask else ""}\n'
           f'mask_revealed_query_loss='
           f'{bool(args.mask_revealed_query_loss)}  '
-          f'query_pairs={args.query_pairs}')
+          f'query_pairs={args.query_pairs}  '
+          f'decoy_corruption={bool(args.decoy_corruption)}'
+          f'{" (A.7)" if args.decoy_corruption else ""}'
+          f'{f"  decoy_lag_bins={args.decoy_lag_bins}  decoy_mask_residual={args.decoy_mask_residual}" if args.decoy_corruption else ""}')
     print(f'Architecture: M2CDuetBlockDiffusion (A.3)  K={args.diffusion_K}  '
           f'3-pass (intra/cross/frame) + 2 gates + query slots with per-item '
           f'noise levels + k-embedding')
@@ -1431,6 +1599,9 @@ if __name__ == '__main__':
                     'mask_revealed_query_loss':
                         bool(args.mask_revealed_query_loss),
                     'query_pairs': args.query_pairs,
+                    'decoy_corruption': bool(args.decoy_corruption),
+                    'decoy_mask_residual': args.decoy_mask_residual,
+                    'decoy_lag_bins': args.decoy_lag_bins,
                     'run_tag': args.run_tag,
                     'model_abbr': model_abbr,
                 },

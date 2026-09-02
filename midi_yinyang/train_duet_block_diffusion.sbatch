@@ -285,6 +285,15 @@ MASK_REVEALED_QUERY_LOSS="${MASK_REVEALED_QUERY_LOSS:-0}"
 # Q: distinct frames supervised per forward at the query slots (see
 # header). Q>1 marks the run dir with 'qN'.
 QUERY_PAIRS="${QUERY_PAIRS:-1}"
+# A.7: lag-graded decoy corruption -- query slots are corrupted with the
+# same stream's frame from t +- lag(k) (complete, self-contained frames
+# whose harmonic agreement with the partner decays with k) instead of
+# the mask embedding. Mutually exclusive with TOKEN_LEVEL_MASK and
+# MASK_REVEALED_QUERY_LOSS (init enforces it). Set DECOY_LAG_BINS from
+# calibrate_decoy_lag.py's [bins] block.
+DECOY_CORRUPTION="${DECOY_CORRUPTION:-0}"
+DECOY_MASK_RESIDUAL="${DECOY_MASK_RESIDUAL:-0.25}"
+DECOY_LAG_BINS="${DECOY_LAG_BINS:-1:4,8:16,24:48}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_block_diffusion_${SLURM_JOB_ID}}"
 # Data polyphony per stream (drives the sample-dump reshape, not the model):
@@ -345,7 +354,8 @@ if [[ "$TIME_ROPE_ALIGNED" == "1" ]]; then SCHEME_VERSION=v1.2; else SCHEME_VERS
 # Existing runs keep their old-style directories; to EXTEND one, pass
 # CKPT=<old dir>/last.ckpt explicitly.
 if [[ -z "${MODEL_ABBR:-}" ]]; then
-    if [[ "$TOKEN_LEVEL_MASK" == "1" && "$MASK_REVEALED_QUERY_LOSS" == "1" ]]; then FAM="A4"
+    if [[ "$DECOY_CORRUPTION" == "1" ]]; then FAM="A7"
+    elif [[ "$TOKEN_LEVEL_MASK" == "1" && "$MASK_REVEALED_QUERY_LOSS" == "1" ]]; then FAM="A4"
     elif [[ "$TOKEN_LEVEL_MASK" == "1" ]]; then FAM="A4legacy"
     elif [[ "$MASK_REVEALED_QUERY_LOSS" == "1" && "$QUERY_PAIRS" != "1" ]]; then FAM="A6"
     elif [[ "$MASK_REVEALED_QUERY_LOSS" == "1" ]]; then FAM="A5"
@@ -402,7 +412,7 @@ fi
 
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
-echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K  moe_modality_bias=$MOE_MODALITY_BIAS  moe_modality_gates=$MOE_MODALITY_GATES  moe_modality_hard_route=$MOE_MODALITY_HARD_ROUTE  token_level_mask=$TOKEN_LEVEL_MASK  mask_revealed_query_loss=$MASK_REVEALED_QUERY_LOSS  query_pairs=$QUERY_PAIRS${MB_TAG:+  [$MB_TAG]}"
+echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K  moe_modality_bias=$MOE_MODALITY_BIAS  moe_modality_gates=$MOE_MODALITY_GATES  moe_modality_hard_route=$MOE_MODALITY_HARD_ROUTE  token_level_mask=$TOKEN_LEVEL_MASK  mask_revealed_query_loss=$MASK_REVEALED_QUERY_LOSS  query_pairs=$QUERY_PAIRS  decoy_corruption=$DECOY_CORRUPTION${DECOY_CORRUPTION:+ }$([[ "$DECOY_CORRUPTION" == "1" ]] && echo "bins=$DECOY_LAG_BINS residual=$DECOY_MASK_RESIDUAL")${MB_TAG:+  [$MB_TAG]}"
 echo "MoE: experts=$MOE_NUM_EXPERTS topk=$MOE_TOPK intermediate=${MOE_INTERMEDIATE_SIZE:-<default 3072/expert>}  RUN_TAG=${RUN_TAG:-<none>}"
 echo "MODEL_ABBR=$MODEL_ABBR  ->  $RUN_DIR"
 echo "Task:    $TASK   (data max_polyphony: $MAX_POLYPHONY)"
@@ -503,6 +513,9 @@ COMMON_ARGS=(
     --token_level_mask "$TOKEN_LEVEL_MASK"
     --mask_revealed_query_loss "$MASK_REVEALED_QUERY_LOSS"
     --query_pairs "$QUERY_PAIRS"
+    --decoy_corruption "$DECOY_CORRUPTION"
+    --decoy_mask_residual "$DECOY_MASK_RESIDUAL"
+    --decoy_lag_bins "$DECOY_LAG_BINS"
     --model_abbr "$MODEL_ABBR"
     --diffusion_K "$DIFFUSION_K"
     --checkpoint_path "$TRAIN_CKPT"

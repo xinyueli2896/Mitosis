@@ -277,6 +277,7 @@ run on the melchord cp4 / v1.2 / per-part-gate defaults.
 | **A.4** | A.5 + token-level slot corruption (bug fixes included) | `TOKEN_LEVEL_MASK=1 MASK_REVEALED_QUERY_LOSS=1` | `A4` | first attempt (pre-fix, without A.5's loss) FAILED — legacy dir `K4mgtk...long`; retrain pending |
 | **A.5** | A.3 + query loss on corrupted positions only | `MASK_REVEALED_QUERY_LOSS=1` | `A5` | trained 2026-08-31 (legacy dir `K4mgqm...long`) |
 | **A.6** | A.5 + 8 query pairs per forward | `MASK_REVEALED_QUERY_LOSS=1 QUERY_PAIRS=8` | `A6` | planned |
+| **A.7** | A.3 scaffold + lag-graded decoy corruption | `DECOY_CORRUPTION=1` (+ `DECOY_LAG_BINS` from `calibrate_decoy_lag`) | `A7` | planned 2026-09-02 |
 
 There is ONE A.4. The bugged first implementation does not keep the
 name; A.4 *means* the corrected model — token-level corruption with the
@@ -300,6 +301,33 @@ explicitly, because auto-resume now looks for the new-style name.
 The main line is A.3 → A.5 → A.6, each strictly containing the
 previous; A.4 sits on that line too (it contains A.5), adding
 token-level corruption on top.
+
+### A.7 — lag-graded decoy corruption (2026-09-02)
+
+Post-bake-off diagnosis (queryablation, 2026-09-02): the states the
+refinement loop actually visits are COMPLETE frames that fail to match
+their partner — every draft leaves the AR chain fluent and
+self-contained; what is missing is coordination, never notes. A.4
+modeled "partial" as "notes missing" and lost (coupling 0.014,
+survival 0.54): its confidence re-masking protects fluent-but-clashing
+notes, and its keep-mask loss trains completion, not revision. A.7
+keeps every certified part of A.3 (frame-level slots, independent
+k_m/k_c, the commitment tag, full-frame CE, self-conditioning, Q=1,
+the unchanged decode loop) and changes only the corrupted branch's
+CONTENT: instead of the mask embedding, the slot receives the same
+stream's frame from t±lag(k) in the training window — a real,
+self-contained frame whose harmonic agreement with the partner decays
+with k. lag bins for k=1..K-1 are placed by calibrate_decoy_lag.py at
+equal spacing in MEASURED decoherence (chord-tone agreement vs lag on
+the POP909 train songs — the same quantity harmonic_coupling scores);
+k=K draws a uniform lag plus a residual mask coin
+(DECOY_MASK_RESIDUAL, default 0.25) so the no-information endpoint
+stays trained. The query target stays the true frame, so every k
+trains revision toward coordination — the decode loop's actual job.
+Training-only branch: validation pins k=K on the mask path, keeping
+val_loss comparable across the A-family. Incompatible by construction
+with TOKEN_LEVEL_MASK and MASK_REVEALED_QUERY_LOSS (init raises).
+Gated by audit_decoy_corruption before first training.
 
 ### A.4 — token-level commitment (graded within-frame corruption, 2026-08-28)
 
