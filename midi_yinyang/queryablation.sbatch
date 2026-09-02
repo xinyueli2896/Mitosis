@@ -86,14 +86,30 @@ print(f'[gpu] {torch.cuda.device_count()} visible; {torch.cuda.get_device_name(0
 "
 
 # ---- 1. co-generation decodes, sequential ------------------------------
+# Skip logic is CONTENT-based, not marker-based: a model's decode is
+# considered done when every test song already has N_SAMPLES co samples
+# in the duet_multi layout -- so outputs produced by earlier jobs count,
+# and a run killed mid-model resumes at the incomplete model. The .done
+# marker is kept as a fast path. FORCE=1 regenerates everything.
+have_all_outputs() {
+    local out="$1" sid n
+    for f in "$MEL_FOLDER"/*.mid; do
+        sid=$(basename "$f" .mid)
+        n=$(ls "$out/$sid/co/"*.mid 2>/dev/null | wc -l)
+        [[ "$n" -ge "$N_SAMPLES" ]] || return 1
+    done
+    return 0
+}
+
 # A1 first: intra-cross-attn, NO query slots at all -- the control the
 # whole query-slot line is measured against. Different inference script,
 # same decode knobs and output layout.
 A1_CKPT=ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_melchord_cp4tar_batch_8_schedule
 A1_OUT=temp/bakeoff/A1_co
 echo "----------------------------------------------------------------"
-if [[ "$FORCE" != "1" && -f "$A1_OUT/.done" ]]; then
-    echo "[A1] SKIP (marker $A1_OUT/.done present)"
+if [[ "$FORCE" != "1" ]] && { [[ -f "$A1_OUT/.done" ]] || have_all_outputs "$A1_OUT"; }; then
+    echo "[A1] SKIP (outputs already complete)"
+    touch "$A1_OUT/.done" 2>/dev/null || true
 else
     [[ -d "$A1_CKPT" ]] || { echo "ERROR: ckpt dir $A1_CKPT not found"; exit 1; }
     echo "[A1] decoding from $A1_CKPT/ -> $A1_OUT"
@@ -122,8 +138,9 @@ for m in "${MODELS[@]}"; do
     ckpt="${CKPTS[$m]}"
     out="temp/bakeoff/${m}_co"
     echo "----------------------------------------------------------------"
-    if [[ "$FORCE" != "1" && -f "$out/.done" ]]; then
-        echo "[$m] SKIP (marker $out/.done present)"
+    if [[ "$FORCE" != "1" ]] && { [[ -f "$out/.done" ]] || have_all_outputs "$out"; }; then
+        echo "[$m] SKIP (outputs already complete)"
+        touch "$out/.done" 2>/dev/null || true
         continue
     fi
     [[ -d "$ckpt" ]] || { echo "ERROR: ckpt dir $ckpt not found"; exit 1; }
