@@ -293,7 +293,10 @@ QUERY_PAIRS="${QUERY_PAIRS:-1}"
 # calibrate_decoy_lag.py's [bins] block.
 DECOY_CORRUPTION="${DECOY_CORRUPTION:-0}"
 DECOY_MASK_RESIDUAL="${DECOY_MASK_RESIDUAL:-0.25}"
-DECOY_LAG_BINS="${DECOY_LAG_BINS:-1:4,8:16,24:48}"
+# Default = calibrated bins (calibrate_decoy_lag job 202343; equal
+# spacing in measured decoherence on the POP909 train songs). Override
+# with "/"-separated lo:hi pairs -- sbatch --export splits on commas.
+DECOY_LAG_BINS="${DECOY_LAG_BINS:-1:2,3:11,12:19}"
 TASK="${TASK:-drumnondrum}"
 DUMP_SAMPLES_DIR="${DUMP_SAMPLES_DIR:-temp/train_samples_duet_block_diffusion_${SLURM_JOB_ID}}"
 # Data polyphony per stream (drives the sample-dump reshape, not the model):

@@ -322,7 +322,12 @@ equal spacing in MEASURED decoherence (chord-tone agreement vs lag on
 the POP909 train songs — the same quantity harmonic_coupling scores);
 k=K draws a uniform lag plus a residual mask coin
 (DECOY_MASK_RESIDUAL, default 0.25) so the no-information endpoint
-stays trained. The query target stays the true frame, so every k
+stays trained. CALIBRATED 2026-09-03 (job 202343, 876 train songs,
+curve in results/decoy_lag_curve.csv): cov(0)=0.654, random-lag floor
+0.467, monotone decay; bins 1:2 / 3:11 / 12:19 frames -- half the
+decoherence span is gone within one bar, i.e. harmonic agreement in
+POP909 is sharply local, which is the measured justification for the
+same-instant query-slot channel. The query target stays the true frame, so every k
 trains revision toward coordination — the decode loop's actual job.
 Training-only branch: validation pins k=K on the mask path, keeping
 val_loss comparable across the A-family. Incompatible by construction

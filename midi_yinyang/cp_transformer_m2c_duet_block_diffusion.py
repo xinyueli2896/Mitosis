@@ -184,9 +184,13 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         )
         self.decoy_mask_residual = float(decoy_mask_residual)
         if decoy_lag_bins is None:
-            # Placeholder defaults for K=4 pending calibration; the
-            # sbatch passes the calibrated bins explicitly.
-            decoy_lag_bins = [(1, 4), (8, 16), (24, 48)]
+            # CALIBRATED defaults for K=4 (calibrate_decoy_lag on the
+            # 876 usable POP909 train songs, job 202343, curve in
+            # results/decoy_lag_curve.csv): lags where measured
+            # decoherence crosses 0.25 / 0.50 / 0.75 of the span
+            # cov(0)=0.654 -> floor 0.467. Agreement decays FAST --
+            # half the span is gone within one bar.
+            decoy_lag_bins = [(1, 2), (3, 11), (12, 19)]
         self.decoy_lag_bins = [tuple(int(v) for v in b)
                                for b in decoy_lag_bins]
         if decoy_corruption:
@@ -1214,11 +1218,14 @@ if __name__ == '__main__':
                              'plain mask embedding instead of a random-'
                              'lag decoy, keeping the no-information '
                              'endpoint trained.')
-    parser.add_argument('--decoy_lag_bins', type=str, default='1:4,8:16,24:48',
-                        help='A.7: K-1 comma-separated lo:hi lag bins '
-                             '(frames, inclusive) for k=1..K-1; k=K is '
-                             'always a uniform lag. Set from '
-                             'calibrate_decoy_lag.py\'s [bins] block.')
+    parser.add_argument('--decoy_lag_bins', type=str,
+                        default='1:2,3:11,12:19',
+                        help='A.7: K-1 lo:hi lag bins (frames, '
+                             'inclusive) for k=1..K-1, separated by '
+                             '"," or "/" (use "/" inside sbatch '
+                             '--export, which splits on commas); k=K '
+                             'is always a uniform lag. Default = '
+                             'calibrate_decoy_lag job 202343.')
     parser.add_argument('--query_loss_weight', type=float, default=1.0,
                         help='Weight on the query-slot CE term. Lower it '
                              'if the AR stream regresses while the model is '
@@ -1470,7 +1477,8 @@ if __name__ == '__main__':
         decoy_corruption=bool(args.decoy_corruption),
         decoy_mask_residual=args.decoy_mask_residual,
         decoy_lag_bins=[tuple(int(v) for v in b.split(':'))
-                        for b in args.decoy_lag_bins.split(',')],
+                        for b in args.decoy_lag_bins.replace('/', ',')
+                        .split(',')],
     )
     print(f'[scheme] {scheme_version}: slot_rope_aligned={not args.legacy_slot_rope}  '
           f'time_rope_aligned={bool(args.time_rope_aligned)}  '
