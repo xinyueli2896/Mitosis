@@ -82,6 +82,21 @@ def toy_batch(net, B=2, T=8):
     ])
 
 
+def raw_batch(B, T, n_tuples=2):
+    """RAW dataset-form stream [B, T, 4*n_tuples] for loss(), which
+    preprocesses (program, pitch, duration, velocity) tuples itself --
+    feeding it already-encoded cp frames overflows the vocabulary
+    (pitch + (dur+1)*128 on encoded ids), which is exactly the crash
+    the first audit run hit. One note + EOS per frame.
+    """
+    x = torch.zeros(B, T, 4 * n_tuples, dtype=torch.long)
+    for b in range(B):
+        for t in range(T):
+            x[b, t, 0:4] = torch.tensor([24, 48 + (b + t) % 24, 2, 0])
+            x[b, t, 4:8] = torch.tensor([254, 0, 0, 0])       # EOS tuple
+    return x
+
+
 def coded_h(B, T_full, H):
     """Deterministic 'embeddings' encoding (stream, frame) in two dims,
     so gather mistakes are unmissable."""
@@ -203,8 +218,8 @@ def main():
     got_rev = revealed[:, :, 0]
     check(bool((got_rev == want_rev).all()),
           '_last_query_revealed true exactly where k==0 (no self-cond)')
-    x_mel = x[:, 0::2]
-    x_acc = x[:, 1::2]
+    x_mel = raw_batch(B, T)
+    x_acc = raw_batch(B, T)
     out = net.loss(x_mel, x_acc, torch.zeros(B, dtype=torch.long))
     loss = out[0] if isinstance(out, (tuple, list)) else out
     check(bool(torch.isfinite(loss)), 'training loss is finite')
