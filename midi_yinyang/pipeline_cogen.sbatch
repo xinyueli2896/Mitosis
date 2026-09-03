@@ -24,9 +24,16 @@
 # Score in E1 via the EXTRA_SOURCES knob, e.g.:
 #   EXTRA_SOURCES="P-mc:duet_multi:temp/cascade_P-mc_<jobid>/4_final"
 #
-# DISCLOSED CAVEAT: Y is Nottingham-trained; on POP909 prompts it runs
-# out of domain. The pipeline uses the strongest available conditional
-# model, which happens to be folk-trained.
+# STAGE-B DOMAIN (updated 2026-09-03): a POP909-trained YinYang
+# conditional now exists (cp_transformer_yinyang_v5.1_lora_batch_8_
+# pop909_cp8_v2_chord_mel[_rev]_...), so the cascade can run DOMAIN
+# MATCHED -- prefer it. Direction mapping is the ckpt's own suffix:
+#   P-mc (mel2chord) -> the '_rev' ckpt
+#   P-cm (chord2mel) -> the non-rev ckpt
+# The published Nottingham-trained ckpts remain runnable for the
+# published-baseline row, but then the out-of-domain caveat must be
+# disclosed with the number. Whichever is used, the label printed below
+# goes into the results table.
 #
 # Env knobs (--export=ALL,KEY=val):
 #   PIPELINE      P-mc (default) or P-cm
@@ -44,7 +51,13 @@
 #   MEL_FOLDER    default input/pop909_split/melody
 #   CHORD_FOLDER  default input/pop909_split/chord
 #   PROMPT_LENGTH default 96.  GEN_LENGTH default 416 (TOTAL).
-#   N_SAMPLES     default 3.   MAX_POLYPHONY default 4 (specialist cp).
+#   N_SAMPLES     default 3.
+#   MAX_POLYPHONY the STAGE-A SPECIALIST's training cp (default 4).
+#                 S-mel / S-chord are trained on pop909_{melody,chord}_
+#                 cp8_v2.pt -> pass MAX_POLYPHONY=8 for them. A cp
+#                 mismatch loads cleanly and silently degrades the
+#                 music (CLAUDE.md). Stage C needs no cp flag: the
+#                 YinYang ckpt restores its own hyperparameters.
 #   OUT_ROOT      default temp/cascade_<PIPELINE>_<jobid>. MUST be under
 #                 temp/ (stage A can only write there). The run tree is
 #                 1_stageA_specialist / 2_hybrids / 3_y_conditional /
@@ -121,7 +134,11 @@ if [[ -z "$CKPT_SPEC" ]]; then
 fi
 case "$STAGE_B" in
     y)  [[ -n "$CKPT_Y" ]] || { echo "ERROR: STAGE_B=y needs CKPT_Y."; exit 1; }
-        COND_LABEL="YinYang $CKPT_Y (published, Nottingham-trained)" ;;
+        case "$CKPT_Y" in
+            *pop909*) _Y_DOMAIN="POP909-trained, DOMAIN MATCHED" ;;
+            *)        _Y_DOMAIN="published Nottingham-trained, OUT OF DOMAIN on POP909" ;;
+        esac
+        COND_LABEL="YinYang $CKPT_Y ($_Y_DOMAIN)" ;;
     c1) [[ -n "$CKPT_COND" ]] || { echo "ERROR: STAGE_B=c1 needs CKPT_COND."; exit 1; }
         COND_SCRIPT=cp_transformer_m2c_duet_rehearsal_inference.py
         COND_LABEL="C.1 rehearsal $CKPT_COND (in-domain)" ;;
