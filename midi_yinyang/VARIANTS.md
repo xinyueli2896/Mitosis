@@ -292,7 +292,14 @@ model abbreviation from this ledger, derived automatically from the
 flags (so mismatched configs still can never auto-resume into each
 other): `..._gnl12_A5_melchord_<RUN_TAG>_batch_8_schedule`. Departures
 from the per-part-gate default prefix the arm: `A2` shared router, `D1`
-dense, `D2` hard route (e.g. `A2A5`, `D1A3`). Non-default settings
+dense, `D2` hard route (e.g. `A2A5`, `D1A3`). The dense arm comes in
+two sizes and the flags cannot tell them apart, so the second one is a
+MODEL_ABBR override: `D1` = COMPUTE-matched (intermediate 6144 = top-2
+x 3072 active), `D1p` = PARAMETER-matched (intermediate 12288 = all 4
+experts' capacity in one always-on FFN; same params, ~2x the active
+FLOPs). D1 vs D1p separates "routing helps" from "total capacity
+helps": if MoE beats D1 but not D1p, the win is capacity; if it beats
+both, the win is routing. Non-default settings
 suffix: `K8` for K≠4, `q4` for A.6 at Q≠8. Override with
 `MODEL_ABBR=`. Runs trained before this date keep their old-style
 directories — to EXTEND one, pass `CKPT=<old dir>/last.ckpt`
