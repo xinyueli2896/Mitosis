@@ -291,8 +291,17 @@ configuration and deliberately derives the ugly name `A4legacy`.
 model abbreviation from this ledger, derived automatically from the
 flags (so mismatched configs still can never auto-resume into each
 other): `..._gnl12_A5_melchord_<RUN_TAG>_batch_8_schedule`. Departures
-from the per-part-gate default prefix the arm: `A2` shared router, `D1`
-dense, `D2` hard route (e.g. `A2A5`, `D1A3`). The dense arm comes in
+from the per-part-gate default prefix the arm: `D3` shared gate, `D1`
+dense, `D2` hard route (e.g. `D3A5`, `D1A3`).
+
+**ARM CODES RENAMED 2026-09-03 (E6 convention):** `D0` = per-part
+gates, THE DEFAULT MODEL (= A3 on the query-slot axis; run dirs carry
+no arm prefix for it), `D1` = dense, `D2` = hard route, `D3` = shared
+gate. TWO REVERSALS vs older notes: the label `D3` previously meant
+per-part gates (the old "codename D.3" sections below), and the shared
+gate was previously arm `A2`. Trees/results written before this date
+(e.g. `a2moe_*` OUT_ROOTs, `K4`-prefixed run dirs) use the OLD labels;
+existing run DIRECTORIES keep their names. The dense arm comes in
 two sizes and the flags cannot tell them apart, so the second one is a
 MODEL_ABBR override: `D1` = COMPUTE-matched (intermediate 6144 = top-2
 x 3072 active), `D1p` = PARAMETER-matched (intermediate 12288 = all 4

@@ -1421,9 +1421,11 @@ if __name__ == '__main__':
         elif a.moe_modality_hard_route:
             arm = 'D2'                         # imposed split
         elif not a.moe_modality_gates:
-            arm = 'A2'                         # shared router
+            arm = 'D3'                         # shared gate ('A2' pre
+                                               # 2026-09-03 renaming)
         else:
-            arm = ''                           # the default model
+            arm = ''                           # the default model (arm
+                                               # code D0 in E6 tables)
         if a.moe_modality_bias:
             arm += 'mb'
         abbr = arm + fam

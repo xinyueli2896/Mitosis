@@ -368,7 +368,8 @@ if [[ -z "${MODEL_ABBR:-}" ]]; then
     ARM=""
     if [[ "$MOE_NUM_EXPERTS" == "1" ]]; then ARM="D1"
     elif [[ "$MOE_MODALITY_HARD_ROUTE" == "1" ]]; then ARM="D2"
-    elif [[ "$MOE_MODALITY_GATES" != "1" ]]; then ARM="A2"
+    elif [[ "$MOE_MODALITY_GATES" != "1" ]]; then ARM="D3"   # shared gate
+                                       # (arm code 'A2' before 2026-09-03)
     fi
     [[ "$MOE_MODALITY_BIAS" == "1" ]] && ARM="${ARM}mb"
     MODEL_ABBR="${ARM}${FAM}"
