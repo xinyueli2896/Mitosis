@@ -79,6 +79,29 @@ done
 shopt -u dotglob
 echo "[layout] results_default now holds: $(ls "$WS/results_default" | tr '\n' ' ')"
 
+# torchvision: their losses/lpips.py imports it at module-import time
+# (training-only LPIPS; inference never instantiates it) -- job crashed
+# on ModuleNotFoundError without it. Install the wheel PAIRED to the
+# venv's torch with --no-deps so torch itself is never touched.
+if ! python -c "import torchvision" 2>/dev/null; then
+    TV=$(python - <<'PY'
+import torch
+maj = '.'.join(torch.__version__.split('+')[0].split('.')[:2])
+m = {'2.0': '0.15.2', '2.1': '0.16.2', '2.2': '0.17.2', '2.3': '0.18.1',
+     '2.4': '0.19.1', '2.5': '0.20.1', '2.6': '0.21.0', '2.7': '0.22.0'}
+print(m.get(maj, ''))
+PY
+)
+    if [[ -z "$TV" ]]; then
+        echo "ERROR: no torchvision pairing known for this torch version;"
+        echo "       pip install a matching torchvision into $WS/.venv manually."
+        exit 1
+    fi
+    echo "[deps] installing torchvision==$TV pillow (--no-deps; torch untouched)"
+    pip install -q --no-deps "torchvision==$TV" pillow
+    python -c "import torchvision; print('[deps] torchvision', torchvision.__version__)"
+fi
+
 # ---- contamination check against their SHIPPED split -------------------
 echo "----------------------------------------------------------------"
 echo "[split] our test songs in THEIR train/valid split (split.npz):"
