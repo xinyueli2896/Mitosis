@@ -138,10 +138,17 @@ case "$STAGE_B" in
         # like every other CKPT knob and resolve the best-val ckpt with
         # the shared resolver.
         if [[ -d "$CKPT_Y" ]]; then
+            # resolve_best_ckpt narrates its choice on STDOUT, so send that
+            # to stderr and keep stdout to the path alone -- capturing both
+            # produced a bogus multi-line CKPT_Y (job 203490).
             CKPT_Y=$(python -c "
+import contextlib, sys
 from ckpt_utils import resolve_best_ckpt
-print(resolve_best_ckpt('$CKPT_Y'))")
+with contextlib.redirect_stdout(sys.stderr):
+    _p = resolve_best_ckpt('$CKPT_Y')
+print(_p)")
             echo "[ckpt_y] run dir -> $CKPT_Y"
+            [[ -f "$CKPT_Y" ]] || { echo "ERROR: resolved CKPT_Y is not a file: $CKPT_Y"; exit 1; }
         fi
         case "$CKPT_Y" in
             *pop909*) _Y_DOMAIN="POP909-trained, DOMAIN MATCHED" ;;
