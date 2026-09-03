@@ -134,6 +134,15 @@ if [[ -z "$CKPT_SPEC" ]]; then
 fi
 case "$STAGE_B" in
     y)  [[ -n "$CKPT_Y" ]] || { echo "ERROR: STAGE_B=y needs CKPT_Y."; exit 1; }
+        # yinyang_e3_driver's loader takes a FILE; accept a run dir here
+        # like every other CKPT knob and resolve the best-val ckpt with
+        # the shared resolver.
+        if [[ -d "$CKPT_Y" ]]; then
+            CKPT_Y=$(python -c "
+from ckpt_utils import resolve_best_ckpt
+print(resolve_best_ckpt('$CKPT_Y'))")
+            echo "[ckpt_y] run dir -> $CKPT_Y"
+        fi
         case "$CKPT_Y" in
             *pop909*) _Y_DOMAIN="POP909-trained, DOMAIN MATCHED" ;;
             *)        _Y_DOMAIN="published Nottingham-trained, OUT OF DOMAIN on POP909" ;;
