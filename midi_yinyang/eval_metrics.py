@@ -1,6 +1,8 @@
 """Quantitative evaluation metrics for E1 co-generation (EXPERIMENTS.md).
 
-Covers hypotheses H1-H3; H4 is the listening test and is out of scope.
+Covers hypotheses H1-H3 plus the S block (stream expertise & role
+separation, non-pre-registered, added for E6); H4 is the listening
+test and is out of scope.
 Reporting follows the pre-registered priority ordering H3 > H2 > H1:
 the summary prints hypothesis blocks in that order and each hypothesis
 has ONE designated primary endpoint (marked *), the rest are
@@ -473,13 +475,82 @@ def h1_metrics(gen_a, gen_b, ref_a, ref_b, task):
 # driver
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# S -- stream expertise & role separation (added 2026-09-03 for E6).
+# (Named 'S', not 'H4': H4 is reserved for the listening test in
+# EXPERIMENTS.md's pre-registered hypothesis list.)
+#
+# The E6 mechanism claim is not "the music is better overall" but "each
+# stream gets better at ITS OWN idiom while the shared/coupling side is
+# preserved". H4 measures that directly:
+#   * own-idiom fidelity, one per stream, beyond the H3 timing rows:
+#       mel_interval_jsd  melodic-interval distribution vs the reference
+#                         melody (semitone steps of the top line, |i|<=12)
+#       voicing_jsd       chord-stream voicing-size distribution vs the
+#                         reference chords (simultaneously sounding
+#                         pitch-classes per non-empty frame, capped at 8)
+#   * role separation -- do the two streams KEEP their distinct roles,
+#     to the same degree the reference pair does? Each is a log2 contrast
+#     between the streams, reported as gen minus ref (target 0):
+#       dur_contrast_delta      log2(median dur_b / median dur_a)
+#       density_contrast_delta  log2(onsets_a / onsets_b)
+# NOT pre-registered: this block was added after the first E6 scoring
+# pass, chosen for the mechanism hypothesis, and must be reported as
+# such.
+# ---------------------------------------------------------------------------
+
+def _interval_hist(mel, span=12):
+    seq = [p for _, p in _melody_seq(mel)]
+    ivs = [max(-span, min(span, b - a)) for a, b in zip(seq, seq[1:])]
+    return hist([i + span for i in ivs], 2 * span + 1)
+
+
+def _voicing_hist(chord, cap=8):
+    sizes = [min(len(s), cap) for s in chord.sounding if s]
+    return hist([v - 1 for v in sizes], cap)
+
+
+def _log2_contrast(num, den):
+    return math.log2(max(num, 1e-6) / max(den, 1e-6))
+
+
+def s_metrics(gen_a, gen_b, ref_a, ref_b, task):
+    out = {}
+    out['mel_interval_jsd'] = jsd(_interval_hist(gen_a),
+                                  _interval_hist(ref_a))
+    out['voicing_jsd'] = jsd(_voicing_hist(gen_b), _voicing_hist(ref_b))
+
+    def med_dur(s):
+        return float(np.median(s.durations)) if s.durations else float('nan')
+
+    def contrast_pair(g_val, r_val):
+        if any(math.isnan(v) for v in (g_val, r_val)):
+            return float('nan')
+        return g_val - r_val
+
+    g_dur = _log2_contrast(med_dur(gen_b), med_dur(gen_a)) \
+        if gen_a.durations and gen_b.durations else float('nan')
+    r_dur = _log2_contrast(med_dur(ref_b), med_dur(ref_a)) \
+        if ref_a.durations and ref_b.durations else float('nan')
+    out['dur_contrast_delta'] = contrast_pair(g_dur, r_dur)
+
+    g_den = _log2_contrast(gen_a.n_onsets(), gen_b.n_onsets()) \
+        if gen_a.n_onsets() and gen_b.n_onsets() else float('nan')
+    r_den = _log2_contrast(ref_a.n_onsets(), ref_b.n_onsets()) \
+        if ref_a.n_onsets() and ref_b.n_onsets() else float('nan')
+    out['density_contrast_delta'] = contrast_pair(g_den, r_den)
+    return out
+
+
 PRIMARY = {
     'melchord': {'H3': ['harmonic_rhythm_jsd'],
                  'H2': ['chord_tone_cov_delta'],
-                 'H1': ['survival_min']},
+                 'H1': ['survival_min'],
+                 'S': []},
     'drumnondrum': {'H3': ['onset_grid_jsd_b'],
                     'H2': ['onset_sync_delta'],
-                    'H1': ['survival_min']},
+                    'H1': ['survival_min'],
+                    'S': []},
 }
 
 H_GROUPS = {
@@ -496,6 +567,8 @@ H_GROUPS = {
            'density_ratio_a', 'density_ratio_b',
            'density_drift_a', 'density_drift_b',
            'empty_rate_a', 'empty_rate_b', 'register_overlap_delta'],
+    'S': ['mel_interval_jsd', 'voicing_jsd',
+           'dur_contrast_delta', 'density_contrast_delta'],
 }
 
 
@@ -535,6 +608,8 @@ STREAM_OF = {
     'density_drift_a': 'a', 'density_drift_b': 'b',
     'empty_rate_a': 'a', 'empty_rate_b': 'b',
     'register_overlap_delta': None,
+    'mel_interval_jsd': 'a', 'voicing_jsd': 'b',
+    'dur_contrast_delta': None, 'density_contrast_delta': None,
 }
 
 # Which stream is GIVEN in each conditional mode. 'co' (E1) gives neither.
@@ -558,6 +633,7 @@ def score_pair(gen_paths, ref_paths, args):
     row.update(h3_metrics(ga, gb, ra, rb, args.task))
     row.update(h2_metrics(ga, gb, ra, rb, args.task))
     row.update(h1_metrics(ga, gb, ra, rb, args.task))
+    row.update(s_metrics(ga, gb, ra, rb, args.task))
     return row
 
 
@@ -565,9 +641,9 @@ def summarize(rows, task):
     by_system = {}
     for r in rows:
         by_system.setdefault(r.get('system', '?'), []).append(r)
-    print('\n================= SUMMARY (priority order: H3 > H2 > H1) '
+    print('\n================= SUMMARY (priority order: H3 > H2 > H1 > S) '
           '=================')
-    for h in ('H3', 'H2', 'H1'):
+    for h in ('H3', 'H2', 'H1', 'S'):
         print(f'\n--- {h} ---')
         keys = [k for k in H_GROUPS[h]
                 if any(k in r and not _is_nan(r[k]) for r in rows)]
@@ -644,7 +720,7 @@ def main():
 
     if args.out:
         keys = ['system', 'mode', 'song', 'sample'] + [
-            k for h in ('H3', 'H2', 'H1') for k in H_GROUPS[h]]
+            k for h in ('H3', 'H2', 'H1', 'S') for k in H_GROUPS[h]]
         with open(args.out, 'w', newline='') as f:
             w = csv.DictWriter(f, fieldnames=keys, extrasaction='ignore')
             w.writeheader()

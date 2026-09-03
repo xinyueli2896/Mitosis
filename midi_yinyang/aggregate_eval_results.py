@@ -261,7 +261,7 @@ def main():
         md_lines.append('| metric | ' + ' | '.join(cols) + ' |')
         md_lines.append('|' + '---|' * (len(cols) + 1))
 
-        for h in ('H3', 'H2', 'H1'):
+        for h in ('H3', 'H2', 'H1', 'S'):
             print(f'--- {h} ---')
             md_lines.append(f'| **{h}** | ' + ' | '.join('' for _ in cols) + ' |')
             for metric in H_GROUPS[h]:
