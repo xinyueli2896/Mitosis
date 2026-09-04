@@ -31,19 +31,29 @@ chd_* (partner), and the chord column the other way round:
       the sanity floor. Must be large -- if it is not, the injection
       path is broken and nothing else here means anything.
   PARTNER GAIN  = CE(ctx) - CE(partner slot filled with its true frame)
-      how much knowing the partner's true frame improves this stream's
-      prediction. This IS the same-instant channel's information
-      content. Near zero => the channel is dead.
+      how much filling the partner slot with the truth improves this
+      stream's prediction. NOT the coordination channel on its own --
+      it conflates two effects, so it is split:
+  CONTENT  = CE(partner decoy) - CE(partner true)
+      the true partner against a WRONG partner that is equally legal
+      and equally present. This is the only part that can carry
+      coordination: it is what the model gains from knowing WHICH
+      frame the partner played. Near zero => the channel is dead even
+      if PARTNER GAIN looks positive.
+  presence = PARTNER GAIN - CONTENT
+      the remainder: the model preferring any real frame in that slot
+      over the mask token. Costs nothing to produce at decode and
+      carries no information about the partner.
   DECOY SENSITIVITY = divergence(partner decoy, ctx)
       how far a wrong-but-legal partner moves the prediction. Near zero
       => the model ignores slot content it judges untrustworthy (the
       shortcut story). Large, with CE worse than ctx => it is misled
       instead (the opposite story).
 
-PARTNER GAIN is reported both raw and as a fraction of OWN GAIN. The
-raw value depends on how predictable the corpus is; the fraction is
-what survives comparing two models trained on different corpora, so
-prefer it when the checkpoints are not corpus-matched.
+CONTENT is reported both raw and as a fraction of OWN GAIN. The raw
+value depends on how predictable the corpus is; the fraction is what
+survives comparing two models trained on different corpora, so prefer
+it when the checkpoints are not corpus-matched.
 
 Slot contents are injected through the model's own self-conditioning
 override (k=0 plus sc_mask/sc_emb), which both the A.3 and A.7 forwards
@@ -255,23 +265,35 @@ def main():
         # Per stream: its OWN slot is the one named after it, its
         # PARTNER slot is the other one. One condition, two readings.
         print()
-        ratios = {}
+        content = {}
         for stream, col, own, partner in (('melody', 'm', 'mel', 'chd'),
                                           ('chord', 'c', 'chd', 'mel')):
             base = mean(acc['ctx'][f'ce_{col}'])
+            true_ce = mean(acc[f'{partner}_true'][f'ce_{col}'])
+            decoy_ce = mean(acc[f'{partner}_decoy'][f'ce_{col}'])
             own_gain = base - mean(acc[f'{own}_true'][f'ce_{col}'])
-            gain = base - mean(acc[f'{partner}_true'][f'ce_{col}'])
-            harm = mean(acc[f'{partner}_decoy'][f'ce_{col}']) - base
+            gain = base - true_ce
+            # PARTNER GAIN conflates two effects: the model may simply
+            # prefer ANY legal frame in that slot over the mask token
+            # (presence), regardless of which frame it is. Subtracting
+            # the decoy -- wrong partner, equally legal, equally
+            # present -- isolates the part that is about the partner's
+            # actual content, which is the only part that can carry
+            # coordination.
+            content_gain = decoy_ce - true_ce
+            presence = gain - content_gain
             sens = mean(acc[f'{partner}_decoy'][f'js_{col}'])
             shift = mean(acc[f'{partner}_shift'][f'js_{col}'])
-            frac = gain / own_gain if own_gain > 1e-6 else float('nan')
-            ratios[stream] = frac
+            frac = content_gain / own_gain if own_gain > 1e-6 else float('nan')
+            content[stream] = frac
             print(f'  [{stream}]  OWN GAIN {own_gain:+.4f}   '
-                  f'PARTNER GAIN {gain:+.4f} ({100 * frac:.1f}% of own)')
-            print(f'            partner DECOY  JS {sens:.4f}  '
-                  f'harm(CE) {harm:+.4f}     partner SHIFT  JS {shift:.4f}')
-        alive = [s for s, f in ratios.items() if f == f and f > 0.01]
-        print(f'  -> same-instant channel alive for: '
+                  f'PARTNER GAIN {gain:+.4f}')
+            print(f'            = CONTENT {content_gain:+.4f} '
+                  f'({100 * frac:.1f}% of own)  +  presence {presence:+.4f}')
+            print(f'            partner DECOY JS {sens:.4f}     '
+                  f'partner SHIFT JS {shift:.4f}')
+        alive = [s for s, f in content.items() if f == f and f > 0.01]
+        print(f'  -> same-instant channel carries CONTENT for: '
               f'{", ".join(alive) if alive else "NEITHER stream"}')
 
     print(f'\n{"=" * 66}')
