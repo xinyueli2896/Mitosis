@@ -63,6 +63,10 @@ GEN_LENGTH="${GEN_LENGTH:-416}"
 N_SAMPLES="${N_SAMPLES:-3}"
 BASELINE="${BASELINE:-A3}"
 FORCE="${FORCE:-0}"
+# Which query-slot variants to run/score. A focused comparison is
+# e.g. MODELS="A3pop A7" INCLUDE_A1=0 BASELINE=A3pop -- the losing
+# variants (A4/A5/A6) only add noise once they are settled.
+INCLUDE_A1="${INCLUDE_A1:-1}"
 MEL_FOLDER=input/pop909_split/melody
 CHORD_FOLDER=input/pop909_split/chord
 
@@ -111,7 +115,9 @@ have_all_outputs() {
 A1_CKPT=ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_melchord_cp4tar_batch_8_schedule
 A1_OUT=temp/bakeoff/A1_co
 echo "----------------------------------------------------------------"
-if [[ "$FORCE" != "1" ]] && { [[ -f "$A1_OUT/.done" ]] || have_all_outputs "$A1_OUT"; }; then
+if [[ "$INCLUDE_A1" != "1" ]]; then
+    echo "[A1] SKIP (INCLUDE_A1=0)"
+elif [[ "$FORCE" != "1" ]] && { [[ -f "$A1_OUT/.done" ]] || have_all_outputs "$A1_OUT"; }; then
     echo "[A1] SKIP (outputs already complete)"
     touch "$A1_OUT/.done" 2>/dev/null || true
 else
@@ -134,7 +140,8 @@ fi
 # A3pop  = the POP909-only A3 -- SAME data/schedule as A4/A5/A6/A7, so
 #          it is the like-for-like baseline for any query-design claim
 #          (BASELINE=A3pop). Absent models are skipped with a warning.
-MODELS=(A3 A3pop A4 A5 A6 A7)
+MODELS_DEFAULT="A3 A3pop A4 A5 A6 A7"
+read -r -a MODELS <<< "${MODELS:-$MODELS_DEFAULT}"
 declare -A CKPTS=(
     [A3]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord_pop909_pop1k7_combined_long_batch_8_schedule
     [A3pop]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord_long_batch_8_schedule
@@ -192,11 +199,12 @@ METRICS=results/queryablation_metrics.csv
 TABLE=results/queryablation_table.md
 
 echo "--- building manifest ---"
-SRC_ARGS=(--source "A1:duet_multi:temp/bakeoff/A1_co")
+SRC_ARGS=()
+[[ "$INCLUDE_A1" == "1" ]] && SRC_ARGS+=(--source "A1:duet_multi:temp/bakeoff/A1_co")
 for m in "${DECODED[@]}"; do
     SRC_ARGS+=(--source "$m:duet_multi:temp/bakeoff/${m}_co")
 done
-echo "[sources] A1 ${DECODED[*]}"
+echo "[sources] ${INCLUDE_A1:+A1 }${DECODED[*]}"
 python build_eval_manifest.py "${SRC_ARGS[@]}" \
     --songs $SONG_IDS --modes co --out "$MANIFEST"
 
@@ -218,17 +226,21 @@ python aggregate_eval_results.py --csv "$METRICS" \
 # Second baseline: A1 = no query slots. "Does ANY query-slot design
 # improve melody-chord consistency over plain intra-cross-attn?" is the
 # design-level question; vs-A3 above is the variant-level one.
-echo "--- comparison table (paired Wilcoxon vs A1, no-query-slot control) ---"
-python aggregate_eval_results.py --csv "$METRICS" \
-    --task melchord --baseline A1 --mode co \
-    --one-sided --complete-cases --out-md "${TABLE%.md}_vsA1.md"
+if [[ "$INCLUDE_A1" == "1" ]]; then
+    echo "--- comparison table (paired Wilcoxon vs A1, no-query-slot control) ---"
+    python aggregate_eval_results.py --csv "$METRICS" \
+        --task melchord --baseline A1 --mode co \
+        --one-sided --complete-cases --out-md "${TABLE%.md}_vsA1.md"
+fi
 
 echo "================================================================"
 echo "RESULT TABLE (one-sided, complete cases, vs $BASELINE):"
 cat "$TABLE"
 echo "================================================================"
-echo "RESULT TABLE (one-sided, complete cases, vs A1 control):"
-cat "${TABLE%.md}_vsA1.md"
+if [[ "$INCLUDE_A1" == "1" ]]; then
+    echo "RESULT TABLE (one-sided, complete cases, vs A1 control):"
+    cat "${TABLE%.md}_vsA1.md"
+fi
 echo "================================================================"
 echo "Listening midis: temp/bakeoff/<model>_co/<song>/co/sample_<i>_temp*.mid"
 echo "Focus rows for the query-slot hypothesis: harmonic_coupling,"
