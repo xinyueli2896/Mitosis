@@ -153,7 +153,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  time_rope_aligned=False, self_cond_prob=0.5,
                  token_level_mask=False, mask_revealed_query_loss=False,
                  query_pairs=1, decoy_corruption=False,
-                 decoy_mask_residual=0.25, decoy_lag_bins=None, **kwargs):
+                 decoy_mask_residual=0.25, decoy_lag_bins=None,
+                 query_block=1, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- A.7: lag-graded DECOY corruption -------------------------
@@ -318,6 +319,28 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         # so Q leaves the parameters, the checkpoint and the decode path
         # untouched, and Q=1 is bit-for-bit the historical behaviour.
         self.query_pairs = max(int(query_pairs), 1)
+        # --- A.8: CONTIGUOUS BLOCK of query pairs --------------------
+        # B = query_block frames t0..t0+B-1 carry slots in one forward.
+        # Unlike A.6's scattered Q (independent frames, each seeing its
+        # own past and only its partner), a block is what the DECODE
+        # can actually reproduce: at generation the B frames are all
+        # un-committed at once, so every slot conditions on the prefix
+        # before t0 and reads every other slot in the block. Training
+        # and decode therefore share one structure -- the property A.4
+        # lacked. B=1 is exactly A.3.
+        self.query_block = max(int(query_block), 1)
+        self.register_buffer(
+            'query_block_flag',
+            torch.tensor(self.query_block, dtype=torch.long),
+        )
+        if self.query_block > 1:
+            if self.query_pairs > 1:
+                raise ValueError(
+                    'query_block (A.8, contiguous) and query_pairs '
+                    '(A.6, scattered) are different uses of the same '
+                    'slot machinery; enable only one.')
+            for layer in self.global_layers:
+                layer.query_block_mode = True
 
     @property
     def slot_rope_aligned(self):
@@ -925,8 +948,21 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         # Sample the query frames. Q = query_pairs distinct frames per
         # forward (see the QUERY-PAIR COUNT note in the module
         # docstring); Q=1 reproduces the historical single-frame draw.
+        B_blk = min(max(int(self.query_block), 1), max(T_full - 1, 1))
+        if self.training and B_blk > 1:
+            # A.8: one contiguous block t0 .. t0+B-1, start uniform over
+            # the legal range so every block offset is trained.
+            hi = T_full - B_blk
+            t0 = int(torch.randint(low=1, high=max(hi + 1, 2), size=(1,),
+                                   device=x.device).item())
+            t0 = min(t0, max(T_full - B_blk, 1))
+            tq = tuple(range(t0, t0 + B_blk))
+        else:
+            tq = None
         Q = min(max(int(self.query_pairs), 1), T_full - 1)
-        if self.training:
+        if tq is not None:
+            pass
+        elif self.training:
             if Q == 1:
                 tq = (int(torch.randint(
                     low=1, high=T_full, size=(1,), device=x.device,
@@ -938,7 +974,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                 tq = tuple(sorted(int(t) for t in perm.tolist()))
         else:
             # Eval keeps the historical single frame, so val_loss stays
-            # comparable across Q.
+            # comparable across Q and B.
             tq = (T_full - 1,)
         n_pairs = len(tq)
         T_query = tq[0] if n_pairs == 1 else tq
@@ -1207,6 +1243,14 @@ if __name__ == '__main__':
     parser.add_argument('--dump_samples_every_n_epochs', type=int, default=None)
     parser.add_argument('--max_polyphony', type=int, default=16)
     parser.add_argument('--gate_init_bias', type=float, default=-10.0)
+    parser.add_argument('--query_block', type=int, default=1,
+                        help='A.8: B contiguous frames carry query '
+                             'pairs in one forward, all conditioning on '
+                             'the prefix before the block and reading '
+                             'each other -- the structure the BLOCK '
+                             'decode reproduces (it commits B frames '
+                             'per refinement cycle). 1 = A.3. Mutually '
+                             'exclusive with --query_pairs.')
     parser.add_argument('--decoy_corruption', type=int, default=0,
                         help='A.7: corrupt query slots with the same '
                              'stream\'s frame from t +- lag(k) instead '
@@ -1396,7 +1440,11 @@ if __name__ == '__main__':
         auto-resume into each other. Suffixes appear only for
         non-default settings (K != 4; A.6 at Q != 8).
         """
-        if a.decoy_corruption:
+        if getattr(a, 'query_block', 1) > 1:
+            fam = 'A8'                         # contiguous block of B
+                                               # query pairs, decoded and
+                                               # committed together
+        elif a.decoy_corruption:
             fam = 'A7'                         # A.7 = A.3 scaffold +
                                                # lag-graded decoy corruption
                                                # (init rejects combining it
@@ -1433,6 +1481,8 @@ if __name__ == '__main__':
             abbr += f'K{a.diffusion_K}'
         if fam == 'A6' and a.query_pairs != 8:
             abbr += f'q{a.query_pairs}'
+        if fam == 'A8' and a.query_block != 4:
+            abbr += f'b{a.query_block}'
         return abbr
 
     tag = f'_{args.run_tag}' if args.run_tag else ''
@@ -1481,6 +1531,7 @@ if __name__ == '__main__':
         decoy_lag_bins=[tuple(int(v) for v in b.split(':'))
                         for b in args.decoy_lag_bins.replace('/', ',')
                         .split(',')],
+        query_block=args.query_block,
     )
     print(f'[scheme] {scheme_version}: slot_rope_aligned={not args.legacy_slot_rope}  '
           f'time_rope_aligned={bool(args.time_rope_aligned)}  '
@@ -1496,6 +1547,8 @@ if __name__ == '__main__':
           f'mask_revealed_query_loss='
           f'{bool(args.mask_revealed_query_loss)}  '
           f'query_pairs={args.query_pairs}  '
+          f'query_block={args.query_block}'
+          f'{" (A.8)" if args.query_block > 1 else ""}  '
           f'decoy_corruption={bool(args.decoy_corruption)}'
           f'{" (A.7)" if args.decoy_corruption else ""}'
           f'{f"  decoy_lag_bins={args.decoy_lag_bins}  decoy_mask_residual={args.decoy_mask_residual}" if args.decoy_corruption else ""}')
@@ -1609,6 +1662,7 @@ if __name__ == '__main__':
                     'mask_revealed_query_loss':
                         bool(args.mask_revealed_query_loss),
                     'query_pairs': args.query_pairs,
+                    'query_block': args.query_block,
                     'decoy_corruption': bool(args.decoy_corruption),
                     'decoy_mask_residual': args.decoy_mask_residual,
                     'decoy_lag_bins': args.decoy_lag_bins,

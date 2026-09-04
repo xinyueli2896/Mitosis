@@ -195,7 +195,19 @@ class M2CDuetBlockLayer(nn.Module):
         tq = normalize_T_query(T_query)
         n_pairs = len(tq)
         L = clean_len + 2 * n_pairs
-        cache_key = (clean_len, tq, str(device))
+        # A.8 BLOCK MODE (query_block_mode, set by the model when
+        # --query_block > 1): the Q pairs are a CONTIGUOUS block
+        # t0..t0+B-1 that inference drafts and commits together, so
+        #   * every slot conditions on the committed prefix < t0 (NOT
+        #     < its own frame -- frames inside the block are not
+        #     committed yet at decode time), and
+        #   * every slot may read every OTHER slot in the block, not
+        #     just its own partner: that is what lets the B frames be
+        #     negotiated jointly instead of independently.
+        # Both are exactly what the block decode supplies, which is the
+        # point of the variant.
+        block_mode = bool(getattr(self, 'query_block_mode', False))
+        cache_key = (clean_len, tq, str(device), block_mode)
         if self._mask_cache_key == cache_key:
             return self._mask_intra, self._mask_cross, self._mask_frame
 
@@ -243,6 +255,14 @@ class M2CDuetBlockLayer(nn.Module):
         # This is identical to strict_past_frame when q is clean, so we can
         # reuse strict_past_frame uniformly for cross/intra "past" tests on q.
 
+        # What a QUERY row may reach in the clean stream: frames before
+        # its own target normally, before the BLOCK START in block mode.
+        if block_mode:
+            cut = int(min(tq))
+            q_past_for_query = (f_q < cut)
+        else:
+            q_past_for_query = strict_past_frame
+
         q_clean = is_clean[None, :]
         q_query = is_query[None, :]
         p_clean = is_clean[:, None]
@@ -258,7 +278,7 @@ class M2CDuetBlockLayer(nn.Module):
         #   query p AND clean q AND same_mod AND frame(q) < T_query
         mask_intra = (
             (clean_clean & same_mod & causal_pos)
-            | (p_query & q_clean & same_mod & strict_past_frame)
+            | (p_query & q_clean & same_mod & q_past_for_query)
         )
 
         # mask_cross:
@@ -269,7 +289,7 @@ class M2CDuetBlockLayer(nn.Module):
         # and frame(p) = pred_frame for clean rows.)
         mask_cross = (
             (clean_clean & diff_mod & strict_past_frame)
-            | (p_query & q_clean & diff_mod & strict_past_frame)
+            | (p_query & q_clean & diff_mod & q_past_for_query)
         )
 
         # mask_frame:
@@ -283,9 +303,13 @@ class M2CDuetBlockLayer(nn.Module):
         # supply.
         diag = torch.eye(L, dtype=torch.bool, device=device)
         same_pair = (pair_id[:, None] == pair_id[None, :])
+        # Block mode links every slot to every other slot in the block
+        # (both streams, all B frames); otherwise a slot sees only its
+        # own partner, which is what keeps scattered Q > 1 honest.
+        slot_link = torch.ones_like(same_pair) if block_mode else same_pair
         mask_frame = (
             (clean_clean & diff_mod & same_frame)
-            | (p_query & q_query & same_pair & ~diag)
+            | (p_query & q_query & slot_link & ~diag)
         )
 
         # Empty-row safeguard: pos 0 and pos 1 have empty mask_cross

@@ -134,6 +134,18 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
             break
     print(f'[load_model] token_level_mask={token_level_mask}'
           f'{" (A.4)" if token_level_mask else ""}')
+    # A.8 detection: the block size travels in the ckpt as a buffer
+    # VALUE. It must be restored, or the model would build A.3 masks and
+    # the decode would take the single-frame path -- a silent
+    # train/decode mismatch, which is exactly what A.8 exists to avoid.
+    query_block = 1
+    for k in state_dict_keys:
+        if k.endswith('query_block_flag'):
+            sd_tmp = ck['state_dict'] if 'state_dict' in ck else ck
+            query_block = max(int(sd_tmp[k].item()), 1)
+            break
+    print(f'[load_model] query_block={query_block}'
+          f'{" (A.8: BLOCK decode)" if query_block > 1 else ""}')
     if diffusion_K is None:
         for key, name in (('k_emb_m.weight', 'k_emb_m'),
                           ('k_emb_c.weight', 'k_emb_c')):
@@ -165,6 +177,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         moe_modality_gates=moe_modality_gates,
         moe_modality_hard_route=moe_modality_hard_route,
         token_level_mask=token_level_mask,
+        query_block=query_block,
     )
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)
@@ -272,11 +285,161 @@ def _build_slot(model, mode, prev_est_h, action_frame_h, r, K, slot_idx, B):
     return base + k_e
 
 
+def general_inference_block(model, gen_length, B, subseq_len, temperature,
+                            mel_action_fn, chord_action_fn,
+                            K_refine=None, seed_from_ar=True,
+                            final_temperature=None):
+    """A.8 BLOCK decode: draft, refine and commit Bk frames at a time.
+
+    The single-frame loop refines one frame against a fully committed
+    past. A.8 trains slots as a CONTIGUOUS BLOCK -- every slot sees the
+    prefix before the block and every other slot in it -- so its decode
+    must present the same picture: Bk frame-pairs un-committed at once,
+    mutually visible, refined together, committed together. That is the
+    whole point of the variant (train/decode structural identity), and
+    it also costs K+1 forwards per Bk frames instead of per frame.
+
+    Differences from the single-frame loop, all forced by the block:
+      * AR seeding applies to the FIRST frame of the block only -- the
+        clean heads predict one frame ahead, and frames t0+1.. have no
+        committed predecessor to be seeded from. They start masked.
+      * the adaptive silent-frame early exit is skipped: silence is a
+        per-frame property and the block commits jointly.
+      * token re-masking (A.4) is not applied; A.8 builds on the
+        frame-level kernels (A.3 / A.7).
+    """
+    device = next(model.parameters()).device
+    dtype = next(model.parameters()).dtype
+    tokenizer = model.tokenizer
+    H = model.hidden_size
+    K = K_refine if K_refine is not None else model.diffusion_K
+    Bk = max(int(getattr(model, 'query_block_flag', 1)), 1)
+    if final_temperature is None:
+        final_temperature = temperature
+    draft_temperature = None
+    env_dt = _os.environ.get('A3_DRAFT_TEMP')
+    if env_dt is not None:
+        draft_temperature = float(env_dt)
+    print(f'[gen] BLOCK decode: Bk={Bk} frames per cycle, K={K}')
+
+    h_buffer = torch.zeros(B, 0, H, device=device, dtype=dtype)
+    mel_frames, chord_frames = [], []
+
+    t = 0
+    while t < gen_length:
+        blk = min(Bk, gen_length - t)
+        frames = list(range(t, t + blk))
+        if t % 10 < blk:
+            print(f'[gen] frames {frames[0]}..{frames[-1]}/{gen_length}')
+
+        m_actions = [mel_action_fn(f) for f in frames]
+        c_actions = [chord_action_fn(f) for f in frames]
+        m_samp = [a == 'sample' for a in m_actions]
+        c_samp = [a == 'sample' for a in c_actions]
+
+        # Given frames are resolved once and held at k_emb(0) all rounds.
+        m_tok = [None] * blk
+        c_tok = [None] * blk
+        m_act_h = [None] * blk
+        c_act_h = [None] * blk
+        for j in range(blk):
+            if not m_samp[j]:
+                m_tok[j] = resolve_frame(m_actions[j], B, subseq_len,
+                                          tokenizer, device)
+                m_act_h[j] = model._encode_frame(m_tok[j], 0).to(dtype=dtype)
+            if not c_samp[j]:
+                c_tok[j] = resolve_frame(c_actions[j], B, subseq_len,
+                                          tokenizer, device)
+                c_act_h[j] = model._encode_frame(c_tok[j], 1).to(dtype=dtype)
+
+        if any(m_samp) or any(c_samp):
+            sos = model._assemble_sos(B, device, dtype)
+            h_clean = torch.cat([sos, h_buffer], dim=1)
+            clean_len = h_clean.shape[1]
+            # Frame indices must be >= 1 and distinct (forward asserts
+            # both); the very first block is shifted up by one, matching
+            # the single-frame loop's T_query = max(t, 1) convention.
+            base = max(frames[0], 1)
+            tq = tuple(range(base, base + blk))
+
+            prev_m = [None] * blk
+            prev_c = [None] * blk
+            last_m = [None] * blk
+            last_c = [None] * blk
+
+            for r in range(K, -1, -1):
+                slots = []
+                for j in range(blk):
+                    slots.append(_build_slot(
+                        model, 'sample' if m_samp[j] else 'committed',
+                        prev_m[j], m_act_h[j], r, K, 0, B))
+                    slots.append(_build_slot(
+                        model, 'sample' if c_samp[j] else 'committed',
+                        prev_c[j], c_act_h[j], r, K, 1, B))
+                h_in = torch.cat([h_clean] + slots, dim=1)
+                h_global, _ = model._run_global_stack(h_in, T_query=tq)
+
+                temp_r = (final_temperature if r == 0
+                          else (draft_temperature
+                                if draft_temperature is not None
+                                else temperature))
+                temp_r = max(temp_r, 1e-4)
+
+                for j in range(blk):
+                    if r == K and seed_from_ar and j == 0:
+                        # only the block's first frame has a committed
+                        # predecessor to be AR-seeded from
+                        h_m_pred = h_global[:, clean_len - 2]
+                        h_c_pred = h_global[:, clean_len - 1]
+                    else:
+                        h_m_pred = h_global[:, clean_len + 2 * j]
+                        h_c_pred = h_global[:, clean_len + 2 * j + 1]
+                    if m_samp[j]:
+                        last_m[j] = model.local_sampling(
+                            h_m_pred, max_subseq_len=subseq_len,
+                            temperature=temp_r, token_type_id=0)
+                        prev_m[j] = model._encode_frame(
+                            last_m[j], 0).to(dtype=dtype)
+                    if c_samp[j]:
+                        last_c[j] = model.local_sampling(
+                            h_c_pred, max_subseq_len=subseq_len,
+                            temperature=temp_r, token_type_id=1)
+                        prev_c[j] = model._encode_frame(
+                            last_c[j], 1).to(dtype=dtype)
+
+            for j in range(blk):
+                if m_samp[j]:
+                    m_tok[j] = last_m[j]
+                if c_samp[j]:
+                    c_tok[j] = last_c[j]
+
+        for j in range(blk):
+            if m_tok[j] is None:
+                m_tok[j] = resolve_frame(m_actions[j], B, subseq_len,
+                                          tokenizer, device)
+            if c_tok[j] is None:
+                c_tok[j] = resolve_frame(c_actions[j], B, subseq_len,
+                                          tokenizer, device)
+            mel_frames.append(m_tok[j])
+            chord_frames.append(c_tok[j])
+            h_buffer = torch.cat(
+                [h_buffer,
+                 model._encode_frame(m_tok[j], 0).to(dtype=dtype),
+                 model._encode_frame(c_tok[j], 1).to(dtype=dtype)], dim=1)
+        t += blk
+
+    return mel_frames, chord_frames
+
+
 def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                                   mel_action_fn, chord_action_fn,
                                   K_refine=None, seed_from_ar=True,
                                   final_temperature=None):
     """Parallel-diffusion AR decoding loop.
+
+    Dispatches to general_inference_block for A.8 checkpoints (block
+    size > 1), so every existing driver picks up the matching decode
+    without new plumbing.
 
     For each step t in 0..gen_length-1, determines per-modality actions
     via mel_action_fn(t) / chord_action_fn(t). For sampling actions,
@@ -321,6 +484,13 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     Returns (mel_frames, chord_frames), each a list of [B, subseq_len].
     """
     tokenizer = model.tokenizer
+    if int(getattr(model, 'query_block_flag', 1)) > 1:
+        return general_inference_block(
+            model, gen_length, B, subseq_len, temperature,
+            mel_action_fn, chord_action_fn,
+            K_refine=K_refine, seed_from_ar=seed_from_ar,
+            final_temperature=final_temperature)
+
     device = next(model.parameters()).device
     dtype = next(model.parameters()).dtype
     H = model.hidden_size
