@@ -361,7 +361,8 @@ if [[ "$TIME_ROPE_ALIGNED" == "1" ]]; then SCHEME_VERSION=v1.2; else SCHEME_VERS
 # Existing runs keep their old-style directories; to EXTEND one, pass
 # CKPT=<old dir>/last.ckpt explicitly.
 if [[ -z "${MODEL_ABBR:-}" ]]; then
-    if [[ "$QUERY_BLOCK" != "1" ]]; then FAM="A8"
+    if [[ "$QUERY_BLOCK" != "1" && "$DECOY_CORRUPTION" == "1" ]]; then FAM="A8d"
+    elif [[ "$QUERY_BLOCK" != "1" ]]; then FAM="A8"
     elif [[ "$DECOY_CORRUPTION" == "1" ]]; then FAM="A7"
     elif [[ "$TOKEN_LEVEL_MASK" == "1" && "$MASK_REVEALED_QUERY_LOSS" == "1" ]]; then FAM="A4"
     elif [[ "$TOKEN_LEVEL_MASK" == "1" ]]; then FAM="A4legacy"
@@ -380,7 +381,7 @@ if [[ -z "${MODEL_ABBR:-}" ]]; then
     MODEL_ABBR="${ARM}${FAM}"
     [[ "$DIFFUSION_K" != "4" ]] && MODEL_ABBR="${MODEL_ABBR}K${DIFFUSION_K}"
     [[ "$FAM" == "A6" && "$QUERY_PAIRS" != "8" ]] && MODEL_ABBR="${MODEL_ABBR}q${QUERY_PAIRS}"
-    [[ "$FAM" == "A8" && "$QUERY_BLOCK" != "4" ]] && MODEL_ABBR="${MODEL_ABBR}b${QUERY_BLOCK}"
+    [[ "$FAM" == A8* && "$QUERY_BLOCK" != "4" ]] && MODEL_ABBR="${MODEL_ABBR}b${QUERY_BLOCK}"
 fi
 RUN_DIR="ckpt/m2c_duet_block_diffusion_${SCHEME_VERSION}_large_gnl12_${MODEL_ABBR}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then

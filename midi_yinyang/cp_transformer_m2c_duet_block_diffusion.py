@@ -1441,9 +1441,10 @@ if __name__ == '__main__':
         non-default settings (K != 4; A.6 at Q != 8).
         """
         if getattr(a, 'query_block', 1) > 1:
-            fam = 'A8'                         # contiguous block of B
-                                               # query pairs, decoded and
-                                               # committed together
+            # A.8 = A.3 scaffold + block. The block is ORTHOGONAL to the
+            # corruption kernel, so a block run on A.7's decoy kernel is
+            # a DIFFERENT model and must not share A.8's run dir.
+            fam = 'A8d' if a.decoy_corruption else 'A8'
         elif a.decoy_corruption:
             fam = 'A7'                         # A.7 = A.3 scaffold +
                                                # lag-graded decoy corruption
@@ -1481,7 +1482,7 @@ if __name__ == '__main__':
             abbr += f'K{a.diffusion_K}'
         if fam == 'A6' and a.query_pairs != 8:
             abbr += f'q{a.query_pairs}'
-        if fam == 'A8' and a.query_block != 4:
+        if fam.startswith('A8') and a.query_block != 4:
             abbr += f'b{a.query_block}'
         return abbr
 
