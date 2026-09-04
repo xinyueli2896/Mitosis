@@ -1,6 +1,7 @@
 #!/bin/bash
 # SLURM (GPU): query-slot ablation, ONE JOB -- co-generation decodes for
-# A1 (intra-cross-attn, NO query slots: the control) and A3/A4/A5/A6 on
+# A1 (intra-cross-attn, NO query slots: the control) and the query-
+# slot variants A3/A3pop/A4/A5/A6/A7 on
 # the POP909 test split, then the quantitative melody-chord consistency
 # scoring, all in a single allocation (the multi-job chain version hit
 # QOSMaxSubmitJobPerUserLimit). Tables: vs A3 (variant-level) and vs A1
@@ -27,7 +28,10 @@
 #
 # Env knobs (--export=ALL,KEY=val):
 #   PROMPT_LENGTH default 96 (6 bars), GEN_LENGTH default 416,
-#   N_SAMPLES default 3, BASELINE default A3, FORCE default 0
+#   N_SAMPLES default 3, FORCE default 0
+#   BASELINE  default A3. Use BASELINE=A3pop for a same-data
+#             comparison against A4/A5/A6/A7 (the combined-data A3
+#             differs in TRAINING DATA as well as query design).
 #
 # Example:
 #   sbatch midi_yinyang/queryablation.sbatch
@@ -69,7 +73,7 @@ export A3_TOP_P="${A3_TOP_P:-0.95}"
 
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
-echo "QUERY-SLOT ABLATION: A3/A4/A5/A6 co decode + H-metric scoring"
+echo "QUERY-SLOT ABLATION: co decode + scoring (models below)"
 echo "PROMPT_LENGTH=$PROMPT_LENGTH ($((PROMPT_LENGTH / 16)) bars)"
 echo "GEN_LENGTH=$GEN_LENGTH  N_SAMPLES=$N_SAMPLES  BASELINE=$BASELINE"
 echo "REFINE=$A3_REFINE_STEPS temp=$A3_FINAL_TEMP top_p=$A3_TOP_P"
@@ -126,13 +130,20 @@ else
     echo "[A1] done"
 fi
 
-MODELS=(A3 A4 A5 A6)
+# A3     = the combined POP909+Pop1K7 run (the E1 candidate).
+# A3pop  = the POP909-only A3 -- SAME data/schedule as A4/A5/A6/A7, so
+#          it is the like-for-like baseline for any query-design claim
+#          (BASELINE=A3pop). Absent models are skipped with a warning.
+MODELS=(A3 A3pop A4 A5 A6 A7)
 declare -A CKPTS=(
     [A3]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord_pop909_pop1k7_combined_long_batch_8_schedule
+    [A3pop]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord_long_batch_8_schedule
     [A4]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A4_melchord_long_batch_8_schedule
     [A5]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A5_melchord_long_batch_8_schedule
     [A6]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A6_melchord_long_batch_8_schedule
+    [A7]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A7_melchord_long_batch_8_schedule
 )
+DECODED=()
 
 for m in "${MODELS[@]}"; do
     ckpt="${CKPTS[$m]}"
@@ -141,9 +152,13 @@ for m in "${MODELS[@]}"; do
     if [[ "$FORCE" != "1" ]] && { [[ -f "$out/.done" ]] || have_all_outputs "$out"; }; then
         echo "[$m] SKIP (outputs already complete)"
         touch "$out/.done" 2>/dev/null || true
+        DECODED+=("$m")
         continue
     fi
-    [[ -d "$ckpt" ]] || { echo "ERROR: ckpt dir $ckpt not found"; exit 1; }
+    if [[ ! -d "$ckpt" ]]; then
+        echo "[$m] SKIP (ckpt dir not found: $ckpt)"
+        continue
+    fi
     echo "[$m] decoding from $ckpt/ -> $out"
     python cp_transformer_m2c_duet_block_diffusion_combined.py \
         --ckpt "$ckpt/" \
@@ -160,6 +175,7 @@ for m in "${MODELS[@]}"; do
         --min-chord-tokens-before-eos 0 \
         --n-samples "$N_SAMPLES"
     touch "$out/.done"
+    DECODED+=("$m")
     echo "[$m] done"
 done
 
@@ -176,12 +192,12 @@ METRICS=results/queryablation_metrics.csv
 TABLE=results/queryablation_table.md
 
 echo "--- building manifest ---"
-python build_eval_manifest.py \
-    --source "A1:duet_multi:temp/bakeoff/A1_co" \
-    --source "A3:duet_multi:temp/bakeoff/A3_co" \
-    --source "A4:duet_multi:temp/bakeoff/A4_co" \
-    --source "A5:duet_multi:temp/bakeoff/A5_co" \
-    --source "A6:duet_multi:temp/bakeoff/A6_co" \
+SRC_ARGS=(--source "A1:duet_multi:temp/bakeoff/A1_co")
+for m in "${DECODED[@]}"; do
+    SRC_ARGS+=(--source "$m:duet_multi:temp/bakeoff/${m}_co")
+done
+echo "[sources] A1 ${DECODED[*]}"
+python build_eval_manifest.py "${SRC_ARGS[@]}" \
     --songs $SONG_IDS --modes co --out "$MANIFEST"
 
 echo "--- scoring (H1-H3) ---"
