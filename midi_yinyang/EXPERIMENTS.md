@@ -153,28 +153,56 @@ The frozen winner gets recorded here when the bake-off concludes.
 
 ### Abstract draft (placeholders marked)
 
-Single paragraph, ICASSP register. ~195 words.
+Single paragraph, ICASSP register. ~230 words. REVISED 2026-09-04:
+repositioned from a multi-track critique to the joint-generation
+framing (below), with a lead-in that narrows field -> dominant framing
+(distant pairs) -> the neglected family (shared timeline, continuous
+agreement) -> our case, so "agreement, not translation" lands as a
+contrast the reader has been set up for.
 
-> Multi-track symbolic music generation predominantly models all tracks
-> with a single shared network, distinguishing them only at the input by
-> an instrument or track-identity token. Tracks, however, correspond to
-> distinct functional roles - melody, harmony, accompaniment - each
-> governed by its own grammar, from melodic contour and phrase structure
-> to voice-leading and harmonic rhythm; sharing every parameter across
-> roles differentiates what the model reads rather than how it computes.
-> We propose a two-stream architecture in which each part is afforded
-> its own computation while remaining mutually attentive. Role
-> specialization is realized by a sparsely gated mixture-of-experts
-> layer with a separate router per part over a shared, unassigned expert
-> pool, so that the experts a part recruits, and whether any expert
-> serves both parts, are learned rather than imposed a priori. A
-> three-pass attention scheme - within-part, cross-part causal, and
-> same-instant - preserves coordination at every time step, including
-> mutual conditioning within a single step, which a causally interleaved
-> sequence otherwise precludes. On melody-chord co-generation over
-> POP909, Nottingham, and Pop1K7, [RESULT]. Routing analysis indicates
-> that the resulting specialization is content-driven rather than an
-> artifact of stream identity: [INTERPRETABILITY RESULT].
+> Generative models are increasingly asked to produce several
+> coordinated streams at once, and most of that effort has gone to
+> semantically distant pairs such as image and text, where the
+> difficulty is bridging representations. Signals that instead share one
+> timeline and must agree continuously - speech with its transcript,
+> melody with harmony - have drawn less attention. Melody and harmony
+> are a demanding case: two domains of a single modality, aligned frame
+> by frame, each obeying its own grammar, from contour and phrase
+> structure to voice leading and harmonic rhythm. Agreement, not
+> translation, is the problem here, and the bar is set by unified
+> single-stream music models. Existing systems share all parameters
+> across tracks and separate them by an identity token alone, or chain
+> two specialists, fixing one stream before the other is written. We
+> generate both with a single network that keeps their computation
+> distinct and their decisions simultaneous. Specialization arises from
+> a sparsely gated mixture-of-experts layer with a per-stream router
+> over a shared, unassigned pool: which experts a stream recruits, and
+> whether any serves both, is learned rather than declared. Three
+> attention passes - within-stream, cross-stream causal, and
+> same-instant - restore the mutual conditioning that a causally
+> interleaved sequence destroys. With the backbone pretrained on
+> unpaired single-stream music, the scarce aligned corpora are spent on
+> coordination alone. On melody-chord co-generation over POP909,
+> Nottingham and Pop1K7, [RESULT]; routing analysis indicates the
+> specialization is content-driven rather than an artifact of stream
+> identity: [INTERPRETABILITY RESULT].
+
+**Decision 1 AMENDED (2026-09-04) - the modality/domain rule.** The
+earlier rule was "never write 'modality'". It is now: melody and chord
+are two DOMAINS of one MODALITY (symbolic music), and the word
+"modality" appears exactly once, in the positioning clause that places
+this work beside speech-text rather than image-text. Everywhere else
+the streams are parts / domains / streams. The distinction is load
+bearing for the paper's framing: it is what makes "agreement, not
+translation" the honest statement of the problem, and it is what
+licenses both the scarce-paired-data argument (unpaired single-stream
+music pretrains the backbone) and the strong-baseline argument
+(unified single-stream models set the bar).
+
+If the venue's word limit bites, the two cheapest cuts that keep the
+structure are the second half of "speech with its transcript, melody
+with harmony" and the clause "from contour and phrase structure to
+voice leading and harmonic rhythm" (~20 words).
 
 Open placeholders: `[RESULT]` (E1 co-generation vs the SOTA lead-sheet
 references of 2.6) and `[INTERPRETABILITY RESULT]` (E6, per Decision 3).
