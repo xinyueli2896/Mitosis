@@ -3,9 +3,11 @@
 #
 # Runs probe_slot_use.py -- does a trained model USE its query slots,
 # or has it learned to ignore them? For a fixed query frame it reruns
-# the model over identical val batches, varying ONLY the slot contents
-# (both masked / own true frame / partner true frame / partner
-# displaced / partner transposed) and reads the query logits.
+# the model over identical val batches, varying ONLY which slot is
+# filled and with what (both masked / true frame / displaced frame /
+# transposed frame) and reads the query logits. Each condition fills
+# ONE slot and is read by both streams: filling the melody slot is the
+# melody's OWN channel and the chord's PARTNER channel at once.
 #
 # PARTNER GAIN = CE(both masked) - CE(partner true) is the information
 # the same-instant channel actually carries; DECOY SENSITIVITY is how
@@ -78,10 +80,9 @@ SEMITONES="${SEMITONES:-1}"
 
 # tasks.py resolves the melchord dataset paths from MELCHORD_CP, the
 # same way train_duet_block_diffusion.sbatch does. 8 is the melchord*
-# default there; the cp4 family (A.1's cp4tar, the combined POP909+
-# Pop1K7 files) needs MAX_POLYPHONY=4 passed in. Echo the resolved
-# paths -- a cp mismatch does not error, it just quietly ruins the
-# numbers, so this line is the only place it shows up.
+# default there, but the query-ablation duet family is cp4 -- so there
+# is no default that is right for everyone, and the echo below is the
+# only place a mismatch becomes visible at all.
 if [[ -z "${MAX_POLYPHONY:-}" ]]; then
     echo "ERROR: set MAX_POLYPHONY explicitly (the query-ablation duet"
     echo "family is cp4; train_duet_block_diffusion.sbatch defaults"
