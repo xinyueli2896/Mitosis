@@ -1,5 +1,5 @@
 #!/bin/bash
-# SLURM (CPU): audit the A.8 query-block variant.
+# SLURM: does a trained model use its query slots?
 #
 # Runs probe_slot_use.py -- does a trained model USE its query slots,
 # or has it learned to ignore them? For a fixed query frame it reruns
@@ -21,9 +21,7 @@
 #   LAG               decoy displacement in frames (default 16 = 1 bar)
 #   SEMITONES         transposition for the shift condition (default 1)
 #
-# Takes seconds. Run after any change to
-# cp_transformer_m2c_duet_block_diffusion.py, and before launching the
-# first QUERY_BLOCK>1 training run.
+# Forward passes only -- no decoding, no training. A few minutes.
 #
 # Example:
 #   sbatch midi_yinyang/probe_slot_use.sbatch
