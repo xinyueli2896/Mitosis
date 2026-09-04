@@ -118,6 +118,16 @@ def frame_divergence(logits_a, logits_b, target, pad):
     return float(js), float(disagree)
 
 
+def split_slots(q_logits, B):
+    """Query logits come back FLATTENED as [B*2, S, V] (local_decode's
+    layout: index = b*2 + slot), not [B, 2, S, V]. Normalise, so the
+    melody slot is [:, 0] and the chord slot [:, 1]."""
+    if q_logits.dim() == 3:
+        S, V = q_logits.shape[-2], q_logits.shape[-1]
+        q_logits = q_logits.view(B, -1, S, V)
+    return q_logits[:, 0], q_logits[:, 1]
+
+
 @torch.no_grad()
 def run_condition(net, x, t, K, mode, lag, semitones, device):
     """One forward with the slots set up for `mode`. Returns query
@@ -194,16 +204,16 @@ def main():
                                        args.semitones, device)
                       for m in MODES}
             tgt_m, tgt_c = x[:, 2 * t], x[:, 2 * t + 1]
+            B = x.shape[0]
             for m in MODES:
-                lm, lc = logits[m][:, 0], logits[m][:, 1]
+                lm, lc = split_slots(logits[m], B)
                 acc[m]['ce_m'].append(frame_ce(lm, tgt_m, pad))
                 acc[m]['ce_c'].append(frame_ce(lc, tgt_c, pad))
-                js, dis = frame_divergence(lm, logits['ctx'][:, 0],
-                                           tgt_m, pad)
+                cm, cc = split_slots(logits['ctx'], B)
+                js, dis = frame_divergence(lm, cm, tgt_m, pad)
                 acc[m]['js_m'].append(js)
                 acc[m]['dis_m'].append(dis)
-                js, dis = frame_divergence(lc, logits['ctx'][:, 1],
-                                           tgt_c, pad)
+                js, dis = frame_divergence(lc, cc, tgt_c, pad)
                 acc[m]['js_c'].append(js)
                 acc[m]['dis_c'].append(dis)
 
