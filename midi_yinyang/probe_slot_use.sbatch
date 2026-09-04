@@ -18,12 +18,18 @@
 # Env knobs (--export=ALL,KEY=val):
 #   CKPT_A3, CKPT_A7  run dirs (best-val auto-resolved); both optional,
 #                     at least one required
-#   TASK_A3, TASK_A7  corpus to probe each on. The two reference
-#                     checkpoints are NOT corpus-matched (A.3 trained on
-#                     pop909+pop1k7, A.7 on pop909), so probe each on
-#                     its own and compare the "% of own" column, which
-#                     divides out how predictable the corpus is.
+#   TASK_A3, TASK_A7  corpus to probe each on, when the checkpoints are
+#                     NOT corpus-matched. Both reference checkpoints are
+#                     plain melchord (POP909), so leave these unset --
+#                     the combined POP909+Pop1K7 files in the A.3 run
+#                     directory's name are a RUN_TAG, not its task, and
+#                     only exist at cp4 anyway.
 #   TASK              corpus for any checkpoint with no TASK_* (melchord)
+#   MAX_POLYPHONY     cp of the datasets to probe (default 8). MUST match
+#                     what the checkpoints trained on -- a mismatch loads
+#                     cleanly and silently degrades every number here.
+#                     Confirm from each run's training log:
+#                       grep 'Data for dataset' ~/logs/<train job>.out
 #   LAG               decoy displacement in frames (default 16 = 1 bar)
 #   SEMITONES         transposition for the shift condition (default 1)
 #
@@ -67,11 +73,16 @@ TASK_A7="${TASK_A7:-}"
 LAG="${LAG:-16}"
 SEMITONES="${SEMITONES:-1}"
 
-# tasks.py resolves the melchord dataset paths from MELCHORD_CP; every
-# melchord* run trains at max_polyphony 8, so pin the probe to the same
-# tokenization rather than inheriting whatever the shell had.
-export MELCHORD_CP="${MELCHORD_CP:-8}"
-echo "MELCHORD_CP=$MELCHORD_CP  (must match the training runs' cp)"
+# tasks.py resolves the melchord dataset paths from MELCHORD_CP, the
+# same way train_duet_block_diffusion.sbatch does. 8 is the melchord*
+# default there; the cp4 family (A.1's cp4tar, the combined POP909+
+# Pop1K7 files) needs MAX_POLYPHONY=4 passed in. Echo the resolved
+# paths -- a cp mismatch does not error, it just quietly ruins the
+# numbers, so this line is the only place it shows up.
+MAX_POLYPHONY="${MAX_POLYPHONY:-8}"
+export MELCHORD_CP="$MAX_POLYPHONY"
+echo "MAX_POLYPHONY=$MAX_POLYPHONY -> data/pop909_{melody,chord}_cp${MELCHORD_CP}_v2.pt"
+echo "Confirm against each run's log: grep 'Data for dataset' ~/logs/<job>.out"
 
 ARGS=()
 [[ -n "$CKPT_A3" ]] && ARGS+=(--ckpt "A3=$CKPT_A3${TASK_A3:+=$TASK_A3}")
