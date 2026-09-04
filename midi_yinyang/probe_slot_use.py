@@ -282,13 +282,27 @@ def main():
             # coordination.
             content_gain = decoy_ce - true_ce
             presence = gain - content_gain
+            # CONTENT is a PAIRED difference -- same batches, same
+            # frame, only the partner's identity changes -- so its
+            # standard error comes from the per-batch differences, not
+            # from the spread of either condition. Without it a +0.005
+            # gain and a +0.02 gain look equally real.
+            diffs = [d - t for d, t in zip(acc[f'{partner}_decoy'][f'ce_{col}'],
+                                           acc[f'{partner}_true'][f'ce_{col}'])]
+            n = len(diffs)
+            if n > 1:
+                mu = sum(diffs) / n
+                var = sum((d - mu) ** 2 for d in diffs) / (n - 1)
+                sem = (var / n) ** 0.5
+            else:
+                sem = float('nan')
             sens = mean(acc[f'{partner}_decoy'][f'js_{col}'])
             shift = mean(acc[f'{partner}_shift'][f'js_{col}'])
             frac = content_gain / own_gain if own_gain > 1e-6 else float('nan')
             content[stream] = frac
             print(f'  [{stream}]  OWN GAIN {own_gain:+.4f}   '
                   f'PARTNER GAIN {gain:+.4f}')
-            print(f'            = CONTENT {content_gain:+.4f} '
+            print(f'            = CONTENT {content_gain:+.4f} +- {sem:.4f} '
                   f'({100 * frac:.1f}% of own)  +  presence {presence:+.4f}')
             print(f'            partner DECOY JS {sens:.4f}     '
                   f'partner SHIFT JS {shift:.4f}')
