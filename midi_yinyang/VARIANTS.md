@@ -277,6 +277,7 @@ run on the melchord cp4 / v1.2 / per-part-gate defaults.
 | **A.4** | A.5 + token-level slot corruption (bug fixes included) | `TOKEN_LEVEL_MASK=1 MASK_REVEALED_QUERY_LOSS=1` | `A4` | first attempt (pre-fix, without A.5's loss) FAILED — legacy dir `K4mgtk...long`; retrain pending |
 | **A.5** | A.3 + query loss on corrupted positions only | `MASK_REVEALED_QUERY_LOSS=1` | `A5` | trained 2026-08-31 (legacy dir `K4mgqm...long`) |
 | **A.6** | A.5 + 8 query pairs per forward | `MASK_REVEALED_QUERY_LOSS=1 QUERY_PAIRS=8` | `A6` | planned |
+| **A.8** | A.3 scaffold + CONTIGUOUS BLOCK of B query pairs, decoded and committed B frames at a time | `QUERY_BLOCK=B` (default 4) | `A8` (suffix `bB` for B≠4) | planned 2026-09-04 |
 | **A.7** | A.3 scaffold + lag-graded decoy corruption | `DECOY_CORRUPTION=1` (+ `DECOY_LAG_BINS` from `calibrate_decoy_lag`) | `A7` | planned 2026-09-02 |
 
 There is ONE A.4. The bugged first implementation does not keep the
@@ -317,6 +318,44 @@ explicitly, because auto-resume now looks for the new-style name.
 The main line is A.3 → A.5 → A.6, each strictly containing the
 previous; A.4 sits on that line too (it contains A.5), adding
 token-level corruption on top.
+
+### A.8 — contiguous query block (2026-09-04)
+
+Comes out of the "where do the query slots sit" analysis. The literal
+question has a negative answer: PHYSICAL placement is free. The stack is
+rotary-only (no absolute position embedding), so a slot is defined by
+its rotary phase (t+1) and its visibility mask, not by its index --
+end-of-tensor and inline-before-frame-t are the same computation. The
+v1.0 bug that looked like a placement problem was a PHASE problem, fixed
+by remapping the phase rather than moving tokens. Placement would only
+become load-bearing if the custom masks were dropped for a plain causal
+one, in which case slots must PRECEDE the frame they predict (they would
+otherwise read their own target).
+
+What is live is where a slot sits in the DEPENDENCY GRAPH, and how many
+frames the decode commits per refinement cycle. A.8 changes both
+together, so training and decoding share one structure:
+
+  * training draws a CONTIGUOUS block t0..t0+B-1 (B = query_block,
+    default 4) instead of one frame (A.3) or B scattered frames (A.6);
+  * every slot conditions on the committed prefix < t0 -- not < its own
+    frame, because at decode nothing inside the block is committed yet;
+  * every slot reads every other slot in the block, both streams, so the
+    B frames are negotiated jointly rather than independently;
+  * general_inference_block mirrors that exactly, drafting, refining and
+    committing all B frames per K+1-round cycle. Dispatch is automatic
+    from the ckpt's query_block_flag (load_model restores it; losing it
+    would silently reinstate the mismatch A.8 removes). AR seeding
+    applies to the block's first frame only -- the clean heads see one
+    frame ahead -- and the rest start masked.
+
+Costs and risks: K+1 forwards per B frames instead of per frame (a B x
+decode speedup), 2B slot positions per training forward, and A.6's
+warning applies -- more supervised frames per step risks the same trunk
+over-fit, so B stays small (4-8) and best-val selection matters. B=1 is
+exactly A.3, masks bit-identical. Exclusive with QUERY_PAIRS (A.6):
+both use the same slot machinery differently. Gated by
+audit_query_block before first training.
 
 ### A.7 — lag-graded decoy corruption (2026-09-02)
 
