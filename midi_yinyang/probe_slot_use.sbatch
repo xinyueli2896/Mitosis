@@ -25,9 +25,11 @@
 #                     directory's name are a RUN_TAG, not its task, and
 #                     only exist at cp4 anyway.
 #   TASK              corpus for any checkpoint with no TASK_* (melchord)
-#   MAX_POLYPHONY     cp of the datasets to probe (default 8). MUST match
-#                     what the checkpoints trained on -- a mismatch loads
-#                     cleanly and silently degrades every number here.
+#   MAX_POLYPHONY     REQUIRED, no default. cp of the datasets to probe;
+#                     must match what the checkpoints trained on. The
+#                     A.1/A.3-A.8 query-ablation family is cp4. A
+#                     mismatch loads cleanly and silently degrades every
+#                     number here, so this wrapper refuses to guess.
 #                     Confirm from each run's training log:
 #                       grep 'Data for dataset' ~/logs/<train job>.out
 #   LAG               decoy displacement in frames (default 16 = 1 bar)
@@ -36,7 +38,8 @@
 # Forward passes only -- no decoding, no training. A few minutes.
 #
 # Example:
-#   sbatch midi_yinyang/probe_slot_use.sbatch
+#   sbatch --export=ALL,MAX_POLYPHONY=4,CKPT_A3=ckpt/<run>,CKPT_A7=ckpt/<run> \\
+#       midi_yinyang/probe_slot_use.sbatch
 
 #SBATCH --job-name=probe_slot_use
 #SBATCH --output=/home/xinyue.li/logs/%x_%j.out
@@ -79,7 +82,14 @@ SEMITONES="${SEMITONES:-1}"
 # Pop1K7 files) needs MAX_POLYPHONY=4 passed in. Echo the resolved
 # paths -- a cp mismatch does not error, it just quietly ruins the
 # numbers, so this line is the only place it shows up.
-MAX_POLYPHONY="${MAX_POLYPHONY:-8}"
+if [[ -z "${MAX_POLYPHONY:-}" ]]; then
+    echo "ERROR: set MAX_POLYPHONY explicitly (the query-ablation duet"
+    echo "family is cp4; train_duet_block_diffusion.sbatch defaults"
+    echo "melchord* to 8). There is no safe default: every number this"
+    echo "probe prints is a cross-entropy, and the wrong cp loads"
+    echo "cleanly and degrades all of them without erroring."
+    exit 1
+fi
 export MELCHORD_CP="$MAX_POLYPHONY"
 echo "MAX_POLYPHONY=$MAX_POLYPHONY -> data/pop909_{melody,chord}_cp${MELCHORD_CP}_v2.pt"
 echo "Confirm against each run's log: grep 'Data for dataset' ~/logs/<job>.out"
