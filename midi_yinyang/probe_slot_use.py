@@ -9,9 +9,9 @@ nothing at decode, which is what coupling below the no-slot control
 looks like.
 
 This probe measures that directly, with no training and no decoding.
-For a fixed query frame t it runs the model several times over the SAME
-validation batches, changing only what the two query slots contain, and
-reads the query logits. Conditions are named by WHICH SLOT is filled,
+Over the SAME validation batches it runs the model on several query
+frames, changing only what the two query slots contain, and reads the
+query logits. Conditions are named by WHICH SLOT is filled,
 not by whose point of view it is -- one condition serves both streams,
 because filling the melody slot is the melody's OWN channel and the
 chord's PARTNER channel at the same time:
@@ -199,6 +199,10 @@ def main():
                    help='default corpus for checkpoints with no TASK field')
     p.add_argument('--batch_size', type=int, default=4)
     p.add_argument('--n_batches', type=int, default=25)
+    p.add_argument('--n_frames', type=int, default=8,
+                   help='query frames scored per batch, evenly spaced '
+                        'over the middle half. Averaged within the '
+                        'batch, so this cuts noise without inflating n.')
     p.add_argument('--lag', type=int, default=16,
                    help='decoy displacement in frames (16 = one bar)')
     p.add_argument('--semitones', type=int, default=1,
@@ -235,23 +239,41 @@ def main():
                    'dis_m': [], 'dis_c': []} for m in MODES}
         for batch in batches:
             x, T_full, S = interleave(net, batch, device)
-            t = T_full // 2                      # a mid-sequence frame
-            logits = {m: run_condition(net, x, t, K, m, args.lag,
-                                       args.semitones, device)
-                      for m in MODES}
-            tgt_m, tgt_c = x[:, 2 * t], x[:, 2 * t + 1]
-            B = x.shape[0]
-            for m in MODES:
-                lm, lc = split_slots(logits[m], B)
-                acc[m]['ce_m'].append(frame_ce(lm, tgt_m, pad))
-                acc[m]['ce_c'].append(frame_ce(lc, tgt_c, pad))
+            # Several query frames per batch, evenly spaced over the
+            # middle half so every one has real history behind it and
+            # room for the +lag decoy ahead of it. Scoring a single
+            # frame per batch left the paired CONTENT difference with a
+            # standard error as large as the effect. Averaging WITHIN
+            # the batch first keeps the batch as the independent unit
+            # -- frames of the same songs are not independent samples,
+            # so they must not inflate n.
+            lo, hi = T_full // 4, (3 * T_full) // 4
+            span = max(hi - lo, 1)
+            frames = sorted({lo + (i * span) // args.n_frames
+                             for i in range(args.n_frames)})
+            per_batch = {m: {k: [] for k in acc[m]} for m in MODES}
+            for t in frames:
+                logits = {m: run_condition(net, x, t, K, m, args.lag,
+                                           args.semitones, device)
+                          for m in MODES}
+                tgt_m, tgt_c = x[:, 2 * t], x[:, 2 * t + 1]
+                B = x.shape[0]
                 cm, cc = split_slots(logits['ctx'], B)
-                js, dis = frame_divergence(lm, cm, tgt_m, pad)
-                acc[m]['js_m'].append(js)
-                acc[m]['dis_m'].append(dis)
-                js, dis = frame_divergence(lc, cc, tgt_c, pad)
-                acc[m]['js_c'].append(js)
-                acc[m]['dis_c'].append(dis)
+                for m in MODES:
+                    lm, lc = split_slots(logits[m], B)
+                    per_batch[m]['ce_m'].append(frame_ce(lm, tgt_m, pad))
+                    per_batch[m]['ce_c'].append(frame_ce(lc, tgt_c, pad))
+                    js, dis = frame_divergence(lm, cm, tgt_m, pad)
+                    per_batch[m]['js_m'].append(js)
+                    per_batch[m]['dis_m'].append(dis)
+                    js, dis = frame_divergence(lc, cc, tgt_c, pad)
+                    per_batch[m]['js_c'].append(js)
+                    per_batch[m]['dis_c'].append(dis)
+            for m in MODES:
+                for key, vals in per_batch[m].items():
+                    good = [v for v in vals if v == v]
+                    acc[m][key].append(sum(good) / len(good) if good
+                                       else float('nan'))
 
         mean = lambda v: sum(v) / max(len(v), 1)
         print(f'{"condition":<16}{"CE mel":>9}{"CE chd":>9}'
@@ -311,14 +333,15 @@ def main():
               f'{", ".join(alive) if alive else "NEITHER stream"}')
 
     print(f'\n{"=" * 66}')
-    print('How to read: PARTNER GAIN is the information the same-instant '
-          'edge\nactually carries; the "% of own" figure is the '
-          'corpus-robust version of\nit. If A.7 gains far less than A.3 '
-          'while its DECOY sensitivity is ~0, the\nparametric corruption '
-          'taught it to discard the channel, and pitch-shift\n(also '
-          'parametric, also invertible) would meet the same fate. If A.7 '
-          'gains\nas much but is MISLED (harm > 0), the channel lives and '
-          'the failure is\nelsewhere.')
+    print('How to read: CONTENT is the information the same-instant edge '
+          'actually\ncarries -- PARTNER GAIN minus the part that is just '
+          'a real frame beating\nthe mask token. Compare it against its '
+          'own standard error first: these\nare small numbers. If A.7 '
+          'carries far less CONTENT than A.3 while its\nDECOY sensitivity '
+          'is ~0, the parametric corruption taught it to discard\nthe '
+          'channel, and pitch-shift (also parametric, also invertible) '
+          'would meet\nthe same fate. If A.7 carries as much but is '
+          'MISLED, the channel lives and\nthe failure is elsewhere.')
 
 
 if __name__ == '__main__':

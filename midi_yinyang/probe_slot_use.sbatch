@@ -2,20 +2,21 @@
 # SLURM: does a trained model use its query slots?
 #
 # Runs probe_slot_use.py -- does a trained model USE its query slots,
-# or has it learned to ignore them? For a fixed query frame it reruns
-# the model over identical val batches, varying ONLY which slot is
+# or has it learned to ignore them? Over identical val batches it
+# reruns the model on several query frames, varying ONLY which slot is
 # filled and with what (both masked / true frame / displaced frame /
 # transposed frame) and reads the query logits. Each condition fills
 # ONE slot and is read by both streams: filling the melody slot is the
 # melody's OWN channel and the chord's PARTNER channel at once.
 #
-# PARTNER GAIN = CE(both masked) - CE(partner true) is the information
-# the same-instant channel actually carries; DECOY SENSITIVITY is how
-# far a wrong-but-legal partner moves the prediction. A model that
-# learned to discard untrusted slot content shows gain ~ 0 and
-# sensitivity ~ 0 -- which would mean parametric corruptions (A.7's
-# displacement, and pitch shift equally) are invertible shortcuts, and
-# would settle whether to try another one.
+# The headline is CONTENT = CE(partner decoy) - CE(partner true): the
+# true partner against a WRONG one that is equally legal and equally
+# present, so only the partner's identity varies. That is the only
+# component that can carry coordination -- the rest of PARTNER GAIN is
+# the model merely preferring a real frame over the mask token. A model
+# that learned to discard untrusted slot content shows CONTENT ~ 0 and
+# decoy sensitivity ~ 0, which would mean parametric corruptions (A.7's
+# displacement, and pitch shift equally) are invertible shortcuts.
 #
 # Env knobs (--export=ALL,KEY=val):
 #   CKPT_A3, CKPT_A7  run dirs (best-val auto-resolved); both optional,
@@ -34,6 +35,10 @@
 #                     number here, so this wrapper refuses to guess.
 #                     Confirm from each run's training log:
 #                       grep 'Data for dataset' ~/logs/<train job>.out
+#   N_FRAMES          query frames scored per batch (default 8), evenly
+#                     spaced over the middle half and averaged within
+#                     the batch. The batch stays the independent unit;
+#                     this only cuts the noise inside it.
 #   LAG               decoy displacement in frames (default 16 = 1 bar)
 #   SEMITONES         transposition for the shift condition (default 1)
 #
@@ -75,6 +80,7 @@ CKPT_A7="${CKPT_A7:-}"
 TASK="${TASK:-melchord}"
 TASK_A3="${TASK_A3:-}"
 TASK_A7="${TASK_A7:-}"
+N_FRAMES="${N_FRAMES:-8}"
 LAG="${LAG:-16}"
 SEMITONES="${SEMITONES:-1}"
 
@@ -103,7 +109,7 @@ if [[ ${#ARGS[@]} -eq 0 ]]; then
 fi
 
 python probe_slot_use.py "${ARGS[@]}" --task "$TASK" \
-    --lag "$LAG" --semitones "$SEMITONES"
+    --n_frames "$N_FRAMES" --lag "$LAG" --semitones "$SEMITONES"
 
 echo "================================================================"
 printf "Read OWN GAIN, PARTNER GAIN and DECOY per stream (bottom of each\nblock); the closing note explains what each pattern implies.\n"
