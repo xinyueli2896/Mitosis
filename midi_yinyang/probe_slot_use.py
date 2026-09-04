@@ -11,25 +11,39 @@ looks like.
 This probe measures that directly, with no training and no decoding.
 For a fixed query frame t it runs the model several times over the SAME
 validation batches, changing only what the two query slots contain, and
-reads the query logits:
+reads the query logits. Conditions are named by WHICH SLOT is filled,
+not by whose point of view it is -- one condition serves both streams,
+because filling the melody slot is the melody's OWN channel and the
+chord's PARTNER channel at the same time:
 
-  ctx            both slots masked            -> prediction from history alone
-  own_true       own slot = its true frame    -> can it read its own slot at all?
-  partner_true   partner slot = its true frame, own masked
-  partner_decoy  partner slot = a DISPLACED real frame (t + lag), own masked
-  partner_shift  partner slot = a TRANSPOSED real frame, own masked
+  ctx        both slots masked      -> prediction from history alone
+  mel_true   melody slot = its true frame
+  chd_true   chord  slot = its true frame
+  mel_decoy  melody slot = a DISPLACED real melody frame (t + lag)
+  chd_decoy  chord  slot = a DISPLACED real chord  frame (t + lag)
+  mel_shift  melody slot = a TRANSPOSED real melody frame
+  chd_shift  chord  slot = a TRANSPOSED real chord frame
 
-The two numbers that decide the question, per stream:
+Per stream, read off the melody column under mel_* (own) and under
+chd_* (partner), and the chord column the other way round:
 
-  PARTNER GAIN  = CE(ctx) - CE(partner_true)
+  OWN GAIN      = CE(ctx) - CE(own slot filled with its true frame)
+      the sanity floor. Must be large -- if it is not, the injection
+      path is broken and nothing else here means anything.
+  PARTNER GAIN  = CE(ctx) - CE(partner slot filled with its true frame)
       how much knowing the partner's true frame improves this stream's
       prediction. This IS the same-instant channel's information
       content. Near zero => the channel is dead.
-  DECOY SENSITIVITY = divergence(partner_decoy, ctx)
+  DECOY SENSITIVITY = divergence(partner decoy, ctx)
       how far a wrong-but-legal partner moves the prediction. Near zero
       => the model ignores slot content it judges untrustworthy (the
       shortcut story). Large, with CE worse than ctx => it is misled
       instead (the opposite story).
+
+PARTNER GAIN is reported both raw and as a fraction of OWN GAIN. The
+raw value depends on how predictable the corpus is; the fraction is
+what survives comparing two models trained on different corpora, so
+prefer it when the checkpoints are not corpus-matched.
 
 Slot contents are injected through the model's own self-conditioning
 override (k=0 plus sc_mask/sc_emb), which both the A.3 and A.7 forwards
@@ -130,47 +144,49 @@ def split_slots(q_logits, B):
 
 @torch.no_grad()
 def run_condition(net, x, t, K, mode, lag, semitones, device):
-    """One forward with the slots set up for `mode`. Returns query
-    logits [B, 2, S, V] (index 0 = melody slot, 1 = chord slot)."""
+    """One forward with the slots set up for `mode`.
+
+    `mode` is 'ctx', or '<mel|chd>_<true|decoy|shift>' -- the stream
+    names WHICH SLOT is filled; the other stays masked at k=K.
+    """
     B, L, S = x.shape
     T_full = L // 2
     full = lambda v: torch.full((B,), v, dtype=torch.long, device=device)
-    none_sc = (None, None)
 
-    def decoy_emb(mod, kind):
-        t2 = (t + lag) % T_full
-        tokens = x[:, 2 * t2 + mod]
+    def content_emb(mod, kind):
         if kind == 'shift':
             tokens = transpose_frame(net, x[:, 2 * t + mod], semitones)
+        else:                                     # 'decoy': displaced
+            tokens = x[:, 2 * ((t + lag) % T_full) + mod]
         return net._encode_frame(tokens, mod)
 
-    k_m, k_c = full(K), full(K)
-    sc_m, e_m = none_sc
-    sc_c, e_c = none_sc
-    if mode == 'ctx':
-        pass
-    elif mode == 'own_true':
-        k_m = full(0)
-    elif mode == 'partner_true':
-        k_c = full(0)
-    elif mode in ('partner_decoy', 'partner_shift'):
-        k_c = full(0)
-        sc_c = torch.ones(B, dtype=torch.bool, device=device)
-        e_c = decoy_emb(1, 'shift' if mode == 'partner_shift' else 'lag')
-    else:
-        raise ValueError(mode)
+    k = {0: full(K), 1: full(K)}
+    sc = {0: None, 1: None}
+    emb = {0: None, 1: None}
+    if mode != 'ctx':
+        stream, kind = mode.split('_')
+        mod = 0 if stream == 'mel' else 1
+        k[mod] = full(0)                          # reveal this slot
+        if kind != 'true':
+            sc[mod] = torch.ones(B, dtype=torch.bool, device=device)
+            emb[mod] = content_emb(mod, kind)
 
-    _, q_logits, _ = net(x, T_query=t, k_m=k_m, k_c=k_c,
-                         sc_mask_m=sc_m, sc_emb_m=e_m,
-                         sc_mask_c=sc_c, sc_emb_c=e_c)
+    _, q_logits, _ = net(x, T_query=t, k_m=k[0], k_c=k[1],
+                         sc_mask_m=sc[0], sc_emb_m=emb[0],
+                         sc_mask_c=sc[1], sc_emb_c=emb[1])
     return q_logits
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--ckpt', action='append', required=True,
-                   help='NAME=PATH, repeatable (e.g. A3=ckpt/<run>/)')
-    p.add_argument('--task', default='melchord')
+                   help='NAME=PATH[=TASK], repeatable. The optional third '
+                        'field probes that checkpoint on its OWN training '
+                        'corpus instead of --task; use it whenever the '
+                        'checkpoints are not corpus-matched, and compare '
+                        'the "% of own" column rather than raw gains.')
+    p.add_argument('--task', default='melchord',
+                   help='default corpus for checkpoints with no TASK field')
     p.add_argument('--batch_size', type=int, default=4)
     p.add_argument('--n_batches', type=int, default=25)
     p.add_argument('--lag', type=int, default=16,
@@ -180,20 +196,30 @@ def main():
     args = p.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    task = get_task(args.task)
-    batches = collect_batches(task, args.batch_size, args.n_batches)
-    print(f'[data] {len(batches)} val batches x {args.batch_size}')
+    cache = {}
 
-    MODES = ['ctx', 'own_true', 'partner_true', 'partner_decoy',
-             'partner_shift']
+    def batches_for(task_name):
+        if task_name not in cache:
+            cache[task_name] = collect_batches(get_task(task_name),
+                                               args.batch_size,
+                                               args.n_batches)
+            print(f'[data] {task_name}: {len(cache[task_name])} val '
+                  f'batches x {args.batch_size}')
+        return cache[task_name]
+
+    MODES = ['ctx', 'mel_true', 'chd_true', 'mel_decoy', 'chd_decoy',
+             'mel_shift', 'chd_shift']
     for spec in args.ckpt:
-        name, path = spec.split('=', 1)
+        name, rest = spec.split('=', 1)
+        path, _, task_name = rest.partition('=')
+        task_name = task_name or args.task
+        batches = batches_for(task_name)
         net = load_model(path).to(device)
         net.eval()
         K = net.diffusion_K
         pad = net.tokenizer.pad_token
         print(f'\n{"=" * 66}\n{name}: {os.path.basename(path.rstrip("/"))}\n'
-              f'{"=" * 66}')
+              f'  corpus: {task_name}\n{"=" * 66}')
 
         acc = {m: {'ce_m': [], 'ce_c': [], 'js_m': [], 'js_c': [],
                    'dis_m': [], 'dis_c': []} for m in MODES}
@@ -226,31 +252,37 @@ def main():
                   f'{mean(a["js_m"]):>10.4f}/{mean(a["js_c"]):<9.4f}'
                   f'{mean(a["dis_m"]):>11.3f}/{mean(a["dis_c"]):<10.3f}')
 
-        gain_m = mean(acc['ctx']['ce_m']) - mean(acc['partner_true']['ce_m'])
-        gain_c = mean(acc['ctx']['ce_c']) - mean(acc['partner_true']['ce_c'])
-        own_m = mean(acc['ctx']['ce_m']) - mean(acc['own_true']['ce_m'])
-        harm_m = mean(acc['partner_decoy']['ce_m']) - mean(acc['ctx']['ce_m'])
-        sens_m = mean(acc['partner_decoy']['js_m'])
-        shift_m = mean(acc['partner_shift']['js_m'])
-        print(f'\n  PARTNER GAIN   mel {gain_m:+.4f}   chord {gain_c:+.4f}'
-              f'   (>0: the same-instant channel carries information)')
-        print(f'  OWN-SLOT GAIN  mel {own_m:+.4f}'
-              f'   (sanity: reading its own true frame must help a lot)')
-        print(f'  DECOY  sensitivity(JS) {sens_m:.4f}   harm(CE) {harm_m:+.4f}')
-        print(f'  SHIFT  sensitivity(JS) {shift_m:.4f}')
-        verdict = ('IGNORES untrusted slot content'
-                   if sens_m < 0.05 * max(own_m, 1e-6) or sens_m < 1e-3
-                   else 'RESPONDS to slot content')
-        print(f'  -> {verdict}')
+        # Per stream: its OWN slot is the one named after it, its
+        # PARTNER slot is the other one. One condition, two readings.
+        print()
+        ratios = {}
+        for stream, col, own, partner in (('melody', 'm', 'mel', 'chd'),
+                                          ('chord', 'c', 'chd', 'mel')):
+            base = mean(acc['ctx'][f'ce_{col}'])
+            own_gain = base - mean(acc[f'{own}_true'][f'ce_{col}'])
+            gain = base - mean(acc[f'{partner}_true'][f'ce_{col}'])
+            harm = mean(acc[f'{partner}_decoy'][f'ce_{col}']) - base
+            sens = mean(acc[f'{partner}_decoy'][f'js_{col}'])
+            shift = mean(acc[f'{partner}_shift'][f'js_{col}'])
+            frac = gain / own_gain if own_gain > 1e-6 else float('nan')
+            ratios[stream] = frac
+            print(f'  [{stream}]  OWN GAIN {own_gain:+.4f}   '
+                  f'PARTNER GAIN {gain:+.4f} ({100 * frac:.1f}% of own)')
+            print(f'            partner DECOY  JS {sens:.4f}  '
+                  f'harm(CE) {harm:+.4f}     partner SHIFT  JS {shift:.4f}')
+        alive = [s for s, f in ratios.items() if f == f and f > 0.01]
+        print(f'  -> same-instant channel alive for: '
+              f'{", ".join(alive) if alive else "NEITHER stream"}')
 
     print(f'\n{"=" * 66}')
-    print('How to read: compare PARTNER GAIN across models -- it is the '
-          'information\nthe same-instant edge actually carries. If A.7 '
-          'gains far less than A.3 while\nits DECOY sensitivity is ~0, '
-          'the parametric corruption taught it to discard\nthe channel, '
-          'and pitch-shift (also parametric, also invertible) would '
-          'meet\nthe same fate. If A.7 gains as much but is MISLED '
-          '(harm > 0), the channel\nlives and the failure is elsewhere.')
+    print('How to read: PARTNER GAIN is the information the same-instant '
+          'edge\nactually carries; the "% of own" figure is the '
+          'corpus-robust version of\nit. If A.7 gains far less than A.3 '
+          'while its DECOY sensitivity is ~0, the\nparametric corruption '
+          'taught it to discard the channel, and pitch-shift\n(also '
+          'parametric, also invertible) would meet the same fate. If A.7 '
+          'gains\nas much but is MISLED (harm > 0), the channel lives and '
+          'the failure is\nelsewhere.')
 
 
 if __name__ == '__main__':

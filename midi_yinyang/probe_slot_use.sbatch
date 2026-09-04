@@ -18,6 +18,12 @@
 # Env knobs (--export=ALL,KEY=val):
 #   CKPT_A3, CKPT_A7  run dirs (best-val auto-resolved); both optional,
 #                     at least one required
+#   TASK_A3, TASK_A7  corpus to probe each on. The two reference
+#                     checkpoints are NOT corpus-matched (A.3 trained on
+#                     pop909+pop1k7, A.7 on pop909), so probe each on
+#                     its own and compare the "% of own" column, which
+#                     divides out how predictable the corpus is.
+#   TASK              corpus for any checkpoint with no TASK_* (melchord)
 #   LAG               decoy displacement in frames (default 16 = 1 bar)
 #   SEMITONES         transposition for the shift condition (default 1)
 #
@@ -55,17 +61,28 @@ echo "================================================================"
 
 CKPT_A3="${CKPT_A3:-}"
 CKPT_A7="${CKPT_A7:-}"
+TASK="${TASK:-melchord}"
+TASK_A3="${TASK_A3:-}"
+TASK_A7="${TASK_A7:-}"
 LAG="${LAG:-16}"
 SEMITONES="${SEMITONES:-1}"
+
+# tasks.py resolves the melchord dataset paths from MELCHORD_CP; every
+# melchord* run trains at max_polyphony 8, so pin the probe to the same
+# tokenization rather than inheriting whatever the shell had.
+export MELCHORD_CP="${MELCHORD_CP:-8}"
+echo "MELCHORD_CP=$MELCHORD_CP  (must match the training runs' cp)"
+
 ARGS=()
-[[ -n "$CKPT_A3" ]] && ARGS+=(--ckpt "A3=$CKPT_A3")
-[[ -n "$CKPT_A7" ]] && ARGS+=(--ckpt "A7=$CKPT_A7")
+[[ -n "$CKPT_A3" ]] && ARGS+=(--ckpt "A3=$CKPT_A3${TASK_A3:+=$TASK_A3}")
+[[ -n "$CKPT_A7" ]] && ARGS+=(--ckpt "A7=$CKPT_A7${TASK_A7:+=$TASK_A7}")
 if [[ ${#ARGS[@]} -eq 0 ]]; then
     echo "ERROR: set CKPT_A3 and/or CKPT_A7"; exit 1
 fi
 
-python probe_slot_use.py "${ARGS[@]}" --lag "$LAG" --semitones "$SEMITONES"
+python probe_slot_use.py "${ARGS[@]}" --task "$TASK" \
+    --lag "$LAG" --semitones "$SEMITONES"
 
 echo "================================================================"
-echo "Read PARTNER GAIN and DECOY SENSITIVITY per model (bottom of\neach block); the closing note explains what each pattern implies."
+printf "Read OWN GAIN, PARTNER GAIN and DECOY per stream (bottom of each\nblock); the closing note explains what each pattern implies.\n"
 echo "================================================================"
