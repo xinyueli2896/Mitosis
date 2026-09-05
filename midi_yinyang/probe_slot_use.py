@@ -321,15 +321,22 @@ def main():
             sens = mean(acc[f'{partner}_decoy'][f'js_{col}'])
             shift = mean(acc[f'{partner}_shift'][f'js_{col}'])
             frac = content_gain / own_gain if own_gain > 1e-6 else float('nan')
-            content[stream] = frac
+            tstat = content_gain / sem if sem and sem == sem else float('nan')
+            content[stream] = tstat
             print(f'  [{stream}]  OWN GAIN {own_gain:+.4f}   '
                   f'PARTNER GAIN {gain:+.4f}')
             print(f'            = CONTENT {content_gain:+.4f} +- {sem:.4f} '
-                  f'({100 * frac:.1f}% of own)  +  presence {presence:+.4f}')
+                  f'(t={tstat:.1f}, {100 * frac:.1f}% of own)'
+                  f'  +  presence {presence:+.4f}')
             print(f'            partner DECOY JS {sens:.4f}     '
                   f'partner SHIFT JS {shift:.4f}')
-        alive = [s for s, f in content.items() if f == f and f > 0.01]
-        print(f'  -> same-instant channel carries CONTENT for: '
+        # Whether the channel exists is a question about zero, so key
+        # the verdict on the standard error, not on a share-of-own
+        # threshold: a 0.5%-of-own effect can be solidly non-zero while
+        # a 1.1% one is noise. How BIG the channel is, is what the
+        # "% of own" figure is for, and the two must not be conflated.
+        alive = [s for s, t in content.items() if t == t and t > 2.0]
+        print(f"  -> same-instant channel carries CONTENT (t>2) for: "
               f'{", ".join(alive) if alive else "NEITHER stream"}')
 
     print(f'\n{"=" * 66}')
