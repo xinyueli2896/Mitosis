@@ -277,7 +277,7 @@ run on the melchord cp4 / v1.2 / per-part-gate defaults.
 | **A.4** | A.5 + token-level slot corruption (bug fixes included) | `TOKEN_LEVEL_MASK=1 MASK_REVEALED_QUERY_LOSS=1` | `A4` | first attempt (pre-fix, without A.5's loss) FAILED — legacy dir `K4mgtk...long`; retrain pending |
 | **A.5** | A.3 + query loss on corrupted positions only | `MASK_REVEALED_QUERY_LOSS=1` | `A5` | trained 2026-08-31 (legacy dir `K4mgqm...long`) |
 | **A.6** | A.5 + 8 query pairs per forward | `MASK_REVEALED_QUERY_LOSS=1 QUERY_PAIRS=8` | `A6` | planned |
-| **A.8** | A.3 scaffold + CONTIGUOUS BLOCK of B query pairs, decoded and committed B frames at a time | `QUERY_BLOCK=B` (default 4) | `A8` (suffix `bB` for B≠4) | planned 2026-09-04 |
+| **A.8** | A.3 scaffold + CONTIGUOUS BLOCK of B query pairs, decoded and committed B frames at a time | `QUERY_BLOCK=B` (default 4) | `A8` (suffix `bB` for B≠4) | trained 2026-09-05 (job 206327, 75k); NEGATIVE, closed -- see entry |
 | **A.7** | A.3 scaffold + lag-graded decoy corruption | `DECOY_CORRUPTION=1` (+ `DECOY_LAG_BINS` from `calibrate_decoy_lag`) | `A7` | planned 2026-09-02 |
 
 There is ONE A.4. The bugged first implementation does not keep the
@@ -356,6 +356,45 @@ over-fit, so B stays small (4-8) and best-val selection matters. B=1 is
 exactly A.3, masks bit-identical. Exclusive with QUERY_PAIRS (A.6):
 both use the same slot machinery differently. Gated by
 audit_query_block before first training.
+
+**Result (2026-09-05): negative, closed.** Job 206327, B=4, 75k steps.
+
+*Training.* val_query_loss rose from its init value from step 0 (0.4 ->
+0.65), the A.6 pattern; AR heads bottomed at ~35k and overfit as in the
+rest of the family. val_loss minimum 0.9665 at step 9500 against ~0.45-
+0.50 for A.4/A.5/A.7. Only the step-9500 checkpoint exists: best-val
+correctly kept 500/9500, and last.ckpt was found byte-identical to the
+9500 file although the run validated every 500 steps to 75k --
+checkpointing stopped at the last best-k save (see the
+diagnose_last_ckpt entry in EXPERIMENTS.md; the trainer now writes a
+rolling step checkpoint, STEP_CKPT_EVERY).
+
+*Why (probe_slot_use, block section, step 9500).* The block lets a
+slot read TRUE future frames: with A.3's kernel a neighbour holds its
+true frame whenever its k<K, and every slot reads every other. The
+offset-0 melody slot's CE drops 0.775 -> 0.662 when its neighbours are
+revealed (LEAK +0.113 +- 0.015, t~8) -- ten times A.3's whole
+cross-stream CONTENT. That is bidirectional teacher forcing; decode can
+only ever fill those neighbours with drafts. The lone-slot val_loss
+scores a regime training never visits, which is why it rose while the
+block objective improved.
+
+*Decode (queryablation 207527, 9.5k ckpt, vs A.3, 5 songs x 3).* Worse
+on every H2 row: coupling 0.072 vs 0.095 -- below the no-slot A.1
+control (0.084), as A.7 was; ctnctr 0.721 vs 0.881, pcs 0.337 vs
+0.457, chord_tone_cov 0.483 vs 0.561, mctd 1.487 vs 1.401. Melody
+degenerates: density_ratio_a 0.705, empty_rate_a 0.777 (vs 0.645),
+mel_stepwise_delta -0.291 (vs -0.036), mel_interval_jsd 0.225 (vs
+0.100) -- each worse on 5/5 songs (two-sided p=0.062, the floor at
+n=5). survival_min 0.80 vs 0.88.
+
+*Caveat and decision.* 9.5k steps is 13% of the schedule, so grammar
+and health rows could partly be under-training. Coupling below the
+no-slot control is not: it is the leak paying off in training and not
+at decode, the same signature as A.7. A converged A.8 would lean on the
+leak more, not less. Not retrained. Third query-design variant in a
+row that does not beat A.3; the exploration (A.4-A.8) is closed with
+A.3 as the model.
 
 ### A.7 — lag-graded decoy corruption (2026-09-02)
 
