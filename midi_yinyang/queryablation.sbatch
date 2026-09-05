@@ -1,7 +1,7 @@
 #!/bin/bash
 # SLURM (GPU): query-slot ablation, ONE JOB -- co-generation decodes for
 # A1 (intra-cross-attn, NO query slots: the control) and the query-
-# slot variants A3/A3pop/A4/A5/A6/A7 on
+# slot variants A3/A3pop/A4/A5/A6/A7/A8 on
 # the POP909 test split, then the quantitative melody-chord consistency
 # scoring, all in a single allocation (the multi-job chain version hit
 # QOSMaxSubmitJobPerUserLimit). Tables: vs A3 (variant-level) and vs A1
@@ -29,9 +29,14 @@
 # Env knobs (--export=ALL,KEY=val):
 #   PROMPT_LENGTH default 96 (6 bars), GEN_LENGTH default 416,
 #   N_SAMPLES default 3, FORCE default 0
-#   BASELINE  default A3. Use BASELINE=A3pop for a same-data
-#             comparison against A4/A5/A6/A7 (the combined-data A3
-#             differs in TRAINING DATA as well as query design).
+#   BASELINE  default A3. A3's run tag names the combined corpus but
+#             the run trained on the plain melchord task (POP909) --
+#             the tag is a label, not the task; confirm from the
+#             'Data for dataset' line of its training log.
+#   MODELS    space-separated subset, e.g. MODELS="A3 A8" INCLUDE_A1=0
+#             to score one variant against A3 alone. A8 (query block)
+#             decodes through the block loop automatically -- the ckpt
+#             carries query_block_flag and load_model dispatches on it.
 #
 # Example:
 #   sbatch midi_yinyang/queryablation.sbatch
@@ -136,11 +141,14 @@ else
     echo "[A1] done"
 fi
 
-# A3     = the combined POP909+Pop1K7 run (the E1 candidate).
-# A3pop  = the POP909-only A3 -- SAME data/schedule as A4/A5/A6/A7, so
-#          it is the like-for-like baseline for any query-design claim
-#          (BASELINE=A3pop). Absent models are skipped with a warning.
-MODELS_DEFAULT="A3 A3pop A4 A5 A6 A7"
+# A3     = the reference run (the E1 candidate). Its tag says
+#          pop909_pop1k7_combined but the task was plain melchord.
+# A3pop  = an A3 retrain under the bare 'long' tag, if one exists.
+#          Absent models are skipped with a warning.
+# A8     = contiguous query block (B=4). Only a step-9500 checkpoint
+#          exists: val_loss bottomed there and last.ckpt froze at the
+#          same save, so the 75k weights were never written.
+MODELS_DEFAULT="A3 A3pop A4 A5 A6 A7 A8"
 read -r -a MODELS <<< "${MODELS:-$MODELS_DEFAULT}"
 declare -A CKPTS=(
     [A3]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord_pop909_pop1k7_combined_long_batch_8_schedule
@@ -149,6 +157,7 @@ declare -A CKPTS=(
     [A5]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A5_melchord_long_batch_8_schedule
     [A6]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A6_melchord_long_batch_8_schedule
     [A7]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A7_melchord_long_batch_8_schedule
+    [A8]=ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A8_melchord_long_batch_8_schedule
 )
 DECODED=()
 
