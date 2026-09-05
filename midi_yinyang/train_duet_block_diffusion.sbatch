@@ -160,6 +160,14 @@
 #                           objective differs -- so turn it on for a
 #                           WHOLE arm-set (all four E6 arms, say) or
 #                           none. Run dirs get a 'qm' marker.
+#   --export=ALL,SLOT_SEES_PREV_FRAME=1   A.3f: each query slot reads
+#                           the clean rows that predict its frame
+#                           (content up to t-1, both streams). The
+#                           historical mask stops at t-2, one frame
+#                           short of the AR head at the same phase.
+#                           With QUERY_PAIRS=all this is A.9.
+#   --export=ALL,QUERY_PAIRS=all     every frame 1..T-1 carries a query
+#                           pair (A.9 with the flag above; A3qall alone).
 #   --export=ALL,QUERY_PAIRS=N       Q: how many DISTINCT frames each
 #                           training forward supervises at the query
 #                           slots. Training supervises ONE frame per
@@ -293,6 +301,12 @@ MASK_REVEALED_QUERY_LOSS="${MASK_REVEALED_QUERY_LOSS:-0}"
 # Q: distinct frames supervised per forward at the query slots (see
 # header). Q>1 marks the run dir with 'qN'.
 QUERY_PAIRS="${QUERY_PAIRS:-1}"
+[[ "$QUERY_PAIRS" == "all" ]] && QUERY_PAIRS=-1     # A.9: every frame
+# A.9 / A.3f: let each query slot read the clean rows that PREDICT its
+# frame, i.e. content up to t-1 in both streams. The historical mask
+# stops at content t-2 -- one frame short of the AR head at the same
+# rotary phase. Travels in the ckpt; load_model restores it.
+SLOT_SEES_PREV_FRAME="${SLOT_SEES_PREV_FRAME:-0}"
 # A.7: lag-graded decoy corruption -- query slots are corrupted with the
 # same stream's frame from t +- lag(k) (complete, self-contained frames
 # whose harmonic agreement with the partner decays with k) instead of
@@ -375,6 +389,9 @@ if [[ -z "${MODEL_ABBR:-}" ]]; then
     elif [[ "$TOKEN_LEVEL_MASK" == "1" && "$MASK_REVEALED_QUERY_LOSS" == "1" ]]; then FAM="A4"
     elif [[ "$TOKEN_LEVEL_MASK" == "1" ]]; then FAM="A4legacy"
     elif [[ "$MASK_REVEALED_QUERY_LOSS" == "1" && "$QUERY_PAIRS" != "1" ]]; then FAM="A6"
+    elif [[ "$SLOT_SEES_PREV_FRAME" == "1" && "$QUERY_PAIRS" == "-1" ]]; then FAM="A9"
+    elif [[ "$SLOT_SEES_PREV_FRAME" == "1" ]]; then FAM="A3f"
+    elif [[ "$QUERY_PAIRS" == "-1" ]]; then FAM="A3qall"
     elif [[ "$MASK_REVEALED_QUERY_LOSS" == "1" ]]; then FAM="A5"
     elif [[ "$QUERY_PAIRS" != "1" ]]; then FAM="A3q${QUERY_PAIRS}"
     else FAM="A3"
@@ -505,6 +522,9 @@ fi
 # callback keeps the two lowest val_loss files; when val_loss bottoms
 # early and only rises (every multi-pair query run so far), those are
 # early-run files and the converged weights are never written. 0 = off.
+if [[ "$SLOT_SEES_PREV_FRAME" == "1" ]]; then
+    EXTRA_TRAIN_ARGS+=(--slot_sees_prev_frame)
+fi
 STEP_CKPT_EVERY="${STEP_CKPT_EVERY:-5000}"
 if [[ "$STEP_CKPT_EVERY" != "0" ]]; then
     EXTRA_TRAIN_ARGS+=(--step_ckpt_every "$STEP_CKPT_EVERY")

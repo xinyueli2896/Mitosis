@@ -207,7 +207,19 @@ class M2CDuetBlockLayer(nn.Module):
         # Both are exactly what the block decode supplies, which is the
         # point of the variant.
         block_mode = bool(getattr(self, 'query_block_mode', False))
-        cache_key = (clean_len, tq, str(device), block_mode)
+        # A.9 / A.3f (slot_sees_prev_frame, set by the model): let a
+        # query row reach the clean rows that PREDICT its own frame.
+        # The clean stream is shifted one frame right (h_clean = [sos,
+        # h[:, :-2]]), so clean row p holds frame p//2 - 1 and predicts
+        # frame p//2. The historical test admits rows by prediction
+        # frame < t, i.e. content up to t-2: the slot for frame t has
+        # never been able to see frame t-1, in any layer, while the AR
+        # head at the same rotary phase (row 2t, predicting t) can.
+        # Admitting prediction frame <= t adds rows 2t and 2t+1 --
+        # content t-1 in both streams -- and nothing else: row 2t+2,
+        # the first to hold frame t itself, predicts t+1 and stays out.
+        prev_ok = bool(getattr(self, 'slot_sees_prev_frame', False))
+        cache_key = (clean_len, tq, str(device), block_mode, prev_ok)
         if self._mask_cache_key == cache_key:
             return self._mask_intra, self._mask_cross, self._mask_frame
 
@@ -260,6 +272,8 @@ class M2CDuetBlockLayer(nn.Module):
         if block_mode:
             cut = int(min(tq))
             q_past_for_query = (f_q < cut)
+        elif prev_ok:
+            q_past_for_query = (f_q <= f_p)
         else:
             q_past_for_query = strict_past_frame
 

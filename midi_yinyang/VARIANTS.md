@@ -277,6 +277,8 @@ run on the melchord cp4 / v1.2 / per-part-gate defaults.
 | **A.4** | A.5 + token-level slot corruption (bug fixes included) | `TOKEN_LEVEL_MASK=1 MASK_REVEALED_QUERY_LOSS=1` | `A4` | first attempt (pre-fix, without A.5's loss) FAILED — legacy dir `K4mgtk...long`; retrain pending |
 | **A.5** | A.3 + query loss on corrupted positions only | `MASK_REVEALED_QUERY_LOSS=1` | `A5` | trained 2026-08-31 (legacy dir `K4mgqm...long`) |
 | **A.6** | A.5 + 8 query pairs per forward | `MASK_REVEALED_QUERY_LOSS=1 QUERY_PAIRS=8` | `A6` | planned |
+| **A.9** | A.3 kernel; each query slot reads clean history through frame t-1 (fix); a query pair at EVERY frame; A.3 decode | `SLOT_SEES_PREV_FRAME=1 QUERY_PAIRS=all` | `A9` | planned 2026-09-05 |
+| **A.3f** | A.3 + the t-1 mask fix only (one change at a time) | `SLOT_SEES_PREV_FRAME=1` | `A3f` | planned 2026-09-05 |
 | **A.8** | A.3 scaffold + CONTIGUOUS BLOCK of B query pairs, decoded and committed B frames at a time | `QUERY_BLOCK=B` (default 4) | `A8` (suffix `bB` for B≠4) | trained 2026-09-05 (job 206327, 75k); NEGATIVE, closed -- see entry |
 | **A.7** | A.3 scaffold + lag-graded decoy corruption | `DECOY_CORRUPTION=1` (+ `DECOY_LAG_BINS` from `calibrate_decoy_lag`) | `A7` | planned 2026-09-02 |
 
@@ -318,6 +320,48 @@ explicitly, because auto-resume now looks for the new-style name.
 The main line is A.3 → A.5 → A.6, each strictly containing the
 previous; A.4 sits on that line too (it contains A.5), adding
 token-level corruption on top.
+
+### A.9 / A.3f — the slot sees frame t-1; a query pair at every frame (2026-09-05)
+
+**The finding.** `_build_masks` admits clean rows into a query slot by
+their PREDICTION frame: `f_q < t`. But the clean stream is shifted one
+frame right (`h_clean = [sos, h[:, :-2]]`), so clean row p holds frame
+p//2 - 1 and predicts p//2. Rows predicting < t hold content up to
+**t-2**. The slot for frame t has never been able to see frame t-1,
+in any layer, in any A-family checkpoint -- while the AR head at the
+same rotary phase (row 2t, predicting t) sees t-1 in both streams
+(intra: own; frame pass: partner). The slot is documented as "the
+clean row that would hold frame t"; that row's natural context is
+content <= t-1. The mask is one frame short of the documented intent.
+Verified by audit_slot_context (mask asked directly) and reported per
+checkpoint by probe_slot_use's `[mask]` line.
+
+The consequence at decode: rounds r<K refine from a draft that came
+from the AR head (which saw t-1), so t-1 reaches the slot only
+indirectly, through the draft. Every slot-side number in the ledger
+(A.3's 5.9% / 3.7% CONTENT included) was measured on slots working
+with one frame less direct context than the head they refine.
+
+**A.3f** = A.3 + `--slot_sees_prev_frame`: the test becomes `f_q <= t`,
+adding exactly rows 2t and 2t+1 (content t-1, both streams) and nothing
+else -- row 2t+2, the first to hold frame t, predicts t+1 and stays
+out. Everything else unchanged. One change, so its effect is
+attributable.
+
+**A.9** = A.3f + `--query_pairs -1`: every frame 1..T-1 carries a query
+pair in one forward, no frame sampling, each pair seeing its own past
+(through t-1) and only its own partner -- A.6's scattered mask taken
+to its limit, minus A.5's keep-mask loss. Decode is A.3's, one frame
+at a time. Not a block: no slot reads another frame's slot, so the
+A.8 future leak cannot occur by construction. Sequence length at
+training is ~4T instead of 2T. Note the query loss is a MEAN over
+slots, so Q pairs give the same gradient magnitude with lower
+variance, not Q times the signal; A.6 (Q=8) overfit sooner for that
+reason. If more signal is wanted it is `QUERY_LOSS_WEIGHT`, untested.
+
+Both travel in the ckpt as `slot_sees_prev_frame_flag`; load_model
+restores it (decoding with the other mask is a silent mismatch).
+Exclusive with query_block. Gated by audit_slot_context.
 
 ### A.8 — contiguous query block (2026-09-04)
 

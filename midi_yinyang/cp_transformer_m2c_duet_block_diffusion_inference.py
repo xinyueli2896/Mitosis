@@ -146,6 +146,17 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
             break
     print(f'[load_model] query_block={query_block}'
           f'{" (A.8: BLOCK decode)" if query_block > 1 else ""}')
+    # A.9 / A.3f detection: buffer VALUE, must be restored -- decoding
+    # with the other mask gives the slot one frame more or less context
+    # than it trained with, silently.
+    slot_sees_prev_frame = False
+    for k in state_dict_keys:
+        if k.endswith('slot_sees_prev_frame_flag'):
+            sd_tmp = ck['state_dict'] if 'state_dict' in ck else ck
+            slot_sees_prev_frame = bool(int(sd_tmp[k].item()))
+            break
+    print(f'[load_model] slot_sees_prev_frame={slot_sees_prev_frame}'
+          f'{" (A.9/A.3f: slot reads frame t-1)" if slot_sees_prev_frame else ""}')
     if diffusion_K is None:
         for key, name in (('k_emb_m.weight', 'k_emb_m'),
                           ('k_emb_c.weight', 'k_emb_c')):
@@ -173,6 +184,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         diffusion_K=diffusion_K,
         slot_rope_aligned=slot_rope_aligned,
         time_rope_aligned=time_rope_aligned,
+        slot_sees_prev_frame=slot_sees_prev_frame,
         moe_modality_bias=moe_modality_bias,
         moe_modality_gates=moe_modality_gates,
         moe_modality_hard_route=moe_modality_hard_route,

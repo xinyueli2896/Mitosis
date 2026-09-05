@@ -154,7 +154,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  token_level_mask=False, mask_revealed_query_loss=False,
                  query_pairs=1, decoy_corruption=False,
                  decoy_mask_residual=0.25, decoy_lag_bins=None,
-                 query_block=1, **kwargs):
+                 query_block=1, slot_sees_prev_frame=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- A.7: lag-graded DECOY corruption -------------------------
@@ -318,7 +318,23 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         # Training-only: inference always decodes one frame at a time,
         # so Q leaves the parameters, the checkpoint and the decode path
         # untouched, and Q=1 is bit-for-bit the historical behaviour.
-        self.query_pairs = max(int(query_pairs), 1)
+        # -1 = EVERY frame 1..T-1 carries a query pair (A.9). Any
+        # other value keeps the historical meaning.
+        self.query_pairs = -1 if int(query_pairs) < 0 else max(int(query_pairs), 1)
+        # --- A.9 / A.3f: the slot sees frame t-1 ----------------------
+        # See _build_masks in cp_transformer_m2c_duet_block.py. Travels
+        # in the ckpt as a buffer VALUE so load_model restores it;
+        # decoding with the other mask is a silent train/decode
+        # mismatch (the slot would see one frame more or less context
+        # than it was trained with).
+        self.slot_sees_prev_frame = bool(slot_sees_prev_frame)
+        self.register_buffer(
+            'slot_sees_prev_frame_flag',
+            torch.tensor(int(self.slot_sees_prev_frame), dtype=torch.long),
+        )
+        if self.slot_sees_prev_frame:
+            for layer in self.global_layers:
+                layer.slot_sees_prev_frame = True
         # --- A.8: CONTIGUOUS BLOCK of query pairs --------------------
         # B = query_block frames t0..t0+B-1 carry slots in one forward.
         # Unlike A.6's scattered Q (independent frames, each seeing its
@@ -334,7 +350,12 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             torch.tensor(self.query_block, dtype=torch.long),
         )
         if self.query_block > 1:
-            if self.query_pairs > 1:
+            if self.slot_sees_prev_frame:
+                raise ValueError(
+                    'slot_sees_prev_frame is defined for the per-frame '
+                    'mask only; block mode (A.8) cuts history at the '
+                    'block start and is closed.')
+            if self.query_pairs > 1 or self.query_pairs < 0:
                 raise ValueError(
                     'query_block (A.8, contiguous) and query_pairs '
                     '(A.6, scattered) are different uses of the same '
@@ -657,9 +678,9 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         clean_len = L - 2 * len(tq)
         head_dim = H // self.num_attention_heads
         positions = torch.arange(L, device=h.device)
-        for j, t_j in enumerate(tq):
-            positions[clean_len + 2 * j] = 2 * t_j + 2
-            positions[clean_len + 2 * j + 1] = 2 * t_j + 3
+        tq_t = torch.as_tensor(tq, device=h.device, dtype=positions.dtype)
+        positions[clean_len::2] = 2 * tq_t + 2
+        positions[clean_len + 1::2] = 2 * tq_t + 3
         if self.time_rope_aligned:
             positions = torch.div(positions, 2, rounding_mode='floor')
         max_pos = int(positions.max().item()) + 1
@@ -959,11 +980,16 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             tq = tuple(range(t0, t0 + B_blk))
         else:
             tq = None
-        Q = min(max(int(self.query_pairs), 1), T_full - 1)
+        Q = (T_full - 1 if self.query_pairs < 0
+             else min(max(int(self.query_pairs), 1), T_full - 1))
         if tq is not None:
             pass
         elif self.training:
-            if Q == 1:
+            if Q >= T_full - 1:
+                # A.9: every frame, no sampling -- the query objective
+                # becomes a full-sequence objective like the AR loss.
+                tq = tuple(range(1, T_full))
+            elif Q == 1:
                 tq = (int(torch.randint(
                     low=1, high=T_full, size=(1,), device=x.device,
                 ).item()),)
@@ -1409,6 +1435,13 @@ if __name__ == '__main__':
                              'get a "qm" marker; carried in the ckpt '
                              'as the mask_revealed_query_loss_flag '
                              'buffer.')
+    parser.add_argument('--slot_sees_prev_frame', action='store_true',
+                        help='Let each query slot read the clean rows '
+                             'that PREDICT its frame (content up to t-1, '
+                             'both streams). The historical mask stops '
+                             'at content t-2, one frame short of what '
+                             'the AR head at the same phase sees. A.3f '
+                             'alone; A.9 with --query_pairs -1.')
     parser.add_argument('--query_pairs', type=int, default=1,
                         help='Q: how many DISTINCT frames each training '
                              'forward supervises at the query slots. '
@@ -1469,6 +1502,14 @@ if __name__ == '__main__':
             fam = 'A6'
         elif a.mask_revealed_query_loss:
             fam = 'A5'
+        elif a.slot_sees_prev_frame and a.query_pairs < 0:
+            fam = 'A9'                         # A.9 = A.3 kernel, slot sees
+                                               # t-1, a query pair at EVERY
+                                               # frame, A.3 decode
+        elif a.slot_sees_prev_frame:
+            fam = 'A3f'                        # A.3 + the t-1 mask fix only
+        elif a.query_pairs < 0:
+            fam = 'A3qall'                     # every frame, old mask
         elif a.query_pairs > 1:
             fam = f'A3q{a.query_pairs}'        # unnamed combo, kept unique
         else:
@@ -1557,6 +1598,7 @@ if __name__ == '__main__':
           f'mask_revealed_query_loss='
           f'{bool(args.mask_revealed_query_loss)}  '
           f'query_pairs={args.query_pairs}  '
+          f'slot_sees_prev_frame={args.slot_sees_prev_frame}  '
           f'query_block={args.query_block}'
           f'{" (A.8)" if args.query_block > 1 else ""}  '
           f'decoy_corruption={bool(args.decoy_corruption)}'
@@ -1689,6 +1731,7 @@ if __name__ == '__main__':
                     'mask_revealed_query_loss':
                         bool(args.mask_revealed_query_loss),
                     'query_pairs': args.query_pairs,
+                    'slot_sees_prev_frame': bool(args.slot_sees_prev_frame),
                     'query_block': args.query_block,
                     'decoy_corruption': bool(args.decoy_corruption),
                     'decoy_mask_residual': args.decoy_mask_residual,
