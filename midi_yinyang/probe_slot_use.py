@@ -215,59 +215,102 @@ def block_probe(net, batches, K, pad, n_frames, device):
     and a regime training never visits -- sits where the masked-
     neighbour case sits or worse (REGIME).
 
-    Three forwards per frame, offset-0 slot masked at k=K throughout:
-      alone       T_query = t0 only          (the val_loss regime)
-      nbr_masked  block, every slot at k=K   (decode round r=K)
-      nbr_true    block, neighbours at k=0   (training when k draws 0)
-    Also reports CE per offset under nbr_masked, i.e. how much harder
-    each further-ahead frame is with history cut at t0.
+    Forwards per frame, all with the block's other slots as stated:
+      alone        T_query = t0 only          (the val_loss regime)
+      nbr_masked   block, every slot at k=K   (decode round r=K)
+      nbr_true     block, slot 0 at k=K, the rest at k=0
+      only_j       block, slot j at k=K, the rest at k=0  (j = 1..B-1)
+    Reports, per offset j: CE with everything masked (how much harder
+    each further-ahead frame is with history cut at t0), CE with the
+    slot itself revealed (copy sanity, must be ~0), and CE with only
+    the slot masked (the leak at that offset -- interior offsets have
+    true neighbours on BOTH sides).
+
+    Every cell also counts frames that came back NaN, split by cause:
+    an all-pad target (nothing to score) vs NaN logits (a forward
+    defect, e.g. an attention row with no permitted key). A NaN cell
+    is printed as nan, never averaged away.
     """
     Bq = int(net.query_block)
     print(f'\n  --- block regime (query_block={Bq}) ---')
-    per = {c: {'m': [], 'c': []} for c in ('alone', 'nbr_masked', 'nbr_true')}
-    per_off = {j: {'m': [], 'c': []} for j in range(Bq)}
+    conds = ['alone', 'nbr_masked', 'nbr_true']
+    per = {c: {'m': [], 'c': []} for c in conds}
+    per_off = {kind: {j: {'m': [], 'c': []} for j in range(Bq)}
+               for kind in ('all_masked', 'self_true', 'only_self_masked')}
+    nan_pad = {}      # (label, stream) -> frames with all-pad target
+    nan_logit = {}    # (label, stream) -> frames with NaN logits
+    n_seen = 0
+
+    def score(label, logits, target, s):
+        """frame_ce plus NaN bookkeeping under `label`."""
+        key = (label, s)
+        if (target != pad).sum() == 0:
+            nan_pad[key] = nan_pad.get(key, 0) + 1
+            return float('nan')
+        if not torch.isfinite(logits).all():
+            nan_logit[key] = nan_logit.get(key, 0) + 1
+            return float('nan')
+        return frame_ce(logits, target, pad)
+
+    def bm(v):
+        good = [u for u in v if u == u]
+        return sum(good) / len(good) if good else float('nan')
+
     for batch in batches:
         x, T_full, S = interleave(net, batch, device)
         B = x.shape[0]
         lo, hi = T_full // 4, min((3 * T_full) // 4, T_full - Bq)
         span = max(hi - lo, 1)
         frames = sorted({lo + (i * span) // n_frames for i in range(n_frames)})
-        acc = {c: {'m': [], 'c': []} for c in per}
-        acc_off = {j: {'m': [], 'c': []} for j in per_off}
+        acc = {c: {'m': [], 'c': []} for c in conds}
+        acc_off = {kind: {j: {'m': [], 'c': []} for j in range(Bq)}
+                   for kind in per_off}
         for t0 in frames:
+            n_seen += 1
             tq = tuple(range(t0, t0 + Bq))
             kK = torch.full((B, Bq), K, dtype=torch.long, device=device)
-            k_true = kK.clone()
-            k_true[:, 1:] = 0
-            runs = {
-                'alone': net(x, T_query=t0,
-                             k_m=kK[:, 0].contiguous(),
-                             k_c=kK[:, 0].contiguous())[1],
-                'nbr_masked': net(x, T_query=tq, k_m=kK, k_c=kK)[1],
-                'nbr_true': net(x, T_query=tq, k_m=k_true, k_c=k_true)[1],
-            }
-            for c, q in runs.items():
-                S_, V = q.shape[-2], q.shape[-1]
-                q = q.view(B, -1, S_, V)
-                acc[c]['m'].append(frame_ce(q[:, 0], x[:, 2 * t0], pad))
-                acc[c]['c'].append(frame_ce(q[:, 1], x[:, 2 * t0 + 1], pad))
-            q = runs['nbr_masked'].view(B, -1, S, runs['nbr_masked'].shape[-1])
+            k0 = torch.zeros_like(kK)
+
+            def block(k):
+                q = net(x, T_query=tq, k_m=k, k_c=k)[1]
+                return q.view(B, -1, q.shape[-2], q.shape[-1])
+
+            q_alone = net(x, T_query=t0, k_m=kK[:, 0].contiguous(),
+                          k_c=kK[:, 0].contiguous())[1]
+            q_alone = q_alone.view(B, -1, q_alone.shape[-2], q_alone.shape[-1])
+            q_masked = block(kK)
+            q_true = block(k0)                       # every slot revealed
+            only = {}
+            for j in range(Bq):
+                k = k0.clone()
+                k[:, j] = K
+                only[j] = block(k)                   # slot j alone masked
+            tm, tc = x[:, 2 * t0], x[:, 2 * t0 + 1]
+            acc['alone']['m'].append(score('alone', q_alone[:, 0], tm, 'm'))
+            acc['alone']['c'].append(score('alone', q_alone[:, 1], tc, 'c'))
+            acc['nbr_masked']['m'].append(score('nbr_masked', q_masked[:, 0], tm, 'm'))
+            acc['nbr_masked']['c'].append(score('nbr_masked', q_masked[:, 1], tc, 'c'))
+            acc['nbr_true']['m'].append(score('nbr_true', only[0][:, 0], tm, 'm'))
+            acc['nbr_true']['c'].append(score('nbr_true', only[0][:, 1], tc, 'c'))
             for j in range(Bq):
                 t = t0 + j
-                acc_off[j]['m'].append(frame_ce(q[:, 2 * j], x[:, 2 * t], pad))
-                acc_off[j]['c'].append(frame_ce(q[:, 2 * j + 1], x[:, 2 * t + 1], pad))
-        bm = lambda v: (sum(u for u in v if u == u)
-                        / max(sum(1 for u in v if u == u), 1))
-        for c in per:
+                tm, tc = x[:, 2 * t], x[:, 2 * t + 1]
+                for kind, q in (('all_masked', q_masked), ('self_true', q_true),
+                                ('only_self_masked', only[j])):
+                    lab = f'{kind}@{j}'
+                    acc_off[kind][j]['m'].append(score(lab, q[:, 2 * j], tm, 'm'))
+                    acc_off[kind][j]['c'].append(score(lab, q[:, 2 * j + 1], tc, 'c'))
+        for c in conds:
             for s in ('m', 'c'):
                 per[c][s].append(bm(acc[c][s]))
-        for j in per_off:
-            for s in ('m', 'c'):
-                per_off[j][s].append(bm(acc_off[j][s]))
+        for kind in per_off:
+            for j in per_off[kind]:
+                for s in ('m', 'c'):
+                    per_off[kind][j][s].append(bm(acc_off[kind][j][s]))
 
-    mean = lambda v: sum(v) / max(len(v), 1)
+    mean = bm
     print(f'  {"offset-0 slot, k=K":<22}{"CE mel":>9}{"CE chd":>9}')
-    for c in per:
+    for c in conds:
         print(f'  {c:<22}{mean(per[c]["m"]):>9.4f}{mean(per[c]["c"]):>9.4f}')
     for s, name in (('m', 'melody'), ('c', 'chord')):
         leak, leak_se = paired_stats(per['nbr_masked'][s], per['nbr_true'][s])
@@ -276,14 +319,29 @@ def block_probe(net, batches, K, pad, n_frames, device):
               f'{leak:+.4f} +- {leak_se:.4f}')
         print(f'            REGIME CE(alone) - CE(nbr_masked) = '
               f'{reg:+.4f} +- {reg_se:.4f}')
-    print(f'  {"per offset (nbr_masked)":<22}{"CE mel":>9}{"CE chd":>9}')
-    for j in per_off:
-        print(f'  {"t0+" + str(j):<22}{mean(per_off[j]["m"]):>9.4f}'
-              f'{mean(per_off[j]["c"]):>9.4f}')
+    print(f'  {"per offset":<12}{"all masked":>18}{"self revealed":>18}'
+          f'{"only self masked":>18}')
+    print(f'  {"":<12}{"mel":>9}{"chd":>9}{"mel":>9}{"chd":>9}{"mel":>9}{"chd":>9}')
+    for j in range(Bq):
+        row = f'  {"t0+" + str(j):<12}'
+        for kind in ('all_masked', 'self_true', 'only_self_masked'):
+            row += (f'{mean(per_off[kind][j]["m"]):>9.4f}'
+                    f'{mean(per_off[kind][j]["c"]):>9.4f}')
+        print(row)
+    print(f'  frames scored per cell: {n_seen}')
+    if nan_pad or nan_logit:
+        print('  NaN frames (excluded from every mean above):')
+        for key in sorted(set(nan_pad) | set(nan_logit)):
+            print(f'    {key[0]:<22} {key[1]}  all-pad target: '
+                  f'{nan_pad.get(key, 0):>4}   NaN logits: '
+                  f'{nan_logit.get(key, 0):>4}')
+    else:
+        print('  no NaN frames in any cell')
     print('  LEAK >> 0: the slot learned to read true future frames from '
           'its neighbours,\n  which decode can only ever fill with drafts. '
           'REGIME > 0: the lone-slot\n  eval that picks the checkpoint '
-          'scores a regime the model never trained in.')
+          'scores a regime the model never trained in.\n  "self revealed" '
+          'must be ~0 (copy); "only self masked" is the leak per offset.')
 
 
 def exact_ckpt(path):
@@ -302,7 +360,11 @@ def exact_ckpt(path):
         link = os.path.join(tempfile.mkdtemp(prefix='probe_ckpt_'),
                             f'{run}.final.ckpt')
         os.symlink(os.path.abspath(path), link)
-        print(f'[ckpt] probing FINAL weights: {path}')
+        real = os.path.realpath(path)
+        st = os.stat(real)
+        print(f'[ckpt] probing FINAL weights: {path}\n'
+              f'       resolves to {real}\n'
+              f'       {st.st_size / 1e6:.1f} MB, mtime {st.st_mtime:.0f}')
         return link
     return path
 
