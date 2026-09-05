@@ -344,6 +344,32 @@ def block_probe(net, batches, K, pad, n_frames, device):
           'must be ~0 (copy); "only self masked" is the leak per offset.')
 
 
+@torch.no_grad()
+def mask_reach(net, T_full, t, device):
+    """What clean CONTENT can the query slot for frame t actually see?
+
+    The clean stream is shifted right by one frame (h_clean = [sos,
+    h[:, :-2]]), so clean row p holds frame p//2 - 1 and predicts frame
+    p//2. The slot mask admits clean rows by their PREDICTION frame
+    (f_q < t). Whether that lets the slot read frame t-1 -- the row
+    predicting t, which is what the AR head at the same phase reads --
+    is a one-line question about the mask, so ask it directly rather
+    than infer it from CE.
+    """
+    layer = net.global_layers[0]
+    clean_len = 2 * T_full
+    m_intra, m_cross, m_frame = layer._build_masks(clean_len, t, device)
+    row = clean_len                       # melody slot of pair 0
+    reach = (m_intra[row] | m_cross[row])[:clean_len]
+    cols = torch.nonzero(reach).flatten()
+    last = int(cols.max()) if cols.numel() else -1
+    last_content = last // 2 - 1          # frame held by that row
+    print(f'  [mask] slot for frame t={t}: last visible clean row {last} '
+          f'(predicts frame {last // 2}, holds frame {last_content}); '
+          f'frame t-1={t - 1} is '
+          f'{"VISIBLE" if last_content >= t - 1 else "NOT visible"}')
+
+
 def exact_ckpt(path):
     """Let a NAME=.../last.ckpt spec mean the FINAL weights.
 
@@ -419,6 +445,8 @@ def main():
 
         acc = {m: {'ce_m': [], 'ce_c': [], 'js_m': [], 'js_c': [],
                    'dis_m': [], 'dis_c': []} for m in MODES}
+        _x, _T, _ = interleave(net, batches[0], device)
+        mask_reach(net, _T, _T // 2, device)
         for batch in batches:
             x, T_full, S = interleave(net, batch, device)
             # Several query frames per batch, evenly spaced over the
