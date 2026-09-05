@@ -39,6 +39,14 @@
 #                           2-GPU default gives global batch 8 and a new
 #                           run dir, i.e. a fresh cold-start run.
 #   --export=ALL,TASK=...   drumnondrum (default) or melchord.
+#   --export=ALL,STEP_CKPT_EVERY=N   rolling checkpoint every N steps,
+#                           independent of val_loss (default 5000; 0 =
+#                           off). Written as <run>.rolling.step=N.ckpt,
+#                           newest only. resolve_best_ckpt never picks
+#                           it -- pass the file explicitly. Exists
+#                           because the best-val callback cannot keep
+#                           late weights once val_loss only rises, and
+#                           last.ckpt did not either (A.8).
 #   --export=ALL,CKPT=...   explicit override for the resume ckpt. If
 #                           unset, the script auto-detects the run's
 #                           last.ckpt. Full Lightning resume preserves
@@ -492,6 +500,14 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 EXTRA_TRAIN_ARGS=()
 if [[ -n "$MOE_INTERMEDIATE_SIZE" ]]; then
     EXTRA_TRAIN_ARGS+=(--moe_intermediate_size "$MOE_INTERMEDIATE_SIZE")
+fi
+# Rolling step checkpoint, independent of val_loss. The best-val
+# callback keeps the two lowest val_loss files; when val_loss bottoms
+# early and only rises (every multi-pair query run so far), those are
+# early-run files and the converged weights are never written. 0 = off.
+STEP_CKPT_EVERY="${STEP_CKPT_EVERY:-5000}"
+if [[ "$STEP_CKPT_EVERY" != "0" ]]; then
+    EXTRA_TRAIN_ARGS+=(--step_ckpt_every "$STEP_CKPT_EVERY")
 fi
 if [[ -n "$RUN_TAG" ]]; then
     EXTRA_TRAIN_ARGS+=(--run_tag "$RUN_TAG")

@@ -1212,6 +1212,15 @@ if __name__ == '__main__':
                         action='store_false')
     parser.add_argument('--wandb_dir', type=str, default='/tmp/wandb')
     parser.add_argument('--save_top_k', type=int, default=2)
+    parser.add_argument('--step_ckpt_every', type=int, default=0,
+                        help='Also write a rolling checkpoint every N '
+                             'training steps, independent of val_loss '
+                             '(0 = off). Keeps exactly one, the newest. '
+                             'The best-val callback cannot keep late '
+                             'weights once val_loss has stopped '
+                             'improving, and save_last has not proven '
+                             'a reliable substitute (A.8: last.ckpt '
+                             'frozen at step 9500 of 75000).')
     parser.add_argument('--limit_val_batches', type=int, default=25,
                         help='validation batches per check. Validation is '
                              'now DETERMINISTIC (fixed sample order and '
@@ -1606,6 +1615,23 @@ if __name__ == '__main__':
         strategy = 'auto'
 
     extra_callbacks = []
+    if args.step_ckpt_every > 0:
+        # Insurance against a monotonically worsening val_loss. With
+        # save_top_k on val_loss, a run whose val_loss bottoms early
+        # (A.6, A.8: from ~10k of 75k steps) never writes another
+        # best-k file, and last.ckpt was observed frozen at the last
+        # best-k save -- so the converged weights simply did not exist
+        # on disk. This callback has no monitor: it writes the newest
+        # weights every N steps and keeps only that one. The filename
+        # carries no val_ tag, so resolve_best_ckpt never auto-selects
+        # it; pass the file explicitly to use it.
+        extra_callbacks.append(L.callbacks.ModelCheckpoint(
+            dirpath=ckpt_dir,
+            filename=model_name + '.rolling.{step}',
+            every_n_train_steps=args.step_ckpt_every,
+            save_top_k=1, monitor=None, save_last=False,
+            enable_version_counter=False,
+        ))
     if args.moe_monitor_every_n_steps > 0:
         from moe_routing_monitor import MoERoutingMonitor
         extra_callbacks.append(
