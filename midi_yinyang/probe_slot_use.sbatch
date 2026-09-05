@@ -19,8 +19,19 @@
 # displacement, and pitch shift equally) are invertible shortcuts.
 #
 # Env knobs (--export=ALL,KEY=val):
-#   CKPT_A3, CKPT_A7  run dirs (best-val auto-resolved); both optional,
-#                     at least one required
+#   CKPT_A3, CKPT_A7, CKPT_A8
+#                     run dirs (best-val auto-resolved); all optional,
+#                     at least one required. A query_block>1 checkpoint
+#                     (A.8) additionally gets the block-regime section:
+#                     LEAK (can the offset-0 slot read true future frames
+#                     from its neighbours?) and REGIME (does the lone-slot
+#                     val_loss score a regime training never visits?).
+#   CKPTS             extra NAME=PATH entries, space-separated, for
+#                     anything beyond the three fixed slots -- e.g.
+#                     CKPTS="A8last=ckpt/<run>/last.ckpt" to probe a
+#                     run's FINAL weights next to its best-val pick
+#                     (a path ending in last.ckpt is honoured as-is
+#                     here, unlike everywhere else in the repo).
 #   TASK_A3, TASK_A7  corpus to probe each on, when the checkpoints are
 #                     NOT corpus-matched. Both reference checkpoints are
 #                     plain melchord (POP909), so leave these unset --
@@ -77,9 +88,12 @@ echo "================================================================"
 
 CKPT_A3="${CKPT_A3:-}"
 CKPT_A7="${CKPT_A7:-}"
+CKPT_A8="${CKPT_A8:-}"
+CKPTS="${CKPTS:-}"
 TASK="${TASK:-melchord}"
 TASK_A3="${TASK_A3:-}"
 TASK_A7="${TASK_A7:-}"
+TASK_A8="${TASK_A8:-}"
 N_FRAMES="${N_FRAMES:-8}"
 LAG="${LAG:-16}"
 SEMITONES="${SEMITONES:-1}"
@@ -104,8 +118,10 @@ echo "Confirm against each run's log: grep 'Data for dataset' ~/logs/<job>.out"
 ARGS=()
 [[ -n "$CKPT_A3" ]] && ARGS+=(--ckpt "A3=$CKPT_A3${TASK_A3:+=$TASK_A3}")
 [[ -n "$CKPT_A7" ]] && ARGS+=(--ckpt "A7=$CKPT_A7${TASK_A7:+=$TASK_A7}")
+[[ -n "$CKPT_A8" ]] && ARGS+=(--ckpt "A8=$CKPT_A8${TASK_A8:+=$TASK_A8}")
+for spec in $CKPTS; do ARGS+=(--ckpt "$spec"); done
 if [[ ${#ARGS[@]} -eq 0 ]]; then
-    echo "ERROR: set CKPT_A3 and/or CKPT_A7"; exit 1
+    echo "ERROR: set at least one of CKPT_A3 / CKPT_A7 / CKPT_A8 / CKPTS"; exit 1
 fi
 
 python probe_slot_use.py "${ARGS[@]}" --task "$TASK" \

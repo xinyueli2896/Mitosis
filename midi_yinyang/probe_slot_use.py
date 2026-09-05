@@ -68,6 +68,7 @@ Usage (via probe_slot_use.sbatch):
 
 import argparse
 import os
+import tempfile
 
 import torch
 import torch.nn.functional as F
@@ -187,6 +188,125 @@ def run_condition(net, x, t, K, mode, lag, semitones, device):
     return q_logits
 
 
+def paired_stats(a, b):
+    """mean and standard error of the per-batch paired difference a - b."""
+    diffs = [x - y for x, y in zip(a, b) if x == x and y == y]
+    n = len(diffs)
+    if n == 0:
+        return float('nan'), float('nan')
+    mu = sum(diffs) / n
+    if n == 1:
+        return mu, float('nan')
+    var = sum((d - mu) ** 2 for d in diffs) / (n - 1)
+    return mu, (var / n) ** 0.5
+
+
+@torch.no_grad()
+def block_probe(net, batches, K, pad, n_frames, device):
+    """A.8 only: does the block let a slot read the FUTURE?
+
+    In A.8 every slot in the block reads every other slot, and with
+    A.3's kernel a neighbour holds its TRUE frame whenever its k < K.
+    So the offset-0 slot can predict frame t0 from true frames
+    t0+1..t0+B-1 -- bidirectional teacher forcing that history-only
+    prediction cannot match. If the model learned that, it shows as
+    the offset-0 slot doing much better with true neighbours than with
+    masked ones (LEAK), while a LONE slot -- what val_query_loss scores,
+    and a regime training never visits -- sits where the masked-
+    neighbour case sits or worse (REGIME).
+
+    Three forwards per frame, offset-0 slot masked at k=K throughout:
+      alone       T_query = t0 only          (the val_loss regime)
+      nbr_masked  block, every slot at k=K   (decode round r=K)
+      nbr_true    block, neighbours at k=0   (training when k draws 0)
+    Also reports CE per offset under nbr_masked, i.e. how much harder
+    each further-ahead frame is with history cut at t0.
+    """
+    Bq = int(net.query_block)
+    print(f'\n  --- block regime (query_block={Bq}) ---')
+    per = {c: {'m': [], 'c': []} for c in ('alone', 'nbr_masked', 'nbr_true')}
+    per_off = {j: {'m': [], 'c': []} for j in range(Bq)}
+    for batch in batches:
+        x, T_full, S = interleave(net, batch, device)
+        B = x.shape[0]
+        lo, hi = T_full // 4, min((3 * T_full) // 4, T_full - Bq)
+        span = max(hi - lo, 1)
+        frames = sorted({lo + (i * span) // n_frames for i in range(n_frames)})
+        acc = {c: {'m': [], 'c': []} for c in per}
+        acc_off = {j: {'m': [], 'c': []} for j in per_off}
+        for t0 in frames:
+            tq = tuple(range(t0, t0 + Bq))
+            kK = torch.full((B, Bq), K, dtype=torch.long, device=device)
+            k_true = kK.clone()
+            k_true[:, 1:] = 0
+            runs = {
+                'alone': net(x, T_query=t0,
+                             k_m=kK[:, 0].contiguous(),
+                             k_c=kK[:, 0].contiguous())[1],
+                'nbr_masked': net(x, T_query=tq, k_m=kK, k_c=kK)[1],
+                'nbr_true': net(x, T_query=tq, k_m=k_true, k_c=k_true)[1],
+            }
+            for c, q in runs.items():
+                S_, V = q.shape[-2], q.shape[-1]
+                q = q.view(B, -1, S_, V)
+                acc[c]['m'].append(frame_ce(q[:, 0], x[:, 2 * t0], pad))
+                acc[c]['c'].append(frame_ce(q[:, 1], x[:, 2 * t0 + 1], pad))
+            q = runs['nbr_masked'].view(B, -1, S, runs['nbr_masked'].shape[-1])
+            for j in range(Bq):
+                t = t0 + j
+                acc_off[j]['m'].append(frame_ce(q[:, 2 * j], x[:, 2 * t], pad))
+                acc_off[j]['c'].append(frame_ce(q[:, 2 * j + 1], x[:, 2 * t + 1], pad))
+        bm = lambda v: (sum(u for u in v if u == u)
+                        / max(sum(1 for u in v if u == u), 1))
+        for c in per:
+            for s in ('m', 'c'):
+                per[c][s].append(bm(acc[c][s]))
+        for j in per_off:
+            for s in ('m', 'c'):
+                per_off[j][s].append(bm(acc_off[j][s]))
+
+    mean = lambda v: sum(v) / max(len(v), 1)
+    print(f'  {"offset-0 slot, k=K":<22}{"CE mel":>9}{"CE chd":>9}')
+    for c in per:
+        print(f'  {c:<22}{mean(per[c]["m"]):>9.4f}{mean(per[c]["c"]):>9.4f}')
+    for s, name in (('m', 'melody'), ('c', 'chord')):
+        leak, leak_se = paired_stats(per['nbr_masked'][s], per['nbr_true'][s])
+        reg, reg_se = paired_stats(per['alone'][s], per['nbr_masked'][s])
+        print(f'  [{name}]  LEAK  CE(nbr_masked) - CE(nbr_true) = '
+              f'{leak:+.4f} +- {leak_se:.4f}')
+        print(f'            REGIME CE(alone) - CE(nbr_masked) = '
+              f'{reg:+.4f} +- {reg_se:.4f}')
+    print(f'  {"per offset (nbr_masked)":<22}{"CE mel":>9}{"CE chd":>9}')
+    for j in per_off:
+        print(f'  {"t0+" + str(j):<22}{mean(per_off[j]["m"]):>9.4f}'
+              f'{mean(per_off[j]["c"]):>9.4f}')
+    print('  LEAK >> 0: the slot learned to read true future frames from '
+          'its neighbours,\n  which decode can only ever fill with drafts. '
+          'REGIME > 0: the lone-slot\n  eval that picks the checkpoint '
+          'scores a regime the model never trained in.')
+
+
+def exact_ckpt(path):
+    """Let a NAME=.../last.ckpt spec mean the FINAL weights.
+
+    resolve_best_ckpt redirects a file literally named last.ckpt to its
+    best-val sibling -- the bias it exists to prevent. For a run whose
+    val_loss rises from the start (A.8), best-val is the ~9k
+    checkpoint, and probing it says nothing about the trained design.
+    An explicitly named file is honoured, so hand it a differently
+    named symlink. The run directory's name is kept in the link so the
+    gnl<N> filename detection still works.
+    """
+    if os.path.isfile(path) and os.path.basename(path).lower() == 'last.ckpt':
+        run = os.path.basename(os.path.dirname(os.path.abspath(path)))
+        link = os.path.join(tempfile.mkdtemp(prefix='probe_ckpt_'),
+                            f'{run}.final.ckpt')
+        os.symlink(os.path.abspath(path), link)
+        print(f'[ckpt] probing FINAL weights: {path}')
+        return link
+    return path
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--ckpt', action='append', required=True,
@@ -228,7 +348,7 @@ def main():
         path, _, task_name = rest.partition('=')
         task_name = task_name or args.task
         batches = batches_for(task_name)
-        net = load_model(path).to(device)
+        net = load_model(exact_ckpt(path)).to(device)
         net.eval()
         K = net.diffusion_K
         pad = net.tokenizer.pad_token
@@ -338,6 +458,9 @@ def main():
         alive = [s for s, t in content.items() if t == t and t > 2.0]
         print(f"  -> same-instant channel carries CONTENT (t>2) for: "
               f'{", ".join(alive) if alive else "NEITHER stream"}')
+
+        if int(getattr(net, 'query_block', 1)) > 1:
+            block_probe(net, batches, K, pad, args.n_frames, device)
 
     print(f'\n{"=" * 66}')
     print('How to read: CONTENT is the information the same-instant edge '
