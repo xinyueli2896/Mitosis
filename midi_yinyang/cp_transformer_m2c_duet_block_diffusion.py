@@ -1059,14 +1059,19 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                     # A.4 corrupts at the TOKEN level, so it needs the
                     # draft tokens themselves, not their encoding; the
                     # frame-level branch needs the encoding.
-                    sc_emb_m = torch.stack([
-                        self._encode_frame(sc_toks_m[:, j], 0)
-                        for j in range(n_pairs)
-                    ], dim=1)                           # [B, Q, 1, H]
-                    sc_emb_c = torch.stack([
-                        self._encode_frame(sc_toks_c[:, j], 1)
-                        for j in range(n_pairs)
-                    ], dim=1)
+                    # One local-encoder call per stream over all Q
+                    # pairs: the encoder is per-frame, so folding Q
+                    # into the batch axis is exact. The per-pair loop
+                    # this replaces made 2Q encoder calls per step --
+                    # 766 at Q=all (A.9), which is what made that run
+                    # ~8x slower per step than A.3f, not the longer
+                    # sequence.
+                    sc_emb_m = self._encode_frame(
+                        sc_toks_m.reshape(batch_size * n_pairs, subseq_len), 0,
+                    ).view(batch_size, n_pairs, 1, -1)   # [B, Q, 1, H]
+                    sc_emb_c = self._encode_frame(
+                        sc_toks_c.reshape(batch_size * n_pairs, subseq_len), 1,
+                    ).view(batch_size, n_pairs, 1, -1)
                     if n_pairs == 1:
                         # Historical shapes, so a Q=1 run is unchanged.
                         sc_toks_m, sc_toks_c = sc_toks_m[:, 0], sc_toks_c[:, 0]
