@@ -48,10 +48,10 @@
 #   CKPT_A1        default the melchord cp4tar intra-cross-attn run dir
 #   CKPT_A3        default the original A3 (K4mg ... combined_long) run dir
 #   CKPT_S0        default the LA-pretrained cp transformer ckpt
-#   CKPT_SMEL      REQUIRED for P-mc: melody specialist run dir
-#   CKPT_SCHORD    REQUIRED for P-cm: chord specialist run dir
-#   CKPT_Y_M2C     REQUIRED for P-mc: POP909 YinYang mel2chord ('_rev')
-#   CKPT_Y_C2M     REQUIRED for P-cm: POP909 YinYang chord2mel (non-rev)
+#   CKPT_SMEL      P-mc stage A: default the pop909ft_mel_cp4 specialist
+#   CKPT_SCHORD    P-cm stage A: default the pop909ft_chord_cp4 specialist
+#   CKPT_Y_M2C     P-mc stage B: default the POP909 YinYang '_rev' (mel2chord)
+#   CKPT_Y_C2M     P-cm stage B: default the POP909 YinYang non-rev (chord2mel)
 #   MAX_POLYPHONY_DUET   cp of A1/A3 training data (default 4)
 #   MAX_POLYPHONY_SPEC   cp of the cascade specialists (default 4)
 #   MAX_POLYPHONY_S0     cp of S0 (default 16, merged model)
@@ -65,8 +65,7 @@
 #   PIANO_COPIES   default 1: <system>_piano listening copies
 #
 # Examples:
-#   sbatch --export=ALL,CKPT_SMEL=...,CKPT_SCHORD=...,CKPT_Y_M2C=...,CKPT_Y_C2M=... \
-#       midi_yinyang/eval_e1.sbatch
+#   sbatch midi_yinyang/eval_e1.sbatch          # all six, defaults
 #   sbatch --export=ALL,SYSTEMS="A1 A3",FORCE=A1 midi_yinyang/eval_e1.sbatch
 #   sbatch --export=ALL,SKIP_INFER=1,BASELINE=S0 midi_yinyang/eval_e1.sbatch
 
@@ -99,10 +98,15 @@ FORCE="${FORCE:-}"
 CKPT_A1="${CKPT_A1:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_melchord_cp4tar_batch_8_schedule}"
 CKPT_A3="${CKPT_A3:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord_pop909_pop1k7_combined_long_batch_8_schedule}"
 CKPT_S0="${CKPT_S0:-ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt}"
-CKPT_SMEL="${CKPT_SMEL:-}"
-CKPT_SCHORD="${CKPT_SCHORD:-}"
-CKPT_Y_M2C="${CKPT_Y_M2C:-}"
-CKPT_Y_C2M="${CKPT_Y_C2M:-}"
+# Cascade stage A: the cp4 POP909 specialists (cp4 is in the dir name,
+# hence MAX_POLYPHONY_SPEC=4 below). Stage B: the POP909-trained
+# YinYang conditionals -- direction is the ckpt's own suffix: '_rev' is
+# mel2chord (P-mc), non-rev is chord2mel (P-cm). YinYang restores its
+# own cp from the ckpt, so no cp flag reaches stage B.
+CKPT_SMEL="${CKPT_SMEL:-ckpt/cp_transformer_v0.42_size1_pop909ft_mel_cp4_batch_24_schedule}"
+CKPT_SCHORD="${CKPT_SCHORD:-ckpt/cp_transformer_v0.42_size1_pop909ft_chord_cp4_batch_24_schedule}"
+CKPT_Y_M2C="${CKPT_Y_M2C:-ckpt/cp_transformer_yinyang_v5.1_lora_batch_8_pop909_cp8_v2_chord_mel_rev_mask0.25-10-step1}"
+CKPT_Y_C2M="${CKPT_Y_C2M:-ckpt/cp_transformer_yinyang_v5.1_lora_batch_8_pop909_cp8_v2_chord_mel_mask0.25-10-step1}"
 MAX_POLYPHONY_DUET="${MAX_POLYPHONY_DUET:-4}"
 MAX_POLYPHONY_SPEC="${MAX_POLYPHONY_SPEC:-4}"
 MAX_POLYPHONY_S0="${MAX_POLYPHONY_S0:-16}"
