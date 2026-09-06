@@ -175,6 +175,26 @@ def main():
           'a flag-off model stores 0 (historical ckpts lack the key, '
           'load_model treats absent as 0)')
 
+    print('--- 6b. MoE balance loss over clean tokens only ---')
+    netc = build(slot_sees_prev_frame=True, query_pairs=-1,
+                 moe_aux_clean_only=True)
+    check(all(getattr(l, 'moe_aux_clean_only', False)
+              for l in netc.global_layers),
+          'moe_aux_clean_only switches every layer')
+    netc.train()
+    loss_c, aux_c = netc.loss(x_mel, x_acc, ps)
+    check(torch.isfinite(loss_c).all() and torch.isfinite(aux_c).all(),
+          f'Q=all step with clean-only aux is finite (aux={float(aux_c):.4f})')
+    # Same weights, same batch, the flag off: the aux now also counts
+    # the 2(T-1) slot tokens. The two must differ -- if they did not,
+    # the mask never reached the FFN.
+    netc.eval(); netc.train()
+    for l in netc.global_layers:
+        l.moe_aux_clean_only = False
+    _, aux_all = netc.loss(x_mel, x_acc, ps)
+    check(abs(float(aux_all) - float(aux_c)) > 1e-8,
+          f'aux differs with slots included ({float(aux_all):.4f}) -- mask reaches the FFN')
+
     print('--- 6. vectorised rotary indices == historical loop ---')
     L = clean_len + 2 * len(tq_all)
     positions = torch.arange(L)

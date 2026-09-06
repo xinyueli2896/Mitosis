@@ -237,13 +237,23 @@ class SimpleMoEFFN(nn.Module):
             [nn.Linear(intermediate_size, hidden_size) for _ in range(num_experts)]
         )
 
-    def forward(self, x, modality_ids=None):
+    def forward(self, x, modality_ids=None, aux_mask=None):
         """x: [B, L, H]. Returns (out, aux_loss).
 
         modality_ids: LongTensor [L] or [B, L] of 0 (mod_a) / 1 (mod_b)
         per position. Required iff the module was built with
         modality_bias=True or modality_gates=True (check
         self.needs_modality_ids); ignored otherwise.
+
+        aux_mask: optional BoolTensor [L] or [B, L]; when given, the
+        Switch load-balancing loss is computed over THOSE tokens only.
+        Routing and the FFN itself always run on every token. Used to
+        keep query slots out of the balance statistics: a masked slot is
+        the same vector every time (mask embedding + k tag), so a
+        forward with hundreds of them (A.9, Q=all) hands the balance
+        loss a population it cannot balance -- identical inputs route
+        identically -- and the only mass its gradient can move is the
+        clean tokens' routing.
 
         Caches the most recent routing probabilities at self._last_routing_probs
         with shape [B, L, num_experts] so a diagnostic callback can read them
@@ -315,6 +325,18 @@ class SimpleMoEFFN(nn.Module):
         # f_i = fraction of tokens whose top-1 is expert i
         # P_i = mean softmax probability of expert i
         top1 = top_idx[:, 0]
+        if aux_mask is not None:
+            am = aux_mask.to(device=x.device).bool()
+            if am.dim() == 1:
+                am = am.unsqueeze(0).expand(B, L)
+            am = am.reshape(-1)                                     # [N]
+            sel_all = am.nonzero(as_tuple=False).squeeze(-1)
+            top1 = top1[sel_all]
+            probs_aux = probs[sel_all]
+            ids_aux = None if ids_flat is None else ids_flat[sel_all]
+            N_aux = int(sel_all.numel())
+        else:
+            probs_aux, ids_aux, N_aux = probs, ids_flat, N
         if self.modality_hard_route:
             # Balance WITHIN each pool. The all-expert form would ask for
             # a uniform load over E experts that hard routing cannot
@@ -324,7 +346,7 @@ class SimpleMoEFFN(nn.Module):
             # problem over pool_size experts; the two are averaged.
             aux_terms = []
             for pool_id in (0, 1):
-                sel = (ids_flat == pool_id)
+                sel = (ids_aux == pool_id)
                 n_sel = int(sel.sum())
                 if n_sel == 0:
                     continue
@@ -337,15 +359,15 @@ class SimpleMoEFFN(nn.Module):
                     torch.ones(n_sel, device=x.device, dtype=x.dtype),
                 )
                 f_p = f_p / n_sel
-                P_p = probs[sel, lo:hi].mean(dim=0)
+                P_p = probs_aux[sel, lo:hi].mean(dim=0)
                 aux_terms.append(self.pool_size * (f_p * P_p).sum())
             aux_loss = (torch.stack(aux_terms).mean() if aux_terms
                         else probs.sum() * 0.0)
         else:
             f = torch.zeros(self.num_experts, device=x.device, dtype=x.dtype)
             f.scatter_add_(0, top1, torch.ones_like(top1, dtype=x.dtype))
-            f = f / max(N, 1)
-            P = probs.mean(dim=0)
+            f = f / max(N_aux, 1)
+            P = probs_aux.mean(dim=0) if N_aux > 0 else probs.mean(dim=0) * 0.0
             aux_loss = self.num_experts * (f * P).sum()
 
         return out_flat.view(B, L, H), aux_loss

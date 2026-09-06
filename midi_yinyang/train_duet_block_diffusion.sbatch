@@ -166,6 +166,10 @@
 #                           historical mask stops at t-2, one frame
 #                           short of the AR head at the same phase.
 #                           With QUERY_PAIRS=all this is A.9.
+#   --export=ALL,AUX_LOSS_WEIGHT=w   MoE balance-loss weight (0.01; 0 off)
+#   --export=ALL,MOE_AUX_CLEAN_ONLY=1  balance statistics over clean
+#                           tokens only (query slots excluded). Both are
+#                           training-only: put them in RUN_TAG.
 #   --export=ALL,QUERY_PAIRS=all     every frame 1..T-1 carries a query
 #                           pair (A.9 with the flag above; A3qall alone).
 #   --export=ALL,QUERY_PAIRS=N       Q: how many DISTINCT frames each
@@ -307,6 +311,11 @@ QUERY_PAIRS="${QUERY_PAIRS:-1}"
 # stops at content t-2 -- one frame short of the AR head at the same
 # rotary phase. Travels in the ckpt; load_model restores it.
 SLOT_SEES_PREV_FRAME="${SLOT_SEES_PREV_FRAME:-0}"
+# MoE load-balancing loss: weight (0 disables it) and whether the
+# balance statistics see clean tokens only. Training-only knobs -- they
+# do not enter the run dir name, so record them in RUN_TAG.
+AUX_LOSS_WEIGHT="${AUX_LOSS_WEIGHT:-0.01}"
+MOE_AUX_CLEAN_ONLY="${MOE_AUX_CLEAN_ONLY:-0}"
 # A.7: lag-graded decoy corruption -- query slots are corrupted with the
 # same stream's frame from t +- lag(k) (complete, self-contained frames
 # whose harmonic agreement with the partner decays with k) instead of
@@ -525,6 +534,9 @@ fi
 if [[ "$SLOT_SEES_PREV_FRAME" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--slot_sees_prev_frame)
 fi
+if [[ "$MOE_AUX_CLEAN_ONLY" == "1" ]]; then
+    EXTRA_TRAIN_ARGS+=(--moe_aux_clean_only)
+fi
 STEP_CKPT_EVERY="${STEP_CKPT_EVERY:-5000}"
 if [[ "$STEP_CKPT_EVERY" != "0" ]]; then
     EXTRA_TRAIN_ARGS+=(--step_ckpt_every "$STEP_CKPT_EVERY")
@@ -546,7 +558,7 @@ COMMON_ARGS=(
     --val_check_interval "$VAL_CHECK_INTERVAL"
     --limit_val_batches "$LIMIT_VAL_BATCHES"
     --gradient_clip_val 1.0
-    --aux_loss_weight 0.01
+    --aux_loss_weight "$AUX_LOSS_WEIGHT"
     --moe_monitor_every_n_steps 500
     --dump_samples_dir "$DUMP_SAMPLES_DIR"
     --gate_init_bias "$GATE_INIT_BIAS"

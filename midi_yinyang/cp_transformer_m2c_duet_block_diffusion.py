@@ -154,7 +154,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  token_level_mask=False, mask_revealed_query_loss=False,
                  query_pairs=1, decoy_corruption=False,
                  decoy_mask_residual=0.25, decoy_lag_bins=None,
-                 query_block=1, slot_sees_prev_frame=False, **kwargs):
+                 query_block=1, slot_sees_prev_frame=False,
+                 moe_aux_clean_only=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- A.7: lag-graded DECOY corruption -------------------------
@@ -335,6 +336,13 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         if self.slot_sees_prev_frame:
             for layer in self.global_layers:
                 layer.slot_sees_prev_frame = True
+        # --- MoE balance loss over clean tokens only -------------------
+        # Training-time only (the aux term is not part of decoding), so
+        # it needs no ckpt flag; kept as an attribute for the log line.
+        self.moe_aux_clean_only = bool(moe_aux_clean_only)
+        if self.moe_aux_clean_only:
+            for layer in self.global_layers:
+                layer.moe_aux_clean_only = True
         # --- A.8: CONTIGUOUS BLOCK of query pairs --------------------
         # B = query_block frames t0..t0+B-1 carry slots in one forward.
         # Unlike A.6's scattered Q (independent frames, each seeing its
@@ -1440,6 +1448,13 @@ if __name__ == '__main__':
                              'get a "qm" marker; carried in the ckpt '
                              'as the mask_revealed_query_loss_flag '
                              'buffer.')
+    parser.add_argument('--moe_aux_clean_only', action='store_true',
+                        help='Compute the Switch load-balancing loss over '
+                             'the CLEAN tokens only, leaving query slots '
+                             'out of the balance statistics. Matters at '
+                             'query_pairs=-1 (A.9), where ~half the '
+                             'tokens are slots and most of those are the '
+                             'identical mask vector.')
     parser.add_argument('--slot_sees_prev_frame', action='store_true',
                         help='Let each query slot read the clean rows '
                              'that PREDICT its frame (content up to t-1, '
@@ -1604,6 +1619,9 @@ if __name__ == '__main__':
           f'{bool(args.mask_revealed_query_loss)}  '
           f'query_pairs={args.query_pairs}  '
           f'slot_sees_prev_frame={args.slot_sees_prev_frame}  '
+          f'moe_aux_clean_only={args.moe_aux_clean_only}  '
+          f'aux_loss_weight={args.aux_loss_weight}  '
+          f'query_loss_weight={args.query_loss_weight}  '
           f'query_block={args.query_block}'
           f'{" (A.8)" if args.query_block > 1 else ""}  '
           f'decoy_corruption={bool(args.decoy_corruption)}'
@@ -1737,6 +1755,8 @@ if __name__ == '__main__':
                         bool(args.mask_revealed_query_loss),
                     'query_pairs': args.query_pairs,
                     'slot_sees_prev_frame': bool(args.slot_sees_prev_frame),
+                    'moe_aux_clean_only': bool(args.moe_aux_clean_only),
+                    'aux_loss_weight': args.aux_loss_weight,
                     'query_block': args.query_block,
                     'decoy_corruption': bool(args.decoy_corruption),
                     'decoy_mask_residual': args.decoy_mask_residual,

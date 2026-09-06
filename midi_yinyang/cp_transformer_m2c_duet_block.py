@@ -466,9 +466,17 @@ class M2CDuetBlockLayer(nn.Module):
                 pos = torch.arange(L, device=h.device)
                 mod_ids = torch.where(pos < clean_len, pos % 2,
                                       (pos - clean_len) % 2)
-                ffn_out, aux_loss = self.ffn(h, modality_ids=mod_ids)
+                # moe_aux_clean_only (set by the model): balance the
+                # experts over the CLEAN tokens only; see SimpleMoEFFN.
+                aux_mask = (pos < clean_len) if getattr(
+                    self, 'moe_aux_clean_only', False) else None
+                ffn_out, aux_loss = self.ffn(h, modality_ids=mod_ids,
+                                             aux_mask=aux_mask)
             else:
-                ffn_out, aux_loss = self.ffn(h)
+                pos = torch.arange(L, device=h.device)
+                aux_mask = (pos < clean_len) if getattr(
+                    self, 'moe_aux_clean_only', False) else None
+                ffn_out, aux_loss = self.ffn(h, aux_mask=aux_mask)
         else:
             ffn_out = self.ffn(h)
             aux_loss = torch.zeros((), device=h.device, dtype=h.dtype)
