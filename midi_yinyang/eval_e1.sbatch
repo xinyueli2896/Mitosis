@@ -1,76 +1,76 @@
 #!/bin/bash
-# SLURM: END-TO-END E1 (co-generation) evaluation.
-#   1. collects the held-aside TEST SPLIT into prompt folders
-#   2. runs co-generation inference for every system, saving outputs
-#   3. runs the quantitative analysis (manifest -> metrics -> table)
+# SLURM (GPU): E1 co-generation evaluation, ONE JOB.
 #
-# Systems evaluated:
-#   A.2  duet block diffusion, co mode, frozen decode schedule
-#   B.1  duet anticipatory, co mode (--mode co honours the k-frame
-#        anticipatory re-indexing; the leader stream starts generating k
-#        steps before the follower, which is the mechanism under test)
-#   S1   single-stream in-domain finetune  (melchord: the MATCHED baseline)
-#   S0   single-stream pretrained          (unmatched lower anchor)
+#   1. stages the held-aside POP909 test split as prompts
+#   2. generates every system's outputs into temp/E1/<system>/
+#      -- skipping any system whose folder already holds N_SAMPLES
+#         co samples for every test song (FORCE regenerates)
+#   3. scores everything (manifest -> metrics -> paired table)
 #
-# Env knobs (override via --export=ALL,KEY=val):
-#   TASK          melchord (default) | drumnondrum
-#   CKPT_A2       A.2 run dir or ckpt file        (required)
+# Systems (SYSTEMS knob; default all six):
+#   A1    intra-cross-attn co-generation, NO query slots (control)
+#   A3    the model: duet block diffusion, K=4 refinement, co mode
+#   S0    pretrained single-stream cp transformer (merged streams,
+#         chord on program 48), continuation -- the unmatched anchor
+#   P-mc  cascade: S-mel continues melody -> POP909 YinYang (mel2chord,
+#         the '_rev' ckpt) harmonizes.  Domain matched.
+#   P-cm  cascade: S-chord continues chords -> POP909 YinYang
+#         (chord2mel, non-rev) melodizes.  Domain matched.
+#   WS    external reference: whole-song-gen PROMPTED lead-sheet
+#         continuation, same 6-bar prompt, its own inpainting path.
 #
-#   CHECKPOINT SELECTION: every system resolves to the SMALLEST
-#   val_loss ckpt when given a run DIRECTORY (or a last.ckpt that
-#   has val_loss-tagged siblings). Pass an explicit non-last
-#   filename to pin a specific epoch instead. All systems share
-#   this rule, so the comparison is best-val vs best-val.
-#   CKPT_A1       A.1 run dir or ckpt file        (optional)
-#   CKPT_B1       B.1 run dir or ckpt file        (optional)
-#   CKPT_S1       S1 ckpt file                    (melchord; optional)
-#   CKPT_S0       S0 pretrained ckpt              (optional)
-#   CKPT_SSCRATCH S-scratch run dir (from-scratch on merged POP909;
-#                 optional -- the no-pretrain baseline)
-#   EXTRA_SOURCES space-separated NAME:LAYOUT:PATH triplets of
-#                 pre-generated systems to score alongside, e.g. the
-#                 pipeline baselines:
-#                 "P-mc:duet_multi:temp/pipeline_P-mc_<id>/final"
-#   MEL_FOLDER    full melody/drum midis  (prompts AND scoring references)
-#   CHORD_FOLDER  full chord/nondrum midis
-#                 melchord defaults: input/pop909_split/{melody,chord}
-#                 -- the held-aside POP909 test split.
-#   SONGS         space-separated song ids to restrict to. DEFAULT EMPTY
-#                 = evaluate every song present in the folders, i.e. the
-#                 test split itself defines the evaluation set. Set this
-#                 only to score a subset.
-#   OUT_ROOT      default temp/e1_<TASK>_<JOBID>
-#   BASELINE      system id the table is tested against
-#                 (default: S1 for melchord, S0 for drumnondrum)
-#   N_SAMPLES     samples per song for EVERY system (default 3). Scores
-#                 are averaged over samples per song before the paired
-#                 test, so raising this shrinks each song's standard
-#                 error (~1/sqrt(n)) without changing the song count.
-#                 That is the only lever on a fixed, small test set:
-#                 it will not raise n, but it makes a real effect far
-#                 more likely to hold the same sign on every song.
-#   PROMPT_LENGTH prompt frames at 16 frames/bar: 64 = 4 bars (default),
-#                 96 = 6 bars. Also sets the scoring window, so the
-#                 metrics measure only what was GENERATED, not the prompt.
-#   RESULT_TAG    extra suffix on the result filenames. Results are
-#                 already scoped by prompt length
-#                 (results/e1_<task>_p<PROMPT_LENGTH>_*), so a rerun at a
-#                 different prompt length no longer overwrites the last
-#                 one; use RESULT_TAG to separate runs that share it.
-#   SKIP_INFER=1  reuse existing outputs under OUT_ROOT, score only
-#   S1_OUT_NAME / S0_OUT_NAME / SSCRATCH_OUT_NAME
-#                 override the temp/<name> dirs of the single-stream
-#                 systems (they default to job-id-scoped names, which a
-#                 later rescoring job cannot find). Use with
-#                 SKIP_INFER=1 to add one system to an existing run.
+# Every system: same prompt (PROMPT_LENGTH frames), same total length
+# (GEN_LENGTH), N_SAMPLES per song, scored on frames
+# PROMPT_LENGTH..GEN_LENGTH only. The cascades and WS run through their
+# own wrappers (pipeline_cogen.sbatch, infer_wholesong_prompted.sbatch)
+# executed inside this allocation, so the E1 arm is byte-for-byte the
+# standalone arm.
 #
-# Example:
-#   sbatch --export=ALL,\
-# CKPT_A2=ckpt/m2c_duet_block_diffusion_v1.1_large_gnl12_K4_melchord_batch_8_schedule/,\
-# CKPT_S1=ckpt/cp_transformer_v0.42_size1_pop909ft_short_batch_48_schedule/last.ckpt \
+# Output tree (fixed, rerun-stable):
+#   temp/E1/<system>/            the system's folder
+#     A1, A3, WS:  <song>/co/sample_<i>[_temp<T>].mid   (duet_multi)
+#     S0:          <song>.mid_temp<T>_continuation_<i>.mid (single)
+#     P-mc, P-cm:  1_stageA_specialist/ 2_hybrids/ 3_y_conditional/
+#                  4_final/<song>/co/sample_<i>_temp<T>.mid  (scored)
+#   temp/E1/prompts/{mel,chord,merged_tagged}/  staged test split
+#   results/E1_p<PROMPT_LENGTH>[_<RESULT_TAG>]_{manifest.tsv,metrics.csv,
+#                                               table.md,table_twosided.md}
+#
+# Skip rule: a system is DONE when every staged test song has at least
+# N_SAMPLES samples in its scored layout. Done systems are not
+# regenerated -- so a rerun that adds one system, or a job killed
+# mid-way, only generates what is missing. FORCE="A1 P-mc" (or
+# FORCE=all) deletes those folders under temp/E1 and regenerates them.
+#
+# Env knobs (--export=ALL,KEY=val):
+#   SYSTEMS        default "A1 A3 S0 P-mc P-cm WS"
+#   FORCE          default empty; space-separated names, or all
+#   CKPT_A1        default the melchord cp4tar intra-cross-attn run dir
+#   CKPT_A3        default the original A3 (K4mg ... combined_long) run dir
+#   CKPT_S0        default the LA-pretrained cp transformer ckpt
+#   CKPT_SMEL      REQUIRED for P-mc: melody specialist run dir
+#   CKPT_SCHORD    REQUIRED for P-cm: chord specialist run dir
+#   CKPT_Y_M2C     REQUIRED for P-mc: POP909 YinYang mel2chord ('_rev')
+#   CKPT_Y_C2M     REQUIRED for P-cm: POP909 YinYang chord2mel (non-rev)
+#   MAX_POLYPHONY_DUET   cp of A1/A3 training data (default 4)
+#   MAX_POLYPHONY_SPEC   cp of the cascade specialists (default 4)
+#   MAX_POLYPHONY_S0     cp of S0 (default 16, merged model)
+#   PROMPT_LENGTH  default 96 (6 bars).  GEN_LENGTH default 416 (total).
+#   N_SAMPLES      default 3
+#   BASELINE       system the paired table tests against (default A3)
+#   MEL_FOLDER / CHORD_FOLDER   default input/pop909_split/{melody,chord}
+#   OUT_ROOT       default temp/E1
+#   RESULT_TAG     extra suffix on the result files
+#   SKIP_INFER=1   score only, generate nothing
+#   PIANO_COPIES   default 1: <system>_piano listening copies
+#
+# Examples:
+#   sbatch --export=ALL,CKPT_SMEL=...,CKPT_SCHORD=...,CKPT_Y_M2C=...,CKPT_Y_C2M=... \
 #       midi_yinyang/eval_e1.sbatch
+#   sbatch --export=ALL,SYSTEMS="A1 A3",FORCE=A1 midi_yinyang/eval_e1.sbatch
+#   sbatch --export=ALL,SKIP_INFER=1,BASELINE=S0 midi_yinyang/eval_e1.sbatch
 
-#SBATCH --job-name=mitosis_eval_e1
+#SBATCH --job-name=eval_e1
 #SBATCH --output=/home/xinyue.li/logs/%x_%j.out
 #SBATCH --error=/home/xinyue.li/logs/%x_%j.err
 #SBATCH --nodes=1
@@ -87,404 +87,256 @@ source ~/.bashrc
 
 CONDA_ENV=mitosis
 REPO_DIR=/home/xinyue.li/Mitosis
-
-TASK="${TASK:-melchord}"
-CKPT_A2="${CKPT_A2:-}"
-CKPT_A1="${CKPT_A1:-}"
-CKPT_B1="${CKPT_B1:-}"
-CKPT_S1="${CKPT_S1:-}"
-CKPT_S0="${CKPT_S0:-ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt}"
-# S-scratch: same architecture and merged data as S1, trained from
-# RANDOM init (no LA pretrain) -- the no-pretrain baseline. Same
-# single-stream inference path as S1/S0.
-CKPT_SSCRATCH="${CKPT_SSCRATCH:-}"
-N_SAMPLES="${N_SAMPLES:-3}"
-PROMPT_LENGTH="${PROMPT_LENGTH:-64}"
-GEN_LENGTH="${GEN_LENGTH:-384}"
-SKIP_INFER="${SKIP_INFER:-0}"
-
-case "$TASK" in
-    melchord)
-        # The held-aside POP909 TEST SPLIT. These folders define the
-        # evaluation set: every song in them is evaluated, so no id list
-        # is hardcoded here (a stale list would silently evaluate the
-        # wrong songs, or fail on songs the split does not contain).
-        MEL_FOLDER="${MEL_FOLDER:-input/pop909_split/melody}"
-        CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"
-        SONGS="${SONGS:-}"          # empty = every song in the folders
-        # cp8 is the melchord convention (cp4 retired: seventh chords are
-        # 5 notes and cp4 dropped the seventh). MUST match the duet
-        # ckpts' training data -- pass MAX_POLYPHONY_DUET=4 to evaluate
-        # pre-migration cp4-trained checkpoints.
-        MAX_POLYPHONY_DUET="${MAX_POLYPHONY_DUET:-8}"
-        BASELINE="${BASELINE:-S1}"
-        ;;
-    drumnondrum)
-        MEL_FOLDER="${MEL_FOLDER:-input/rwc_test_prompts_split/drum}"
-        CHORD_FOLDER="${CHORD_FOLDER:-input/rwc_test_prompts_split/nondrum}"
-        SONGS="${SONGS:-}"          # empty = all songs in the folders
-        MAX_POLYPHONY_DUET="${MAX_POLYPHONY_DUET:-16}"
-        BASELINE="${BASELINE:-S0}"
-        ;;
-    *) echo "ERROR: unknown TASK=$TASK"; exit 1 ;;
-esac
-
-OUT_ROOT="${OUT_ROOT:-temp/e1_${TASK}_${SLURM_JOB_ID:-local}}"
+MY="$REPO_DIR/midi_yinyang"
 
 conda activate "$CONDA_ENV"
-cd "$REPO_DIR/midi_yinyang"
-mkdir -p /home/xinyue.li/logs "$OUT_ROOT" results
+cd "$MY"
+mkdir -p /home/xinyue.li/logs results
+
+# ---- knobs ------------------------------------------------------------
+SYSTEMS="${SYSTEMS:-A1 A3 S0 P-mc P-cm WS}"
+FORCE="${FORCE:-}"
+CKPT_A1="${CKPT_A1:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_melchord_cp4tar_batch_8_schedule}"
+CKPT_A3="${CKPT_A3:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord_pop909_pop1k7_combined_long_batch_8_schedule}"
+CKPT_S0="${CKPT_S0:-ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt}"
+CKPT_SMEL="${CKPT_SMEL:-}"
+CKPT_SCHORD="${CKPT_SCHORD:-}"
+CKPT_Y_M2C="${CKPT_Y_M2C:-}"
+CKPT_Y_C2M="${CKPT_Y_C2M:-}"
+MAX_POLYPHONY_DUET="${MAX_POLYPHONY_DUET:-4}"
+MAX_POLYPHONY_SPEC="${MAX_POLYPHONY_SPEC:-4}"
+MAX_POLYPHONY_S0="${MAX_POLYPHONY_S0:-16}"
+PROMPT_LENGTH="${PROMPT_LENGTH:-96}"
+GEN_LENGTH="${GEN_LENGTH:-416}"
+N_SAMPLES="${N_SAMPLES:-3}"
+BASELINE="${BASELINE:-A3}"
+MEL_FOLDER="${MEL_FOLDER:-input/pop909_split/melody}"
+CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"
+OUT_ROOT="${OUT_ROOT:-temp/E1}"
+RESULT_TAG="${RESULT_TAG:-}"
+SKIP_INFER="${SKIP_INFER:-0}"
+PIANO_COPIES="${PIANO_COPIES:-1}"
+
+# A3's decode schedule (the listening-test winner); identical to
+# queryablation so E1's A3 row and the ablation's A3 row are the same
+# decoder.
+export A3_REFINE_STEPS="${A3_REFINE_STEPS:-4}"
+export A3_FINAL_TEMP="${A3_FINAL_TEMP:-0.9}"
+export A3_TOP_P="${A3_TOP_P:-0.95}"
+
+[[ "$OUT_ROOT" == temp/* ]] || { echo "ERROR: OUT_ROOT must be under temp/ (got $OUT_ROOT)"; exit 1; }
+mkdir -p "$OUT_ROOT"
 
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
-echo "E1 CO-GENERATION EVALUATION   task=$TASK"
-echo "CKPT_A2 = ${CKPT_A2:-<unset: A.2 will be SKIPPED>}"
-echo "CKPT_A1 = ${CKPT_A1:-<unset: A.1 will be SKIPPED>}"
-echo "CKPT_B1 = ${CKPT_B1:-<unset: B.1 will be SKIPPED>}"
-echo "CKPT_S1 = ${CKPT_S1:-<unset: S1 will be SKIPPED>}"
-echo "CKPT_S0 = ${CKPT_S0:-<unset: S0 will be SKIPPED>}"
-echo "CKPT_SSCRATCH = ${CKPT_SSCRATCH:-<unset: S-scratch will be SKIPPED>}"
-echo "EXTRA_SOURCES = ${EXTRA_SOURCES:-<none>}"
-echo "MEL_FOLDER=$MEL_FOLDER  CHORD_FOLDER=$CHORD_FOLDER"
-echo "SONGS=${SONGS:-<all>}"
+echo "E1 CO-GENERATION EVALUATION"
+echo "SYSTEMS=$SYSTEMS   FORCE=${FORCE:-<none>}   SKIP_INFER=$SKIP_INFER"
+echo "PROMPT_LENGTH=$PROMPT_LENGTH ($((PROMPT_LENGTH / 16)) bars)  GEN_LENGTH=$GEN_LENGTH  N_SAMPLES=$N_SAMPLES"
 echo "OUT_ROOT=$OUT_ROOT   BASELINE=$BASELINE"
-echo "PROMPT_LENGTH=$PROMPT_LENGTH GEN_LENGTH=$GEN_LENGTH N_SAMPLES=$N_SAMPLES"
-echo "MAX_POLYPHONY_DUET=$MAX_POLYPHONY_DUET  (must match the duet ckpts' training data)"
-echo "PROMPT bars: $((PROMPT_LENGTH / 16))  (16 frames/bar)"
+echo "A3 decode: REFINE=$A3_REFINE_STEPS temp=$A3_FINAL_TEMP top_p=$A3_TOP_P"
+echo "cp: duet=$MAX_POLYPHONY_DUET  specialists=$MAX_POLYPHONY_SPEC  S0=$MAX_POLYPHONY_S0"
 echo "================================================================"
 nvidia-smi | head -n 12 || true
 
-# ---------------------------------------------------------------------
-# 0a. GPU pre-flight.
-#     Every generation stage below calls model.cuda(). Without this the
-#     absence of a GPU surfaces only once python is deep inside the
-#     first inference script ("RuntimeError: No CUDA GPUs are
-#     available"), by which point the job has burned its queue slot.
-#     nvidia-smi above is NOT sufficient: it is piped through `|| true`
-#     so a failure is silent, and a node can list a device that torch
-#     still cannot initialise. Ask torch directly -- that is what the
-#     generation scripts actually use -- and force a real context init.
-# ---------------------------------------------------------------------
-if ! python -c "
+# ---- 0. pre-flight ----------------------------------------------------
+if [[ "$SKIP_INFER" != "1" ]]; then
+    python -c "
 import sys, torch
 if not torch.cuda.is_available():
     sys.exit('torch.cuda.is_available() == False')
 torch.zeros(1).cuda()
 print(f'[gpu] {torch.cuda.device_count()} visible; {torch.cuda.get_device_name(0)}')
-"; then
-    echo "----------------------------------------------------------------"
-    echo "ERROR: no usable CUDA GPU in this job; every stage would fail."
-    if [[ -z "${SLURM_JOB_ID:-}" ]]; then
-        echo "  CAUSE: SLURM_JOB_ID is unset -- this was NOT run through"
-        echo "         sbatch, so the #SBATCH --gres=gpu:1 line never took"
-        echo "         effect. Submit it instead of executing it:"
-        echo "             sbatch --export=ALL,... midi_yinyang/eval_e1.sbatch"
-    else
-        echo "  CAUSE: allocated node $(hostname) has no working GPU"
-        echo "         (CUDA_VISIBLE_DEVICES='${CUDA_VISIBLE_DEVICES:-<unset>}')."
-        echo "         Resubmit excluding it:"
-        echo "             sbatch --exclude=$(hostname) --export=ALL,... \\"
-        echo "                 midi_yinyang/eval_e1.sbatch"
-    fi
-    echo "----------------------------------------------------------------"
-    exit 1
+"
 fi
-
-# ---------------------------------------------------------------------
-# 0. checkpoint integrity pre-flight
-#    A truncated/corrupt ckpt otherwise surfaces as an opaque
-#    "PytorchStreamReader ... failed finding central directory" stack
-#    trace partway through the run. Report it up front instead; the
-#    resolver skips unreadable files, so a warning here is survivable
-#    but tells you the picked ckpt may not be the best-val one.
-# ---------------------------------------------------------------------
-for _c in "$CKPT_A2" "$CKPT_A1" "$CKPT_B1" "$CKPT_S1" "$CKPT_S0" "$CKPT_SSCRATCH"; do
+for _c in "$CKPT_A1" "$CKPT_A3" "$CKPT_S0" "$CKPT_SMEL" "$CKPT_SCHORD" "$CKPT_Y_M2C" "$CKPT_Y_C2M"; do
     [[ -n "$_c" && -e "$_c" ]] && python check_ckpts.py "$_c" || true
 done
-echo "================================================================"
 
-# ---------------------------------------------------------------------
-# 1. eval-subset prompt folders
-#    Inference iterates whole folders, so restricting to the held-out
-#    songs here is what keeps this from decoding all ~900 POP909 songs.
-#    The SAME full midis serve as prompts (first PROMPT_LENGTH frames)
-#    and as scoring references (frames PROMPT_LENGTH..GEN_LENGTH).
-# ---------------------------------------------------------------------
+# ---- 1. prompts: the test split, staged once -------------------------
+# The same full midis serve as prompts (first PROMPT_LENGTH frames) and
+# as scoring references (frames PROMPT_LENGTH..GEN_LENGTH).
 EVAL_MEL="$OUT_ROOT/prompts/mel"
 EVAL_CHORD="$OUT_ROOT/prompts/chord"
 EVAL_MERGED="$OUT_ROOT/prompts/merged_tagged"
 mkdir -p "$EVAL_MEL" "$EVAL_CHORD"
-
-if [[ -n "$SONGS" ]]; then
-    for sid in $SONGS; do
-        for pair in "$MEL_FOLDER:$EVAL_MEL" "$CHORD_FOLDER:$EVAL_CHORD"; do
-            src_dir="${pair%%:*}"; dst_dir="${pair##*:}"
-            src=$(ls "$src_dir/$sid".mid "$src_dir/$sid".MID 2>/dev/null | head -1 || true)
-            if [[ -z "$src" ]]; then
-                echo "ERROR: song $sid not found in $src_dir"; exit 1
-            fi
-            cp -f "$src" "$dst_dir/$sid.mid"
-        done
-    done
-else
-    # Both extension cases: RWC files are named *.SMF_SYNC.MID (uppercase),
-    # POP909 files *.mid -- a lowercase-only glob silently collects NOTHING
-    # from the RWC split and the run dies at the count check below.
-    cp -f "$MEL_FOLDER"/*.mid "$MEL_FOLDER"/*.MID "$EVAL_MEL"/ 2>/dev/null || true
-    cp -f "$CHORD_FOLDER"/*.mid "$CHORD_FOLDER"/*.MID "$EVAL_CHORD"/ 2>/dev/null || true
-fi
-N_EVAL=$(ls "$EVAL_MEL" 2>/dev/null | wc -l)
-N_EVAL_CHORD=$(ls "$EVAL_CHORD" 2>/dev/null | wc -l)
-if [[ "$N_EVAL" -eq 0 ]]; then
-    echo "ERROR: no midis collected from MEL_FOLDER=$MEL_FOLDER"
-    echo "       (does the test split exist? expected .mid files there)"
-    exit 1
-fi
-if [[ "$N_EVAL" -ne "$N_EVAL_CHORD" ]]; then
-    echo "ERROR: melody/chord test split sizes differ ($N_EVAL vs"
-    echo "       $N_EVAL_CHORD). The two folders must hold the SAME songs"
-    echo "       -- scoring pairs them by filename."
-    exit 1
-fi
-echo "[prompts] $N_EVAL eval songs -> $EVAL_MEL , $EVAL_CHORD"
-echo "[prompts] songs: $(ls "$EVAL_MEL" | sed 's/\.mid$//' | tr '\n' ' ')"
-
-# merged, program-tagged prompts for the single-stream systems: the
-# tokenizer separates streams by PROGRAM only, so the chord stream must
-# carry a distinct program or the two parts fuse irreversibly.
-if [[ "$TASK" == "melchord" ]]; then
-    python merge_melody_chord.py \
-        --melody "$EVAL_MEL" --chord "$EVAL_CHORD" \
+cp -f "$MEL_FOLDER"/*.mid "$MEL_FOLDER"/*.MID "$EVAL_MEL"/ 2>/dev/null || true
+cp -f "$CHORD_FOLDER"/*.mid "$CHORD_FOLDER"/*.MID "$EVAL_CHORD"/ 2>/dev/null || true
+N_EVAL=$(ls "$EVAL_MEL" | wc -l)
+[[ "$N_EVAL" -gt 0 ]] || { echo "ERROR: no midis in $MEL_FOLDER"; exit 1; }
+[[ "$N_EVAL" -eq "$(ls "$EVAL_CHORD" | wc -l)" ]] || {
+    echo "ERROR: melody/chord split sizes differ; scoring pairs by filename"; exit 1; }
+SONG_IDS=$(ls "$EVAL_MEL" | sed 's/\.[Mm][Ii][Dd]$//' | sort | tr '\n' ' ')
+echo "[prompts] $N_EVAL test songs: $SONG_IDS"
+# merged, program-tagged copies for the single-stream S0 (the tokenizer
+# separates streams by program only)
+if [[ ! -d "$EVAL_MERGED" || "$(ls "$EVAL_MERGED" | wc -l)" -lt "$N_EVAL" ]]; then
+    python merge_melody_chord.py --melody "$EVAL_MEL" --chord "$EVAL_CHORD" \
         --dst "$EVAL_MERGED" --chord-program 48
-else
-    # drumnondrum: drums are natively program 127, so a plain merge keeps
-    # the streams distinguishable.
-    python merge_melody_chord.py \
-        --melody "$EVAL_MEL" --chord "$EVAL_CHORD" --dst "$EVAL_MERGED"
 fi
-echo "[prompts] merged+tagged -> $EVAL_MERGED"
 
-# ---------------------------------------------------------------------
-# 2. inference
-# ---------------------------------------------------------------------
-A2_OUT="$OUT_ROOT/A.2"
-A1_OUT="$OUT_ROOT/A.1"
-B1_OUT="$OUT_ROOT/B.1"
-# Single-stream outputs live in temp/<name>/, named by JOB ID so
-# concurrent runs never collide. That makes them unfindable on a LATER
-# job, so each name is overridable: with SKIP_INFER=1 you can point a
-# rescoring run at an earlier run's dirs (and at a system generated
-# separately by infer_singlestream_e1.sbatch) instead of regenerating
-# every system to add one column.
-S1_OUT_NAME="${S1_OUT_NAME:-e1_${TASK}_S1_${SLURM_JOB_ID:-local}}"
-S0_OUT_NAME="${S0_OUT_NAME:-e1_${TASK}_S0_${SLURM_JOB_ID:-local}}"
-SSCRATCH_OUT_NAME="${SSCRATCH_OUT_NAME:-e1_${TASK}_Sscratch_${SLURM_JOB_ID:-local}}"
-S1_OUT="temp/$S1_OUT_NAME"
-S0_OUT="temp/$S0_OUT_NAME"
-SSCRATCH_OUT="temp/$SSCRATCH_OUT_NAME"
+# ---- system registry --------------------------------------------------
+# folder under OUT_ROOT, the scored root inside it, and its layout.
+sys_dir()    { echo "$OUT_ROOT/$1"; }
+sys_root()   { case "$1" in P-mc|P-cm) echo "$OUT_ROOT/$1/4_final" ;; *) echo "$OUT_ROOT/$1" ;; esac; }
+sys_layout() { case "$1" in S0) echo single ;; *) echo duet_multi ;; esac; }
 
-if [[ "$SKIP_INFER" == "1" ]]; then
-    echo "[infer] SKIP_INFER=1 -- reusing existing outputs"
-else
-    if [[ -n "$CKPT_A2" ]]; then
-        echo "--- A.2 co-generation (K=4 schedule from infer defaults) ---"
-        export A3_REFINE_STEPS="${A3_REFINE_STEPS:-4}"
-        export A3_FINAL_TEMP="${A3_FINAL_TEMP:-0.9}"
-        export A3_TOP_P="${A3_TOP_P:-0.95}"
-        export A3_ADAPTIVE="${A3_ADAPTIVE:-1}"
-        echo "[A.2] K=$A3_REFINE_STEPS temp=$A3_FINAL_TEMP top_p=$A3_TOP_P adaptive=$A3_ADAPTIVE"
-        python cp_transformer_m2c_duet_block_diffusion_combined.py \
-            --ckpt "$CKPT_A2" \
-            --mel-folder "$EVAL_MEL" --chord-folder "$EVAL_CHORD" \
-            --output-dir "$A2_OUT" \
-            --modes co \
-            --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
-            --temperature 1.0 --n-samples "$N_SAMPLES" \
-            --max-polyphony "$MAX_POLYPHONY_DUET" \
-            --model-size large --moe-num-experts 4 --moe-topk 2
-    else
-        echo "[A.2] SKIPPED (CKPT_A2 unset)"
-    fi
+# DONE = every test song has >= N_SAMPLES samples in the scored layout.
+is_complete() {
+    local root layout sid n
+    root=$(sys_root "$1"); layout=$(sys_layout "$1")
+    [[ -d "$root" ]] || return 1
+    for sid in $SONG_IDS; do
+        case "$layout" in
+            duet_multi) n=$(ls "$root/$sid/co/"sample_*.mid 2>/dev/null | wc -l) ;;
+            single)     n=$(ls "$root/$sid".mid_temp*_continuation_*.mid 2>/dev/null | wc -l) ;;
+        esac
+        [[ "$n" -ge "$N_SAMPLES" ]] || return 1
+    done
+    return 0
+}
 
-    if [[ -n "$CKPT_A1" ]]; then
-        echo "--- A.1 co-generation (intra-cross-attn, --modes co) ---"
+is_forced() {
+    [[ "$FORCE" == "all" ]] && return 0
+    local f; for f in $FORCE; do [[ "$f" == "$1" ]] && return 0; done
+    return 1
+}
+
+# ---- 2. generation ----------------------------------------------------
+generate() {
+    local name="$1" dir; dir=$(sys_dir "$name")
+    case "$name" in
+    A1)
         python cp_transformer_m2c_intra_cross_attn_combined.py \
-            --ckpt "$CKPT_A1" \
+            --ckpt "$CKPT_A1/" \
             --mel-folder "$EVAL_MEL" --chord-folder "$EVAL_CHORD" \
-            --output-dir "$A1_OUT" \
-            --modes co \
+            --output-dir "$dir" --modes co \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
             --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$MAX_POLYPHONY_DUET" \
-            --model-size large --moe-num-experts 4 --moe-topk 2
-    else
-        echo "[A.1] SKIPPED (CKPT_A1 unset)"
-    fi
-
-    if [[ -n "$CKPT_B1" ]]; then
-        echo "--- B.1 co-generation (anticipatory, --mode co) ---"
-        # --mode co prompts BOTH streams then generates both, honouring
-        # the k-frame lead (auto-detected from the ckpt path's _k<N>_).
-        # --n-samples matters: without it B.1 wrote ONE sample in the
-        # flat 'duet' layout while every other system wrote N_SAMPLES in
-        # 'duet_multi', and the manifest scanner silently missed B.1.
-        python cp_transformer_m2c_duet_anticipatory_inference.py \
-            --ckpt "$CKPT_B1" \
-            --mode co \
-            --drum-folder "$EVAL_MEL" --nondrum-folder "$EVAL_CHORD" \
-            --output-dir "$B1_OUT" \
+            --model-size large --moe-num-experts 4 --moe-topk 2 ;;
+    A3)
+        python cp_transformer_m2c_duet_block_diffusion_combined.py \
+            --ckpt "$CKPT_A3/" \
+            --mel-folder "$EVAL_MEL" --chord-folder "$EVAL_CHORD" \
+            --output-dir "$dir" --modes co \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
             --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$MAX_POLYPHONY_DUET" \
-            --model-size large --moe-num-experts 4 --moe-topk 2
-    else
-        echo "[B.1] SKIPPED (CKPT_B1 unset)"
-    fi
-
-    for spec in "S1:$CKPT_S1:$S1_OUT_NAME" "S0:$CKPT_S0:$S0_OUT_NAME" "S-scratch:$CKPT_SSCRATCH:$SSCRATCH_OUT_NAME"; do
-        sys="${spec%%:*}"; rest="${spec#*:}"
-        ckpt="${rest%%:*}"; name="${rest##*:}"
-        if [[ -z "$ckpt" ]]; then echo "[$sys] SKIPPED (ckpt unset)"; continue; fi
-        if [[ ! -e "$ckpt" ]]; then echo "[$sys] SKIPPED (ckpt not found: $ckpt)"; continue; fi
-        echo "--- $sys single-stream continuation ---"
+            --model-size large --moe-num-experts 4 --moe-topk 2 \
+            --min-chord-tokens-before-eos 0 ;;
+    S0)
+        # cp_transformer_inference writes temp/<save-name>/ itself.
         python cp_transformer_inference.py \
-            --ckpt "$ckpt" \
+            --ckpt "$CKPT_S0" \
             --midi-folder "$EVAL_MERGED" \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
             --temperature 1.0 --n-samples "$N_SAMPLES" \
-            --save-name "$name"
-    done
-fi
+            --max-polyphony "$MAX_POLYPHONY_S0" \
+            --save-name "${dir#temp/}" ;;
+    P-mc|P-cm)
+        local spec y
+        if [[ "$name" == "P-mc" ]]; then spec="$CKPT_SMEL"; y="$CKPT_Y_M2C"
+        else spec="$CKPT_SCHORD"; y="$CKPT_Y_C2M"; fi
+        [[ -n "$spec" && -n "$y" ]] || {
+            echo "[$name] SKIPPED: needs $([[ "$name" == P-mc ]] && echo CKPT_SMEL and CKPT_Y_M2C || echo CKPT_SCHORD and CKPT_Y_C2M)"
+            return 0; }
+        # The standalone cascade wrapper, run inside this allocation with
+        # E1's prompts and output folder -- so the E1 arm IS the
+        # standalone arm. (#SBATCH lines are ignored when run this way;
+        # the GPU is this job's.)
+        PIPELINE="$name" CKPT_SPEC="$spec" CKPT_Y="$y" STAGE_B=y \
+        OUT_ROOT="$dir" MEL_FOLDER="$EVAL_MEL" CHORD_FOLDER="$EVAL_CHORD" \
+        PROMPT_LENGTH="$PROMPT_LENGTH" GEN_LENGTH="$GEN_LENGTH" \
+        N_SAMPLES="$N_SAMPLES" MAX_POLYPHONY="$MAX_POLYPHONY_SPEC" \
+            bash "$MY/pipeline_cogen.sbatch" ;;
+    WS)
+        # whole-song-gen wants integer ids (its own POP909 index) and an
+        # absolute OUT_DIR (it cds into its venv tree). It writes
+        # <OUT_DIR>/<id zero-padded to 3>/co/sample_<i>.mid, which is
+        # the split's naming.
+        local ids; ids=$(for s in $SONG_IDS; do echo $((10#$s)); done | tr '\n' ' ')
+        OUT_DIR="$MY/$dir" SONG_IDS="$ids" N_SAMPLES="$N_SAMPLES" \
+        PROMPT_BARS="$((PROMPT_LENGTH / 16))" \
+            bash "$MY/infer_wholesong_prompted.sbatch" ;;
+    *)  echo "ERROR: unknown system $name"; exit 1 ;;
+    esac
+}
 
-# ---------------------------------------------------------------------
-# 2b. piano listening copies (melchord). The scored files keep the chord
-#     stream on program 48 (strings) BY DESIGN -- that program is the
-#     stream identity: the tokenizer separates the merged prompt by it
-#     and eval_metrics attributes S0/S1 output notes by it
-#     (chord_programs={48}). Rewriting programs in the scored files
-#     would re-fuse the streams for the scorer, so listening gets
-#     parallel <dir>_piano copies instead: every non-drum track set to
-#     program 0 (Acoustic Grand -- the GM slot a Steinway soundfont
-#     occupies), names/notes/timing preserved. PIANO_COPIES=0 disables.
-# ---------------------------------------------------------------------
-PIANO_COPIES="${PIANO_COPIES:-}"
-if [[ -z "$PIANO_COPIES" ]]; then
-    [[ "$TASK" == "melchord" ]] && PIANO_COPIES=1 || PIANO_COPIES=0
-fi
-if [[ "$PIANO_COPIES" == "1" ]]; then
-    PIANO_DIRS=()
-    for d in "$A2_OUT" "$A1_OUT" "$B1_OUT" "$S1_OUT" "$S0_OUT" "$SSCRATCH_OUT"; do
-        [[ -d "$d" ]] && PIANO_DIRS+=("$d")
-    done
-    if [[ ${#PIANO_DIRS[@]} -gt 0 ]]; then
-        echo "--- piano listening copies (originals untouched) ---"
-        python render_piano_copies.py "${PIANO_DIRS[@]}"
+SCORED=()
+for name in $SYSTEMS; do
+    dir=$(sys_dir "$name")
+    echo "----------------------------------------------------------------"
+    if [[ "$SKIP_INFER" == "1" ]]; then
+        is_complete "$name" && { echo "[$name] score-only: complete"; SCORED+=("$name"); } \
+                            || echo "[$name] score-only: INCOMPLETE or missing -- not scored"
+        continue
     fi
-fi
-
-# ---------------------------------------------------------------------
-# 3. quantitative analysis
-# ---------------------------------------------------------------------
-# Result files are scoped by prompt length (and an optional RESULT_TAG).
-# They used to be fixed at results/e1_<task>_{manifest,metrics,table}, so
-# a rerun under different settings silently overwrote the previous run's
-# numbers -- with no way to tell afterwards which prompt length produced
-# a given table. PROMPT_LENGTH is in FRAMES at 16 frames/bar
-# (eval_metrics.FRAMES_PER_BAR), i.e. 64 = 4 bars, 96 = 6 bars.
-RESULT_TAG="${RESULT_TAG:-}"
-RSUF="p${PROMPT_LENGTH}${RESULT_TAG:+_${RESULT_TAG}}"
-MANIFEST="results/e1_${TASK}_${RSUF}_manifest.tsv"
-METRICS="results/e1_${TASK}_${RSUF}_metrics.csv"
-TABLE="results/e1_${TASK}_${RSUF}_table.md"
-
-# The duet scripts write the 'duet' layout (<song>/<mode>.mid) for a
-# single sample and 'duet_multi' (<song>/<mode>/sample_<i>_temp<T>.mid)
-# when sampling; the manifest scanner needs to be told which.
-DUET_LAYOUT=duet
-[[ "$N_SAMPLES" -gt 1 ]] && DUET_LAYOUT=duet_multi
-
-SRC_ARGS=()
-[[ -d "$A2_OUT" ]] && SRC_ARGS+=(--source "A.2:$DUET_LAYOUT:$A2_OUT")
-[[ -d "$A1_OUT" ]] && SRC_ARGS+=(--source "A.1:$DUET_LAYOUT:$A1_OUT")
-[[ -d "$B1_OUT" ]] && SRC_ARGS+=(--source "B.1:$DUET_LAYOUT:$B1_OUT")
-# Extra pre-generated systems (space-separated NAME:LAYOUT:PATH), e.g.
-# pipeline baselines: EXTRA_SOURCES="P-mc:duet_multi:temp/pipeline_.../final"
-for spec in ${EXTRA_SOURCES:-}; do
-    src_path="${spec##*:}"
-    if [[ -d "$src_path" ]]; then
-        SRC_ARGS+=(--source "$spec")
+    if is_forced "$name" && [[ -d "$dir" ]]; then
+        echo "[$name] FORCE: removing $dir"
+        rm -rf "$dir"
+    fi
+    if is_complete "$name"; then
+        echo "[$name] SKIP: $(sys_root "$name") already has >= $N_SAMPLES co samples for all $N_EVAL songs"
+        SCORED+=("$name"); continue
+    fi
+    echo "[$name] generating -> $dir"
+    t0=$(date +%s)
+    generate "$name"
+    if is_complete "$name"; then
+        echo "[$name] done in $(( $(date +%s) - t0 ))s"
+        SCORED+=("$name")
     else
-        echo "[warn] EXTRA_SOURCES entry skipped (path missing): $spec"
+        echo "[$name] WARNING: incomplete after generation (missing songs or samples); not scored"
     fi
 done
-[[ -d "$S1_OUT" ]] && SRC_ARGS+=(--source "S1:single:$S1_OUT")
-[[ -d "$S0_OUT" ]] && SRC_ARGS+=(--source "S0:single:$S0_OUT")
-[[ -d "$SSCRATCH_OUT" ]] && SRC_ARGS+=(--source "S-scratch:single:$SSCRATCH_OUT")
-if [[ ${#SRC_ARGS[@]} -eq 0 ]]; then
-    echo "ERROR: no inference outputs found to score."
-    exit 1
+
+# ---- 2b. piano listening copies (scored files keep chord on prog 48) --
+if [[ "$PIANO_COPIES" == "1" && ${#SCORED[@]} -gt 0 && "$SKIP_INFER" != "1" ]]; then
+    dirs=(); for name in "${SCORED[@]}"; do dirs+=("$(sys_root "$name")"); done
+    python render_piano_copies.py "${dirs[@]}" || echo "[piano] copies failed (non-fatal)"
 fi
 
-# Always pass the evaluation song list. --songs does double duty in
-# build_eval_manifest: it filters, AND it is what enables the [coverage]
-# report that names the songs each system failed to produce. Passing it
-# only when SONGS is set (the old behaviour) disabled that report in the
-# default configuration -- which is how a run scored 5 songs out of a
-# ~90-song test split without a word about the other 85. The list is
-# derived from the prompts actually staged, so as a filter it is a no-op.
-EVAL_SONG_IDS=$(ls "$EVAL_MEL" | sed 's/\.[Mm][Ii][Dd]$//' | tr '\n' ' ')
-SONG_ARGS=(--songs $EVAL_SONG_IDS)
-echo "[coverage] expecting $N_EVAL song(s) per system"
+# ---- 3. scoring -------------------------------------------------------
+[[ ${#SCORED[@]} -gt 0 ]] || { echo "ERROR: nothing to score"; exit 1; }
+RSUF="p${PROMPT_LENGTH}${RESULT_TAG:+_${RESULT_TAG}}"
+MANIFEST="results/E1_${RSUF}_manifest.tsv"
+METRICS="results/E1_${RSUF}_metrics.csv"
+TABLE="results/E1_${RSUF}_table.md"
 
+SRC_ARGS=()
+for name in "${SCORED[@]}"; do
+    SRC_ARGS+=(--source "$name:$(sys_layout "$name"):$(sys_root "$name")")
+done
 echo "================================================================"
-echo "--- building manifest ---"
-python build_eval_manifest.py "${SRC_ARGS[@]}" "${SONG_ARGS[@]}" \
+echo "[sources] ${SCORED[*]}"
+python build_eval_manifest.py "${SRC_ARGS[@]}" --songs $SONG_IDS \
     --modes co --out "$MANIFEST"
 
-echo "--- scoring (H1-H3) ---"
-python eval_metrics.py --task "$TASK" \
+echo "--- scoring (H3 > H2 > H1 > S) ---"
+python eval_metrics.py --task melchord \
     --manifest "$MANIFEST" \
     --ref-a-dir "$EVAL_MEL" --ref-b-dir "$EVAL_CHORD" \
     --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
     --out "$METRICS"
 
-# Primary analysis. Both flags default ON because they are what makes the
-# comparison sound on this test set:
-#   ONE_SIDED      H1-H3 predict a direction, and at n=5 the two-sided
-#                  exact test floors at p=0.0625 -- above 0.05 at ANY
-#                  effect size, so a two-sided-only run cannot produce a
-#                  significant result no matter what the models do.
-#   COMPLETE_CASES scores every system on the same songs, instead of
-#                  grading each on whichever songs it happened to handle.
-# A plain two-sided / all-cases table is also written alongside, so the
-# conservative reading stays available and nothing is hidden by a default.
-ONE_SIDED="${ONE_SIDED:-1}"
-COMPLETE_CASES="${COMPLETE_CASES:-1}"
-AGG_ARGS=()
-[[ "$ONE_SIDED" == "1" ]] && AGG_ARGS+=(--one-sided)
-[[ "$COMPLETE_CASES" == "1" ]] && AGG_ARGS+=(--complete-cases)
-
-echo "--- comparison table (paired Wilcoxon vs $BASELINE) ---"
-echo "[agg] primary: ${AGG_ARGS[*]:-<two-sided, all cases>}"
-python aggregate_eval_results.py --csv "$METRICS" \
-    --task "$TASK" --baseline "$BASELINE" --mode co \
-    "${AGG_ARGS[@]}" --out-md "$TABLE"
-
-if [[ ${#AGG_ARGS[@]} -gt 0 ]]; then
-    TABLE_2S="${TABLE%.md}_twosided.md"
-    echo "--- reference table (two-sided, all cases) ---"
-    python aggregate_eval_results.py --csv "$METRICS" \
-        --task "$TASK" --baseline "$BASELINE" --mode co \
-        --out-md "$TABLE_2S"
+if [[ " ${SCORED[*]} " != *" $BASELINE "* ]]; then
+    echo "WARNING: BASELINE=$BASELINE was not scored; using ${SCORED[0]} for the paired table"
+    BASELINE="${SCORED[0]}"
 fi
+echo "--- comparison table (paired Wilcoxon vs $BASELINE) ---"
+python aggregate_eval_results.py --csv "$METRICS" \
+    --task melchord --baseline "$BASELINE" --mode co \
+    --one-sided --complete-cases --out-md "$TABLE"
+python aggregate_eval_results.py --csv "$METRICS" \
+    --task melchord --baseline "$BASELINE" --mode co \
+    --out-md "${TABLE%.md}_twosided.md"
 
 echo "================================================================"
-echo "E1 evaluation complete."
-echo "  generated midis : $OUT_ROOT (A.2, B.1), $S1_OUT, $S0_OUT"
-[[ "$PIANO_COPIES" == "1" ]] && echo "  piano copies    : same folders with _piano suffix (listening only)"
-echo "  manifest        : $MANIFEST"
-echo "  per-sample CSV  : $METRICS"
-echo "  comparison table: $TABLE   (primary)"
-[[ ${#AGG_ARGS[@]} -gt 0 ]] && echo "  two-sided table : ${TABLE%.md}_twosided.md"
-echo "Note: B.1 rows should be read PER-STREAM (its design predicts the"
-echo "follower improves while the leader stays flat) -- see EXPERIMENTS.md E1."
+echo "E1 complete.  systems: ${SCORED[*]}"
+echo "  outputs : $OUT_ROOT/<system>/"
+echo "  table   : $TABLE   (one-sided, complete cases, vs $BASELINE)"
+echo "  2-sided : ${TABLE%.md}_twosided.md"
+echo "  metrics : $METRICS"
+echo "================================================================"
+echo "RESULT TABLE:"
+cat "$TABLE"

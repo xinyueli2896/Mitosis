@@ -16,6 +16,7 @@ Supported layouts (--layout):
             One sample per (song, mode); sample id is always 0.
 
   duet_multi  <root>/<song>/<mode>/sample_<i>_temp<T>.mid
+              (or sample_<i>.mid: the whole-song external driver)
             Written by cp_transformer_m2c_jointattn_inference.py's
             run_folder (per-mode dirs, n-samples per mode).
 
@@ -87,8 +88,13 @@ def scan_duet_multi(root):
             if not os.path.isdir(mode_dir):
                 continue
             for f in sorted(os.listdir(mode_dir)):
-                m = re.match(r'sample_(\d+)_temp', f)
-                if not m or not f.lower().endswith('.mid'):
+                # sample_<i>_temp<T>.mid from our decoders; the external
+                # whole-song driver writes sample_<i>.mid (no
+                # temperature in its sampler), which the stricter
+                # pattern silently dropped -- a system scored as absent.
+                m = re.match(r'sample_(\d+)(?:_temp[\d.]+)?\.mid$', f,
+                             re.IGNORECASE)
+                if not m:
                     continue
                 rows.append((mode, song, m.group(1),
                              os.path.join(mode_dir, f)))
