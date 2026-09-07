@@ -10,8 +10,12 @@
 # Systems (SYSTEMS knob; default all six):
 #   A1    intra-cross-attn co-generation, NO query slots (control)
 #   A3    the model: duet block diffusion, K=4 refinement, co mode
-#   S0    pretrained single-stream cp transformer (merged streams,
-#         chord on program 48), continuation -- the unmatched anchor
+#   S1    POP909-finetuned single-stream cp transformer (merged
+#         streams, chord on program 48), continuation -- the MATCHED
+#         single-stream baseline
+#   S0    the LA-pretrained single-stream model, same path, never
+#         trained on POP909 -- unmatched anchor; not in the default
+#         list, add S0 to SYSTEMS to include it
 #   P-mc  cascade: S-mel continues melody -> POP909 YinYang (mel2chord,
 #         the '_rev' ckpt) harmonizes.  Domain matched.
 #   P-cm  cascade: S-chord continues chords -> POP909 YinYang
@@ -29,7 +33,7 @@
 # Output tree (fixed, rerun-stable):
 #   temp/E1/<system>/            the system's folder
 #     A1, A3, WS:  <song>/co/sample_<i>[_temp<T>].mid   (duet_multi)
-#     S0:          <song>.mid_temp<T>_continuation_<i>.mid (single)
+#     S1, S0:      <song>.mid_temp<T>_continuation_<i>.mid (single)
 #     P-mc, P-cm:  1_stageA_specialist/ 2_hybrids/ 3_y_conditional/
 #                  4_final/<song>/co/sample_<i>_temp<T>.mid  (scored)
 #   temp/E1/prompts/{mel,chord,merged_tagged}/  staged test split
@@ -43,10 +47,13 @@
 # FORCE=all) deletes those folders under temp/E1 and regenerates them.
 #
 # Env knobs (--export=ALL,KEY=val):
-#   SYSTEMS        default "A1 A3 S0 P-mc P-cm WS"
+#   SYSTEMS        default "A1 A3 S1 P-mc P-cm WS"
 #   FORCE          default empty; space-separated names, or all
 #   CKPT_A1        default the melchord cp4tar intra-cross-attn run dir
-#   CKPT_A3        default the original A3 (K4mg ... combined_long) run dir
+#   CKPT_A3        default the A3 cp4tar run dir (K4mg_melchord_cp4tar)
+#   CKPT_S1        REQUIRED for S1: the POP909-finetuned MERGED
+#                  single-stream run dir (cp16; not the per-stream
+#                  cp4 specialists the cascade uses)
 #   CKPT_S0        default the LA-pretrained cp transformer ckpt
 #   CKPT_SMEL      P-mc stage A: default the pop909ft_mel_cp4 specialist
 #   CKPT_SCHORD    P-cm stage A: default the pop909ft_chord_cp4 specialist
@@ -54,7 +61,8 @@
 #   CKPT_Y_C2M     P-cm stage B: default the POP909 YinYang non-rev (chord2mel)
 #   MAX_POLYPHONY_DUET   cp of A1/A3 training data (default 4)
 #   MAX_POLYPHONY_SPEC   cp of the cascade specialists (default 4)
-#   MAX_POLYPHONY_S0     cp of S0 (default 16, merged model)
+#   MAX_POLYPHONY_S1 / MAX_POLYPHONY_S0   cp of the merged single-stream
+#                  models (default 16)
 #   PROMPT_LENGTH  default 96 (6 bars).  GEN_LENGTH default 416 (total).
 #   N_SAMPLES      default 3
 #   BASELINE       system the paired table tests against (default A3)
@@ -67,7 +75,7 @@
 # Examples:
 #   sbatch midi_yinyang/eval_e1.sbatch          # all six, defaults
 #   sbatch --export=ALL,SYSTEMS="A1 A3",FORCE=A1 midi_yinyang/eval_e1.sbatch
-#   sbatch --export=ALL,SKIP_INFER=1,BASELINE=S0 midi_yinyang/eval_e1.sbatch
+#   sbatch --export=ALL,SKIP_INFER=1,BASELINE=S1 midi_yinyang/eval_e1.sbatch
 
 #SBATCH --job-name=eval_e1
 #SBATCH --output=/home/xinyue.li/logs/%x_%j.out
@@ -93,10 +101,11 @@ cd "$MY"
 mkdir -p /home/xinyue.li/logs results
 
 # ---- knobs ------------------------------------------------------------
-SYSTEMS="${SYSTEMS:-A1 A3 S0 P-mc P-cm WS}"
+SYSTEMS="${SYSTEMS:-A1 A3 S1 P-mc P-cm WS}"
 FORCE="${FORCE:-}"
 CKPT_A1="${CKPT_A1:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_melchord_cp4tar_batch_8_schedule}"
-CKPT_A3="${CKPT_A3:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord_pop909_pop1k7_combined_long_batch_8_schedule}"
+CKPT_A3="${CKPT_A3:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord_cp4tar_batch_8_schedule}"
+CKPT_S1="${CKPT_S1:-}"
 CKPT_S0="${CKPT_S0:-ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt}"
 # Cascade stage A: the cp4 POP909 specialists (cp4 is in the dir name,
 # hence MAX_POLYPHONY_SPEC=4 below). Stage B: the POP909-trained
@@ -109,6 +118,7 @@ CKPT_Y_M2C="${CKPT_Y_M2C:-ckpt/cp_transformer_yinyang_v5.1_lora_batch_8_pop909_c
 CKPT_Y_C2M="${CKPT_Y_C2M:-ckpt/cp_transformer_yinyang_v5.1_lora_batch_8_pop909_cp8_v2_chord_mel_mask0.25-10-step1}"
 MAX_POLYPHONY_DUET="${MAX_POLYPHONY_DUET:-4}"
 MAX_POLYPHONY_SPEC="${MAX_POLYPHONY_SPEC:-4}"
+MAX_POLYPHONY_S1="${MAX_POLYPHONY_S1:-16}"
 MAX_POLYPHONY_S0="${MAX_POLYPHONY_S0:-16}"
 PROMPT_LENGTH="${PROMPT_LENGTH:-96}"
 GEN_LENGTH="${GEN_LENGTH:-416}"
@@ -138,7 +148,7 @@ echo "SYSTEMS=$SYSTEMS   FORCE=${FORCE:-<none>}   SKIP_INFER=$SKIP_INFER"
 echo "PROMPT_LENGTH=$PROMPT_LENGTH ($((PROMPT_LENGTH / 16)) bars)  GEN_LENGTH=$GEN_LENGTH  N_SAMPLES=$N_SAMPLES"
 echo "OUT_ROOT=$OUT_ROOT   BASELINE=$BASELINE"
 echo "A3 decode: REFINE=$A3_REFINE_STEPS temp=$A3_FINAL_TEMP top_p=$A3_TOP_P"
-echo "cp: duet=$MAX_POLYPHONY_DUET  specialists=$MAX_POLYPHONY_SPEC  S0=$MAX_POLYPHONY_S0"
+echo "cp: duet=$MAX_POLYPHONY_DUET  specialists=$MAX_POLYPHONY_SPEC  S1/S0=$MAX_POLYPHONY_S1/$MAX_POLYPHONY_S0"
 echo "================================================================"
 nvidia-smi | head -n 12 || true
 
@@ -152,7 +162,7 @@ torch.zeros(1).cuda()
 print(f'[gpu] {torch.cuda.device_count()} visible; {torch.cuda.get_device_name(0)}')
 "
 fi
-for _c in "$CKPT_A1" "$CKPT_A3" "$CKPT_S0" "$CKPT_SMEL" "$CKPT_SCHORD" "$CKPT_Y_M2C" "$CKPT_Y_C2M"; do
+for _c in "$CKPT_A1" "$CKPT_A3" "$CKPT_S1" "$CKPT_S0" "$CKPT_SMEL" "$CKPT_SCHORD" "$CKPT_Y_M2C" "$CKPT_Y_C2M"; do
     [[ -n "$_c" && -e "$_c" ]] && python check_ckpts.py "$_c" || true
 done
 
@@ -182,7 +192,7 @@ fi
 # folder under OUT_ROOT, the scored root inside it, and its layout.
 sys_dir()    { echo "$OUT_ROOT/$1"; }
 sys_root()   { case "$1" in P-mc|P-cm) echo "$OUT_ROOT/$1/4_final" ;; *) echo "$OUT_ROOT/$1" ;; esac; }
-sys_layout() { case "$1" in S0) echo single ;; *) echo duet_multi ;; esac; }
+sys_layout() { case "$1" in S0|S1) echo single ;; *) echo duet_multi ;; esac; }
 
 # DONE = every test song has >= N_SAMPLES samples in the scored layout.
 is_complete() {
@@ -228,14 +238,18 @@ generate() {
             --max-polyphony "$MAX_POLYPHONY_DUET" \
             --model-size large --moe-num-experts 4 --moe-topk 2 \
             --min-chord-tokens-before-eos 0 ;;
-    S0)
+    S0|S1)
+        local ck cp
+        if [[ "$name" == "S1" ]]; then ck="$CKPT_S1"; cp="$MAX_POLYPHONY_S1"
+        else ck="$CKPT_S0"; cp="$MAX_POLYPHONY_S0"; fi
+        [[ -n "$ck" ]] || { echo "[$name] SKIPPED: set CKPT_$name"; return 0; }
         # cp_transformer_inference writes temp/<save-name>/ itself.
         python cp_transformer_inference.py \
-            --ckpt "$CKPT_S0" \
+            --ckpt "$ck" \
             --midi-folder "$EVAL_MERGED" \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
             --temperature 1.0 --n-samples "$N_SAMPLES" \
-            --max-polyphony "$MAX_POLYPHONY_S0" \
+            --max-polyphony "$cp" \
             --save-name "${dir#temp/}" ;;
     P-mc|P-cm)
         local spec y
