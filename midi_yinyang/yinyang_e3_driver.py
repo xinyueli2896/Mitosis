@@ -109,6 +109,42 @@ def source_tempo(path, default=120.0):
         return default
 
 
+def diagnose_hybrid(path, ins_ids, gen_length):
+    """Why did cond_continuation fail on this file? preprocess_midi
+    returns None for an unreadable file, a zero-length grid, or a
+    selected track with no notes inside the fixed window, and
+    cond_continuation then dies on None[0] with no further detail.
+    Print what the file actually contains and which step says no."""
+    try:
+        pm = pretty_midi.PrettyMIDI(path)
+        _, tempi = pm.get_tempo_changes()
+        print(f'  [diag] tempi={[round(float(t), 1) for t in tempi[:4]]}  '
+              f'end={pm.get_end_time():.1f}s  instruments={len(pm.instruments)}')
+        for i, ins in enumerate(pm.instruments):
+            t0 = min((n.start for n in ins.notes), default=float("nan"))
+            t1 = max((n.end for n in ins.notes), default=float("nan"))
+            print(f'  [diag]   track-{i} name={ins.name!r} program={ins.program} '
+                  f'drum={ins.is_drum} notes={len(ins.notes)} span={t0:.1f}-{t1:.1f}s')
+    except Exception as e:
+        print(f'  [diag] pretty_midi cannot read it: {e!r}')
+    try:
+        import xf_midi
+        m = xf_midi.XFMidi(path, constant_tempo=60.0 / 16)
+        print(f'  [diag] XFMidi ok: end_time={m.get_end_time():.1f} grid units, '
+              f'{len(m.instruments)} instruments')
+    except Exception as e:
+        print(f'  [diag] XFMidi raised: {e!r}  <- preprocess_midi returns None here')
+    try:
+        from preprocess_large_midi_dataset import preprocess_midi
+        for ids in ([ins_ids[0]], [ins_ids[1]], list(ins_ids)):
+            r = preprocess_midi(path, 16, ins_ids=ids, filter=False,
+                                fixed_length=gen_length)
+            print(f'  [diag] preprocess_midi(ins_ids={ids}) -> '
+                  f'{"None" if r is None else "ok " + str(getattr(r[0], "shape", "?"))}')
+    except Exception as e:
+        print(f'  [diag] preprocess_midi raised: {e!r}')
+
+
 def load_yinyang(ckpt):
     """Mirror eval_model's resolution: accept ckpt/<name>, <dir>/<name>,
     or an absolute path."""
@@ -231,6 +267,9 @@ def main():
             )
         except Exception as e:
             print(f'  failed: {e!r}')
+            import traceback
+            traceback.print_exc(limit=6)
+            diagnose_hybrid(f, preset['ins_ids'], args.gen_length)
             continue
 
         mode_dir = os.path.join(args.output_dir, sid, args.direction)

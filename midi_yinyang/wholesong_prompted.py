@@ -59,6 +59,13 @@ def main():
     from data_utils.midi_output import note_mat_to_notes, piano_roll_to_note_mat
     from inference.generation_operations import (CounterpointGenOp,
                                                  LeadSheetGenOp)
+    from data_utils.pytorch_datasets.const import LANGUAGE_DATASET_PARAMS
+    # The dataset constructors default to the COUNTERPOINT geometry
+    # (n_channels=10); the lead-sheet level is 12 channels. Their own
+    # loader passes these from const.py per level; so must we, or the
+    # 6 phrase channels written at [6:12] overflow a 10-channel image.
+    P_CTP = LANGUAGE_DATASET_PARAMS['counterpoint']
+    P_LSH = LANGUAGE_DATASET_PARAMS['lead_sheet']
     from model import get_model_path
     from params import params_ctp, params_lsh
     import torch
@@ -85,6 +92,8 @@ def main():
             # GT language images, full length, via THEIR dataset builders
             # (shift 0, no augmentation).
             ctp_ds = CounterpointDataset(analyses, shift_high=0, shift_low=0,
+                                         max_l=P_CTP['max_l'], h=P_CTP['h'],
+                                         n_channels=P_CTP['n_channel'],
                                          random_pitch_aug=False,
                                          use_autoreg_cond=True,
                                          use_external_cond=False)
@@ -96,6 +105,8 @@ def main():
             ctp_img = ctp_ds.lang_to_img(0, 0, L_beats, tgt_lgth=L_beats)
 
             lsh_ds = LeadSheetDataset(analyses, shift_high=0, shift_low=0,
+                                      max_l=P_LSH['max_l'], h=P_LSH['h'],
+                                      n_channels=P_LSH['n_channel'],
                                       random_pitch_aug=False,
                                       use_autoreg_cond=True,
                                       use_external_cond=False)
