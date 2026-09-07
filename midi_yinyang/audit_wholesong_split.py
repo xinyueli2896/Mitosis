@@ -148,20 +148,31 @@ def main():
 
     if args.stage_dir:
         ok = 0
+        # The 5 test songs were MOVED out of the source folders into
+        # input/pop909_split/{melody,chord} before preprocessing, so a
+        # shared-clean song that is one of them (004) lives there, not
+        # in the source folder. Search both.
+        test_root = os.path.dirname(os.path.dirname(args.test_folder))
         for sub, src in (('melody', args.mel_src), ('chord', args.chord_src)):
             dst = os.path.join(args.stage_dir, sub)
             os.makedirs(dst, exist_ok=True)
-            if not os.path.isdir(src):
-                print(f'[stage] source folder missing: {src} -- not staged')
+            sources = [d for d in (src, os.path.join(test_root, sub))
+                       if os.path.isdir(d)]
+            if not sources:
+                print(f'[stage] no source folder for {sub} ({src}) -- not staged')
                 continue
             for s in sorted(shared):
-                cands = [f for f in os.listdir(src) if song_id(f) == s
-                         and f.lower().endswith('.mid')]
-                if not cands:
-                    print(f'[stage] {sub}: no midi for song {s:03d} in {src}')
+                found = None
+                for d in sources:
+                    cands = [f for f in os.listdir(d) if song_id(f) == s
+                             and f.lower().endswith('.mid')]
+                    if cands:
+                        found = os.path.join(d, cands[0])
+                        break
+                if found is None:
+                    print(f'[stage] {sub}: no midi for song {s:03d} in {sources}')
                     continue
-                shutil.copyfile(os.path.join(src, cands[0]),
-                                os.path.join(dst, f'{s:03d}.mid'))
+                shutil.copyfile(found, os.path.join(dst, f'{s:03d}.mid'))
                 ok += 1
         print(f'[stage] {ok} files -> {args.stage_dir}/{{melody,chord}}')
         n_m = len(os.listdir(os.path.join(args.stage_dir, 'melody')))
