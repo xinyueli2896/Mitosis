@@ -15,11 +15,13 @@
 #
 # Env knobs (--export=ALL,KEY=val):
 #   DATASETS    our POP909 dataset stems, space-separated (default:
-#               pop909_chord_cp4_v2 pop909_chord_cp8_v2
-#               pop909_melchord_tagged_cp16_v2 -- cp4 for A1/A3/the
-#               specialists, cp8 for YinYang, tagged cp16 for S1/
-#               S-scratch). Each has its own index%10 validation set;
-#               all are printed and intersected.
+#               the cp4 melody/chord pair (A1, A3, specialists), the
+#               cp8 pair, the cp8 '_chord_mel' dual file (YinYang) and
+#               the tagged cp16 merge (S1/S-scratch)). Each file's
+#               idx%10==0 songs are printed and intersected; a final
+#               per-system table checks the shared-clean songs against
+#               the TRAINING split of every E1 system (two dataset
+#               classes, two rules -- idx%10==0 is untrained under both).
 #   STAGE_DIR   default input/pop909_split_ws
 #   MEL_SRC / CHORD_SRC   full per-song POP909 stream midis
 #               (default POP909-Dataset/POP909-{melody,chord})
@@ -50,7 +52,7 @@ conda activate "$CONDA_ENV"
 cd "$MY"
 mkdir -p /home/xinyue.li/logs
 
-DATASETS="${DATASETS:-pop909_chord_cp4_v2 pop909_chord_cp8_v2 pop909_melchord_tagged_cp16_v2}"
+DATASETS="${DATASETS:-pop909_chord_cp4_v2 pop909_melody_cp4_v2 pop909_chord_cp8_v2 pop909_melody_cp8_v2 pop909_cp8_v2_chord_mel pop909_melchord_tagged_cp16_v2}"
 STAGE_DIR="${STAGE_DIR:-input/pop909_split_ws}"
 MEL_SRC="${MEL_SRC:-POP909-Dataset/POP909-melody}"
 CHORD_SRC="${CHORD_SRC:-POP909-Dataset/POP909-chord}"

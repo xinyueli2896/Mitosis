@@ -76,7 +76,9 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--split', required=True, help='their split.npz')
     p.add_argument('--datasets', nargs='+',
-                   default=['pop909_chord_cp4_v2', 'pop909_chord_cp8_v2',
+                   default=['pop909_chord_cp4_v2', 'pop909_melody_cp4_v2',
+                            'pop909_chord_cp8_v2', 'pop909_melody_cp8_v2',
+                            'pop909_cp8_v2_chord_mel',
                             'pop909_melchord_tagged_cp16_v2'],
                    help='dataset stems under data/ (the .txt and .length.pt '
                         'next to each give index -> song). Our systems train '
@@ -145,6 +147,43 @@ def main():
     print(f'  {fmt(shared)}')
     print('  neither side trained on these; use them as the E1 test set '
           'for any table that contains WS.')
+
+    # ---- per-system check: are the shared-clean songs outside every E1
+    # system's TRAINING split? Two dataset classes are in play:
+    #   cp_transformer_m2c_moe.FramedDataset (A1, A3):
+    #       train = idx % 10 != 0            val = idx % 10 == 0
+    #   cp_transformer.FramedDataset (S1, S-scratch, specialists, YinYang):
+    #       train = idx % 10 > 1   val = idx % 10 == 1   test = idx % 10 == 0
+    # Under BOTH, idx % 10 == 0 is never trained on -- so a song is safe
+    # for a system iff it sits at idx % 10 == 0 in that system's dataset
+    # file (or was cut out before preprocessing). That is what is checked
+    # here, file by file, for the files each system trains on.
+    E1 = [
+        ('A1',        'cp_transformer_m2c_moe', ['pop909_chord_cp4_v2', 'pop909_melody_cp4_v2']),
+        ('A3',        'cp_transformer_m2c_moe', ['pop909_chord_cp4_v2', 'pop909_melody_cp4_v2']),
+        ('S1',        'cp_transformer',         ['pop909_melchord_tagged_cp16_v2']),
+        ('S-scratch', 'cp_transformer',         ['pop909_melchord_tagged_cp16_v2']),
+        ('P-mc S-mel specialist',   'cp_transformer', ['pop909_melody_cp4_v2']),
+        ('P-cm S-chord specialist', 'cp_transformer', ['pop909_chord_cp4_v2']),
+        ('P-mc/P-cm YinYang',       'cp_transformer', ['pop909_cp8_v2_chord_mel']),
+    ]
+    print('\n[E1 clean check] shared-clean songs vs each system\'s training split')
+    all_ok = True
+    for sysname, cls, stems in E1:
+        for stem in stems:
+            txt, lp = f'data/{stem}.txt', f'data/{stem}.length.pt'
+            if not (os.path.isfile(txt) and os.path.isfile(lp)):
+                print(f'  {sysname:<26} {stem:<34} FILE MISSING -- cannot verify')
+                all_ok = False
+                continue
+            tr, va, nm = our_val(txt, lp)
+            leaked = shared & tr
+            status = 'CLEAN' if not leaked else f'LEAK: {fmt(leaked)}'
+            print(f'  {sysname:<26} {stem:<34} {cls:<24} {status}')
+            all_ok &= not leaked
+    print(f'  WS                         their valid split                           '
+          f'{"CLEAN" if shared <= ws_valid else "LEAK"}')
+    print(f'  -> {"ALL E1 SYSTEMS CLEAN on the shared set" if all_ok else "NOT clean -- see LEAK / MISSING lines"}')
 
     if args.stage_dir:
         ok = 0
