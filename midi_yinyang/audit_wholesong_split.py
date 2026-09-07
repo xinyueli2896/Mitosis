@@ -191,7 +191,7 @@ def main():
         # input/pop909_split/{melody,chord} before preprocessing, so a
         # shared-clean song that is one of them (004) lives there, not
         # in the source folder. Search both.
-        test_root = os.path.dirname(os.path.dirname(args.test_folder))
+        test_root = os.path.dirname(args.test_folder)   # input/pop909_split
         for sub, src in (('melody', args.mel_src), ('chord', args.chord_src)):
             dst = os.path.join(args.stage_dir, sub)
             os.makedirs(dst, exist_ok=True)
