@@ -570,6 +570,26 @@ ids passed explicitly instead of derived from parity.
 Both streams are generated jointly, conditioned on a 4-bar prompt of
 both streams.
 
+**Test set and line-up (2026-09-07).** E1 runs on the 14 SHARED-CLEAN
+POP909 songs `004 046 136 196 276 326 366 456 466 626 656 746 806 816`
+(staged in `input/pop909_split_ws`, outputs `temp/E1_ws/`, results
+`results/E1_p96_ws_*`), 6-bar prompt, 416 frames, 3 samples/song. They
+are the intersection of whole-song-gen's validation split (its only
+held-out set; `split.npz`, seed 1234, verified) with our held-out set
+(FramedDataset idx%10==0 in every dataset file, plus the 5 songs cut
+before preprocessing). `audit_wholesong_split.sbatch` (job 214622)
+verified per system and per dataset file that none of the 14 is in any
+training split: A1/A3 (cp4 pair), S1/S-scratch (tagged cp16 merge), the
+cascade specialists (cp4), YinYang (`pop909_cp8_v2_chord_mel`), WS.
+The original 5-song split is contaminated for WS (001 002 003 005 are
+in its training set; only 004 is not) and stays as the secondary table
+without WS. Disclose: for A1/A3 the 14 are validation songs (never in a
+gradient, but they picked the best-val ckpt); for the cp_transformer-
+class models they are test songs (idx%10==0 is neither train nor val
+there); for WS they are its validation set. Line-up: A1, A3
+(K4mg_melchord_cp4tar), S1, S-scratch, P-mc, P-cm (domain-matched POP909
+YinYang stage B), WS; paired Wilcoxon vs A3; `eval_e1.sbatch`.
+
 | Task | Systems under test | Matched baseline | Mode |
 |---|---|---|---|
 | drumnondrum | A.2(K=4), B.1 | S0 (merged stream; same LA training corpus) | `co` |
