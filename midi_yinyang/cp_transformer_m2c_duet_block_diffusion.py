@@ -1191,6 +1191,19 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.log('train_query_pairs', float(self._last_n_pairs))
         return loss
 
+    def on_before_optimizer_step(self, optimizer):
+        # Total gradient norm BEFORE clipping. With gradient_clip_val=1.0
+        # a norm that sits far above 1 means the update direction is
+        # whichever loss term has the larger gradient, regardless of the
+        # weights on the terms -- the weight-insensitivity A.9 shows.
+        try:
+            from pytorch_lightning.utilities import grad_norm
+            n = grad_norm(self, norm_type=2).get('grad_2.0_norm_total')
+            if n is not None:
+                self.log('train_grad_norm_preclip', n, prog_bar=False)
+        except Exception:
+            pass
+
     def validation_step(self, batch, batch_idx):
         loss, aux_loss = self.loss(*batch)
         self.log('val_loss', loss)

@@ -195,6 +195,35 @@ def main():
     check(abs(float(aux_all) - float(aux_c)) > 1e-8,
           f'aux differs with slots included ({float(aux_all):.4f}) -- mask reaches the FFN')
 
+    print('--- 7. Q=all forward leaves clean rows and each slot UNCHANGED ---')
+    # If the masks are right, (a) the clean rows' AR logits are the same
+    # whether 1 or T-1 query pairs ride along, and (b) the slot pair for
+    # frame t computes the same logits alone as inside the full set,
+    # because slots read only clean history and their own partner. Any
+    # difference is a path from slots into clean rows (or slots into
+    # other slots) that the mask checks above did not cover.
+    torch.manual_seed(0)
+    netq = build(slot_sees_prev_frame=True, query_pairs=-1)
+    netq.eval()
+    # use the model's own preprocessing path exactly as loss() does
+    with torch.no_grad():
+        pm, pa = netq.preprocess(x_mel, ps, y=x_acc)
+        Bx, Tx, Sx = pm.shape
+        xin = torch.stack([pm, pa], dim=2).view(Bx, Tx * 2, Sx)
+        K = netq.diffusion_K
+        kK = torch.full((Bx,), K, dtype=torch.long)
+        ar1, q1, _ = netq(xin, T_query=t, k_m=kK, k_c=kK)
+        tq_all = tuple(range(1, Tx))
+        kKq = torch.full((Bx, len(tq_all)), K, dtype=torch.long)
+        arQ, qQ, _ = netq(xin, T_query=tq_all, k_m=kKq, k_c=kKq)
+    d_ar = float((ar1 - arQ).abs().max())
+    check(d_ar < 1e-4, f'clean-row AR logits identical for Q=1 vs Q=all (max |diff| {d_ar:.2e})')
+    V = q1.shape[-1]
+    q1v = q1.view(Bx, 2, Sx, V)
+    qQv = qQ.view(Bx, len(tq_all), 2, Sx, V)[:, t - 1]
+    d_q = float((q1v - qQv).abs().max())
+    check(d_q < 1e-4, f'slot pair for frame t identical alone vs inside Q=all (max |diff| {d_q:.2e})')
+
     print('--- 6. vectorised rotary indices == historical loop ---')
     L = clean_len + 2 * len(tq_all)
     positions = torch.arange(L)
