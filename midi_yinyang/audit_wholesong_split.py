@@ -75,8 +75,15 @@ def our_val(dataset_txt, length_pt, split_ratio=10):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--split', required=True, help='their split.npz')
-    p.add_argument('--dataset-txt', default='data/pop909_chord_cp4_v2.txt')
-    p.add_argument('--length-pt', default='data/pop909_chord_cp4_v2.length.pt')
+    p.add_argument('--datasets', nargs='+',
+                   default=['pop909_chord_cp4_v2', 'pop909_chord_cp8_v2',
+                            'pop909_melchord_tagged_cp16_v2'],
+                   help='dataset stems under data/ (the .txt and .length.pt '
+                        'next to each give index -> song). Our systems train '
+                        'on different files -- cp4 (A1/A3/specialists), cp8 '
+                        '(YinYang), tagged cp16 (S1/S-scratch) -- and each '
+                        'has its own index%%10 validation set; the audit '
+                        'reports every one and intersects them.')
     p.add_argument('--test-folder', default='input/pop909_split/melody')
     p.add_argument('--mel-src', default='POP909-Dataset/POP909-melody')
     p.add_argument('--chord-src', default='POP909-Dataset/POP909-chord')
@@ -93,17 +100,34 @@ def main():
     print(f'[theirs] split.npz == seed-1234 regeneration: '
           f'{"YES" if ws_valid == rg_valid else "NO -- their payload was split differently"}')
 
-    our_train, our_val_ids, names = our_val(args.dataset_txt, args.length_pt)
+    our_train, our_val_ids, names = set(), None, {}
+    for stem in args.datasets:
+        txt, lp = f'data/{stem}.txt', f'data/{stem}.length.pt'
+        if not (os.path.isfile(txt) and os.path.isfile(lp)):
+            print(f'[ours] {stem}: files missing under data/ -- skipped')
+            continue
+        tr, va, nm = our_val(txt, lp)
+        print(f'[ours] {stem}: {len(nm)} songs; train={len(tr)} val={len(va)}'
+              f' (index % 10 == 0)  val ids: {fmt(va)}')
+        our_train |= tr
+        our_val_ids = va if our_val_ids is None else (our_val_ids & va)
+        names = names or nm
+    if our_val_ids is None:
+        sys.exit('no dataset files found under data/')
+    print(f'[ours] validation songs common to ALL listed datasets: '
+          f'{len(our_val_ids)}  ({fmt(our_val_ids)})')
+    print(f'[ours] songs in ANY training split: {len(our_train)}')
     our_test = set()
     if os.path.isdir(args.test_folder):
         for f in os.listdir(args.test_folder):
             s = song_id(f)
             if s is not None:
                 our_test.add(s)
-    print(f'\n[ours] dataset {args.dataset_txt}: {len(names)} songs; '
-          f'train={len(our_train)} val={len(our_val_ids)} (index % 10 == 0)')
-    print(f'[ours] val ids : {fmt(our_val_ids)}')
-    print(f'[ours] test ids: {fmt(our_test)}  ({args.test_folder})')
+    print(f'[ours] test ids (cut before preprocessing): {fmt(our_test)}  '
+          f'({args.test_folder})')
+    in_data = our_test & (our_train | our_val_ids)
+    if in_data:
+        print(f'[ours] WARNING: test songs present in a dataset file: {fmt(in_data)}')
     both = our_train & ws_valid
     print(f'[ours] our TRAIN songs inside their valid: {len(both)} '
           f'(these are fair for WS but not for us)')

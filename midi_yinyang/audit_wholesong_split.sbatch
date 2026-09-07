@@ -14,8 +14,12 @@
 # so E1 can run with MEL_FOLDER/CHORD_FOLDER pointed there.
 #
 # Env knobs (--export=ALL,KEY=val):
-#   DATASET     our POP909 dataset stem (default pop909_chord_cp4_v2;
-#               the .txt and .length.pt next to it give index -> song)
+#   DATASETS    our POP909 dataset stems, space-separated (default:
+#               pop909_chord_cp4_v2 pop909_chord_cp8_v2
+#               pop909_melchord_tagged_cp16_v2 -- cp4 for A1/A3/the
+#               specialists, cp8 for YinYang, tagged cp16 for S1/
+#               S-scratch). Each has its own index%10 validation set;
+#               all are printed and intersected.
 #   STAGE_DIR   default input/pop909_split_ws
 #   MEL_SRC / CHORD_SRC   full per-song POP909 stream midis
 #               (default POP909-Dataset/POP909-{melody,chord})
@@ -46,7 +50,7 @@ conda activate "$CONDA_ENV"
 cd "$MY"
 mkdir -p /home/xinyue.li/logs
 
-DATASET="${DATASET:-pop909_chord_cp4_v2}"
+DATASETS="${DATASETS:-pop909_chord_cp4_v2 pop909_chord_cp8_v2 pop909_melchord_tagged_cp16_v2}"
 STAGE_DIR="${STAGE_DIR:-input/pop909_split_ws}"
 MEL_SRC="${MEL_SRC:-POP909-Dataset/POP909-melody}"
 CHORD_SRC="${CHORD_SRC:-POP909-Dataset/POP909-chord}"
@@ -55,15 +59,14 @@ SPLIT="$WS/data/pop909_split/split.npz"
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "whole-song split audit   theirs=$SPLIT"
-echo "ours: data/$DATASET.{txt,length.pt}  test=input/pop909_split/melody"
+echo "ours: data/{$DATASETS}.{txt,length.pt}  test=input/pop909_split/melody"
 echo "stage -> $STAGE_DIR  from $MEL_SRC , $CHORD_SRC"
 echo "================================================================"
 [[ -f "$SPLIT" ]] || { echo "ERROR: $SPLIT not found (run setup_wholesong / infer_wholesong_uncond once to unpack the data payload)"; exit 1; }
-[[ -f "data/$DATASET.txt" ]] || { echo "ERROR: data/$DATASET.txt not found"; exit 1; }
 
 python audit_wholesong_split.py \
     --split "$SPLIT" \
-    --dataset-txt "data/$DATASET.txt" --length-pt "data/$DATASET.length.pt" \
+    --datasets $DATASETS \
     --mel-src "$MEL_SRC" --chord-src "$CHORD_SRC" \
     --stage-dir "$STAGE_DIR"
 
