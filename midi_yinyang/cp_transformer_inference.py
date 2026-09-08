@@ -78,12 +78,14 @@ def decompress(model, byte_arr):
 
 
 def get_input_tempo(midi_path, default=120.0):
-    """First tempo of the prompt midi, so outputs render at the same speed."""
+    """Main tempo of the prompt midi, so outputs render at the same speed.
+
+    Tick-weighted median over the tempo map (midi_tempo.main_tempo), NOT
+    the first event: the time-aligned POP909 files open with a ~0.06 s
+    lead-in segment that encodes as ~990 bpm, which this used to return."""
+    from midi_tempo import main_tempo
     try:
-        pm = pretty_midi.PrettyMIDI(midi_path)
-        _, tempi = pm.get_tempo_changes()
-        if len(tempi) > 0 and tempi[0] > 0:
-            return float(tempi[0])
+        return float(main_tempo(midi_path, default=default))
     except Exception as e:
         print(f'[tempo] failed to read {midi_path}: {e!r}')
     return default

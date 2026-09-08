@@ -102,11 +102,12 @@ def _get_input_tempo(midi_path, default=120.0):
     correctly aligned to 16th notes."""
     if midi_path is None:
         return float(default)
+    # main tempo = tick-weighted median over the tempo map, not the first
+    # event: the time-aligned POP909 files open with a ~0.06 s lead-in
+    # segment (~990 bpm) and every E1 output inherited it.
+    from midi_tempo import main_tempo
     try:
-        midi = pretty_midi.PrettyMIDI(midi_path)
-        _, tempos = midi.get_tempo_changes()
-        if len(tempos) > 0:
-            return float(tempos[0])
+        return float(main_tempo(midi_path, default=default))
     except Exception as e:
         print(f'[tempo] warn: could not read tempo from {midi_path}: {e!r}; '
               f'falling back to {default}')

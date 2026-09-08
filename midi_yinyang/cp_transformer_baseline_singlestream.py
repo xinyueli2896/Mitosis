@@ -38,11 +38,11 @@ from preprocess_large_midi_dataset import preprocess_midi
 
 
 def get_input_tempo(midi_path, default=120.0):
+    """Main (tick-weighted median) tempo of the prompt, not its first
+    event -- see midi_tempo.main_tempo for why."""
+    from midi_tempo import main_tempo
     try:
-        pm = pretty_midi.PrettyMIDI(midi_path)
-        _, tempi = pm.get_tempo_changes()
-        if len(tempi) > 0 and tempi[0] > 0:
-            return float(tempi[0])
+        return float(main_tempo(midi_path, default=default))
     except Exception as e:
         print(f'[tempo] failed to read {midi_path}: {e!r}')
     return default

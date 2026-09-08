@@ -83,10 +83,11 @@ FRAMES_PER_BAR = 16
 # ---------------------------------------------------------------------------
 
 def _file_tempo(pm, default=120.0):
+    """Main tempo (tick-weighted median), used only for reporting: frames
+    are computed on the tick grid (frame_fn)."""
+    from midi_tempo import main_tempo_pm
     try:
-        _, tempi = pm.get_tempo_changes()
-        if len(tempi) > 0 and tempi[0] > 0:
-            return float(tempi[0])
+        return float(main_tempo_pm(pm, default=default))
     except Exception:
         pass
     return default
