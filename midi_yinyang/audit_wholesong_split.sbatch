@@ -39,6 +39,9 @@
 #   MAX_OFFGRID default 0.05: exclude a song with more than this fraction
 #               of onsets off the 16th TICK grid (job 217761: 276 and 806
 #               triplet-encoded, 326 at 72%, 816 at 10%).
+#   KEEP_OFFGRID  default "326 816": songs kept despite the off-grid flag
+#               (checked by hand and judged fine); the flag is still
+#               printed with a (kept) mark.
 #   PROMPT_FRAMES / GEN_FRAMES   default 96 / 320 (E1's 6-bar prompt and
 #               416-frame total). The staged files are CROPPED to start at
 #               the co-entry bar -- the first bar by which both streams
@@ -80,6 +83,7 @@ MEL_SRC="${MEL_SRC:-/home/xinyue.li/POP909-Dataset/POP909-melody}"
 CHORD_SRC="${CHORD_SRC:-/home/xinyue.li/POP909-Dataset/POP909-chord}"
 MIN_KEPT="${MIN_KEPT:-8}"
 MAX_OFFGRID="${MAX_OFFGRID:-0.05}"
+KEEP_OFFGRID="${KEEP_OFFGRID:-326 816}"
 PROMPT_FRAMES="${PROMPT_FRAMES:-96}"
 GEN_FRAMES="${GEN_FRAMES:-320}"
 [[ -d "$MEL_SRC" && -d "$CHORD_SRC" ]] || { echo "ERROR: source folders missing: $MEL_SRC , $CHORD_SRC"; exit 1; }
@@ -102,7 +106,8 @@ python audit_wholesong_split.py \
     --datasets $DATASETS \
     --mel-src "$MEL_SRC" --chord-src "$CHORD_SRC" \
     --stage-dir "$STAGE_DIR" --min-kept "$MIN_KEPT" --max-offgrid "$MAX_OFFGRID" \
-    --prompt-frames "$PROMPT_FRAMES" --gen-frames "$GEN_FRAMES"
+    --prompt-frames "$PROMPT_FRAMES" --gen-frames "$GEN_FRAMES" \
+    --keep-offgrid $KEEP_OFFGRID
 
 echo "================================================================"
 echo "E1 on the shared-clean set:"

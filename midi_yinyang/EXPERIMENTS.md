@@ -597,8 +597,9 @@ the staged files are cropped there and re-emitted at a constant 120
 bpm on the tick grid (`input/909_matched_split/crop_bars.tsv` records
 the offset), so every system and the scorer still take frame 0 as the
 prompt start, and the crop is identical for both streams. Off-grid
-songs stay excluded (`MAX_OFFGRID=0.05`). Expected set: the 10 songs
-`004 046 136 196 366 456 466 626 656 746`. They
+songs are excluded (`MAX_OFFGRID=0.05`) except 326 and 816, which were
+checked by hand and kept (`KEEP_OFFGRID`). Expected set: the 12 songs
+`004 046 136 196 326 366 456 466 626 656 746 816`. They
 are the intersection of whole-song-gen's validation split (its only
 held-out set; `split.npz`, seed 1234, verified) with our held-out set
 (FramedDataset idx%10==0 in every dataset file, plus the 5 songs cut

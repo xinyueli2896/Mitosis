@@ -112,6 +112,9 @@ def main():
                    help='exclude a song if more than this fraction of its '
                         'onsets are off the 16th tick grid (or cluster at '
                         'thirds: triplet-encoded)')
+    p.add_argument('--keep-offgrid', type=int, nargs='*', default=[326, 816],
+                   help='song ids whose off-grid flag is reported but does '
+                        'not exclude them (checked by ear/score: 326, 816)')
     p.add_argument('--min-kept', type=int, default=8,
                    help='exit 1 if fewer songs survive the prompt check, so '
                         'a dependent E1 chain holds instead of scoring a '
@@ -371,7 +374,9 @@ def main():
                 reasons.append(f'{", ".join(bad)} empty in cropped prompt')
             if end < crop + total:
                 reasons.append(f'ends at frame {end:.0f} < {crop + total}')
-            if gflags:
+            if gflags and s in args.keep_offgrid:
+                gflags = [f'{g}(kept)' for g in gflags]
+            elif gflags:
                 reasons.append('off the 16th tick grid / meter')
             verdict = 'ok' if not reasons else f'EXCLUDED ({"; ".join(reasons)})'
             off_s = '/'.join(f'{o:.1%}' for o in offs) or '-'
