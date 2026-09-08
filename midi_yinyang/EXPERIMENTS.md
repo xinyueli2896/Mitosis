@@ -586,8 +586,19 @@ tempo event, flagged 13 of the 14 time-aligned songs OFF-GRID/TRIPLET
 and staged only 004, so every column of `results/E1_p96_matched_*`
 from that run is a single song with ±0.000. The audit now checks the
 grid in TICK space (`check_tokenizer_grid.analyze`) and exits 1 below
-`MIN_KEPT=10` survivors; `eval_e1.sbatch` refuses below `MIN_SONGS=2`.
-Rerun the chain (audit → prep → infer → score) and replace the files. They
+`MIN_KEPT` survivors; `eval_e1.sbatch` refuses below `MIN_SONGS=2`.
+The tick-space audit (job 217761) then showed the real constraint: the
+melody is absent from the first 6 bars of 8 of the 14 songs (POP909
+intros: chords alone, melody entering at bar 5–9), and 4 songs are off
+the 16th tick grid (276, 806 triplet-encoded; 326 at 72%; 816 at 10%).
+**Prompt protocol (2026-09-08):** the prompt is the 6 bars starting at
+the *co-entry bar*, the first bar by which both streams have sounded;
+the staged files are cropped there and re-emitted at a constant 120
+bpm on the tick grid (`input/909_matched_split/crop_bars.tsv` records
+the offset), so every system and the scorer still take frame 0 as the
+prompt start, and the crop is identical for both streams. Off-grid
+songs stay excluded (`MAX_OFFGRID=0.05`). Expected set: the 10 songs
+`004 046 136 196 366 456 466 626 656 746`. They
 are the intersection of whole-song-gen's validation split (its only
 held-out set; `split.npz`, seed 1234, verified) with our held-out set
 (FramedDataset idx%10==0 in every dataset file, plus the 5 songs cut

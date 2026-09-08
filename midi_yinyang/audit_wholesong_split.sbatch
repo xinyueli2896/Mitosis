@@ -32,10 +32,21 @@
 #               set on a different grid from the models' training data.
 #               004 is taken from here too, so all songs are one kind
 #               of file.
-#   MIN_KEPT    default 10: the audit exits 1 (holding any afterok chain)
+#   MIN_KEPT    default 8: the audit exits 1 (holding any afterok chain)
 #               if fewer songs survive the prompt/grid check. Job 217364's
 #               chain ran E1 on a 1-song stage because the grid check
 #               framed by the first tempo event and excluded 13 songs.
+#   MAX_OFFGRID default 0.05: exclude a song with more than this fraction
+#               of onsets off the 16th TICK grid (job 217761: 276 and 806
+#               triplet-encoded, 326 at 72%, 816 at 10%).
+#   PROMPT_FRAMES / GEN_FRAMES   default 96 / 320 (E1's 6-bar prompt and
+#               416-frame total). The staged files are CROPPED to start at
+#               the co-entry bar -- the first bar by which both streams
+#               have sounded -- and written at a constant 120 bpm on the
+#               tick grid (job 217761: the melody is absent from the first
+#               6 bars of 8 of the 14 songs; POP909 intros). E1 then reads
+#               frame 0 as the prompt start as before; crop_bars.tsv in
+#               STAGE_DIR records the offset per song.
 #
 # Example:
 #   sbatch midi_yinyang/audit_wholesong_split.sbatch
@@ -67,7 +78,10 @@ DATASETS="${DATASETS:-pop909_chord_cp4_v2 pop909_melody_cp4_v2 pop909_chord_cp8_
 STAGE_DIR="${STAGE_DIR:-input/909_matched_split}"
 MEL_SRC="${MEL_SRC:-/home/xinyue.li/POP909-Dataset/POP909-melody}"
 CHORD_SRC="${CHORD_SRC:-/home/xinyue.li/POP909-Dataset/POP909-chord}"
-MIN_KEPT="${MIN_KEPT:-10}"
+MIN_KEPT="${MIN_KEPT:-8}"
+MAX_OFFGRID="${MAX_OFFGRID:-0.05}"
+PROMPT_FRAMES="${PROMPT_FRAMES:-96}"
+GEN_FRAMES="${GEN_FRAMES:-320}"
 [[ -d "$MEL_SRC" && -d "$CHORD_SRC" ]] || { echo "ERROR: source folders missing: $MEL_SRC , $CHORD_SRC"; exit 1; }
 # a fresh stage every run: the buggy first-tempo prompt check deleted
 # files from the old stage dir, and a stale file must not survive a
@@ -87,7 +101,8 @@ python audit_wholesong_split.py \
     --split "$SPLIT" \
     --datasets $DATASETS \
     --mel-src "$MEL_SRC" --chord-src "$CHORD_SRC" \
-    --stage-dir "$STAGE_DIR" --min-kept "$MIN_KEPT"
+    --stage-dir "$STAGE_DIR" --min-kept "$MIN_KEPT" --max-offgrid "$MAX_OFFGRID" \
+    --prompt-frames "$PROMPT_FRAMES" --gen-frames "$GEN_FRAMES"
 
 echo "================================================================"
 echo "E1 on the shared-clean set:"
