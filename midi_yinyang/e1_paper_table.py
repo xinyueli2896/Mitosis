@@ -237,61 +237,70 @@ def main():
 
 
 def consistency_table(per_song, systems, baseline, out, n_songs, alpha):
-    """Same content as the figure, as a single-column booktabs table:
-    systems as rows with the reference pair as the first row, the five
-    statistics as columns, mean +- s.e.m. over songs. Superscripts mark
-    a two-sided paired Wilcoxon difference from the baseline on the raw
-    per-song values (a comparison among systems, not to a target):
-    a = p < alpha, b = p < alpha/5 (Bonferroni over the five columns)."""
+    """Same content as the figure, as a two-column-spanning table in the
+    IEEE conference style (ruled, caption above): reference pair as the
+    first row, then the systems, the five statistics as columns, mean +-
+    s.e.m. over songs. Superscripts mark a two-sided paired Wilcoxon
+    difference from the baseline on the raw per-song values (a
+    comparison among systems, not to a target): a = p < alpha,
+    b = p < alpha/5 (Bonferroni over the five columns)."""
     cols = [(m, t) for m, t, _ in _CONSISTENCY]
-    lines = [r'\begin{table}[t]', r'\centering', r'\small',
-             r'\setlength{\tabcolsep}{3.5pt}',
-             r'\begin{tabular}{l' + 'c' * len(cols) + '}', r'\toprule',
-             'System & ' + ' & '.join(t for _, t in cols) + r' \\', r'\midrule']
-    # reference row
+    ncol = len(cols) + 1
+    bl = SYSTEM_NAME.get(baseline, baseline)
+    L = []
+    L.append(r'\begin{table*}[htbp]')
+    L.append(r'\caption{Melody--chord consistency of the generated pair on ' + str(n_songs)
+             + r' held-out songs (mean$\pm$s.e.m. over songs; 3 samples per song averaged first).}')
+    L.append(r'\begin{center}')
+    L.append(r'\begin{tabular}{|l|' + 'c|' * len(cols) + '}')
+    L.append(r'\hline')
+    L.append(r'\textbf{System} & ' + ' & '.join(r'\textbf{' + t + '}' for _, t in cols) + r' \\')
+    L.append(r'\hline')
     ref_cells = []
     for m, _ in cols:
         sv = song_values(per_song, baseline, m)
         rv = [t for _, t in sv.values()]
         ref_cells.append(f'{np.mean(rv):.3f}$\\pm${np.std(rv) / math.sqrt(len(rv)):.3f}'
                          if rv else '--')
-    lines.append(r'\textit{Reference pair} & ' + ' & '.join(ref_cells) + r' \\')
-    lines.append(r'\midrule')
-    for s in systems:
+    L.append(r'\textit{Reference pair} & ' + ' & '.join(ref_cells) + r' \\')
+    L.append(r'\hline')
+    for s_ in systems:
         cells = []
         for m, _ in cols:
-            sv = song_values(per_song, s, m)
+            sv = song_values(per_song, s_, m)
             vals = [v for v, _ in sv.values()]
             if not vals:
                 cells.append('--')
                 continue
             txt = f'{np.mean(vals):.3f}$\\pm${np.std(vals) / math.sqrt(len(vals)):.3f}'
-            if s != baseline:
+            if s_ != baseline:
                 bv = song_values(per_song, baseline, m)
                 common = sorted(set(sv) & set(bv))
                 diffs = [sv[k][0] - bv[k][0] for k in common]
                 if len(diffs) >= 5:
                     _, pv, _ = wilcoxon_signed_rank(diffs, 'two-sided')
                     if pv < alpha / len(cols):
-                        txt += '$^{b}$'
+                        txt += r'$^{\mathrm{b}}$'
                     elif pv < alpha:
-                        txt += '$^{a}$'
+                        txt += r'$^{\mathrm{a}}$'
             cells.append(txt)
-        name = SYSTEM_NAME.get(s, s)
-        if s == baseline:
+        name = SYSTEM_NAME.get(s_, s_)
+        if s_ == baseline:
             name = r'\textbf{' + name + '}'
-        lines.append(name + ' & ' + ' & '.join(cells) + r' \\')
-    lines += [r'\bottomrule', r'\end{tabular}',
-              r'\caption{Melody--chord consistency of the generated pair on '
-              + str(n_songs) + r' held-out songs (mean$\pm$s.e.m. over songs; 3 samples '
-              r'per song averaged first). Coupling is chord-tone coverage on the true '
-              r'pairing minus coverage with the chords shifted by two bars. '
-              r'$^{a}$/$^{b}$: differs from \emph{' + SYSTEM_NAME.get(baseline, baseline)
-              + r'} at $p<' + f'{alpha:g}' + r'$ / $p<' + f'{alpha / len(cols):.2g}'
-              + r'$ (two-sided paired Wilcoxon on per-song values).}',
-              r'\label{tab:consistency}', r'\end{table}']
+        L.append(name + ' & ' + ' & '.join(cells) + r' \\')
+        L.append(r'\hline')
+    L.append(r'\multicolumn{' + str(ncol) + r'}{l}{Chord-tone coverage: fraction of melody '
+             r'onsets on a chord tone. Coupling: coverage on the true pairing minus coverage '
+             r'with the chords shifted by two bars.} \\')
+    L.append(r'\multicolumn{' + str(ncol) + r'}{l}{$^{\mathrm{a}}$/$^{\mathrm{b}}$: differs '
+             r'from \emph{' + bl + r'} at $p<' + f'{alpha:g}' + r'$ / $p<'
+             + f'{alpha / len(cols):.2g}' + r'$ (two-sided paired Wilcoxon over songs).}')
+    L.append(r'\end{tabular}')
+    L.append(r'\label{tab:consistency}')
+    L.append(r'\end{center}')
+    L.append(r'\end{table*}')
     with open(out + '.tex', 'w') as fh:
-        fh.write('\n'.join(lines) + '\n')
+        fh.write('\n'.join(L) + '\n')
     print(f'[table] wrote {out}.tex')
 
 
