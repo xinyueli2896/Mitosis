@@ -27,7 +27,7 @@ import statistics
 
 import pretty_midi
 
-from eval_metrics import _file_tempo, BEAT_DIV, FRAMES_PER_BAR
+from eval_metrics import _file_tempo, frame_fn, BEAT_DIV, FRAMES_PER_BAR
 
 
 def describe(path, prompt, total):
@@ -39,9 +39,16 @@ def describe(path, prompt, total):
     end_frame = max((n.end for n in notes), default=0.0) / step
     in_win = sum(1 for n in notes if prompt * step <= n.start < total * step)
     in_prompt = sum(1 for n in notes if n.start < prompt * step)
+    # the same counts on the TICK grid (what the tokenizer and, now,
+    # the scorer use); a large gap between the two columns is the
+    # spurious-initial-tempo signature.
+    fr = frame_fn(pm)
+    tick_win = sum(1 for n in notes if prompt <= fr(n.start) < total)
+    tick_prompt = sum(1 for n in notes if fr(n.start) < prompt)
     res = getattr(pm, 'resolution', None)
     return dict(file=os.path.basename(path), tempo=tempo, n_tempi=len(tempi),
                 res=res, n_notes=len(notes), n_prompt=in_prompt, n_win=in_win,
+                tick_prompt=tick_prompt, tick_win=tick_win,
                 end_frame=end_frame, n_ins=len(pm.instruments),
                 names=[(i.name or '')[:8] for i in pm.instruments])
 
@@ -62,7 +69,8 @@ def main():
               f'[{args.prompt}, {args.total}) at {BEAT_DIV}/beat, '
               f'{FRAMES_PER_BAR}/bar ---')
         print(f'{"file":<10}{"tempo":>7}{"#tempi":>7}{"res":>6}{"ins":>4}'
-              f'{"notes":>7}{"prompt":>7}{"window":>7}{"end_fr":>8}  names')
+              f'{"notes":>7}{"prompt":>7}{"window":>7}{"end_fr":>8}'
+              f'{"|tick:pr":>9}{"win":>6}  names')
         for f in files:
             try:
                 d = describe(f, args.prompt, args.total)
@@ -77,6 +85,7 @@ def main():
             print(f'{d["file"]:<10}{d["tempo"]:>7.1f}{d["n_tempi"]:>7}'
                   f'{str(d["res"]):>6}{d["n_ins"]:>4}{d["n_notes"]:>7}'
                   f'{d["n_prompt"]:>7}{d["n_win"]:>7}{d["end_frame"]:>8.0f}'
+                  f'{d["tick_prompt"]:>9}{d["tick_win"]:>6}'
                   f'  {d["names"]}{flag}')
 
     if args.metrics and os.path.isfile(args.metrics):

@@ -92,17 +92,37 @@ def _file_tempo(pm, default=120.0):
     return default
 
 
+def frame_fn(pm):
+    """seconds -> frames on the file's BEAT grid, via its tick map.
+
+    The tokenizer (xf_midi.XFMidi with constant_tempo) reads note
+    positions from ticks and ignores tempo events, so training data and
+    prompts live on the tick grid whatever the tempo map says. Scoring
+    used to convert seconds with the file's FIRST tempo event instead;
+    POP909 files often carry a spurious initial tempo (1323 bpm on
+    song 046), which put the whole scored window inside the first few
+    seconds of the reference and produced density ratios of 5x, JSDs
+    near their maximum and NaN rows for every system at once. Framing
+    by ticks is exact for constant-tempo files (every generated file)
+    and correct for real tempo maps (the references).
+    """
+    ticks_per_frame = pm.resolution / BEAT_DIV
+    return lambda t: pm.time_to_tick(t) / ticks_per_frame
+
+
 class Stream:
     """Frame-quantized view of one stream: onsets and sounding notes."""
 
     def __init__(self, notes, step, n_frames):
+        """step: seconds per frame (float) or a callable seconds -> frames."""
         self.n_frames = n_frames
         self.onsets = [[] for _ in range(n_frames)]     # pitches starting here
         self.sounding = [set() for _ in range(n_frames)]  # pitch classes held
         self.durations = []                              # in frames
+        to_frame = step if callable(step) else (lambda t: t / step)
         for note in notes:
-            f0 = int(round(note.start / step))
-            f1 = max(f0 + 1, int(round(note.end / step)))
+            f0 = int(round(to_frame(note.start)))
+            f1 = max(f0 + 1, int(round(to_frame(note.end))))
             if f0 < 0 or f0 >= n_frames:
                 continue
             self.onsets[f0].append(note.pitch)
@@ -131,13 +151,12 @@ def load_streams(paths, task, mel_programs, chord_programs, total_frames):
         out = []
         for p in paths:
             pm = pretty_midi.PrettyMIDI(p)
-            step = 60.0 / _file_tempo(pm) / BEAT_DIV
             notes = [n for inst in pm.instruments for n in inst.notes]
-            out.append(Stream(notes, step, total_frames))
+            out.append(Stream(notes, frame_fn(pm), total_frames))
         return out[0], out[1]
 
     pm = pretty_midi.PrettyMIDI(paths[0])
-    step = 60.0 / _file_tempo(pm) / BEAT_DIV
+    step = frame_fn(pm)
     a_notes, b_notes, unmatched = [], [], []
     named = any((inst.name or '').strip().lower() in ('melody', 'chord')
                 for inst in pm.instruments)

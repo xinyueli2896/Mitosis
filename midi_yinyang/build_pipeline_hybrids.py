@@ -96,43 +96,44 @@ def build(args):
             warnings.simplefilter('ignore')
             gen_pm = pretty_midi.PrettyMIDI(f)
             part_pm = pretty_midi.PrettyMIDI(partner)
-        gen_bpm = _bpm(gen_pm)
-        part_bpm = _bpm(part_pm)
-        gen_step = 60.0 / gen_bpm / 4.0
-        part_step = 60.0 / part_bpm / 4.0
+        # Both files are put on the BEAT grid through their tick maps
+        # (frame = tick / (resolution/4)), the same grid the tokenizer
+        # reads, and the hybrid is written at a fixed 120 bpm. The old
+        # seconds-based path scaled by each file's FIRST tempo event;
+        # POP909's spurious initial tempi (1323 bpm on 046) then cut the
+        # partner prompt to a second of music, and stage C got an empty
+        # conditioning track -- the 'NoneType' failures in E1.
+        OUT_BPM = 120.0
+        out_step = 60.0 / OUT_BPM / 4.0
+        gen_frame = lambda t, pm=gen_pm: pm.time_to_tick(t) / (pm.resolution / 4.0)
+        part_frame = lambda t, pm=part_pm: pm.time_to_tick(t) / (pm.resolution / 4.0)
 
         # Partner prompt: keep notes STARTING within the first
-        # prompt-frames on the partner's own grid; re-express on the
-        # generated file's grid by frame index so tempi need not match.
-        cutoff = args.prompt_frames * part_step
+        # prompt-frames on the partner's grid; keep each note's real end
+        # (cond_continuation truncates the target stream by frame).
         partner_inst = pretty_midi.Instrument(
             program=0,
             name=('CHORD' if args.generated_role == 'mel' else 'MELODY'))
         for note in _all_notes(part_pm):
-            if note.start >= cutoff:
+            f0, f1 = part_frame(note.start), part_frame(note.end)
+            if f0 >= args.prompt_frames:
                 continue
-            scale = gen_step / part_step
-            # Keep the note's real end: cond_continuation truncates the
-            # target stream by FRAME (x2[:, :prompt_length]) anyway, so
-            # clipping durations here only shortened the prompt's last
-            # chord -- and made this path disagree with build-cond, which
-            # copies the partner file untouched.
             partner_inst.notes.append(pretty_midi.Note(
                 velocity=note.velocity, pitch=note.pitch,
-                start=note.start * scale,
-                end=note.end * scale,
+                start=f0 * out_step, end=max(f1, f0 + 1) * out_step,
             ))
 
         gen_inst = pretty_midi.Instrument(
             program=0,
             name=('MELODY' if args.generated_role == 'mel' else 'CHORD'))
         for note in _all_notes(gen_pm):
+            f0, f1 = gen_frame(note.start), gen_frame(note.end)
             gen_inst.notes.append(pretty_midi.Note(
                 velocity=note.velocity, pitch=note.pitch,
-                start=note.start, end=note.end,
+                start=f0 * out_step, end=max(f1, f0 + 1) * out_step,
             ))
 
-        out_pm = pretty_midi.PrettyMIDI(initial_tempo=gen_bpm)
+        out_pm = pretty_midi.PrettyMIDI(initial_tempo=OUT_BPM)
         # Nottingham convention: track 0 = melody, track 1 = chord.
         if args.generated_role == 'mel':
             out_pm.instruments.extend([gen_inst, partner_inst])
