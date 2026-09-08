@@ -10,8 +10,9 @@
 #
 # Runs audit_wholesong_split.py: prints both splits, where our current
 # 5 test songs fall in theirs, the shared-clean intersection, and
-# copies those songs' melody/chord midis to STAGE_DIR/{melody,chord}
-# so E1 can run with MEL_FOLDER/CHORD_FOLDER pointed there.
+# copies those songs' melody/chord midis UNCROPPED to
+# STAGE_DIR/p<N>/{melody,chord}, one group per prompt length N (bars),
+# so E1 runs once per group and merge_e1.sbatch scores them together.
 #
 # Env knobs (--export=ALL,KEY=val):
 #   DATASETS    our POP909 dataset stems, space-separated (default:
@@ -42,16 +43,17 @@
 #   KEEP_OFFGRID  default "326 816": songs kept despite the off-grid flag
 #               (checked by hand and judged fine); the flag is still
 #               printed with a (kept) mark.
-#   PROMPT_FRAMES / GEN_FRAMES   default 96 / 320 (E1's 6-bar prompt and
-#               416-frame total). The staged files are CROPPED to start at
-#               the co-entry bar -- the first bar by which both streams
-#               have sounded -- and written at a constant 120 bpm on the
-#               tick grid (job 217761: the melody is absent from the first
-#               6 bars of 8 of the 14 songs; POP909 intros). E1 then reads
-#               frame 0 as the prompt start as before; crop_bars.tsv in
-#               STAGE_DIR records the offset per song.
+#   PROMPT_BARS default "6 8": candidate prompt lengths. Job 217761 found
+#               the melody absent from the first 6 bars of 8 of the 14
+#               songs (POP909 intros: chords alone, melody entering at
+#               bar 5-14; job 217792: 046 136 466 enter by bar 8). The
+#               intro is kept intact: each song gets the SMALLEST N with
+#               both streams present in its first N bars and is staged
+#               into STAGE_DIR/p<N>/; prompt_bars.tsv records it.
+#   GEN_FRAMES  default 320: scored continuation after the prompt, the
+#               same in every group (E1: GEN_LENGTH = 16N + GEN_FRAMES).
 #
-# Example:
+# Example (then one E1 chain per group, and merge_e1.sbatch):
 #   sbatch midi_yinyang/audit_wholesong_split.sbatch
 
 #SBATCH --job-name=audit_wholesong_split
@@ -84,7 +86,7 @@ CHORD_SRC="${CHORD_SRC:-/home/xinyue.li/POP909-Dataset/POP909-chord}"
 MIN_KEPT="${MIN_KEPT:-8}"
 MAX_OFFGRID="${MAX_OFFGRID:-0.05}"
 KEEP_OFFGRID="${KEEP_OFFGRID:-326 816}"
-PROMPT_FRAMES="${PROMPT_FRAMES:-96}"
+PROMPT_BARS="${PROMPT_BARS:-6 8}"
 GEN_FRAMES="${GEN_FRAMES:-320}"
 [[ -d "$MEL_SRC" && -d "$CHORD_SRC" ]] || { echo "ERROR: source folders missing: $MEL_SRC , $CHORD_SRC"; exit 1; }
 # a fresh stage every run: the buggy first-tempo prompt check deleted
@@ -106,11 +108,10 @@ python audit_wholesong_split.py \
     --datasets $DATASETS \
     --mel-src "$MEL_SRC" --chord-src "$CHORD_SRC" \
     --stage-dir "$STAGE_DIR" --min-kept "$MIN_KEPT" --max-offgrid "$MAX_OFFGRID" \
-    --prompt-frames "$PROMPT_FRAMES" --gen-frames "$GEN_FRAMES" \
+    --prompt-bars $PROMPT_BARS --gen-frames "$GEN_FRAMES" \
     --keep-offgrid $KEEP_OFFGRID
 
 echo "================================================================"
-echo "E1 on the shared-clean set:"
-echo "  sbatch --export=ALL,MEL_FOLDER=$STAGE_DIR/melody,CHORD_FOLDER=$STAGE_DIR/chord,OUT_ROOT=temp/E1_matched,RESULT_TAG=matched \\"
-echo "      midi_yinyang/eval_e1.sbatch"
+echo "E1 on the shared-clean set: one chain per group under $STAGE_DIR/p<N>, then"
+echo "  sbatch --export=ALL,RUNS=\"p96_matched p128_matched\",RESULT_TAG=matched midi_yinyang/merge_e1.sbatch"
 echo "================================================================"

@@ -591,15 +591,23 @@ The tick-space audit (job 217761) then showed the real constraint: the
 melody is absent from the first 6 bars of 8 of the 14 songs (POP909
 intros: chords alone, melody entering at bar 5–9), and 4 songs are off
 the 16th tick grid (276, 806 triplet-encoded; 326 at 72%; 816 at 10%).
-**Prompt protocol (2026-09-08):** the prompt is the 6 bars starting at
-the *co-entry bar*, the first bar by which both streams have sounded;
-the staged files are cropped there and re-emitted at a constant 120
-bpm on the tick grid (`input/909_matched_split/crop_bars.tsv` records
-the offset), so every system and the scorer still take frame 0 as the
-prompt start, and the crop is identical for both streams. Off-grid
-songs are excluded (`MAX_OFFGRID=0.05`) except 326 and 816, which were
-checked by hand and kept (`KEEP_OFFGRID`). Expected set: the 12 songs
-`004 046 136 196 326 366 456 466 626 656 746 816`. They
+**Prompt protocol (2026-09-08):** the intro is kept intact (a crop to
+the co-entry bar was built and rejected: it discards the chord-only
+intro from prompt and reference). Each song gets the smallest prompt
+length in {6, 8} bars at which both streams are present in the prompt
+(`check_prompt_entry` job 217792: 004 326 456 746 806 816 at 6 bars;
+046 136 466 only at 8; 196 276 366 626 656 enter at bar 8–14 and are
+excluded). The audit stages the groups uncropped into
+`input/909_matched_split/p6` and `p8` (`prompt_bars.tsv` records the
+assignment); E1 runs once per group with `PROMPT_LENGTH` 96 / 128 and
+`GEN_LENGTH` 416 / 448, so the scored continuation is 320 frames in
+both, and `merge_e1.sbatch` concatenates the metrics and builds one
+paired table over the union (`results/E1_mixed_matched_*`). Prompt
+length is a per-song property shared by all systems, so it cancels in
+the paired differences. Off-grid songs are excluded
+(`MAX_OFFGRID=0.05`) except 326 and 816, checked by hand and kept
+(`KEEP_OFFGRID`); 276 and 806 (triplet-encoded) stay out. Expected set:
+8 songs, p6 = `004 326 456 746 816`, p8 = `046 136 466`. They
 are the intersection of whole-song-gen's validation split (its only
 held-out set; `split.npz`, seed 1234, verified) with our held-out set
 (FramedDataset idx%10==0 in every dataset file, plus the 5 songs cut

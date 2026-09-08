@@ -18,8 +18,10 @@ side trained on it. This script prints:
   * the SHARED-CLEAN set: their valid  ∩  (our val ∪ our test)
 
 and, with --stage-dir, copies the shared-clean songs' melody/chord midis
-into <stage-dir>/{melody,chord}/ so E1 can point MEL_FOLDER/CHORD_FOLDER
-at them.
+UNCROPPED into <stage-dir>/p<N>/{melody,chord}/, N being the smallest
+prompt length in bars (--prompt-bars, default 6 8) at which both streams
+are present, so E1 runs once per group (PROMPT_LENGTH=16N) and
+merge_e1.sbatch scores the groups together.
 
 Usage (via audit_wholesong_split.sbatch):
     python audit_wholesong_split.py --split external/whole_song_gen/data/pop909_split/split.npz
@@ -94,8 +96,6 @@ def main():
     p.add_argument('--chord-src', default='/home/xinyue.li/POP909-Dataset/POP909-chord')
     p.add_argument('--stage-dir', default=None,
                    help='copy shared-clean songs here as {melody,chord}/<id>.mid')
-    p.add_argument('--prompt-frames', type=int, default=96,
-                   help='E1 prompt length in frames (16/bar; 96 = 6 bars)')
     p.add_argument('--min-prompt-notes', type=int, default=1,
                    help='a staged song must have at least this many notes '
                         'in BOTH streams inside the prompt, else it is '
@@ -104,10 +104,14 @@ def main():
                         'a chord track that starts late) is not a '
                         'co-generation prompt, every system gets it wrong '
                         'in its own way, and the song only adds noise.')
+    p.add_argument('--prompt-bars', type=int, nargs='+', default=[6, 8],
+                   help='candidate prompt lengths in bars; each song gets the '
+                        'smallest with both streams present and is staged '
+                        'into <stage-dir>/p<N>/')
     p.add_argument('--gen-frames', type=int, default=320,
-                   help='frames scored after the prompt (E1: GEN_LENGTH 416 '
-                        '- PROMPT_LENGTH 96); a song whose streams end '
-                        'before crop + prompt + this is excluded')
+                   help='frames scored after the prompt (E1: GEN_LENGTH - '
+                        'PROMPT_LENGTH); a song whose streams end before '
+                        'prompt + this is excluded')
     p.add_argument('--max-offgrid', type=float, default=0.05,
                    help='exclude a song if more than this fraction of its '
                         'onsets are off the 16th tick grid (or cluster at '
@@ -283,69 +287,47 @@ def main():
                 out.append('MIXED-METER')
             return out
 
-        # ---- co-entry crop. Job 217761 (tick-space check, time-aligned
-        # files) found the melody absent from the first 6 bars in 8 of
-        # the 14 songs: pop intros, where the chord track plays alone
-        # and the melody enters at bar 5-9. "Prompt = the first 6 bars"
-        # is therefore not a co-generation prompt for most of POP909.
-        # Protocol: the prompt starts at the CO-ENTRY BAR, the first bar
-        # by which both streams have sounded (max over streams of the
-        # bar of the first onset). Both staged files are cropped there
-        # and re-emitted at a constant 120 bpm on the tick grid, so
-        # every system and the scorer still see frame 0 as the prompt
-        # start; the crop is identical for both streams, so bar phase
-        # and cross-stream alignment are untouched. The pre-crop file
-        # decides the grid flags (a crop cannot change the onset
-        # fraction). A song is still excluded if a stream has fewer
-        # than --min-prompt-notes inside the cropped prompt, if it is
-        # off the tick grid, or if it ends before the scored window.
+        # ---- prompt-length groups. Job 217761 (tick-space check on the
+        # time-aligned files) found the melody absent from the first 6
+        # bars of 8 of the 14 songs: POP909 intros, chords alone with
+        # the melody entering at bar 5-14. The intro is kept intact
+        # (the decision was NOT to crop it away): instead each song is
+        # assigned the SMALLEST prompt length in --prompt-bars (default
+        # 6 8) for which both streams have at least --min-prompt-notes
+        # onsets inside the prompt, and is staged UNCROPPED into
+        # <stage>/p<N>/{melody,chord}. E1 then runs once per group with
+        # PROMPT_LENGTH=16*N and GEN_LENGTH=16*N+--gen-frames, so the
+        # scored continuation has the same length in every group, and
+        # merge_e1.sbatch scores the groups together (prompt length is
+        # a per-song property shared by every system, so it cancels in
+        # the paired per-song differences). A song whose streams are
+        # not both present at the largest N, that is off the tick grid
+        # (unless in --keep-offgrid), or that ends before the scored
+        # window, is excluded. prompt_bars.tsv records the assignment.
         FPB = 16
-        fpb_sec = 60.0 / 120.0 / 4.0      # seconds per frame at 120 bpm
+        groups = sorted(set(args.prompt_bars))
 
         def load(fn):
             pm = pretty_midi.PrettyMIDI(fn)
             fr = frame_fn(pm)
-            notes = [(fr(n.start), fr(n.end), n, ins)
-                     for ins in pm.instruments for n in ins.notes]
-            return pm, notes
+            return sorted((fr(n.start), fr(n.end))
+                          for ins in pm.instruments for n in ins.notes)
 
-        def write_cropped(fn, pm, notes, crop):
-            out = pretty_midi.PrettyMIDI(resolution=pm.resolution,
-                                         initial_tempo=120.0)
-            by_ins = {}
-            for st, en, n, ins in notes:
-                st, en = st - crop, en - crop
-                if en <= 0:
-                    continue
-                st = max(st, 0.0)
-                if en <= st:
-                    en = st + 0.25
-                key = id(ins)
-                if key not in by_ins:
-                    by_ins[key] = pretty_midi.Instrument(
-                        program=ins.program, is_drum=ins.is_drum, name=ins.name)
-                by_ins[key].notes.append(pretty_midi.Note(
-                    velocity=n.velocity, pitch=n.pitch,
-                    start=st * fpb_sec, end=en * fpb_sec))
-            out.instruments.extend(by_ins.values())
-            out.write(fn)
-
-        total = args.prompt_frames + args.gen_frames
-        print(f'\n[prompt] prompt = {args.prompt_frames} frames ({args.prompt_frames // FPB} bars)'
-              f' from the CO-ENTRY bar (first bar by which both streams have sounded),'
-              f' on the tick grid; scored window ends {total} frames after it.'
-              f' off-grid = onset fraction off the 16th TICK grid, pre-crop (mel/chd);'
-              f' tempo-ev = tempo events in the source file (ignored by the tokenizer)')
-        print(f'  {"song":<6}{"entry(m/c)":>11}{"crop":>6}{"melody":>8}{"chord":>8}'
-              f'{"end":>7}{"off-grid":>16}{"tempo-ev":>10}  grid flags        verdict')
-        dropped, crops = [], {}
+        print(f'\n[prompt] prompt = the first N bars of the song, N = smallest of '
+              f'{groups} with both streams present ({args.min_prompt_notes}+ onsets),'
+              f' on the tick grid; scored window = the {args.gen_frames} frames after it.'
+              f' off-grid = onset fraction off the 16th TICK grid (mel/chd);'
+              f' tempo-ev = tempo events in the file (ignored by the tokenizer)')
+        cols = ''.join(f'{f"m/c<{b}b":>10}' for b in groups)
+        print(f'  {"song":<6}{"entry(m/c)":>11}{cols}{"N":>4}{"end":>7}{"off-grid":>16}'
+              f'{"tempo-ev":>10}  grid flags        verdict')
+        dropped, assign = [], {}
         for s in sorted(shared):
             data, gflags, offs, tev, first = {}, [], [], [], {}
             for sub in ('melody', 'chord'):
                 fn = os.path.join(args.stage_dir, sub, f'{s:03d}.mid')
                 data[sub] = load(fn)
-                onsets = [st for st, _, _, _ in data[sub][1]]
-                first[sub] = int(min(onsets) // FPB) if onsets else None
+                first[sub] = int(data[sub][0][0] // FPB) if data[sub] else None
                 try:
                     r = tick_grid(fn, 4)
                     offs.append(r['off_frac'])
@@ -357,23 +339,18 @@ def main():
                     gflags += meter_flags(fn)
                 except Exception as e:      # noqa: BLE001
                     gflags.append(f'check-failed({e!r})')
+            counts = {b: {sub: sum(1 for st, _ in data[sub] if st < b * FPB)
+                          for sub in data} for b in groups}
+            n_bars = next((b for b in groups
+                           if all(v >= args.min_prompt_notes
+                                  for v in counts[b].values())), None)
+            end = min((max((en for _, en in data[sub]), default=0.0)
+                       for sub in data), default=0.0)
             reasons = []
-            if any(v is None for v in first.values()):
-                crop_bar = 0
-                reasons.append('a stream has no notes at all')
-            else:
-                crop_bar = max(first.values())
-            crop = crop_bar * FPB
-            counts = {sub: sum(1 for st, _, _, _ in data[sub][1]
-                               if crop <= st < crop + args.prompt_frames)
-                      for sub in data}
-            end = min(max((en for _, en, _, _ in data[sub][1]), default=0.0)
-                      for sub in data)
-            bad = [k for k, v in counts.items() if v < args.min_prompt_notes]
-            if bad:
-                reasons.append(f'{", ".join(bad)} empty in cropped prompt')
-            if end < crop + total:
-                reasons.append(f'ends at frame {end:.0f} < {crop + total}')
+            if n_bars is None:
+                reasons.append(f'a stream empty in the first {groups[-1]} bars')
+            elif end < n_bars * FPB + args.gen_frames:
+                reasons.append(f'ends at frame {end:.0f} < {n_bars * FPB + args.gen_frames}')
             if gflags and s in args.keep_offgrid:
                 gflags = [f'{g}(kept)' for g in gflags]
             elif gflags:
@@ -383,35 +360,48 @@ def main():
             tev_s = '/'.join(str(t) for t in tev) or '-'
             ent_s = '/'.join('-' if first[k] is None else str(first[k])
                              for k in ('melody', 'chord'))
-            print(f'  {s:03d}   {ent_s:>11}{crop_bar:>6}{counts["melody"]:>8}'
-                  f'{counts["chord"]:>8}{end - crop:>7.0f}{off_s:>16}{tev_s:>10}'
-                  f'  {",".join(sorted(set(gflags))) or "-":<18}{verdict}')
+            cnt_s = ''.join(f'{counts[b]["melody"]}/{counts[b]["chord"]:<4}'.rjust(10)
+                            for b in groups)
+            print(f'  {s:03d}   {ent_s:>11}{cnt_s}{str(n_bars or "-"):>4}{end:>7.0f}'
+                  f'{off_s:>16}{tev_s:>10}  {",".join(sorted(set(gflags))) or "-":<18}'
+                  f'{verdict}')
+            for sub in ('melody', 'chord'):
+                src_fn = os.path.join(args.stage_dir, sub, f'{s:03d}.mid')
+                if reasons:
+                    os.remove(src_fn)
+                    continue
+                dst_dir = os.path.join(args.stage_dir, f'p{n_bars}', sub)
+                os.makedirs(dst_dir, exist_ok=True)
+                shutil.move(src_fn, os.path.join(dst_dir, f'{s:03d}.mid'))
             if reasons:
                 dropped.append(s)
-                for sub in ('melody', 'chord'):
-                    os.remove(os.path.join(args.stage_dir, sub, f'{s:03d}.mid'))
-                continue
-            crops[s] = crop_bar
-            for sub in ('melody', 'chord'):
-                fn = os.path.join(args.stage_dir, sub, f'{s:03d}.mid')
-                pm, notes = data[sub]
-                write_cropped(fn, pm, notes, crop)
+            else:
+                assign[s] = n_bars
+        for sub in ('melody', 'chord'):
+            d = os.path.join(args.stage_dir, sub)
+            if os.path.isdir(d) and not os.listdir(d):
+                os.rmdir(d)
         kept = sorted(shared - set(dropped))
-        with open(os.path.join(args.stage_dir, 'crop_bars.tsv'), 'w') as fh:
-            fh.write('song\tcrop_bar\tcrop_frames\n')
+        with open(os.path.join(args.stage_dir, 'prompt_bars.tsv'), 'w') as fh:
+            fh.write('song\tprompt_bars\tprompt_frames\tgen_length\n')
             for s in kept:
-                fh.write(f'{s:03d}\t{crops[s]}\t{crops[s] * FPB}\n')
-        print(f'[prompt] kept {len(kept)}: {fmt(kept)}   (crop bars recorded in '
-              f'{args.stage_dir}/crop_bars.tsv; staged files start at the co-entry bar,'
-              f' constant 120 bpm)')
+                fh.write(f'{s:03d}\t{assign[s]}\t{assign[s] * FPB}\t'
+                         f'{assign[s] * FPB + args.gen_frames}\n')
+        print(f'[prompt] kept {len(kept)}: {fmt(kept)}')
+        for b in groups:
+            ids = [s for s in kept if assign[s] == b]
+            print(f'[prompt]   p{b} ({len(ids)}): {fmt(ids) if ids else "(none)"}'
+                  f'   -> {args.stage_dir}/p{b}/{{melody,chord}}'
+                  f'   PROMPT_LENGTH={b * FPB} GEN_LENGTH={b * FPB + args.gen_frames}')
+        print(f'[prompt] assignment recorded in {args.stage_dir}/prompt_bars.tsv')
         if dropped:
-            print(f'[prompt] removed from {args.stage_dir}: {fmt(dropped)}')
+            print(f'[prompt] removed: {fmt(dropped)}')
         if len(kept) < args.min_kept:
             # hold the afterok chain instead of letting E1 run and print
             # a table over one song with every +-0.000
             print(f'[prompt] ERROR: only {len(kept)} songs kept, fewer than '
                   f'--min-kept {args.min_kept}; the stage is not a test set. '
-                  f'Inspect the off-grid column above before lowering the bar.')
+                  f'Inspect the columns above before lowering the bar.')
             sys.exit(1)
 
 
