@@ -84,6 +84,9 @@
 #   PIANO_COPIES   default 1: <system>_piano listening copies
 #   MIN_SONGS      default 2: refuse to run on a smaller staged set (a
 #                  1-song stage prints a full table with every +-0.000)
+#   RESTAGE=1      delete OUT_ROOT/prompts (and its .ready) before
+#                  staging, for when the source folder changed under a
+#                  reused OUT_ROOT; pass it to the prep job only
 #
 # Examples:
 #   sbatch midi_yinyang/eval_e1.sbatch          # all six, defaults
@@ -150,6 +153,7 @@ SKIP_INFER="${SKIP_INFER:-0}"
 PREP_ONLY="${PREP_ONLY:-0}"
 PIANO_COPIES="${PIANO_COPIES:-1}"
 MIN_SONGS="${MIN_SONGS:-2}"
+RESTAGE="${RESTAGE:-0}"
 
 # A3's decode schedule (the listening-test winner); identical to
 # queryablation so E1's A3 row and the ablation's A3 row are the same
@@ -195,6 +199,10 @@ EVAL_MEL="$OUT_ROOT/prompts/mel"
 EVAL_CHORD="$OUT_ROOT/prompts/chord"
 EVAL_MERGED="$OUT_ROOT/prompts/merged_tagged"
 READY="$OUT_ROOT/prompts/.ready"
+if [[ "$RESTAGE" == "1" && "$SKIP_INFER" != "1" ]]; then
+    echo "[prompts] RESTAGE=1: removing $OUT_ROOT/prompts and staging afresh from $MEL_FOLDER"
+    rm -rf "$OUT_ROOT/prompts"
+fi
 if [[ -f "$READY" ]]; then
     echo "[prompts] reusing staged prompts ($READY present; delete it to restage)"
 else
