@@ -72,6 +72,15 @@
 #   RESULT_TAG     extra suffix on the result files
 #   SKIP_INFER=1   score only, generate nothing (no GPU needed: submit
 #                  through score_e1.sbatch, a CPU wrapper that forces it)
+#   PREP_ONLY=1    stage the prompt folders under OUT_ROOT and exit (no
+#                  GPU: submit through prep_e1.sbatch). Lets several
+#                  GPU jobs with disjoint SYSTEMS lists run in PARALLEL
+#                  on one OUT_ROOT without racing on the prompts:
+#                    J0=prep_e1  ->  jobA SYSTEMS="A3 S1 S-scratch"
+#                                    jobB SYSTEMS="A1 P-mc P-cm WS"
+#                                ->  score_e1 (afterok both)
+#                  A GPU job finding OUT_ROOT/prompts/.ready reuses the
+#                  staged prompts instead of rebuilding them.
 #   PIANO_COPIES   default 1: <system>_piano listening copies
 #
 # Examples:
@@ -136,6 +145,7 @@ CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"
 OUT_ROOT="${OUT_ROOT:-temp/E1}"
 RESULT_TAG="${RESULT_TAG:-}"
 SKIP_INFER="${SKIP_INFER:-0}"
+PREP_ONLY="${PREP_ONLY:-0}"
 PIANO_COPIES="${PIANO_COPIES:-1}"
 
 # A3's decode schedule (the listening-test winner); identical to
@@ -160,7 +170,7 @@ echo "================================================================"
 nvidia-smi | head -n 12 || true
 
 # ---- 0. pre-flight ----------------------------------------------------
-if [[ "$SKIP_INFER" != "1" ]]; then
+if [[ "$SKIP_INFER" != "1" && "$PREP_ONLY" != "1" ]]; then
     python -c "
 import sys, torch
 if not torch.cuda.is_available():
@@ -169,7 +179,7 @@ torch.zeros(1).cuda()
 print(f'[gpu] {torch.cuda.device_count()} visible; {torch.cuda.get_device_name(0)}')
 "
 fi
-if [[ "$SKIP_INFER" != "1" ]]; then
+if [[ "$SKIP_INFER" != "1" && "$PREP_ONLY" != "1" ]]; then
     for _c in "$CKPT_A1" "$CKPT_A3" "$CKPT_S1" "$CKPT_SSCRATCH" "$CKPT_S0" "$CKPT_SMEL" "$CKPT_SCHORD" "$CKPT_Y_M2C" "$CKPT_Y_C2M"; do
         [[ -n "$_c" && -e "$_c" ]] && python check_ckpts.py "$_c" || true
     done
@@ -181,9 +191,14 @@ fi
 EVAL_MEL="$OUT_ROOT/prompts/mel"
 EVAL_CHORD="$OUT_ROOT/prompts/chord"
 EVAL_MERGED="$OUT_ROOT/prompts/merged_tagged"
-mkdir -p "$EVAL_MEL" "$EVAL_CHORD"
-cp -f "$MEL_FOLDER"/*.mid "$MEL_FOLDER"/*.MID "$EVAL_MEL"/ 2>/dev/null || true
-cp -f "$CHORD_FOLDER"/*.mid "$CHORD_FOLDER"/*.MID "$EVAL_CHORD"/ 2>/dev/null || true
+READY="$OUT_ROOT/prompts/.ready"
+if [[ -f "$READY" ]]; then
+    echo "[prompts] reusing staged prompts ($READY present; delete it to restage)"
+else
+    mkdir -p "$EVAL_MEL" "$EVAL_CHORD"
+    cp -f "$MEL_FOLDER"/*.mid "$MEL_FOLDER"/*.MID "$EVAL_MEL"/ 2>/dev/null || true
+    cp -f "$CHORD_FOLDER"/*.mid "$CHORD_FOLDER"/*.MID "$EVAL_CHORD"/ 2>/dev/null || true
+fi
 N_EVAL=$(ls "$EVAL_MEL" | wc -l)
 [[ "$N_EVAL" -gt 0 ]] || { echo "ERROR: no midis in $MEL_FOLDER"; exit 1; }
 [[ "$N_EVAL" -eq "$(ls "$EVAL_CHORD" | wc -l)" ]] || {
@@ -192,9 +207,14 @@ SONG_IDS=$(ls "$EVAL_MEL" | sed 's/\.[Mm][Ii][Dd]$//' | sort | tr '\n' ' ')
 echo "[prompts] $N_EVAL test songs: $SONG_IDS"
 # merged, program-tagged copies for the single-stream S0 (the tokenizer
 # separates streams by program only)
-if [[ ! -d "$EVAL_MERGED" || "$(ls "$EVAL_MERGED" | wc -l)" -lt "$N_EVAL" ]]; then
+if [[ ! -f "$READY" ]]; then
     python merge_melody_chord.py --melody "$EVAL_MEL" --chord "$EVAL_CHORD" \
         --dst "$EVAL_MERGED" --chord-program 48
+    date > "$READY"
+fi
+if [[ "$PREP_ONLY" == "1" ]]; then
+    echo "[prompts] PREP_ONLY=1: staged $N_EVAL songs under $OUT_ROOT/prompts; exiting"
+    exit 0
 fi
 
 # ---- system registry --------------------------------------------------
