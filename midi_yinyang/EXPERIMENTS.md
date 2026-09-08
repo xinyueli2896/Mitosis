@@ -565,6 +565,31 @@ ids passed explicitly instead of derived from parity.
 
 ## 3. Experiment matrix
 
+### E1 follow-up — decode diagnostics for the coupling deficit (2026-09-08)
+
+The merged 8-song table (job 217818) has A3 tied with S1 on the H3
+primary, closest on chord-tone coverage, and UNDER-coupled: coupling
+0.053 vs reference 0.088, below every other system (A1, no same-instant
+view, 0.105; S1 0.147). The probe (job 206671) had shown the slots read
+~6% partner content. Reading: a slot trained to predict frame t with
+its partner masked half the time learns the marginal; refinement then
+commits generic drafts. Order of work, each landing in the same table:
+
+1. Decode-only on the A3 ckpt (`eval_e1.sbatch` systems A3K0, A3ctc,
+   A3ctcc, A3ctc2): refinement depth 0 (AR draft only), and
+   commit-then-condition (`A3_SCHEDULE=ctc_*`: commit one stream's
+   draft into its slot at k=0, predict the other from a masked slot --
+   the one-committed-one-masked regime A3 trains on). If K=0 recovers
+   A1's coupling, refinement is the damage; if ctc beats both, the
+   conditional pathway works and the marginal drafts were the problem.
+2. Training: conditional slots (partner committed with p~0.8, never
+   both masked), decoded ctc.
+3. Architecture: A1 + a directed same-frame edge (chord slot at t
+   attends melody slot at t, direction random per example), no slots,
+   no refinement -- exact within-frame conditioning, the merged model's
+   factorisation with stream-specific parameters kept.
+A9 is parked (AR loss climbs regardless of query weight / balance loss).
+
 ### E1 — Co-generation (RQ1)
 
 Both streams are generated jointly, conditioned on a 4-bar prompt of

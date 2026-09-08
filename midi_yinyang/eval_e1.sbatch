@@ -12,6 +12,10 @@
 #   A3    the model: duet block diffusion, K=4 refinement, co mode
 #   A3f   A3 + slot_sees_prev_frame (the mask fix; VARIANTS.md A.3f),
 #         same decoder and schedule as A3; the flag travels in the ckpt
+#   A3K0, A3ctc, A3ctcc, A3ctc2   decode variants on the A3 ckpt (not in
+#         the default list): refinement depth 0; commit-then-condition
+#         with melody leading / chord leading / both passes. Diagnostics
+#         for the coupling deficit -- see the generate() case.
 #   S1    POP909-finetuned single-stream cp transformer (merged
 #         streams, chord tagged on program 48), continuation -- the
 #         MATCHED single-stream baseline (LA pretrain + POP909 finetune)
@@ -95,6 +99,7 @@
 #   sbatch midi_yinyang/eval_e1.sbatch          # all six, defaults
 #   sbatch --export=ALL,SYSTEMS="A1 A3",FORCE=A1 midi_yinyang/eval_e1.sbatch
 #   sbatch --export=ALL,SYSTEMS=A3f midi_yinyang/eval_e1.sbatch   # add one system to an existing tree
+#   sbatch --export=ALL,SYSTEMS="A3K0 A3ctc A3ctc2" midi_yinyang/eval_e1.sbatch   # decode diagnostics
 #   sbatch --export=ALL,SKIP_INFER=1,BASELINE=S1 midi_yinyang/eval_e1.sbatch
 
 #SBATCH --job-name=eval_e1
@@ -282,9 +287,22 @@ generate() {
             --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$MAX_POLYPHONY_DUET" \
             --model-size large --moe-num-experts 4 --moe-topk 2 ;;
-    A3|A3f)
-        local ck; case "$name" in A3) ck="$CKPT_A3" ;; A3f) ck="$CKPT_A3F" ;; esac
-        python cp_transformer_m2c_duet_block_diffusion_combined.py \
+    A3|A3f|A3K0|A3ctc|A3ctc2|A3ctcc)
+        # Decode variants share the A3 checkpoint and differ only in the
+        # env the decoder reads (A3_REFINE_STEPS / A3_SCHEDULE):
+        #   A3K0    refinement depth 0: the AR head's draft is the output
+        #   A3ctc   commit-then-condition, melody leads (ctc_m)
+        #   A3ctcc  commit-then-condition, chord leads (ctc_c)
+        #   A3ctc2  two passes: chord | melody, then melody | chord (ctc2_m)
+        local ck; case "$name" in A3f) ck="$CKPT_A3F" ;; *) ck="$CKPT_A3" ;; esac
+        local -a denv=()
+        case "$name" in
+            A3K0)   denv=(A3_REFINE_STEPS=0) ;;
+            A3ctc)  denv=(A3_SCHEDULE=ctc_m) ;;
+            A3ctcc) denv=(A3_SCHEDULE=ctc_c) ;;
+            A3ctc2) denv=(A3_SCHEDULE=ctc2_m) ;;
+        esac
+        env ${denv[@]+"${denv[@]}"} python cp_transformer_m2c_duet_block_diffusion_combined.py \
             --ckpt "$ck/" \
             --mel-folder "$EVAL_MEL" --chord-folder "$EVAL_CHORD" \
             --output-dir "$dir" --modes co \

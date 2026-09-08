@@ -492,6 +492,8 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
       A3_REFINE_STEPS   int, same as K_refine.
       A3_SEED_FROM_AR   '0' disables the AR seed.
       A3_FINAL_TEMP     float, same as final_temperature.
+      A3_SCHEDULE       'refine' (default) or ctc_m / ctc_c / ctc_alt /
+                        ctc2_*: commit-then-condition (see the code).
 
     Returns (mel_frames, chord_frames), each a list of [B, subseq_len].
     """
@@ -544,6 +546,30 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     adaptive = _os.environ.get('A3_ADAPTIVE') == '1'
     if adaptive:
         print('[gen] A3_ADAPTIVE=1 (skip refinement on silent-frame steps)')
+    # A3_SCHEDULE: 'refine' (default, K+1 parallel rounds) or
+    # commit-then-condition, the MaskGIT-style schedule the model file
+    # lists as option (b): seed both drafts from the AR heads, COMMIT
+    # one stream's draft into its slot (k=0), predict the other from a
+    # fully masked slot (k=K) in one more forward, so the follower is
+    # an exact one-direction conditional on the leader's current frame
+    # -- the 'one committed, one masked' regime A.3 trains on.
+    #   ctc_m   melody leads, chord conditioned      (harmonisation)
+    #   ctc_c   chord leads, melody conditioned
+    #   ctc_alt leader alternates with frame parity
+    #   ctc2_*  a second pass re-predicts the leader conditioned on
+    #           the committed follower (two conditionals, 3 forwards)
+    # Diagnostic for the E1 coupling deficit: refinement drafts the two
+    # slots from partner-masked inputs and the slots were shown to read
+    # little partner content; ctc removes the marginal step entirely.
+    schedule = _os.environ.get('A3_SCHEDULE', 'refine')
+    ctc_passes, ctc_leader = 0, None
+    if schedule.startswith('ctc'):
+        base, _, lead = schedule.partition('_')
+        ctc_passes = 2 if base == 'ctc2' else 1
+        ctc_leader = lead or 'm'
+        assert ctc_leader in ('m', 'c', 'alt'), schedule
+        print(f'[gen] A3_SCHEDULE={schedule}: commit-then-condition, '
+              f'leader={ctc_leader}, passes={ctc_passes}')
     # A.4 decode schedule: feed the next round a PARTIALLY re-masked
     # draft -- the (r-1)/K lowest-confidence tokens replaced by the
     # frame mask id -- matching the graded corruption the token-level
@@ -645,7 +671,53 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
             last_m_tokens = None
             last_c_tokens = None
 
-            for r in range(K, -1, -1):
+            if ctc_passes:
+                # --- commit-then-condition -----------------------------
+                # seed: both slots masked (r=K), drafts from the AR heads
+                slot_m = _build_slot(model, 'sample' if m_sampling else 'committed',
+                                     None, m_action_h, K, K, 0, B)
+                slot_c = _build_slot(model, 'sample' if c_sampling else 'committed',
+                                     None, c_action_h, K, K, 1, B)
+                h_in = torch.cat([h_clean_padded, slot_m, slot_c], dim=1)
+                h_global, _ = model._run_global_stack(h_in, T_query=T_query)
+                clean_len = h_clean.shape[1]
+                cur = {0: m_tokens, 1: c_tokens}
+                if m_sampling:
+                    cur[0] = model.local_sampling(h_global[:, clean_len - 2],
+                                                  max_subseq_len=subseq_len,
+                                                  temperature=temperature,
+                                                  token_type_id=0)
+                if c_sampling:
+                    cur[1] = model.local_sampling(h_global[:, clean_len - 1],
+                                                  max_subseq_len=subseq_len,
+                                                  temperature=temperature,
+                                                  token_type_id=1)
+                lead = {'m': 0, 'c': 1, 'alt': t % 2}[ctc_leader]
+                order = [(lead, 1 - lead)]
+                if ctc_passes == 2:
+                    order.append((1 - lead, lead))
+                sampling = {0: m_sampling, 1: c_sampling}
+                for ld, fo in order:
+                    if not sampling[fo]:
+                        continue        # follower is given: nothing to predict
+                    lead_h = model._encode_frame(cur[ld], ld).to(dtype=dtype)
+                    slots = [None, None]
+                    slots[ld] = _build_slot(model, 'committed', None, lead_h,
+                                            0, K, ld, B)
+                    slots[fo] = _build_slot(model, 'sample', None, None,
+                                            K, K, fo, B)
+                    h_in = torch.cat([h_clean_padded, slots[0], slots[1]], dim=1)
+                    h_global, _ = model._run_global_stack(h_in, T_query=T_query)
+                    h_pred = h_global[:, -2 if fo == 0 else -1]
+                    cur[fo] = model.local_sampling(h_pred, max_subseq_len=subseq_len,
+                                                   temperature=final_temperature,
+                                                   token_type_id=fo)
+                last_m_tokens, last_c_tokens = cur[0], cur[1]
+                K_loop = -1        # skip the refinement loop below
+            else:
+                K_loop = K
+
+            for r in range(K_loop, -1, -1):
                 slot_m = _build_slot(
                     model,
                     mode=('sample' if m_sampling else 'committed'),
