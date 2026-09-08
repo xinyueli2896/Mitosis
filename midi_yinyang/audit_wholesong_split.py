@@ -230,27 +230,45 @@ def main():
             print(f'[stage] WARNING: melody={n_m} chord={n_c} expected={len(shared)}')
             sys.exit(1)
 
-        # ---- prompt check: both streams must be present in the prompt.
-        # The scorer frames each file by its own tempo at 4 frames per
-        # beat; count notes STARTING inside the first prompt_frames.
+        # ---- prompt check: both streams must be present in the prompt,
+        # counted on the TICK grid (frame = tick / (resolution/4)) --
+        # the grid the tokenizer reads. The first version of this check
+        # framed by the file's first tempo event and, on POP909's
+        # spurious initial tempi, judged 12 of 14 prompts empty and
+        # deleted them. Also drop songs the grid-representability
+        # checker flags (TRIPLET / OFF-GRID / METER): tokenization snaps
+        # their onsets a 32nd away, so they are corrupted as prompts and
+        # as references alike.
         import pretty_midi
-        from eval_metrics import _file_tempo, BEAT_DIV
+        from eval_metrics import frame_fn
+        from check_beat_alignment import analyze as grid_check
         print(f'\n[prompt] notes starting inside the first {args.prompt_frames} '
-              f'frames ({args.prompt_frames // 16} bars), per stream')
-        print(f'  {"song":<6}{"melody":>8}{"chord":>8}  verdict')
+              f'frames ({args.prompt_frames // 16} bars) on the tick grid, per stream')
+        print(f'  {"song":<6}{"melody":>8}{"chord":>8}  grid flags        verdict')
         dropped = []
         for s in sorted(shared):
-            counts = {}
+            counts, gflags = {}, []
             for sub in ('melody', 'chord'):
                 fn = os.path.join(args.stage_dir, sub, f'{s:03d}.mid')
                 pm = pretty_midi.PrettyMIDI(fn)
-                step = 60.0 / _file_tempo(pm) / BEAT_DIV
+                fr = frame_fn(pm)
                 counts[sub] = sum(1 for ins in pm.instruments for n in ins.notes
-                                  if n.start < args.prompt_frames * step)
+                                  if fr(n.start) < args.prompt_frames)
+                try:
+                    gflags += [f for f in grid_check(fn)['flags']
+                               if not f.startswith('no-tempo')]
+                except Exception as e:      # noqa: BLE001
+                    gflags.append(f'check-failed({e!r})')
             bad = [k for k, v in counts.items() if v < args.min_prompt_notes]
-            verdict = 'ok' if not bad else f'EXCLUDED ({", ".join(bad)} empty in prompt)'
-            print(f'  {s:03d}   {counts["melody"]:>8}{counts["chord"]:>8}  {verdict}')
+            reasons = []
             if bad:
+                reasons.append(f'{", ".join(bad)} empty in prompt')
+            if gflags:
+                reasons.append('off the 16th grid')
+            verdict = 'ok' if not reasons else f'EXCLUDED ({"; ".join(reasons)})'
+            print(f'  {s:03d}   {counts["melody"]:>8}{counts["chord"]:>8}  '
+                  f'{",".join(sorted(set(gflags))) or "-":<18}{verdict}')
+            if reasons:
                 dropped.append(s)
                 for sub in ('melody', 'chord'):
                     os.remove(os.path.join(args.stage_dir, sub, f'{s:03d}.mid'))
