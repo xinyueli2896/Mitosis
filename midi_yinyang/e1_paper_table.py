@@ -232,6 +232,67 @@ def main():
     print(f'[table] wrote {args.out}.tex')
 
     consistency_figure(per_song, systems, args.baseline, args.out + '_consistency')
+    consistency_table(per_song, systems, args.baseline, args.out + '_consistency',
+                      len(n_songs), args.alpha)
+
+
+def consistency_table(per_song, systems, baseline, out, n_songs, alpha):
+    """Same content as the figure, as a single-column booktabs table:
+    systems as rows with the reference pair as the first row, the five
+    statistics as columns, mean +- s.e.m. over songs. Superscripts mark
+    a two-sided paired Wilcoxon difference from the baseline on the raw
+    per-song values (a comparison among systems, not to a target):
+    a = p < alpha, b = p < alpha/5 (Bonferroni over the five columns)."""
+    cols = [(m, t) for m, t, _ in _CONSISTENCY]
+    lines = [r'\begin{table}[t]', r'\centering', r'\small',
+             r'\setlength{\tabcolsep}{3.5pt}',
+             r'\begin{tabular}{l' + 'c' * len(cols) + '}', r'\toprule',
+             'System & ' + ' & '.join(t for _, t in cols) + r' \\', r'\midrule']
+    # reference row
+    ref_cells = []
+    for m, _ in cols:
+        sv = song_values(per_song, baseline, m)
+        rv = [t for _, t in sv.values()]
+        ref_cells.append(f'{np.mean(rv):.3f}$\\pm${np.std(rv) / math.sqrt(len(rv)):.3f}'
+                         if rv else '--')
+    lines.append(r'\textit{Reference pair} & ' + ' & '.join(ref_cells) + r' \\')
+    lines.append(r'\midrule')
+    for s in systems:
+        cells = []
+        for m, _ in cols:
+            sv = song_values(per_song, s, m)
+            vals = [v for v, _ in sv.values()]
+            if not vals:
+                cells.append('--')
+                continue
+            txt = f'{np.mean(vals):.3f}$\\pm${np.std(vals) / math.sqrt(len(vals)):.3f}'
+            if s != baseline:
+                bv = song_values(per_song, baseline, m)
+                common = sorted(set(sv) & set(bv))
+                diffs = [sv[k][0] - bv[k][0] for k in common]
+                if len(diffs) >= 5:
+                    _, pv, _ = wilcoxon_signed_rank(diffs, 'two-sided')
+                    if pv < alpha / len(cols):
+                        txt += '$^{b}$'
+                    elif pv < alpha:
+                        txt += '$^{a}$'
+            cells.append(txt)
+        name = SYSTEM_NAME.get(s, s)
+        if s == baseline:
+            name = r'\textbf{' + name + '}'
+        lines.append(name + ' & ' + ' & '.join(cells) + r' \\')
+    lines += [r'\bottomrule', r'\end{tabular}',
+              r'\caption{Melody--chord consistency of the generated pair on '
+              + str(n_songs) + r' held-out songs (mean$\pm$s.e.m. over songs; 3 samples '
+              r'per song averaged first). Coupling is chord-tone coverage on the true '
+              r'pairing minus coverage with the chords shifted by two bars. '
+              r'$^{a}$/$^{b}$: differs from \emph{' + SYSTEM_NAME.get(baseline, baseline)
+              + r'} at $p<' + f'{alpha:g}' + r'$ / $p<' + f'{alpha / len(cols):.2g}'
+              + r'$ (two-sided paired Wilcoxon on per-song values).}',
+              r'\label{tab:consistency}', r'\end{table}']
+    with open(out + '.tex', 'w') as fh:
+        fh.write('\n'.join(lines) + '\n')
+    print(f'[table] wrote {out}.tex')
 
 
 # marker/colour per system id: ours black filled; families share a shape
