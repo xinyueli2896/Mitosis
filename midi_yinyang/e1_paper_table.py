@@ -17,11 +17,12 @@ aggregate_eval_results does -- and writes:
               system that is significantly closer (+) or farther (-)
               from the target than the baseline on a one-sided paired
               Wilcoxon over per-song |value - target| differences.
-  <out>.pdf   signed distance from the reference for the H2 statistics
-              (generated minus reference, per song; mean +- s.e.m.),
-              one marker per system, reference at zero. Shows which
-              side of the reference each design lands on, which the
-              table's magnitudes hide.
+  <out>_consistency.pdf   melody-chord consistency read REFERENCE-FREE:
+              one panel per H2 statistic, systems on a shared vertical
+              axis, mean +- s.e.m. over songs with the per-song values
+              behind, and the reference pair as a dashed line with its
+              own s.e.m. band -- one row of the comparison, not a
+              target.
 
 Song counts and p-values are computed here, not copied from the
 aggregator's console output, so the artefacts regenerate from the CSV.
@@ -177,7 +178,6 @@ def main():
     lines.append(' & '.join(head) + r' \\')
     lines.append(r'\midrule')
 
-    fig_rows = []   # (metric label, system, mean delta, sem)
     for block, rows in ROWS:
         lines.append(r'\multicolumn{' + str(ncol) + r'}{l}{\textit{' + block + r'}} \\')
         for metric, label, primary in rows:
@@ -213,10 +213,6 @@ def main():
                         elif p_more < args.alpha:
                             mark = '-'
                 row.append(fmt_cell(vals, s == best and bool(vals), mark))
-                if metric in H2_RAW and sv:
-                    deltas = [v - t for v, t in sv.values()]
-                    fig_rows.append((label, s, float(np.mean(deltas)),
-                                     float(np.std(deltas) / math.sqrt(len(deltas)))))
             lines.append(' & '.join(row) + r' \\')
         lines.append(r'\midrule')
     lines[-1] = r'\bottomrule'
@@ -235,6 +231,33 @@ def main():
         fh.write('\n'.join(lines) + '\n')
     print(f'[table] wrote {args.out}.tex')
 
+    consistency_figure(per_song, systems, args.baseline, args.out + '_consistency')
+
+
+# marker/colour per system id: ours black filled; families share a shape
+_STYLE = {
+    'A3': dict(marker='o', color='black', mfc='black'),
+    'A1': dict(marker='o', color='black', mfc='white'),
+    'S1': dict(marker='s', color='0.35', mfc='0.35'),
+    'S-scratch': dict(marker='s', color='0.35', mfc='white'),
+    'P-mc': dict(marker='^', color='0.5', mfc='0.5'),
+    'P-cm': dict(marker='v', color='0.5', mfc='white'),
+    'WS': dict(marker='D', color='0.6', mfc='white'),
+}
+_CONSISTENCY = [
+    ('chord_tone_cov', 'Chord-tone coverage', 'onsets on chord tones'),
+    ('ctnctr', 'CTnCTR', 'incl. resolved non-chord tones'),
+    ('pcs', 'PCS', 'consonance ($-1$ to $1$)'),
+    ('mctd', 'MCTD', 'centroid distance ($\\downarrow$ closer)'),
+    ('coupling', 'Coupling', 'cov. $-$ shifted cov.'),
+]
+
+
+def consistency_figure(per_song, systems, baseline, out):
+    """Melody-chord consistency, reference-free: one panel per statistic,
+    systems on a shared vertical axis, mean +- s.e.m. over songs with the
+    per-song values behind, and the reference pair as a dashed line with
+    its own s.e.m. band -- a row of the comparison, not a target."""
     try:
         import matplotlib
         matplotlib.use('Agg')
@@ -242,41 +265,56 @@ def main():
     except ImportError:
         print('[figure] matplotlib not available; skipped')
         return
-    labels = [lab for _, lab, _ in ROWS[1][1]]
-    labels = [l.split(' (')[0] for l in labels]
-    fig_rows = [(l.split(' (')[0], s, m, e) for l, s, m, e in fig_rows]
-    fig, ax = plt.subplots(figsize=(6.8, 2.9))
-    markers = ['o', 's', '^', 'v', 'D', 'P', 'X']
-    width = 0.8
-    k = len(systems)
-    for i, s in enumerate(systems):
-        xs, ys, es = [], [], []
-        for j, lab in enumerate(labels):
-            hit = [(m, e) for l, ss, m, e in fig_rows if l == lab and ss == s]
-            if not hit:
+    plt.rcParams.update({'font.size': 7, 'axes.linewidth': 0.6,
+                         'xtick.major.width': 0.5, 'ytick.major.width': 0.5,
+                         'pdf.fonttype': 42, 'ps.fonttype': 42})
+    order = list(systems)[::-1]          # first system drawn on top
+    ypos = {s: i for i, s in enumerate(order)}
+    n = len(_CONSISTENCY)
+    fig, axes = plt.subplots(1, n, figsize=(7.1, 0.3 * len(order) + 0.85),
+                             sharey=True)
+    for ax, (metric, title, sub) in zip(axes, _CONSISTENCY):
+        ref = None
+        for s in order:
+            sv = song_values(per_song, s, metric)
+            if not sv:
                 continue
-            xs.append(j - width / 2 + width * (i + 0.5) / k)
-            ys.append(hit[0][0]); es.append(hit[0][1])
-        ax.errorbar(xs, ys, yerr=es, fmt=markers[i % len(markers)], ms=4.5,
-                    capsize=2, lw=0.9, label=SYSTEM_NAME.get(s, s),
-                    color='black' if s == args.baseline else None,
-                    zorder=3 if s == args.baseline else 2)
-    ax.axhline(0, color='0.3', lw=0.8, ls='--', zorder=1)
-    ax.text(len(labels) - 0.5, 0, ' reference', va='center', ha='left',
-            fontsize=7, color='0.3')
-    ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, fontsize=8)
-    ax.set_ylabel('generated $-$ reference', fontsize=8)
-    ax.tick_params(axis='y', labelsize=7)
-    ax.set_xlim(-0.6, len(labels) - 0.4 + 0.9)
-    fig.legend(fontsize=7, ncol=4, frameon=False, loc='lower center',
-               bbox_to_anchor=(0.5, -0.02))
-    for sp in ('top', 'right'):
-        ax.spines[sp].set_visible(False)
-    fig.tight_layout(rect=(0, 0.13, 1, 1))
-    fig.savefig(args.out + '.pdf')
-    fig.savefig(args.out + '.png', dpi=200)
-    print(f'[figure] wrote {args.out}.pdf / .png')
+            vals = [v for v, _ in sv.values()]
+            if ref is None:
+                ref = [t for _, t in sv.values()]
+            y = ypos[s]
+            ax.plot(vals, [y] * len(vals), '.', color='0.75', ms=2.5,
+                    zorder=1, clip_on=False)
+            m, e = float(np.mean(vals)), float(np.std(vals) / math.sqrt(len(vals)))
+            st = _STYLE.get(s, dict(marker='o', color='0.5', mfc='0.5'))
+            ax.errorbar(m, y, xerr=e, fmt=st['marker'], color=st['color'],
+                        mfc=st['mfc'], ms=4 if s != baseline else 4.8,
+                        mew=0.8, elinewidth=0.8, capsize=1.6, zorder=3)
+        if ref:
+            rm, re_ = float(np.mean(ref)), float(np.std(ref) / math.sqrt(len(ref)))
+            ax.axvspan(rm - re_, rm + re_, color='0.9', zorder=0, lw=0)
+            ax.axvline(rm, color='0.3', lw=0.7, ls='--', zorder=2)
+        ax.set_title(title, fontsize=8, pad=4)
+        ax.set_xlabel(sub, fontsize=5.8, color='0.35', labelpad=2)
+        ax.set_ylim(-0.6, len(order) - 0.4)
+        ax.tick_params(axis='x', labelsize=6, length=2, pad=1)
+        ax.tick_params(axis='y', length=0)
+        for sp in ('top', 'right'):
+            ax.spines[sp].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        ax.grid(axis='x', color='0.92', lw=0.5, zorder=0)
+        ax.set_axisbelow(True)
+        ax.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(3))
+        ax.margins(x=0.08)
+    axes[0].set_yticks(range(len(order)))
+    axes[0].set_yticklabels([SYSTEM_NAME.get(s, s) for s in order], fontsize=7)
+    fig.text(0.15, 0.015, 'dashed: reference pair (mean, s.e.m. band);  '
+             'markers: mean $\\pm$ s.e.m. over songs;  dots: individual songs',
+             fontsize=5.8, color='0.35', ha='left', va='bottom')
+    fig.subplots_adjust(left=0.15, right=0.985, top=0.9, bottom=0.24, wspace=0.22)
+    fig.savefig(out + '.pdf')
+    fig.savefig(out + '.png', dpi=220)
+    print(f'[figure] wrote {out}.pdf / .png')
 
 
 if __name__ == '__main__':
