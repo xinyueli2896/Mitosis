@@ -42,9 +42,10 @@ import numpy as np
 from aggregate_eval_results import wilcoxon_signed_rank, metric_target
 
 # display order and paper names; ids not listed are appended as-is
-SYSTEM_ORDER = ['A3', 'A1', 'S1', 'S-scratch', 'P-mc', 'P-cm', 'WS']
+SYSTEM_ORDER = ['A3', 'A3f', 'A1', 'S1', 'S-scratch', 'P-mc', 'P-cm', 'WS']
 SYSTEM_NAME = {
     'A3': r'Duet (ours)',
+    'A3f': r'Duet, slot sees $t{-}1$',
     'A1': r'Duet, causal',
     'S1': r'Shared, fine-tuned',
     'S-scratch': r'Shared, scratch',
@@ -307,6 +308,7 @@ def consistency_table(per_song, systems, baseline, out, n_songs, alpha):
 # marker/colour per system id: ours black filled; families share a shape
 _STYLE = {
     'A3': dict(marker='o', color='black', mfc='black'),
+    'A3f': dict(marker='o', color='black', mfc='0.6'),
     'A1': dict(marker='o', color='black', mfc='white'),
     'S1': dict(marker='s', color='0.35', mfc='0.35'),
     'S-scratch': dict(marker='s', color='0.35', mfc='white'),

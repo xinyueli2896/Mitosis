@@ -10,6 +10,8 @@
 # Systems (SYSTEMS knob; default all six):
 #   A1    intra-cross-attn co-generation, NO query slots (control)
 #   A3    the model: duet block diffusion, K=4 refinement, co mode
+#   A3f   A3 + slot_sees_prev_frame (the mask fix; VARIANTS.md A.3f),
+#         same decoder and schedule as A3; the flag travels in the ckpt
 #   S1    POP909-finetuned single-stream cp transformer (merged
 #         streams, chord tagged on program 48), continuation -- the
 #         MATCHED single-stream baseline (LA pretrain + POP909 finetune)
@@ -49,10 +51,11 @@
 # FORCE=all) deletes those folders under temp/E1 and regenerates them.
 #
 # Env knobs (--export=ALL,KEY=val):
-#   SYSTEMS        default "A1 A3 S1 S-scratch P-mc P-cm WS"
+#   SYSTEMS        default "A1 A3 A3f S1 S-scratch P-mc P-cm WS"
 #   FORCE          default empty; space-separated names, or all
 #   CKPT_A1        default the melchord cp4tar intra-cross-attn run dir
 #   CKPT_A3        default the A3 cp4tar run dir (K4mg_melchord_cp4tar)
+#   CKPT_A3F       default the A3f run dir (A3f_melchord_long)
 #   CKPT_S1        default the pop909ft_tagged_long merged run (cp16)
 #   CKPT_SSCRATCH  default the pop909scratch_tagged merged run (cp16)
 #   CKPT_S0        default the LA-pretrained cp transformer ckpt
@@ -60,7 +63,7 @@
 #   CKPT_SCHORD    P-cm stage A: default the pop909ft_chord_cp4 specialist
 #   CKPT_Y_M2C     P-mc stage B: default the POP909 YinYang '_rev' (mel2chord)
 #   CKPT_Y_C2M     P-cm stage B: default the POP909 YinYang non-rev (chord2mel)
-#   MAX_POLYPHONY_DUET   cp of A1/A3 training data (default 4)
+#   MAX_POLYPHONY_DUET   cp of A1/A3/A3f training data (default 4)
 #   MAX_POLYPHONY_SPEC   cp of the cascade specialists (default 4)
 #   MAX_POLYPHONY_S1 / MAX_POLYPHONY_SSCRATCH / MAX_POLYPHONY_S0
 #                  cp of the merged single-stream models (default 16)
@@ -91,6 +94,7 @@
 # Examples:
 #   sbatch midi_yinyang/eval_e1.sbatch          # all six, defaults
 #   sbatch --export=ALL,SYSTEMS="A1 A3",FORCE=A1 midi_yinyang/eval_e1.sbatch
+#   sbatch --export=ALL,SYSTEMS=A3f midi_yinyang/eval_e1.sbatch   # add one system to an existing tree
 #   sbatch --export=ALL,SKIP_INFER=1,BASELINE=S1 midi_yinyang/eval_e1.sbatch
 
 #SBATCH --job-name=eval_e1
@@ -117,10 +121,13 @@ cd "$MY"
 mkdir -p /home/xinyue.li/logs results
 
 # ---- knobs ------------------------------------------------------------
-SYSTEMS="${SYSTEMS:-A1 A3 S1 S-scratch P-mc P-cm WS}"
+SYSTEMS="${SYSTEMS:-A1 A3 A3f S1 S-scratch P-mc P-cm WS}"
 FORCE="${FORCE:-}"
 CKPT_A1="${CKPT_A1:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_melchord_cp4tar_batch_8_schedule}"
 CKPT_A3="${CKPT_A3:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord_cp4tar_batch_8_schedule}"
+# A3f: the v1.2 'long' run (A3 + slot_sees_prev_frame; the flag is
+# restored from the ckpt, so the decoder call is A3's).
+CKPT_A3F="${CKPT_A3F:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A3f_melchord_long_batch_8_schedule}"
 # Merged single-stream baselines: 'tagged' = chord on program 48 in the
 # training merge, which is what lets the tokenizer keep the streams
 # apart (an untagged merge fuses them irreversibly).
@@ -187,7 +194,7 @@ print(f'[gpu] {torch.cuda.device_count()} visible; {torch.cuda.get_device_name(0
 "
 fi
 if [[ "$SKIP_INFER" != "1" && "$PREP_ONLY" != "1" ]]; then
-    for _c in "$CKPT_A1" "$CKPT_A3" "$CKPT_S1" "$CKPT_SSCRATCH" "$CKPT_S0" "$CKPT_SMEL" "$CKPT_SCHORD" "$CKPT_Y_M2C" "$CKPT_Y_C2M"; do
+    for _c in "$CKPT_A1" "$CKPT_A3" "$CKPT_A3F" "$CKPT_S1" "$CKPT_SSCRATCH" "$CKPT_S0" "$CKPT_SMEL" "$CKPT_SCHORD" "$CKPT_Y_M2C" "$CKPT_Y_C2M"; do
         [[ -n "$_c" && -e "$_c" ]] && python check_ckpts.py "$_c" || true
     done
 fi
@@ -275,9 +282,10 @@ generate() {
             --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$MAX_POLYPHONY_DUET" \
             --model-size large --moe-num-experts 4 --moe-topk 2 ;;
-    A3)
+    A3|A3f)
+        local ck; case "$name" in A3) ck="$CKPT_A3" ;; A3f) ck="$CKPT_A3F" ;; esac
         python cp_transformer_m2c_duet_block_diffusion_combined.py \
-            --ckpt "$CKPT_A3/" \
+            --ckpt "$ck/" \
             --mel-folder "$EVAL_MEL" --chord-folder "$EVAL_CHORD" \
             --output-dir "$dir" --modes co \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
