@@ -32,6 +32,10 @@
 #               set on a different grid from the models' training data.
 #               004 is taken from here too, so all songs are one kind
 #               of file.
+#   MIN_KEPT    default 10: the audit exits 1 (holding any afterok chain)
+#               if fewer songs survive the prompt/grid check. Job 217364's
+#               chain ran E1 on a 1-song stage because the grid check
+#               framed by the first tempo event and excluded 13 songs.
 #
 # Example:
 #   sbatch midi_yinyang/audit_wholesong_split.sbatch
@@ -63,6 +67,7 @@ DATASETS="${DATASETS:-pop909_chord_cp4_v2 pop909_melody_cp4_v2 pop909_chord_cp8_
 STAGE_DIR="${STAGE_DIR:-input/909_matched_split}"
 MEL_SRC="${MEL_SRC:-/home/xinyue.li/POP909-Dataset/POP909-melody}"
 CHORD_SRC="${CHORD_SRC:-/home/xinyue.li/POP909-Dataset/POP909-chord}"
+MIN_KEPT="${MIN_KEPT:-10}"
 [[ -d "$MEL_SRC" && -d "$CHORD_SRC" ]] || { echo "ERROR: source folders missing: $MEL_SRC , $CHORD_SRC"; exit 1; }
 # a fresh stage every run: the buggy first-tempo prompt check deleted
 # files from the old stage dir, and a stale file must not survive a
@@ -82,7 +87,7 @@ python audit_wholesong_split.py \
     --split "$SPLIT" \
     --datasets $DATASETS \
     --mel-src "$MEL_SRC" --chord-src "$CHORD_SRC" \
-    --stage-dir "$STAGE_DIR"
+    --stage-dir "$STAGE_DIR" --min-kept "$MIN_KEPT"
 
 echo "================================================================"
 echo "E1 on the shared-clean set:"

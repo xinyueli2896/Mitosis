@@ -579,7 +579,15 @@ POP909 songs `004 046 136 196 276 326 366 456 466 626 656 746 806 816`
 `temp/E1_ws`) copied 13 of the 14 from the raw per-song files with
 POP909's original tempo maps and off-grid timing; those tables are
 void. Songs with an empty stream in the prompt or off-grid timing
-(456, triplet-encoded) are excluded by the staging audit. They
+(456, triplet-encoded) are excluded by the staging audit. **The first
+matched chain (score job 217364) is void too:** the audit's grid check
+called `check_beat_alignment`, which frames onsets by the file's first
+tempo event, flagged 13 of the 14 time-aligned songs OFF-GRID/TRIPLET
+and staged only 004, so every column of `results/E1_p96_matched_*`
+from that run is a single song with ±0.000. The audit now checks the
+grid in TICK space (`check_tokenizer_grid.analyze`) and exits 1 below
+`MIN_KEPT=10` survivors; `eval_e1.sbatch` refuses below `MIN_SONGS=2`.
+Rerun the chain (audit → prep → infer → score) and replace the files. They
 are the intersection of whole-song-gen's validation split (its only
 held-out set; `split.npz`, seed 1234, verified) with our held-out set
 (FramedDataset idx%10==0 in every dataset file, plus the 5 songs cut

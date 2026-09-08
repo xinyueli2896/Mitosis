@@ -104,6 +104,10 @@ def main():
                         'a chord track that starts late) is not a '
                         'co-generation prompt, every system gets it wrong '
                         'in its own way, and the song only adds noise.')
+    p.add_argument('--min-kept', type=int, default=10,
+                   help='exit 1 if fewer songs survive the prompt check, so '
+                        'a dependent E1 chain holds instead of scoring a '
+                        'one-song "table"')
     args = p.parse_args()
 
     fmt = lambda s: ' '.join(f'{i:03d}' for i in sorted(s))
@@ -238,19 +242,45 @@ def main():
         # the grid the tokenizer reads. The first version of this check
         # framed by the file's first tempo event and, on POP909's
         # spurious initial tempi, judged 12 of 14 prompts empty and
-        # deleted them. Also drop songs the grid-representability
-        # checker flags (TRIPLET / OFF-GRID / METER): tokenization snaps
-        # their onsets a 32nd away, so they are corrupted as prompts and
-        # as references alike.
+        # deleted them. Also drop songs whose onsets are off the 16th
+        # grid IN TICK SPACE (check_tokenizer_grid): tokenization snaps
+        # them a 32nd away, so they are corrupted as prompts and as
+        # references alike. The grid check must be the TICK-space one:
+        # the second version of this block used check_beat_alignment,
+        # which measures onsets in seconds against the file's FIRST
+        # tempo event -- the same first-tempo bug again -- and on the
+        # time-aligned files (job 217364 chain) flagged 13 of 14 songs
+        # OFF-GRID/TRIPLET, leaving a 1-song stage and a void E1 table.
+        # Meter is still checked from the time-signature events (a 3/4
+        # song does not have 16-frame bars, so '6 bars = 96 frames' is
+        # wrong for it).
+        import mido
         import pretty_midi
         from eval_metrics import frame_fn
-        from check_beat_alignment import analyze as grid_check
+        from check_tokenizer_grid import analyze as tick_grid
+
+        def meter_flags(fn):
+            m = mido.MidiFile(fn)
+            sigs = sorted({(msg.numerator, msg.denominator)
+                           for tr in m.tracks for msg in tr
+                           if msg.type == 'time_signature'})
+            out = []
+            bad = [f'{n}/{d}' for n, d in sigs if int(n * 16 / d) != 16]
+            if bad:
+                out.append(f'METER({",".join(bad)})')
+            if len(sigs) > 1:
+                out.append('MIXED-METER')
+            return out
+
         print(f'\n[prompt] notes starting inside the first {args.prompt_frames} '
-              f'frames ({args.prompt_frames // 16} bars) on the tick grid, per stream')
-        print(f'  {"song":<6}{"melody":>8}{"chord":>8}  grid flags        verdict')
+              f'frames ({args.prompt_frames // 16} bars) on the tick grid, per stream;'
+              f' off-grid = onset fraction off the 16th TICK grid (mel/chd);'
+              f' tempo-ev = tempo events in the file (ignored by the tokenizer)')
+        print(f'  {"song":<6}{"melody":>8}{"chord":>8}{"off-grid":>16}{"tempo-ev":>10}'
+              f'  grid flags        verdict')
         dropped = []
         for s in sorted(shared):
-            counts, gflags = {}, []
+            counts, gflags, offs, tev = {}, [], [], []
             for sub in ('melody', 'chord'):
                 fn = os.path.join(args.stage_dir, sub, f'{s:03d}.mid')
                 pm = pretty_midi.PrettyMIDI(fn)
@@ -258,8 +288,14 @@ def main():
                 counts[sub] = sum(1 for ins in pm.instruments for n in ins.notes
                                   if fr(n.start) < args.prompt_frames)
                 try:
-                    gflags += [f for f in grid_check(fn)['flags']
-                               if not f.startswith('no-tempo')]
+                    r = tick_grid(fn, 4)
+                    offs.append(r['off_frac'])
+                    tev.append(r['tempo_events'])
+                    if r['n'] and r['trip_frac'] > 0.05:
+                        gflags.append('TRIPLET')
+                    elif r['n'] and r['off_frac'] > 0.05:
+                        gflags.append('OFF-GRID')
+                    gflags += meter_flags(fn)
                 except Exception as e:      # noqa: BLE001
                     gflags.append(f'check-failed({e!r})')
             bad = [k for k, v in counts.items() if v < args.min_prompt_notes]
@@ -267,10 +303,12 @@ def main():
             if bad:
                 reasons.append(f'{", ".join(bad)} empty in prompt')
             if gflags:
-                reasons.append('off the 16th grid')
+                reasons.append('off the 16th tick grid / meter')
             verdict = 'ok' if not reasons else f'EXCLUDED ({"; ".join(reasons)})'
-            print(f'  {s:03d}   {counts["melody"]:>8}{counts["chord"]:>8}  '
-                  f'{",".join(sorted(set(gflags))) or "-":<18}{verdict}')
+            off_s = '/'.join(f'{o:.1%}' for o in offs) or '-'
+            tev_s = '/'.join(str(t) for t in tev) or '-'
+            print(f'  {s:03d}   {counts["melody"]:>8}{counts["chord"]:>8}{off_s:>16}'
+                  f'{tev_s:>10}  {",".join(sorted(set(gflags))) or "-":<18}{verdict}')
             if reasons:
                 dropped.append(s)
                 for sub in ('melody', 'chord'):
@@ -279,6 +317,13 @@ def main():
         print(f'[prompt] kept {len(kept)}: {fmt(kept)}')
         if dropped:
             print(f'[prompt] removed from {args.stage_dir}: {fmt(dropped)}')
+        if len(kept) < args.min_kept:
+            # hold the afterok chain instead of letting E1 run and print
+            # a table over one song with every +-0.000
+            print(f'[prompt] ERROR: only {len(kept)} songs kept, fewer than '
+                  f'--min-kept {args.min_kept}; the stage is not a test set. '
+                  f'Inspect the off-grid column above before lowering the bar.')
+            sys.exit(1)
 
 
 if __name__ == '__main__':

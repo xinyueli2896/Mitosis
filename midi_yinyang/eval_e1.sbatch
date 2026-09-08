@@ -82,6 +82,8 @@
 #                  A GPU job finding OUT_ROOT/prompts/.ready reuses the
 #                  staged prompts instead of rebuilding them.
 #   PIANO_COPIES   default 1: <system>_piano listening copies
+#   MIN_SONGS      default 2: refuse to run on a smaller staged set (a
+#                  1-song stage prints a full table with every +-0.000)
 #
 # Examples:
 #   sbatch midi_yinyang/eval_e1.sbatch          # all six, defaults
@@ -147,6 +149,7 @@ RESULT_TAG="${RESULT_TAG:-}"
 SKIP_INFER="${SKIP_INFER:-0}"
 PREP_ONLY="${PREP_ONLY:-0}"
 PIANO_COPIES="${PIANO_COPIES:-1}"
+MIN_SONGS="${MIN_SONGS:-2}"
 
 # A3's decode schedule (the listening-test winner); identical to
 # queryablation so E1's A3 row and the ablation's A3 row are the same
@@ -201,6 +204,13 @@ else
 fi
 N_EVAL=$(ls "$EVAL_MEL" | wc -l)
 [[ "$N_EVAL" -gt 0 ]] || { echo "ERROR: no midis in $MEL_FOLDER"; exit 1; }
+# A one-song stage still produces a full-looking table (every +-0.000,
+# job 217364). Refuse below MIN_SONGS unless the caller lowers it.
+[[ "$N_EVAL" -ge "$MIN_SONGS" ]] || {
+    echo "ERROR: only $N_EVAL song(s) staged under $EVAL_MEL (MIN_SONGS=$MIN_SONGS);"
+    echo "       the staging audit dropped the rest -- see its [prompt] block. Delete"
+    echo "       $READY and restage from a full MEL_FOLDER, or pass MIN_SONGS=1 on purpose."
+    exit 1; }
 [[ "$N_EVAL" -eq "$(ls "$EVAL_CHORD" | wc -l)" ]] || {
     echo "ERROR: melody/chord split sizes differ; scoring pairs by filename"; exit 1; }
 SONG_IDS=$(ls "$EVAL_MEL" | sed 's/\.[Mm][Ii][Dd]$//' | sort | tr '\n' ' ')
