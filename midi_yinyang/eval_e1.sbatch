@@ -70,7 +70,8 @@
 #   MEL_FOLDER / CHORD_FOLDER   default input/pop909_split/{melody,chord}
 #   OUT_ROOT       default temp/E1
 #   RESULT_TAG     extra suffix on the result files
-#   SKIP_INFER=1   score only, generate nothing
+#   SKIP_INFER=1   score only, generate nothing (no GPU needed: submit
+#                  through score_e1.sbatch, a CPU wrapper that forces it)
 #   PIANO_COPIES   default 1: <system>_piano listening copies
 #
 # Examples:
@@ -168,9 +169,11 @@ torch.zeros(1).cuda()
 print(f'[gpu] {torch.cuda.device_count()} visible; {torch.cuda.get_device_name(0)}')
 "
 fi
-for _c in "$CKPT_A1" "$CKPT_A3" "$CKPT_S1" "$CKPT_SSCRATCH" "$CKPT_S0" "$CKPT_SMEL" "$CKPT_SCHORD" "$CKPT_Y_M2C" "$CKPT_Y_C2M"; do
-    [[ -n "$_c" && -e "$_c" ]] && python check_ckpts.py "$_c" || true
-done
+if [[ "$SKIP_INFER" != "1" ]]; then
+    for _c in "$CKPT_A1" "$CKPT_A3" "$CKPT_S1" "$CKPT_SSCRATCH" "$CKPT_S0" "$CKPT_SMEL" "$CKPT_SCHORD" "$CKPT_Y_M2C" "$CKPT_Y_C2M"; do
+        [[ -n "$_c" && -e "$_c" ]] && python check_ckpts.py "$_c" || true
+    done
+fi
 
 # ---- 1. prompts: the test split, staged once -------------------------
 # The same full midis serve as prompts (first PROMPT_LENGTH frames) and
