@@ -87,8 +87,11 @@ def main():
                         'has its own index%%10 validation set; the audit '
                         'reports every one and intersects them.')
     p.add_argument('--test-folder', default='input/pop909_split/melody')
-    p.add_argument('--mel-src', default='POP909-Dataset/POP909-melody')
-    p.add_argument('--chord-src', default='POP909-Dataset/POP909-chord')
+    p.add_argument('--mel-src', default='/home/xinyue.li/POP909-Dataset/POP909-melody',
+                   help='the TIME-ALIGNED per-song stream folder (absolute); '
+                        'the relative POP909-Dataset/... under midi_yinyang '
+                        'holds the raw files and must not be used')
+    p.add_argument('--chord-src', default='/home/xinyue.li/POP909-Dataset/POP909-chord')
     p.add_argument('--stage-dir', default=None,
                    help='copy shared-clean songs here as {melody,chord}/<id>.mid')
     p.add_argument('--prompt-frames', type=int, default=96,

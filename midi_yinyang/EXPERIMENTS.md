@@ -572,8 +572,14 @@ both streams.
 
 **Test set and line-up (2026-09-07).** E1 runs on the 14 SHARED-CLEAN
 POP909 songs `004 046 136 196 276 326 366 456 466 626 656 746 806 816`
-(staged in `input/pop909_split_ws`, outputs `temp/E1_ws/`, results
-`results/E1_p96_ws_*`), 6-bar prompt, 416 frames, 3 samples/song. They
+(staged in `input/909_matched_split` from the TIME-ALIGNED
+`/home/xinyue.li/POP909-Dataset/POP909-{melody,chord}`; outputs
+`temp/E1_matched/`, results `results/E1_p96_matched_*`), 6-bar prompt,
+416 frames, 3 samples/song. An earlier staging (`input/pop909_split_ws`,
+`temp/E1_ws`) copied 13 of the 14 from the raw per-song files with
+POP909's original tempo maps and off-grid timing; those tables are
+void. Songs with an empty stream in the prompt or off-grid timing
+(456, triplet-encoded) are excluded by the staging audit. They
 are the intersection of whole-song-gen's validation split (its only
 held-out set; `split.npz`, seed 1234, verified) with our held-out set
 (FramedDataset idx%10==0 in every dataset file, plus the 5 songs cut

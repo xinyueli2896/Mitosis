@@ -22,9 +22,16 @@
 #               per-system table checks the shared-clean songs against
 #               the TRAINING split of every E1 system (two dataset
 #               classes, two rules -- idx%10==0 is untrained under both).
-#   STAGE_DIR   default input/pop909_split_ws
-#   MEL_SRC / CHORD_SRC   full per-song POP909 stream midis
-#               (default POP909-Dataset/POP909-{melody,chord})
+#   STAGE_DIR   default input/909_matched_split
+#   MEL_SRC / CHORD_SRC   the TIME-ALIGNED per-song POP909 stream midis,
+#               /home/xinyue.li/POP909-Dataset/POP909-{melody,chord}.
+#               NOT the relative POP909-Dataset/... under midi_yinyang:
+#               those are the raw files with POP909's original tempo
+#               maps and off-grid timing (job 217259: 26 tempo events
+#               and 80% off-grid onsets on 456), which staged a test
+#               set on a different grid from the models' training data.
+#               004 is taken from here too, so all songs are one kind
+#               of file.
 #
 # Example:
 #   sbatch midi_yinyang/audit_wholesong_split.sbatch
@@ -53,9 +60,14 @@ cd "$MY"
 mkdir -p /home/xinyue.li/logs
 
 DATASETS="${DATASETS:-pop909_chord_cp4_v2 pop909_melody_cp4_v2 pop909_chord_cp8_v2 pop909_melody_cp8_v2 pop909_cp8_v2_chord_mel pop909_melchord_tagged_cp16_v2}"
-STAGE_DIR="${STAGE_DIR:-input/pop909_split_ws}"
-MEL_SRC="${MEL_SRC:-POP909-Dataset/POP909-melody}"
-CHORD_SRC="${CHORD_SRC:-POP909-Dataset/POP909-chord}"
+STAGE_DIR="${STAGE_DIR:-input/909_matched_split}"
+MEL_SRC="${MEL_SRC:-/home/xinyue.li/POP909-Dataset/POP909-melody}"
+CHORD_SRC="${CHORD_SRC:-/home/xinyue.li/POP909-Dataset/POP909-chord}"
+[[ -d "$MEL_SRC" && -d "$CHORD_SRC" ]] || { echo "ERROR: source folders missing: $MEL_SRC , $CHORD_SRC"; exit 1; }
+# a fresh stage every run: the buggy first-tempo prompt check deleted
+# files from the old stage dir, and a stale file must not survive a
+# change of source folder
+rm -rf "$STAGE_DIR"
 SPLIT="$WS/data/pop909_split/split.npz"
 
 echo "================================================================"
@@ -74,6 +86,6 @@ python audit_wholesong_split.py \
 
 echo "================================================================"
 echo "E1 on the shared-clean set:"
-echo "  sbatch --export=ALL,MEL_FOLDER=$STAGE_DIR/melody,CHORD_FOLDER=$STAGE_DIR/chord,OUT_ROOT=temp/E1_ws,RESULT_TAG=ws \\"
+echo "  sbatch --export=ALL,MEL_FOLDER=$STAGE_DIR/melody,CHORD_FOLDER=$STAGE_DIR/chord,OUT_ROOT=temp/E1_matched,RESULT_TAG=matched \\"
 echo "      midi_yinyang/eval_e1.sbatch"
 echo "================================================================"
