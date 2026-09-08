@@ -1,8 +1,14 @@
 #!/bin/bash
 # SLURM (CPU): make already-generated E1 outputs playable by replacing
-# the spurious ~990 bpm they inherited from the beat-synced prompts with
-# the prompt's main tempo. Ticks are untouched, so scores do not change;
-# the staged prompts/references under <root>/prompts are skipped.
+# the tempo they inherited from the beat-synced prompt's lead-in event
+# (1289 bpm on 326, 1324 on 046, plausible-looking but arbitrary values
+# on the rest) with the prompt's main tempo. Any single-event output
+# whose tempo differs from that by more than 2% is rewritten, so the
+# 120 bpm hybrids and the 90 bpm whole-song files are brought to the
+# same tempo as well. Ticks are untouched, so scores do not change
+# (verified: identical scorer streams at 1289 and 58 bpm, and after the
+# rewrite); the staged prompts/references under <root>/prompts are
+# skipped.
 #
 # Env knobs (--export=ALL,KEY=val):
 #   ROOTS    space-separated output roots (default the two matched groups)

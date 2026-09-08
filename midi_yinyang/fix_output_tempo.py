@@ -7,10 +7,13 @@ what the tokenizer and the scorer read, so the numbers are unaffected;
 only playback is. This walks the given roots, and for every .mid whose
 tempo map is a single event above --max-bpm it replaces that event with
 the main tempo of the matching prompt (midi_tempo.main_tempo of
-<prompts>/<song id>.mid), or --bpm if no prompt matches. Files with a
-sane tempo, or with a real tempo map (more than one event), are left
-alone -- the staged prompts and references are never touched because
-they live under <root>/prompts, which is skipped.
+<prompts>/<song id>.mid), or --bpm if no prompt matches. A file is
+rewritten when its single tempo event differs from that main tempo by
+more than --tol (relative) or exceeds --max-bpm; the first run's
+dry run showed only two songs above 300 bpm while the other five had
+inherited plausible-looking but equally arbitrary lead-in tempi. Files
+with a real tempo map (more than one event) are left alone, and the
+staged prompts and references under <root>/prompts are skipped.
 
 Usage (via fix_output_tempo.sbatch):
     python fix_output_tempo.py --root temp/E1_matched_p6 --root temp/E1_matched_p8
@@ -53,6 +56,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--root', action='append', required=True)
     p.add_argument('--max-bpm', type=float, default=300.0)
+    p.add_argument('--tol', type=float, default=0.02,
+                   help='rewrite when |bpm - prompt main tempo| / main > tol')
     p.add_argument('--bpm', type=float, default=120.0, help='fallback')
     p.add_argument('--dry-run', action='store_true')
     args = p.parse_args()
@@ -75,14 +80,17 @@ def main():
                 except Exception as e:      # noqa: BLE001
                     print(f'[skip] {fn}: {e!r}')
                     continue
-                if len(ev) != 1 or mido.tempo2bpm(ev[0][1]) <= args.max_bpm:
+                if len(ev) != 1:
                     continue
+                have = mido.tempo2bpm(ev[0][1])
                 sid = song_id(os.path.relpath(fn, root))
                 if sid not in cache:
                     pf = os.path.join(prompts, f'{sid}.mid')
                     cache[sid] = main_tempo(pf, args.bpm) if os.path.isfile(pf) else args.bpm
                 bpm = cache[sid]
-                print(f'[fix] {fn}: {mido.tempo2bpm(ev[0][1]):.0f} -> {bpm:.1f} bpm'
+                if have <= args.max_bpm and abs(have - bpm) / bpm <= args.tol:
+                    continue
+                print(f'[fix] {fn}: {have:.0f} -> {bpm:.1f} bpm'
                       f'{"  (dry run)" if args.dry_run else ""}')
                 if not args.dry_run:
                     rewrite(fn, bpm)
