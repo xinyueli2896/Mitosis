@@ -91,6 +91,16 @@ def main():
     p.add_argument('--chord-src', default='POP909-Dataset/POP909-chord')
     p.add_argument('--stage-dir', default=None,
                    help='copy shared-clean songs here as {melody,chord}/<id>.mid')
+    p.add_argument('--prompt-frames', type=int, default=96,
+                   help='E1 prompt length in frames (16/bar; 96 = 6 bars)')
+    p.add_argument('--min-prompt-notes', type=int, default=1,
+                   help='a staged song must have at least this many notes '
+                        'in BOTH streams inside the prompt, else it is '
+                        'removed from the stage dir: a prompt with an '
+                        'empty stream (an intro before the melody enters, '
+                        'a chord track that starts late) is not a '
+                        'co-generation prompt, every system gets it wrong '
+                        'in its own way, and the song only adds noise.')
     args = p.parse_args()
 
     fmt = lambda s: ' '.join(f'{i:03d}' for i in sorted(s))
@@ -219,6 +229,35 @@ def main():
         if n_m != n_c or n_m != len(shared):
             print(f'[stage] WARNING: melody={n_m} chord={n_c} expected={len(shared)}')
             sys.exit(1)
+
+        # ---- prompt check: both streams must be present in the prompt.
+        # The scorer frames each file by its own tempo at 4 frames per
+        # beat; count notes STARTING inside the first prompt_frames.
+        import pretty_midi
+        from eval_metrics import _file_tempo, BEAT_DIV
+        print(f'\n[prompt] notes starting inside the first {args.prompt_frames} '
+              f'frames ({args.prompt_frames // 16} bars), per stream')
+        print(f'  {"song":<6}{"melody":>8}{"chord":>8}  verdict')
+        dropped = []
+        for s in sorted(shared):
+            counts = {}
+            for sub in ('melody', 'chord'):
+                fn = os.path.join(args.stage_dir, sub, f'{s:03d}.mid')
+                pm = pretty_midi.PrettyMIDI(fn)
+                step = 60.0 / _file_tempo(pm) / BEAT_DIV
+                counts[sub] = sum(1 for ins in pm.instruments for n in ins.notes
+                                  if n.start < args.prompt_frames * step)
+            bad = [k for k, v in counts.items() if v < args.min_prompt_notes]
+            verdict = 'ok' if not bad else f'EXCLUDED ({", ".join(bad)} empty in prompt)'
+            print(f'  {s:03d}   {counts["melody"]:>8}{counts["chord"]:>8}  {verdict}')
+            if bad:
+                dropped.append(s)
+                for sub in ('melody', 'chord'):
+                    os.remove(os.path.join(args.stage_dir, sub, f'{s:03d}.mid'))
+        kept = sorted(shared - set(dropped))
+        print(f'[prompt] kept {len(kept)}: {fmt(kept)}')
+        if dropped:
+            print(f'[prompt] removed from {args.stage_dir}: {fmt(dropped)}')
 
 
 if __name__ == '__main__':
