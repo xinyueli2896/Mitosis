@@ -69,7 +69,9 @@
 #   CKPT_SCHORD    P-cm stage A: default the pop909ft_chord_cp4 specialist
 #   CKPT_Y_M2C     P-mc stage B: default the POP909 YinYang '_rev' (mel2chord)
 #   CKPT_Y_C2M     P-cm stage B: default the POP909 YinYang non-rev (chord2mel)
-#   MAX_POLYPHONY_DUET   cp of A1/A3/A3f training data (default 4)
+#   MAX_POLYPHONY_DUET   cp of A1/A3/A3f training data (default 4, legacy)
+#   MAX_POLYPHONY_CP8    cp of the retrained runs A1cp8/A3c/A3fc (default 8)
+#   CKPT_A1CP8     causal duet retrained on cp8, long budget (system A1cp8)
 #   MAX_POLYPHONY_SPEC   cp of the cascade specialists (default 4)
 #   MAX_POLYPHONY_S1 / MAX_POLYPHONY_SSCRATCH / MAX_POLYPHONY_S0
 #                  cp of the merged single-stream models (default 16)
@@ -139,6 +141,8 @@ CKPT_A3F="${CKPT_A3F:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A3f_melchor
 # no default until one is trained -- pass the run dir.
 CKPT_A3C="${CKPT_A3C:-}"
 CKPT_A3FC="${CKPT_A3FC:-}"
+# A1cp8: the causal duet retrained on cp8 at the long budget; no default.
+CKPT_A1CP8="${CKPT_A1CP8:-}"
 # Merged single-stream baselines: 'tagged' = chord on program 48 in the
 # training merge, which is what lets the tokenizer keep the streams
 # apart (an untagged merge fuses them irreversibly).
@@ -155,6 +159,11 @@ CKPT_SCHORD="${CKPT_SCHORD:-ckpt/cp_transformer_v0.42_size1_pop909ft_chord_cp4_b
 CKPT_Y_M2C="${CKPT_Y_M2C:-ckpt/cp_transformer_yinyang_v5.1_lora_batch_8_pop909_cp8_v2_chord_mel_rev_mask0.25-10-step1}"
 CKPT_Y_C2M="${CKPT_Y_C2M:-ckpt/cp_transformer_yinyang_v5.1_lora_batch_8_pop909_cp8_v2_chord_mel_mask0.25-10-step1}"
 MAX_POLYPHONY_DUET="${MAX_POLYPHONY_DUET:-4}"
+# cp of the retrained duet runs (A1cp8, A3c, A3fc): the certified cp8
+# data, full seventh chords. The legacy cp4tar runs (A1, A3, A3f) keep
+# MAX_POLYPHONY_DUET=4 -- cp4 dropped the seventh from 13.8% of chord
+# frames (tasks.py), a handicap on every H2 row.
+MAX_POLYPHONY_CP8="${MAX_POLYPHONY_CP8:-8}"
 MAX_POLYPHONY_SPEC="${MAX_POLYPHONY_SPEC:-4}"
 MAX_POLYPHONY_S1="${MAX_POLYPHONY_S1:-16}"
 MAX_POLYPHONY_SSCRATCH="${MAX_POLYPHONY_SSCRATCH:-16}"
@@ -284,14 +293,23 @@ is_forced() {
 generate() {
     local name="$1" dir; dir=$(sys_dir "$name")
     case "$name" in
-    A1)
+    A1|A1cp8)
+        # A1cp8: the causal duet retrained on the cp8 data (full seventh
+        # chords) at the long budget -- the backbone control for the
+        # cp4/budget handicap of the legacy cp4tar runs.
+        local ck cp
+        case "$name" in
+            A1)    ck="$CKPT_A1";    cp="$MAX_POLYPHONY_DUET" ;;
+            A1cp8) ck="$CKPT_A1CP8"; cp="$MAX_POLYPHONY_CP8" ;;
+        esac
+        [[ -n "$ck" ]] || { echo "[$name] SKIPPED: checkpoint knob unset"; return 0; }
         python cp_transformer_m2c_intra_cross_attn_combined.py \
-            --ckpt "$CKPT_A1/" \
+            --ckpt "$ck/" \
             --mel-folder "$EVAL_MEL" --chord-folder "$EVAL_CHORD" \
             --output-dir "$dir" --modes co \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
             --temperature 1.0 --n-samples "$N_SAMPLES" \
-            --max-polyphony "$MAX_POLYPHONY_DUET" \
+            --max-polyphony "$cp" \
             --model-size large --moe-num-experts 4 --moe-topk 2 ;;
     A3|A3f|A3K0|A3ctc|A3ctcc|A3ctc2|A3c|A3fc)
         # Decode variants share the A3 checkpoint and differ only in the
@@ -302,7 +320,13 @@ generate() {
         #   A3ctc2  two passes: chord | melody, then melody | chord (ctc2_m)
         #   A3c     conditional-slot ckpt (COND_SLOT_PROB), decoded ctc_m
         #   A3fc    same on the A3f mask
-        local ck; case "$name" in A3f) ck="$CKPT_A3F" ;; A3c) ck="$CKPT_A3C" ;; A3fc) ck="$CKPT_A3FC" ;; *) ck="$CKPT_A3" ;; esac
+        local ck cp="$MAX_POLYPHONY_DUET"
+        case "$name" in
+            A3f)  ck="$CKPT_A3F" ;;
+            A3c)  ck="$CKPT_A3C";  cp="$MAX_POLYPHONY_CP8" ;;
+            A3fc) ck="$CKPT_A3FC"; cp="$MAX_POLYPHONY_CP8" ;;
+            *)    ck="$CKPT_A3" ;;
+        esac
         [[ -n "$ck" ]] || { echo "[$name] SKIPPED: checkpoint knob unset"; return 0; }
         local -a denv=()
         case "$name" in
@@ -318,7 +342,7 @@ generate() {
             --output-dir "$dir" --modes co \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
             --temperature 1.0 --n-samples "$N_SAMPLES" \
-            --max-polyphony "$MAX_POLYPHONY_DUET" \
+            --max-polyphony "$cp" \
             --model-size large --moe-num-experts 4 --moe-topk 2 \
             --min-chord-tokens-before-eos 0 ;;
     S0|S1|S-scratch)
