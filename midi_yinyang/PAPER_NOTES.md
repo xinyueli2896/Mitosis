@@ -4,7 +4,7 @@ Terminology (settled): melody and chords are *streams* (general term,
 `\strm{}` / `\strms{}` macros); *modality* appears only in the
 positioning passage; *domain* = corpus; *part* is music-only prose.
 
-## Short abstract (2026-09-09, ~200 words)
+## Short abstract (2026-09-09, ~220 words)
 
 ```latex
 % \newcommand{\strm}{\textit{stream}}  \newcommand{\strms}{\textit{streams}}
@@ -19,13 +19,15 @@ sharing everything or partitioning parameters by modality, and cannot
 test the choice: paired data is scarce, so no fully shared model on
 the same data exists as a yardstick. We therefore study two \strms{}
 of one modality, melody and chords in symbolic music: one
-representation and one clock, two grammars, and abundant paired data
-on which the fully shared generator is the established design. We
-propose a duet transformer, one autoregressive model over the
-interleaved \strms{}, \strm{}-specific in its attention projections
-and its router over a shared, unassigned expert pool, so
-specialisation is learned, not imposed; appended query slots let each
-\strm{} condition on its partner's current frame. On held-out songs no
+representation and one clock, two grammars as distinct in content as
+two modalities, and abundant paired data on which the fully shared
+generator is the established design. We propose a duet transformer,
+one autoregressive model over the interleaved \strms{},
+\strm{}-specific in its attention projections and its router over a
+shared, unassigned expert pool, so specialisation is learned, not
+imposed; appended query slots, masked predictors of the current frame
+refined iteratively at inference, let each \strm{} condition on its
+partner's current frame. On held-out songs no
 compared system trained on, one checkpoint generates both \strms{} in
 either direction, matching the fully shared generator and cascades in
 quality while keeping the \strms{} coupled.
@@ -63,8 +65,9 @@ with the decode diagnostics and the cp8 retrains is in (EXPERIMENTS.md,
    starts from unimodal pretraining and only the bridge is trained on
    pairs; any comparison is confounded with pretraining.
 5. **Stream vs modality, in full.** "which share one representation,
-   its vocabulary and clock, yet obey their own grammars, as distinct in
-   content as two modalities." The passive-aggressive defence: melody
+   its vocabulary and clock, yet obey their own grammars" (the "as
+   distinct in content as two modalities" clause was restored in the
+   220-word version). The passive-aggressive defence: melody
    and chords have the property that makes two modalities interesting
    (own content, own grammar) and lack the one that gets in the way
    (different representation). Also the transfer claim, cut earlier:
@@ -75,8 +78,8 @@ with the decode diagnostics and the cp8 retrains is in (EXPERIMENTS.md,
    the streams share one representation, any specialisation the routers
    learn is by grammar, not by input statistics; in a vision–language
    mixture modality-specific experts separate on pixels-vs-words alone.
-7. **Query-slot mechanism detail.** "masked predictors of the current
-   frame refined iteratively at inference" — method section: slots
+7. **Query-slot mechanism detail.** Restored in the 220-word version;
+   the method section still owes the full account: slots
    trained under random masking of either stream's current frame
    (commitment levels), decoded by iterative refinement or
    commit-then-condition.
