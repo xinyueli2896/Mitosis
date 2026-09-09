@@ -47,8 +47,14 @@ if __name__ == '__main__':
     # intra-cross-attn inference helper, then call its main(). Avoids
     # duplicating ~150 lines of CLI / folder / mode dispatch.
     import cp_transformer_m2c_jointattn_combined as _ja_comb
+    import cp_transformer_m2c_jointattn_inference as _ja_inf
     from cp_transformer_m2c_intra_cross_attn_inference import (
         load_model as _icx_load_model,
+        general_inference_same_frame as _icx_general_inference,
     )
     _ja_comb.load_model = _icx_load_model
+    # A.10 checkpoints need the two-forward decode; the patched loop falls
+    # back to the base loop for plain A.1 checkpoints.
+    _ja_inf.general_inference = _icx_general_inference
+    _ja_comb.general_inference = _icx_general_inference   # bound at import
     _ja_comb.main()

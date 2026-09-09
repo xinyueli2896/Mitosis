@@ -321,6 +321,29 @@ The main line is A.3 → A.5 → A.6, each strictly containing the
 previous; A.4 sits on that line too (it contains A.5), adding
 token-level corruption on top.
 
+### A.10 — same-frame edge on the causal duet (2026-09-09)
+
+`--same_frame` on `cp_transformer_m2c_intra_cross_attn.py` (wrapper
+`SAME_FRAME=1`, run-dir prefix `sf_`, E1 system `A10`). Per training
+example one stream FOLLOWS the other within the frame: under direction
+0 the chord query at row 2t+1 (predicting c_t) may read the mel key at
+row 2t+2, which holds m_t; under direction 1 the mel query at row 2t
+may read the chord key at row 2t+3, which holds c_t. Direction uniform
+per example; the follower rows get a learned embedding. Nothing else
+changes: no query slots, no commitment levels, no refinement, only the
+AR loss. Decode: two forwards per frame -- the leader from the A.1
+position, then the follower with the leader's frame placed at its key
+row -- with the direction drawn per frame (`A10_DIRECTION` alt|m|c|
+random, default alt), so both streams read each other's current frame
+equally often. Motivation: the E1 decode diagnostics (merge 221331)
+showed A.3's commit-then-condition decode, an exact one-direction
+conditional emulated with two forwards and a query slot, landing
+coupling and coverage on the reference, with the alternating form as
+the symmetric decode; A.10 makes that factorisation native and trains
+it at every frame, and cannot show A.9's AR-loss blow-up because there
+is no second objective. Gated by `audit_same_frame.sbatch` (masks,
+causality, decode consistency, batched directions).
+
 ### A.9 / A.3f — the slot sees frame t-1; a query pair at every frame (2026-09-05)
 
 **The finding.** `_build_masks` admits clean rows into a query slot by

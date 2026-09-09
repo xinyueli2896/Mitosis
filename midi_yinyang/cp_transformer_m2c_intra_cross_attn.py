@@ -126,7 +126,42 @@ class M2CIntraCrossAttnLayer(nn.Module):
         B, h, L, d = x.shape
         return x.transpose(1, 2).contiguous().view(B, L, h * d)
 
-    def _build_masks(self, two_T, device):
+    def _build_masks(self, two_T, device, direction=None):
+        """Key-modality masks. direction=None: the historical A.1 masks
+        [2T, 2T]. direction: LongTensor [B] in {0, 1} (A.10, same_frame):
+        returns [B, 1, 2T, 2T] with ONE extra edge per frame,
+          0 -> the chord query at row 2t+1 (predicting c_t) may read the
+               mel key at row 2t+2, which HOLDS m_t (chord follows melody);
+          1 -> the mel query at row 2t (predicting m_t) may read the chord
+               key at row 2t+3, which holds c_t (melody follows chord).
+        Row layout is the parent's shift-by-2: row 2t holds m_{t-1} and
+        predicts m_t, row 2t+1 holds c_{t-1} and predicts c_t. Nothing else
+        changes, so the follower is an EXACT conditional on the leader's
+        current frame, in one forward, with no query slot; the leader's
+        row never sees the follower's current frame (still causal), which
+        is what makes the two-forward decode in
+        cp_transformer_m2c_intra_cross_attn_inference.general_inference_same_frame
+        valid. Decode draws the direction per frame (alternating by
+        default), so over a phrase both streams read each other's current
+        frame equally often -- the fairness rule built into the model.
+        """
+        base_M, base_C = self._build_base_masks(two_T, device)
+        if direction is None:
+            return base_M, base_C
+        B = direction.shape[0]
+        idx = torch.arange(two_T, device=device)
+        q0 = idx[1::2]; k0 = q0 + 1; ok0 = k0 < two_T      # chord q -> mel key (m_t)
+        q1 = idx[0::2]; k1 = q1 + 3; ok1 = k1 < two_T      # mel q -> chord key (c_t)
+        edge0 = torch.zeros(two_T, two_T, dtype=torch.bool, device=device)
+        edge0[q0[ok0], k0[ok0]] = True
+        edge1 = torch.zeros(two_T, two_T, dtype=torch.bool, device=device)
+        edge1[q1[ok1], k1[ok1]] = True
+        d = direction.view(B, 1, 1)
+        mask_M = base_M[None] | (edge0[None] & (d == 0))
+        mask_C = base_C[None] | (edge1[None] & (d == 1))
+        return mask_M[:, None], mask_C[:, None]
+
+    def _build_base_masks(self, two_T, device):
         cache_key = (two_T, str(device))
         if self._mask_cache_key == cache_key:
             return self._mask_M, self._mask_C
@@ -156,8 +191,9 @@ class M2CIntraCrossAttnLayer(nn.Module):
         self._mask_C = mask_C
         return mask_M, mask_C
 
-    def forward(self, m, c, cos, sin):
+    def forward(self, m, c, cos, sin, direction=None):
         """m, c: [B, T, H]. cos, sin: RoPE buffers covering 2T positions.
+        direction: None (A.1) or LongTensor [B] (A.10 same-frame edge).
 
         Returns (m_out, c_out, aux_loss)."""
         B, T, H = m.shape
@@ -187,7 +223,7 @@ class M2CIntraCrossAttnLayer(nn.Module):
         q, k = _apply_rope(q, k, cos_2t, sin_2t)
 
         # 4. Two SDPA passes with key-modality masks.
-        mask_M, mask_C = self._build_masks(two_T, q.device)
+        mask_M, mask_C = self._build_masks(two_T, q.device, direction)
         out_M = F.scaled_dot_product_attention(q, k, v, attn_mask=mask_M)
         out_C = F.scaled_dot_product_attention(q, k, v, attn_mask=mask_C)
         out_M = self._merge_heads(out_M)                            # [B, 2T, H]
@@ -243,7 +279,8 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
     def __init__(self, *args, moe_num_experts=4, moe_topk=2,
                  moe_intermediate_size=None, global_num_layers=None,
                  global_dropout=0.0, preserve_program=True,
-                 gate_init_bias=-10.0, time_rope_aligned=False, **kwargs):
+                 gate_init_bias=-10.0, time_rope_aligned=False,
+                 same_frame=False, **kwargs):
         super().__init__(
             *args,
             moe_num_experts=moe_num_experts,
@@ -270,6 +307,28 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
             'time_rope_aligned_flag',
             torch.tensor(1 if time_rope_aligned else 0, dtype=torch.long),
         )
+        # A.10 -- same-frame edge (see M2CIntraCrossAttnLayer._build_masks).
+        # Per training example one stream FOLLOWS the other within the
+        # frame: the follower's query row reads the key row that holds the
+        # leader's current frame. Direction is drawn uniformly per example
+        # (training_step) and alternated per batch at validation; decode
+        # draws it per frame. Motivation (E1, merge job 221331): the
+        # commit-then-condition decode of A.3 -- an exact one-direction
+        # conditional emulated with two forwards and a query slot -- landed
+        # coupling and coverage on the reference, and its alternating form
+        # is the symmetric decode; this makes that factorisation native:
+        # one forward per stream per frame, no slots, no commitment
+        # levels, no refinement, and only the AR loss (so none of A.9's
+        # slot-vs-AR gradient conflict). The follower rows get a learned
+        # embedding so the network knows the extra key is present.
+        self.register_buffer(
+            'same_frame_flag',
+            torch.tensor(1 if same_frame else 0, dtype=torch.long),
+        )
+        self.sf_dir_emb = nn.Embedding(2, self.hidden_size)
+        with torch.no_grad():
+            self.sf_dir_emb.weight.zero_()
+        self._sf_dir = None          # LongTensor [B] for the current forward
         # Drop the inherited single-backbone global stack; we replace it
         # with our custom intra/cross-attn stack below.
         del self.global_roformer
@@ -313,6 +372,35 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
     def time_rope_aligned(self):
         return bool(self.time_rope_aligned_flag.item())
 
+    @property
+    def same_frame(self):
+        return bool(self.same_frame_flag.item())
+
+    def _sample_sf_dir(self, batch_size, device, batch_idx=None):
+        """Direction per example: uniform at training; at validation
+        alternate per batch so both conditionals are scored."""
+        if not self.same_frame:
+            return None
+        if batch_idx is None:
+            return torch.randint(0, 2, (batch_size,), device=device)
+        return torch.full((batch_size,), int(batch_idx) % 2,
+                          dtype=torch.long, device=device)
+
+    def training_step(self, batch, batch_idx):
+        self._sf_dir = self._sample_sf_dir(batch[0].shape[0], batch[0].device)
+        try:
+            return super().training_step(batch, batch_idx)
+        finally:
+            self._sf_dir = None
+
+    def validation_step(self, batch, batch_idx):
+        self._sf_dir = self._sample_sf_dir(batch[0].shape[0], batch[0].device,
+                                           batch_idx=batch_idx)
+        try:
+            return super().validation_step(batch, batch_idx)
+        finally:
+            self._sf_dir = None
+
     def _assemble_sos(self, batch_size, device, dtype):
         sos_m = (self.global_sos + self.sos_offset_m).view(1, 1, -1)
         sos_c = (self.global_sos + self.sos_offset_c).view(1, 1, -1)
@@ -335,9 +423,17 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
         cos, sin = _rope_freqs(two_T, head_dim, device=h.device, dtype=h.dtype,
                                time_aligned=self.time_rope_aligned)
 
+        direction = self._sf_dir if self.same_frame else None
+        if direction is not None:
+            # follower rows: chord rows under direction 0, mel rows under 1
+            emb = self.sf_dir_emb(direction).to(dtype=h.dtype)[:, None, :]
+            d = direction.view(-1, 1, 1)
+            m = m + emb * (d == 1)
+            c = c + emb * (d == 0)
+
         total_aux = torch.zeros((), device=h.device, dtype=h.dtype)
         for layer in self.global_layers:
-            m, c, aux = layer(m, c, cos, sin)
+            m, c, aux = layer(m, c, cos, sin, direction)
             total_aux = total_aux + aux
 
         out = torch.stack([m, c], dim=2).reshape(B, two_T, H)
@@ -417,6 +513,14 @@ if __name__ == '__main__':
                              'anti-exposure-bias augmentation for the '
                              'sparse stream')
     parser.add_argument('--ctx_corrupt_len', type=int, default=8)
+    parser.add_argument('--same_frame', action='store_true', default=False,
+                        help='A.10: per example one stream follows the '
+                             'other within the frame (its query row reads '
+                             'the key holding the leader\'s current frame); '
+                             'direction uniform per example. Exact '
+                             'within-frame conditioning with no query '
+                             'slots; decode alternates the direction per '
+                             'frame. Run-dir gets the sf_ prefix.')
     parser.add_argument('--time_rope_aligned', type=int, default=0,
                         help='1 = D.1 scheme: m_t and c_t share rotary '
                              'position t (rotary index = physical // 2), '
@@ -466,8 +570,9 @@ if __name__ == '__main__':
     mod_b_path = args.path_to_dataset if args.path_to_dataset is not None else task.mod_b_path
 
     tag = f'_{args.run_tag}' if args.run_tag else ''
+    sf = 'sf_' if args.same_frame else ''
     default_name = (f"m2c_intra_cross_attn_v1.0_{args.model_size}_"
-                    f"gnl{gnl}_{task.name}{tag}_"
+                    f"gnl{gnl}_{sf}{task.name}{tag}_"
                     f"batch_{args.batch_size * n_gpus}_schedule")
     model_name = args.model_name if args.model_name is not None else default_name
 
@@ -493,6 +598,7 @@ if __name__ == '__main__':
         silence_augment_prob=args.silence_augment_prob,
         ctx_corrupt_prob=args.ctx_corrupt_prob,
         time_rope_aligned=bool(args.time_rope_aligned),
+        same_frame=bool(args.same_frame),
         ctx_corrupt_len=args.ctx_corrupt_len,
         eos_loss_weight=args.eos_loss_weight,
         gate_init_bias=args.gate_init_bias,
@@ -624,6 +730,7 @@ if __name__ == '__main__':
             # declares the scheme for a new run; drop incoming flags.
             sd = dict(sd)
             sd.pop('time_rope_aligned_flag', None)
+            sd.pop('same_frame_flag', None)
             missing, unexpected = net.load_state_dict(sd, strict=False)
             if missing:
                 print(f'[init] {len(missing)} missing keys (fresh-init, '
@@ -631,6 +738,7 @@ if __name__ == '__main__':
             if unexpected:
                 print(f'[init] {len(unexpected)} unexpected keys (ignored, '
                        f'first few: {unexpected[:3]})')
+    print(f'[scheme] same_frame={net.same_frame} (A.10)' if net.same_frame else '[scheme] same_frame=0')
     print(f'[scheme] effective time_rope_aligned={net.time_rope_aligned} '
           '(after any warm-start load; Lightning full-resume restores the '
           'flag from the run being resumed)')

@@ -10,6 +10,7 @@
 #   --export=ALL,TASK=...   task name: drumnondrum (default) or melchord.
 #                           Resolves mod_a/mod_b dataset paths + labels.
 #   --export=ALL,CKPT=...   if set, skip init + resume from that ckpt.
+#   --export=ALL,SAME_FRAME=1   A.10: same-frame edge (see below).
 #   --export=ALL,MAX_LR=..  override the LR (else autoscale by NGPUS).
 #   --export=ALL,BATCH_SIZE=12 per-GPU batch size (default 8).
 #   --export=ALL,GATE_INIT_BIAS=-4  raise if gates stay pinned at init.
@@ -90,6 +91,12 @@ CTX_CORRUPT_LEN="${CTX_CORRUPT_LEN:-8}"
 # use RUN_TAG (e.g. tar) so the run dir stays distinct from the legacy
 # parity-RoPE run. Default 0 = legacy.
 TIME_ROPE_ALIGNED="${TIME_ROPE_ALIGNED:-0}"
+# A.10 -- same-frame edge: per example one stream's query row reads the
+# key holding the partner's CURRENT frame (direction uniform per example;
+# decode alternates per frame). Exact within-frame conditioning with no
+# query slots and only the AR loss. Run dir gets the sf_ prefix. Gate it
+# on audit_same_frame.sbatch before training.
+SAME_FRAME="${SAME_FRAME:-0}"
 # Optional run-name suffix. The run directory is derived from variant +
 # task + global batch, so two runs of the SAME task land in the SAME
 # dir and their checkpoints intermingle. That is silently dangerous:
@@ -245,6 +252,7 @@ if [[ "$NGPUS" -le 1 ]]; then
         --ctx_corrupt_prob "$CTX_CORRUPT_PROB" \
         --ctx_corrupt_len "$CTX_CORRUPT_LEN" \
         --time_rope_aligned "$TIME_ROPE_ALIGNED" \
+        $([[ "$SAME_FRAME" == "1" ]] && echo --same_frame) \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --moe_monitor_every_n_steps 500 \
@@ -268,6 +276,7 @@ else
         --ctx_corrupt_prob "$CTX_CORRUPT_PROB" \
         --ctx_corrupt_len "$CTX_CORRUPT_LEN" \
         --time_rope_aligned "$TIME_ROPE_ALIGNED" \
+        $([[ "$SAME_FRAME" == "1" ]] && echo --same_frame) \
         --gradient_clip_val 1.0 \
         --aux_loss_weight 0.01 \
         --moe_monitor_every_n_steps 500 \

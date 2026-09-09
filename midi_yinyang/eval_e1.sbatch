@@ -73,6 +73,8 @@
 #   MAX_POLYPHONY_DUET   cp of A1/A3/A3f training data (default 4, legacy)
 #   MAX_POLYPHONY_CP8    cp of the retrained runs A1cp8/A3c/A3fc (default 8)
 #   CKPT_A1CP8     causal duet retrained on cp8, long budget (system A1cp8)
+#   CKPT_A10       same-frame-edge model (system A10, cp8); A10_DIRECTION
+#                  alt|m|c|random picks the per-frame leader (default alt)
 #   MAX_POLYPHONY_SPEC   cp of the cascade specialists (default 4)
 #   MAX_POLYPHONY_S1 / MAX_POLYPHONY_SSCRATCH / MAX_POLYPHONY_S0
 #                  cp of the merged single-stream models (default 16)
@@ -144,6 +146,9 @@ CKPT_A3C="${CKPT_A3C:-}"
 CKPT_A3FC="${CKPT_A3FC:-}"
 # A1cp8: the causal duet retrained on cp8 at the long budget; no default.
 CKPT_A1CP8="${CKPT_A1CP8:-}"
+# A10: the same-frame-edge model (train_intra_cross_attn SAME_FRAME=1); no default.
+CKPT_A10="${CKPT_A10:-}"
+export A10_DIRECTION="${A10_DIRECTION:-alt}"
 # Merged single-stream baselines: 'tagged' = chord on program 48 in the
 # training merge, which is what lets the tokenizer keep the streams
 # apart (an untagged merge fuses them irreversibly).
@@ -294,7 +299,7 @@ is_forced() {
 generate() {
     local name="$1" dir; dir=$(sys_dir "$name")
     case "$name" in
-    A1|A1cp8)
+    A1|A1cp8|A10)
         # A1cp8: the causal duet retrained on the cp8 data (full seventh
         # chords) at the long budget -- the backbone control for the
         # cp4/budget handicap of the legacy cp4tar runs.
@@ -302,6 +307,7 @@ generate() {
         case "$name" in
             A1)    ck="$CKPT_A1";    cp="$MAX_POLYPHONY_DUET" ;;
             A1cp8) ck="$CKPT_A1CP8"; cp="$MAX_POLYPHONY_CP8" ;;
+            A10)   ck="$CKPT_A10";   cp="$MAX_POLYPHONY_CP8" ;;   # same-frame edge; decode alternates (A10_DIRECTION)
         esac
         [[ -n "$ck" ]] || { echo "[$name] SKIPPED: checkpoint knob unset"; return 0; }
         python cp_transformer_m2c_intra_cross_attn_combined.py \
