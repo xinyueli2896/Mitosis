@@ -12,9 +12,10 @@
 #   A3    the model: duet block diffusion, K=4 refinement, co mode
 #   A3f   A3 + slot_sees_prev_frame (the mask fix; VARIANTS.md A.3f),
 #         same decoder and schedule as A3; the flag travels in the ckpt
-#   A3K0, A3ctc, A3ctcc, A3ctc2   decode variants on the A3 ckpt (not in
+#   A3K0, A3ctc, A3ctcc, A3ctc2, A3ctca   decode variants on the A3 ckpt (not in
 #         the default list): refinement depth 0; commit-then-condition
-#         with melody leading / chord leading / both passes. Diagnostics
+#         with melody leading / chord leading / both passes / alternating
+#         leader (the symmetric one). Diagnostics
 #         for the coupling deficit -- see the generate() case.
 #   S1    POP909-finetuned single-stream cp transformer (merged
 #         streams, chord tagged on program 48), continuation -- the
@@ -311,7 +312,7 @@ generate() {
             --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$cp" \
             --model-size large --moe-num-experts 4 --moe-topk 2 ;;
-    A3|A3f|A3K0|A3ctc|A3ctcc|A3ctc2|A3c|A3fc)
+    A3|A3f|A3K0|A3ctc|A3ctcc|A3ctc2|A3ctca|A3c|A3fc)
         # Decode variants share the A3 checkpoint and differ only in the
         # env the decoder reads (A3_REFINE_STEPS / A3_SCHEDULE):
         #   A3K0    refinement depth 0: the AR head's draft is the output
@@ -334,6 +335,7 @@ generate() {
             A3ctc)    denv=(A3_SCHEDULE=ctc_m) ;;
             A3ctcc)   denv=(A3_SCHEDULE=ctc_c) ;;
             A3ctc2)   denv=(A3_SCHEDULE=ctc2_m) ;;
+            A3ctca)   denv=(A3_SCHEDULE=ctc_alt) ;;   # leader alternates per frame: symmetric in expectation
             A3c|A3fc) denv=(A3_SCHEDULE="${A3C_SCHEDULE:-ctc_m}") ;;
         esac
         env ${denv[@]+"${denv[@]}"} python cp_transformer_m2c_duet_block_diffusion_combined.py \

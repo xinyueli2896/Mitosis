@@ -610,9 +610,17 @@ passes) 0.122, p=0.008; A3f 0.074; S1 0.147; WS 0.152. Reading:
    reference on coupling (-0.006) and coverage (+0.021).
 4. A3f (t-1 mask, refine K=4) moves coupling 0.053 -> 0.074 only; the
    mask was not the main issue.
-Decisions: A3's decode for the paper is commit-then-condition, melody
-leading (`A3_SCHEDULE=ctc_m`; E1 system A3ctc); refine K=4 stays in the
-table as the ablation that shows the damage. Conditional-slot training
+Constraint (2026-09-09): the paper's decode must let both streams read
+each other FAIRLY in time and direction. ctc_m is one-directional (the
+chord reads the melody's current frame, never the reverse) and is a
+diagnostic, not the method. Symmetric candidates, to be chosen on the
+retrained checkpoint: ctc_alt (leader alternates per frame; system
+A3ctca), ctc2 (both passes), and parallel refinement itself (A3's
+original, fully symmetric design), which the conditional-slot retrain
+may repair -- score A3fc at K=4 as well as ctc. The same-frame-edge
+architecture draws its direction at random per frame at training and
+decode, i.e. the alternating rule built in. Refine K=4 on the current
+checkpoint stays in the table as the ablation that shows the damage. Conditional-slot training
 (A3fc, COND_SLOT_PROB=0.8, cp8, long) is the follow-up: the ctc regime
 is 20% of A3's training draws and already lands on the reference, and
 the melody|chord conditional is the slot most in need of it. The H3
