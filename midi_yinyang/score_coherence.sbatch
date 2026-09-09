@@ -6,7 +6,7 @@
 # table with the reference pair as a row. No generation, no GPU.
 #
 # Env knobs (--export=ALL,KEY=val):
-#   GROUPS     "run:out_root:prompt:total" entries, space-separated
+#   COH_GROUPS "run:out_root:prompt:total" entries, space-separated
 #              (default the two matched groups)
 #   RESULT_TAG default matched -> results/E1_mixed_<TAG>_coherence.csv
 #   BASELINE   default A3ctca (the paper's decode)
@@ -36,12 +36,12 @@ conda activate "$CONDA_ENV"
 cd "$MY"
 mkdir -p /home/xinyue.li/logs results
 
-GROUPS="${GROUPS:-p96_matched:temp/E1_matched_p6:96:416 p128_matched:temp/E1_matched_p8:128:448}"
+COH_GROUPS="${COH_GROUPS:-p96_matched:temp/E1_matched_p6:96:416 p128_matched:temp/E1_matched_p8:128:448}"
 RESULT_TAG="${RESULT_TAG:-matched}"
 BASELINE="${BASELINE:-A3ctca}"
 
 CSVS=()
-for g in $GROUPS; do
+for g in $COH_GROUPS; do
     IFS=: read -r run root prompt total <<< "$g"
     manifest="results/E1_${run}_manifest.tsv"
     [[ -f "$manifest" ]] || { echo "ERROR: $manifest missing (run the E1 score step for $run first)"; exit 1; }
