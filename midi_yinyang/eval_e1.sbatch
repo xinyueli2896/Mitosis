@@ -143,11 +143,11 @@ CKPT_A3F="${CKPT_A3F:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A3f_melchor
 # A3c / A3fc: conditional-slot runs (train_duet_block_diffusion COND_SLOT_PROB);
 # no default until one is trained -- pass the run dir.
 CKPT_A3C="${CKPT_A3C:-}"
-CKPT_A3FC="${CKPT_A3FC:-}"
+CKPT_A3FC="${CKPT_A3FC:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A3fc_melchord_cp8long_batch_8_schedule}"   # 2026-09-10 retrain (cp8, COND_SLOT_PROB=0.8); best_ar/ subdir = AR-selected weights
 # A1cp8: the causal duet retrained on cp8 at the long budget; no default.
 CKPT_A1CP8="${CKPT_A1CP8:-}"
 # A10: the same-frame-edge model (train_intra_cross_attn SAME_FRAME=1); no default.
-CKPT_A10="${CKPT_A10:-}"
+CKPT_A10="${CKPT_A10:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_sf_melchord_cp8long_batch_8_schedule}"   # 2026-09-10 A.10 same-frame (cp8)
 export A10_DIRECTION="${A10_DIRECTION:-alt}"
 # Merged single-stream baselines: 'tagged' = chord on program 48 in the
 # training merge, which is what lets the tokenizer keep the streams
