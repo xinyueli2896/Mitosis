@@ -590,6 +590,37 @@ commits generic drafts. Order of work, each landing in the same table:
    factorisation with stream-specific parameters kept.
 A9 is parked (AR loss climbs regardless of query weight / balance loss).
 
+**Decode-diagnostics result (merge job 220640, 8 songs).** Coupling,
+reference 0.088: A3 (refine K=4) 0.053; A3K0 (AR draft, no refinement)
+0.101, p=0.008 vs A3; A1 0.105; A3ctc (commit melody, condition chord)
+0.082; A3ctcc (commit chord, condition melody) 0.103; A3ctc2 (both
+passes) 0.122, p=0.008; A3f 0.074; S1 0.147; WS 0.152. Reading:
+1. **Refinement is the damage.** Depth 0 recovers A1's coupling from the
+   same checkpoint with survival intact (0.906) -- the K=4 rounds take a
+   draft at 0.10 down to 0.05.
+2. **The conditional pathway works.** Commit-then-condition brings the
+   harmony rows onto the reference: MCTD 1.347 / 1.325 / 1.324 (ref
+   1.325; S1 1.328), PCS 0.522 / 0.551 / 0.582 (ref 0.548; A3ctcc
+   p=0.039 vs A3), coverage 0.616 / 0.646 / 0.654 (ref 0.595, S1 0.631).
+3. **Direction matters.** With the chord leading (A3ctcc, and the second
+   pass of A3ctc2) the melody thins out: survival_min 0.817 / 0.779,
+   density_ratio_a 0.795 / 0.718, empty_rate_a 0.712 / 0.742 (p=0.023).
+   The melody-given-chord conditional is the weak slot. Melody-leading
+   (A3ctc) keeps survival 0.898 and density 0.99 and lands nearest the
+   reference on coupling (-0.006) and coverage (+0.021).
+4. A3f (t-1 mask, refine K=4) moves coupling 0.053 -> 0.074 only; the
+   mask was not the main issue.
+Decisions: A3's decode for the paper is commit-then-condition, melody
+leading (`A3_SCHEDULE=ctc_m`; E1 system A3ctc); refine K=4 stays in the
+table as the ablation that shows the damage. Conditional-slot training
+(A3fc, COND_SLOT_PROB=0.8, cp8, long) is the follow-up: the ctc regime
+is 20% of A3's training draws and already lands on the reference, and
+the melody|chord conditional is the slot most in need of it. The H3
+cost of ctc (harmonic rhythm 0.181 vs 0.136, n.s.) is the number to
+watch on the retrain. The story for the paper: the fully shared models
+overshoot the reference's coupling, refinement undershoots it, and the
+conditional decode lands on it.
+
 ### E1 — Co-generation (RQ1)
 
 Both streams are generated jointly, conditioned on a 4-bar prompt of
