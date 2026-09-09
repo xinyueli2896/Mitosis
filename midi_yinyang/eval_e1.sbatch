@@ -60,6 +60,8 @@
 #   CKPT_A1        default the melchord cp4tar intra-cross-attn run dir
 #   CKPT_A3        default the A3 cp4tar run dir (K4mg_melchord_cp4tar)
 #   CKPT_A3F       default the A3f run dir (A3f_melchord_long)
+#   CKPT_A3C / CKPT_A3FC   conditional-slot run dirs (systems A3c / A3fc,
+#                  decoded with A3_SCHEDULE=${A3C_SCHEDULE:-ctc_m}); no default
 #   CKPT_S1        default the pop909ft_tagged_long merged run (cp16)
 #   CKPT_SSCRATCH  default the pop909scratch_tagged merged run (cp16)
 #   CKPT_S0        default the LA-pretrained cp transformer ckpt
@@ -133,6 +135,10 @@ CKPT_A3="${CKPT_A3:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord
 # A3f: the v1.2 'long' run (A3 + slot_sees_prev_frame; the flag is
 # restored from the ckpt, so the decoder call is A3's).
 CKPT_A3F="${CKPT_A3F:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A3f_melchord_long_batch_8_schedule}"
+# A3c / A3fc: conditional-slot runs (train_duet_block_diffusion COND_SLOT_PROB);
+# no default until one is trained -- pass the run dir.
+CKPT_A3C="${CKPT_A3C:-}"
+CKPT_A3FC="${CKPT_A3FC:-}"
 # Merged single-stream baselines: 'tagged' = chord on program 48 in the
 # training merge, which is what lets the tokenizer keep the streams
 # apart (an untagged merge fuses them irreversibly).
@@ -287,20 +293,24 @@ generate() {
             --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$MAX_POLYPHONY_DUET" \
             --model-size large --moe-num-experts 4 --moe-topk 2 ;;
-    A3|A3f|A3K0|A3ctc|A3ctc2|A3ctcc)
+    A3|A3f|A3K0|A3ctc|A3ctcc|A3ctc2|A3c|A3fc)
         # Decode variants share the A3 checkpoint and differ only in the
         # env the decoder reads (A3_REFINE_STEPS / A3_SCHEDULE):
         #   A3K0    refinement depth 0: the AR head's draft is the output
         #   A3ctc   commit-then-condition, melody leads (ctc_m)
         #   A3ctcc  commit-then-condition, chord leads (ctc_c)
         #   A3ctc2  two passes: chord | melody, then melody | chord (ctc2_m)
-        local ck; case "$name" in A3f) ck="$CKPT_A3F" ;; *) ck="$CKPT_A3" ;; esac
+        #   A3c     conditional-slot ckpt (COND_SLOT_PROB), decoded ctc_m
+        #   A3fc    same on the A3f mask
+        local ck; case "$name" in A3f) ck="$CKPT_A3F" ;; A3c) ck="$CKPT_A3C" ;; A3fc) ck="$CKPT_A3FC" ;; *) ck="$CKPT_A3" ;; esac
+        [[ -n "$ck" ]] || { echo "[$name] SKIPPED: checkpoint knob unset"; return 0; }
         local -a denv=()
         case "$name" in
-            A3K0)   denv=(A3_REFINE_STEPS=0) ;;
-            A3ctc)  denv=(A3_SCHEDULE=ctc_m) ;;
-            A3ctcc) denv=(A3_SCHEDULE=ctc_c) ;;
-            A3ctc2) denv=(A3_SCHEDULE=ctc2_m) ;;
+            A3K0)     denv=(A3_REFINE_STEPS=0) ;;
+            A3ctc)    denv=(A3_SCHEDULE=ctc_m) ;;
+            A3ctcc)   denv=(A3_SCHEDULE=ctc_c) ;;
+            A3ctc2)   denv=(A3_SCHEDULE=ctc2_m) ;;
+            A3c|A3fc) denv=(A3_SCHEDULE="${A3C_SCHEDULE:-ctc_m}") ;;
         esac
         env ${denv[@]+"${denv[@]}"} python cp_transformer_m2c_duet_block_diffusion_combined.py \
             --ckpt "$ck/" \

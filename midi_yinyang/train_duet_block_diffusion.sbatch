@@ -166,6 +166,13 @@
 #                           historical mask stops at t-2, one frame
 #                           short of the AR head at the same phase.
 #                           With QUERY_PAIRS=all this is A.9.
+#   --export=ALL,COND_SLOT_PROB=p    A.3c: fraction of (item, pair) draws
+#                           in the commit-then-condition regime (one slot
+#                           committed at k=0, the other masked at k=K,
+#                           leader uniform); the rest keep A.3's uniform
+#                           draw. Family A3c (A3fc with
+#                           SLOT_SEES_PREV_FRAME=1). Decode with
+#                           A3_SCHEDULE=ctc_* (eval_e1 system A3c).
 #   --export=ALL,AUX_LOSS_WEIGHT=w   MoE balance-loss weight (0.01; 0 off)
 #   --export=ALL,MOE_AUX_CLEAN_ONLY=1  balance statistics over clean
 #                           tokens only (query slots excluded). Both are
@@ -311,6 +318,10 @@ QUERY_PAIRS="${QUERY_PAIRS:-1}"
 # stops at content t-2 -- one frame short of the AR head at the same
 # rotary phase. Travels in the ckpt; load_model restores it.
 SLOT_SEES_PREV_FRAME="${SLOT_SEES_PREV_FRAME:-0}"
+# A.3c: share of (item, pair) draws in the commit-then-condition regime
+# (one slot committed at k=0, the other masked at k=K); 0 = A.3's
+# independent uniform draw. Decode such a ckpt with A3_SCHEDULE=ctc_*.
+COND_SLOT_PROB="${COND_SLOT_PROB:-0}"
 # MoE load-balancing loss: weight (0 disables it) and whether the
 # balance statistics see clean tokens only. Training-only knobs -- they
 # do not enter the run dir name, so record them in RUN_TAG.
@@ -399,7 +410,9 @@ if [[ -z "${MODEL_ABBR:-}" ]]; then
     elif [[ "$TOKEN_LEVEL_MASK" == "1" ]]; then FAM="A4legacy"
     elif [[ "$MASK_REVEALED_QUERY_LOSS" == "1" && "$QUERY_PAIRS" != "1" ]]; then FAM="A6"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" && "$QUERY_PAIRS" == "-1" ]]; then FAM="A9"
+    elif [[ "$SLOT_SEES_PREV_FRAME" == "1" && "$COND_SLOT_PROB" != "0" ]]; then FAM="A3fc"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" ]]; then FAM="A3f"
+    elif [[ "$COND_SLOT_PROB" != "0" ]]; then FAM="A3c"
     elif [[ "$QUERY_PAIRS" == "-1" ]]; then FAM="A3qall"
     elif [[ "$MASK_REVEALED_QUERY_LOSS" == "1" ]]; then FAM="A5"
     elif [[ "$QUERY_PAIRS" != "1" ]]; then FAM="A3q${QUERY_PAIRS}"
@@ -536,6 +549,9 @@ if [[ "$SLOT_SEES_PREV_FRAME" == "1" ]]; then
 fi
 if [[ "$MOE_AUX_CLEAN_ONLY" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--moe_aux_clean_only)
+fi
+if [[ "$COND_SLOT_PROB" != "0" ]]; then
+    EXTRA_TRAIN_ARGS+=(--cond_slot_prob "$COND_SLOT_PROB")
 fi
 STEP_CKPT_EVERY="${STEP_CKPT_EVERY:-5000}"
 if [[ "$STEP_CKPT_EVERY" != "0" ]]; then

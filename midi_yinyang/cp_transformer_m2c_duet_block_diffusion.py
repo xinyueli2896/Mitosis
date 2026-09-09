@@ -155,9 +155,28 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  query_pairs=1, decoy_corruption=False,
                  decoy_mask_residual=0.25, decoy_lag_bins=None,
                  query_block=1, slot_sees_prev_frame=False,
-                 moe_aux_clean_only=False, **kwargs):
+                 moe_aux_clean_only=False, cond_slot_prob=0.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
+        # --- conditional slots (A.3c) ------------------------------------
+        # With probability cond_slot_prob per (item, pair) the two slots
+        # are drawn in the commit-then-condition regime: one slot (leader,
+        # uniform) COMMITTED at k=0 with its ground-truth frame, the other
+        # fully MASKED at k=K. Otherwise the historical independent
+        # uniform draw over {0..K}^2. Motivation (E1 merged table, job
+        # 217818; probe 206671): under the uniform draw a slot predicts
+        # frame t with its partner masked half the time and learns the
+        # MARGINAL of its stream; refinement then commits generic drafts
+        # and the two streams end up less coupled than any baseline
+        # (coupling 0.053 vs reference 0.088). The ctc regime trains
+        # the CONDITIONAL p(follower_t | history, leader_t) directly and
+        # never asks for a both-masked prediction; decode with
+        # A3_SCHEDULE=ctc_* to use it. 0 = off (A.3 unchanged).
+        self.cond_slot_prob = float(cond_slot_prob)
+        self.register_buffer(
+            'cond_slot_prob_flag',
+            torch.tensor(self.cond_slot_prob, dtype=torch.float32),
+        )
         # --- A.7: lag-graded DECOY corruption -------------------------
         # The corruption states the refinement loop actually visits are
         # COMPLETE frames that fail to match their partner (every draft
@@ -1026,6 +1045,16 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                                 device=x.device)
             k_c = torch.randint(0, K + 1, (batch_size, n_pairs),
                                 device=x.device)
+            if self.cond_slot_prob > 0:
+                # A.3c: commit-then-condition regime for a share of the
+                # pairs -- leader committed (k=0), follower masked (k=K).
+                use_ctc = torch.rand(batch_size, n_pairs,
+                                     device=x.device) < self.cond_slot_prob
+                lead_is_m = torch.rand(batch_size, n_pairs,
+                                       device=x.device) < 0.5
+                k_m = torch.where(use_ctc, torch.where(lead_is_m, 0, K), k_m)
+                k_c = torch.where(use_ctc, torch.where(lead_is_m, K, 0), k_c)
+                self._last_ctc_frac = use_ctc.float().mean().detach()
         else:
             # Eval: fully-masked (most informative single-pass setting).
             k_m = torch.full((batch_size, n_pairs), K, device=x.device,
@@ -1189,6 +1218,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.log('train_selfcond_frac', self._last_selfcond_frac)
         self.log('train_query_kept_frac', self._last_query_kept_frac)
         self.log('train_query_pairs', float(self._last_n_pairs))
+        self.log('train_ctc_frac', getattr(self, '_last_ctc_frac', torch.zeros(())))
         return loss
 
     def on_before_optimizer_step(self, optimizer):
@@ -1475,6 +1505,14 @@ if __name__ == '__main__':
                              'at content t-2, one frame short of what '
                              'the AR head at the same phase sees. A.3f '
                              'alone; A.9 with --query_pairs -1.')
+    parser.add_argument('--cond_slot_prob', type=float, default=0.0,
+                        help='A.3c: probability per (item, pair) that the '
+                             'two slots are drawn in the commit-then-'
+                             'condition regime (one committed at k=0, the '
+                             'other masked at k=K, leader uniform) instead '
+                             'of the independent uniform draw. Trains the '
+                             'conditional p(follower | history, leader) '
+                             'directly; decode with A3_SCHEDULE=ctc_*.')
     parser.add_argument('--query_pairs', type=int, default=1,
                         help='Q: how many DISTINCT frames each training '
                              'forward supervises at the query slots. '
@@ -1539,8 +1577,12 @@ if __name__ == '__main__':
             fam = 'A9'                         # A.9 = A.3 kernel, slot sees
                                                # t-1, a query pair at EVERY
                                                # frame, A.3 decode
+        elif a.slot_sees_prev_frame and a.cond_slot_prob > 0:
+            fam = 'A3fc'                       # A.3f + conditional slots
         elif a.slot_sees_prev_frame:
             fam = 'A3f'                        # A.3 + the t-1 mask fix only
+        elif a.cond_slot_prob > 0:
+            fam = 'A3c'                        # A.3 + conditional slots
         elif a.query_pairs < 0:
             fam = 'A3qall'                     # every frame, old mask
         elif a.query_pairs > 1:
@@ -1616,6 +1658,7 @@ if __name__ == '__main__':
                         for b in args.decoy_lag_bins.replace('/', ',')
                         .split(',')],
         query_block=args.query_block,
+        cond_slot_prob=args.cond_slot_prob,
     )
     print(f'[scheme] {scheme_version}: slot_rope_aligned={not args.legacy_slot_rope}  '
           f'time_rope_aligned={bool(args.time_rope_aligned)}  '
@@ -1633,6 +1676,7 @@ if __name__ == '__main__':
           f'query_pairs={args.query_pairs}  '
           f'slot_sees_prev_frame={args.slot_sees_prev_frame}  '
           f'moe_aux_clean_only={args.moe_aux_clean_only}  '
+          f'cond_slot_prob={args.cond_slot_prob}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
           f'query_loss_weight={args.query_loss_weight}  '
           f'query_block={args.query_block}'
@@ -1768,6 +1812,7 @@ if __name__ == '__main__':
                         bool(args.mask_revealed_query_loss),
                     'query_pairs': args.query_pairs,
                     'slot_sees_prev_frame': bool(args.slot_sees_prev_frame),
+                    'cond_slot_prob': args.cond_slot_prob,
                     'moe_aux_clean_only': bool(args.moe_aux_clean_only),
                     'aux_loss_weight': args.aux_loss_weight,
                     'query_block': args.query_block,

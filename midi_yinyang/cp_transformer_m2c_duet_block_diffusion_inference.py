@@ -157,6 +157,16 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
             break
     print(f'[load_model] slot_sees_prev_frame={slot_sees_prev_frame}'
           f'{" (A.9/A.3f: slot reads frame t-1)" if slot_sees_prev_frame else ""}')
+    # A.3c: conditional-slot training share, informational (decode is
+    # chosen by A3_SCHEDULE; ctc_* is the matching schedule).
+    for k in state_dict_keys:
+        if k.endswith('cond_slot_prob_flag'):
+            sd_tmp = ck['state_dict'] if 'state_dict' in ck else ck
+            csp = float(sd_tmp[k].item())
+            if csp > 0:
+                print(f'[load_model] cond_slot_prob={csp:.2f} (A.3c: trained in the '
+                      f'commit-then-condition regime; decode with A3_SCHEDULE=ctc_*)')
+            break
     if diffusion_K is None:
         for key, name in (('k_emb_m.weight', 'k_emb_m'),
                           ('k_emb_c.weight', 'k_emb_c')):
