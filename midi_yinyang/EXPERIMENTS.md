@@ -719,6 +719,18 @@ regime) and A.10 same-frame cp8 long (the alternating rule built into
 the architecture), both gated/tracked on val_ar_loss_content at 1k-5k
 steps; the A9 batch-4 controls are deferred.
 
+**A.10 audit failed, design revised (2026-09-10).** The first
+`audit_same_frame` run on the cluster passed direction 0 and failed
+direction 1 (3 checks): the follower read the leader's HIDDEN row, and
+through a 2-layer stack that row carried the follower's own target
+(details in VARIANTS.md A.10). Revised: extra keys built from layer-0
+frame encodings (partner's previous frame always, leader's current
+frame for the follower), no same-frame cross-stream hidden reads,
+direction per frame in training/validation/decode. The revised audit
+(3 layers, per-frame random + alternating directions, transitive target
+checks, filler-invariant decode consistency, batched) passes locally on
+CPU; the cluster run gates the training job as before.
+
 ### E1 — Co-generation (RQ1)
 
 Both streams are generated jointly, conditioned on a 4-bar prompt of

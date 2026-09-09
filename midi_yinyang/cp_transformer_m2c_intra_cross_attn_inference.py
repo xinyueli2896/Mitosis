@@ -98,16 +98,19 @@ def general_inference_same_frame(model, gen_length, B, subseq_len, temperature,
     """A.10 decode. Per frame draw a direction (env A10_DIRECTION: alt
     (default; melody leads on even frames, chord on odd), m, c, random),
     then two forwards: the LEADER is read from the historical A.1
-    position with the direction set (its row has no same-frame edge, so
-    this is A.1's prediction); the leader's frame is encoded and placed
-    at the row that holds it; the FOLLOWER is read from its row in a
-    second forward, where the same-frame edge lets it attend that key.
-    The second forward always has an even length (the stack asserts it):
-    under direction 0 a zero filler stands at row 2t+3 (c_t, unknown),
-    under direction 1 at row 2t+2 (m_t, unknown); the follower row reads
-    neither filler (row 2t+1 reads keys <= 2t+1 and 2t+2; row 2t reads
-    keys <= 2t and 2t+3), which audit_same_frame check 4 verifies. Falls back to the base loop when the
-    checkpoint is not an A.10 model.
+    position (its row has no same-frame edge, so this is A.1's
+    prediction); the leader's frame is encoded and placed at the row
+    that holds it; the FOLLOWER is read from its row in a second forward,
+    where the same-frame edge lets it attend the extra key built from
+    that encoding. The direction HISTORY [B, t+1] of every decoded frame
+    is passed to both forwards, so earlier rows are recomputed exactly
+    as they were when sampled. The second forward always has an even
+    length (the stack asserts it): under direction 0 a zero filler
+    stands at row 2t+3 (c_t, unknown), under direction 1 at row 2t+2
+    (m_t, unknown); the follower row reads neither filler nor the
+    leader's hidden row (its extra key is the leader's encoding), which
+    audit_same_frame check 4 verifies. Falls back to the base loop when
+    the checkpoint is not an A.10 model.
     """
     if not getattr(model, 'same_frame', False):
         return general_inference(model, gen_length, B, subseq_len, temperature,
@@ -130,17 +133,22 @@ def general_inference_same_frame(model, gen_length, B, subseq_len, temperature,
 
     h_buffer = torch.zeros(B, 0, H, device=device, dtype=dtype)
     mel_frames, chord_frames = [], []
+    dirs = []                                   # direction history, one per frame
     for t in range(gen_length):
         if t % 10 == 0:
             print(f'[gen] step {t}/{gen_length}')
         m_action, c_action = mel_action_fn(t), chord_action_fn(t)
         d = direction_for(t)
-        dir_t = torch.full((B,), d, dtype=torch.long, device=device)
+        dirs.append(d)
         m_tokens = c_tokens = None
         if m_action == 'sample' or c_action == 'sample':
             sos = build_inference_sos(model, B, device, dtype)
-            h_in = torch.cat([sos, h_buffer], dim=1)          # 2 + 2t rows
-            model._sf_dir = dir_t
+            h_in = torch.cat([sos, h_buffer], dim=1)          # 2 + 2t rows = t+1 frames
+            # frames 0..t (frame 0 is the SOS pair); the pad frame t+1 of the
+            # second forward gets the rule's next direction (never read)
+            hist = torch.tensor(dirs + [direction_for(t + 1)],
+                                dtype=torch.long, device=device)
+            model._sf_dir = hist[:t + 1].view(1, -1).expand(B, -1)
             try:
                 h_out, _ = model._global_interaction(h_in)
                 if d == 0:
@@ -157,6 +165,7 @@ def general_inference_same_frame(model, gen_length, B, subseq_len, temperature,
                         # needs an even length; row 2t+1 never reads 2t+3)
                         filler = torch.zeros(B, 1, H, device=device, dtype=dtype)
                         h_in2 = torch.cat([h_in, m_h, filler], dim=1)
+                        model._sf_dir = hist.view(1, -1).expand(B, -1)
                         h_out2, _ = model._global_interaction(h_in2)
                         c_tokens = model.local_sampling(
                             h_out2[:, -3], max_subseq_len=subseq_len,   # row 2t+1
@@ -173,6 +182,7 @@ def general_inference_same_frame(model, gen_length, B, subseq_len, temperature,
                         c_h = model._encode_frame(c_tokens, 1).to(dtype=dtype)
                         filler = torch.zeros(B, 1, H, device=device, dtype=dtype)
                         h_in2 = torch.cat([h_in, filler, c_h], dim=1)  # rows 2t+2, 2t+3
+                        model._sf_dir = hist.view(1, -1).expand(B, -1)
                         h_out2, _ = model._global_interaction(h_in2)
                         m_tokens = model.local_sampling(
                             h_out2[:, -4], max_subseq_len=subseq_len,   # row 2t

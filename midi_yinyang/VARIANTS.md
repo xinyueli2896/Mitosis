@@ -324,18 +324,40 @@ token-level corruption on top.
 ### A.10 — same-frame edge on the causal duet (2026-09-09)
 
 `--same_frame` on `cp_transformer_m2c_intra_cross_attn.py` (wrapper
-`SAME_FRAME=1`, run-dir prefix `sf_`, E1 system `A10`). Per training
-example one stream FOLLOWS the other within the frame: under direction
-0 the chord query at row 2t+1 (predicting c_t) may read the mel key at
-row 2t+2, which holds m_t; under direction 1 the mel query at row 2t
-may read the chord key at row 2t+3, which holds c_t. Direction uniform
-per example; the follower rows get a learned embedding. Nothing else
-changes: no query slots, no commitment levels, no refinement, only the
-AR loss. Decode: two forwards per frame -- the leader from the A.1
-position, then the follower with the leader's frame placed at its key
-row -- with the direction drawn per frame (`A10_DIRECTION` alt|m|c|
-random, default alt), so both streams read each other's current frame
-equally often. Motivation: the E1 decode diagnostics (merge 221331)
+`SAME_FRAME=1`, run-dir prefix `sf_`, E1 system `A10`). Per FRAME one
+stream FOLLOWS the other. Rule, identical for both streams (revised
+2026-09-10 after the first audit failed, see below): a row at frame t
+reads its own stream's hidden rows causally, the partner's hidden rows
+only from frames < t, the partner's PREVIOUS frame as an extra key
+built from the layer-0 frame encoding, and -- if it is the follower --
+the partner's CURRENT frame as such a key: under d_t = 0 the chord row
+2t+1 (predicting c_t) reads enc(m_t); under d_t = 1 the mel row 2t
+reads enc(c_t). Extra keys/values use the layer's own k/v projections
+and the row's rotary position and are appended after the 2T hidden
+keys (masks [B, 1, 2T, 4T]). Direction uniform per (example, frame)
+at training, alternating per frame at validation (phase per batch) and
+at decode; the follower rows get a learned embedding. No query slots,
+no commitment levels, no refinement, only the AR loss. Decode: two
+forwards per frame -- the leader from the A.1 position, then the
+follower with the leader's frame placed at its row -- with the
+direction history [B, t+1] passed to both forwards (`A10_DIRECTION`
+alt|m|c|random, default alt), so both streams read each other's
+current frame equally often.
+
+*Why not the leader's hidden row (the 2026-09-09 design):*
+`audit_same_frame` failed direction 1 on a 2-layer stack. Two
+transitive leaks: (i) the chord row 2t+3 reads row 2t+2 (m_t) at layer
+l, so the mel row 2t reading hidden row 2t+3 at layer l+1 saw its own
+target; (ii) the base mask lets the chord row 2t+1 read the mel hidden
+row 2t of its own frame, which under d_t = 1 had read c_t. Direction 0
+had neither only because melody precedes chord in the interleaving.
+Encoding keys close (i); dropping every same-frame cross-stream hidden
+read closes (ii) and, with the lag-1 encoding key, makes the streams
+exact mirror images -- the base A.1 mask was not (chord read m_{t-1} in
+context, melody only c_{t-2}). The audit now runs a 3-layer stack with
+per-frame random and alternating directions, transitive target checks
+at every frame, and filler-invariant decode consistency; all pass.
+Motivation: the E1 decode diagnostics (merge 221331)
 showed A.3's commit-then-condition decode, an exact one-direction
 conditional emulated with two forwards and a query slot, landing
 coupling and coverage on the reference, with the alternating form as

@@ -126,39 +126,95 @@ class M2CIntraCrossAttnLayer(nn.Module):
         B, h, L, d = x.shape
         return x.transpose(1, 2).contiguous().view(B, L, h * d)
 
+    @staticmethod
+    def expand_direction(direction, B, T):
+        """A.10 direction -> LongTensor [B, T] (one entry per FRAME).
+        Accepts [B] (one direction for every frame of the example) or
+        [B, T]. d_t = 0: chord follows melody at frame t; 1: melody
+        follows chord."""
+        if direction.dim() == 1:
+            return direction.view(B, 1).expand(B, T)
+        assert direction.shape == (B, T), (direction.shape, B, T)
+        return direction
+
     def _build_masks(self, two_T, device, direction=None):
         """Key-modality masks. direction=None: the historical A.1 masks
-        [2T, 2T]. direction: LongTensor [B] in {0, 1} (A.10, same_frame):
-        returns [B, 1, 2T, 2T] with ONE extra edge per frame,
-          0 -> the chord query at row 2t+1 (predicting c_t) may read the
-               mel key at row 2t+2, which HOLDS m_t (chord follows melody);
-          1 -> the mel query at row 2t (predicting m_t) may read the chord
-               key at row 2t+3, which holds c_t (melody follows chord).
-        Row layout is the parent's shift-by-2: row 2t holds m_{t-1} and
-        predicts m_t, row 2t+1 holds c_{t-1} and predicts c_t. Nothing else
-        changes, so the follower is an EXACT conditional on the leader's
-        current frame, in one forward, with no query slot; the leader's
-        row never sees the follower's current frame (still causal), which
-        is what makes the two-forward decode in
+        [2T, 2T] over the 2T hidden keys. direction (A.10, same_frame):
+        LongTensor [B] or [B, T] in {0, 1}; returns [B, 1, 2T, 4T] masks
+        over the 2T hidden keys FOLLOWED BY 2T extra keys, where extra key
+        j is the layer-0 frame encoding held by row j (row 2t holds
+        m_{t-1}, 2t+1 c_{t-1}, 2t+2 m_t, 2t+3 c_t). Rule, identical for
+        both streams: a row at frame t reads its OWN stream's hidden rows
+        causally, the PARTNER's hidden rows only from frames < t, the
+        partner's previous frame as an encoding key, and -- if it is the
+        follower -- the partner's current frame as an encoding key:
+          chord row 2t+1: mel hidden rows <= 2t-2, enc(m_{t-1}) [key 2t],
+                          and enc(m_t) [key 2t+2] iff d_t = 0;
+          mel row 2t:     chord hidden rows <= 2t-1, enc(c_{t-1}) [key 2t+1],
+                          and enc(c_t) [key 2t+3] iff d_t = 1.
+        (d_t = 0: chord follows melody; 1: melody follows chord.)
+
+        Why encodings and not hidden rows, and why no same-frame hidden
+        read: the first A.10 design let the follower read the leader's
+        HIDDEN row, and audit_same_frame (2026-09-10) failed direction 1
+        on a 2-layer stack -- the chord row 2t+3 had read row 2t+2 (m_t)
+        at the previous layer, so the mel row 2t saw its own target
+        through it. Replacing the key by the frame ENCODING closed that
+        path but left a second one: the base mask lets the chord row
+        2t+1 read the mel hidden row 2t of its own frame, which under
+        d_t = 1 has read enc(c_t) -- the chord's own target. Direction 0
+        never had either path only because melody precedes chord in the
+        interleaving. Removing every same-frame cross-stream hidden read
+        and supplying the previous frame as an encoding key instead
+        makes the two streams exact mirror images (the base A.1 mask was
+        not: the chord read m_{t-1} in context, the melody only c_{t-2}),
+        and no row contains information from its own frame except the
+        follower's leader-encoding key. That is also what makes the
+        two-forward decode in
         cp_transformer_m2c_intra_cross_attn_inference.general_inference_same_frame
-        valid. Decode draws the direction per frame (alternating by
-        default), so over a phrase both streams read each other's current
-        frame equally often -- the fairness rule built into the model.
+        valid. Direction is per frame (training draws it per frame,
+        decode alternates it), so over a phrase both streams read each
+        other's current frame equally often -- the fairness rule built
+        into the model.
         """
         base_M, base_C = self._build_base_masks(two_T, device)
         if direction is None:
             return base_M, base_C
         B = direction.shape[0]
+        T = two_T // 2
         idx = torch.arange(two_T, device=device)
-        q0 = idx[1::2]; k0 = q0 + 1; ok0 = k0 < two_T      # chord q -> mel key (m_t)
-        q1 = idx[0::2]; k1 = q1 + 3; ok1 = k1 < two_T      # mel q -> chord key (c_t)
+        rows_c = idx[1::2]                                  # chord query rows 2t+1
+        rows_m = idx[0::2]                                  # mel query rows 2t
+        # Hidden keys: cross-stream reads only from EARLIER frames. The
+        # base mask lets the chord row 2t+1 read the mel hidden row 2t of
+        # its own frame (m_{t-1} in context); under d_t = 1 that row has
+        # read enc(c_t), so the chord would see its own target. Removed in
+        # every direction, so the two streams are mirror images; the mel
+        # row never had the reverse edge (2t+1 > 2t).
+        hid_M = base_M.clone()
+        hid_M[rows_c, rows_m] = False
+        hid_C = base_C
+        # Extra keys (frame encodings): the partner's PREVIOUS frame in
+        # both directions (replaces the removed hidden edge for the chord
+        # and gives the melody the same lag-1 access it never had), plus
+        # the leader's CURRENT frame for the follower.
+        x_M = torch.zeros(two_T, two_T, dtype=torch.bool, device=device)
+        x_M[rows_c, rows_m] = True                          # 2t+1 -> enc(m_{t-1}) at key 2t
         edge0 = torch.zeros(two_T, two_T, dtype=torch.bool, device=device)
-        edge0[q0[ok0], k0[ok0]] = True
+        ok0 = rows_c + 1 < two_T
+        edge0[rows_c[ok0], rows_c[ok0] + 1] = True          # 2t+1 -> enc(m_t) at key 2t+2
+        x_C = torch.zeros(two_T, two_T, dtype=torch.bool, device=device)
+        x_C[rows_m, rows_m + 1] = True                      # 2t -> enc(c_{t-1}) at key 2t+1
         edge1 = torch.zeros(two_T, two_T, dtype=torch.bool, device=device)
-        edge1[q1[ok1], k1[ok1]] = True
-        d = direction.view(B, 1, 1)
-        mask_M = base_M[None] | (edge0[None] & (d == 0))
-        mask_C = base_C[None] | (edge1[None] & (d == 1))
+        ok1 = rows_m + 3 < two_T
+        edge1[rows_m[ok1], rows_m[ok1] + 3] = True          # 2t -> enc(c_t) at key 2t+3
+        # direction of the QUERY row's frame: rows 2t and 2t+1 -> d_t
+        dq = self.expand_direction(direction, B, T).repeat_interleave(2, dim=1)
+        dq = dq.view(B, two_T, 1)
+        mask_M = torch.cat([hid_M[None].expand(B, -1, -1),
+                            x_M[None] | (edge0[None] & (dq == 0))], dim=-1)
+        mask_C = torch.cat([hid_C[None].expand(B, -1, -1),
+                            x_C[None] | (edge1[None] & (dq == 1))], dim=-1)
         return mask_M[:, None], mask_C[:, None]
 
     def _build_base_masks(self, two_T, device):
@@ -191,9 +247,12 @@ class M2CIntraCrossAttnLayer(nn.Module):
         self._mask_C = mask_C
         return mask_M, mask_C
 
-    def forward(self, m, c, cos, sin, direction=None):
+    def forward(self, m, c, cos, sin, direction=None, m0=None, c0=None):
         """m, c: [B, T, H]. cos, sin: RoPE buffers covering 2T positions.
-        direction: None (A.1) or LongTensor [B] (A.10 same-frame edge).
+        direction: None (A.1) or LongTensor [B] / [B, T] (A.10 same-frame
+        edge); with a direction, m0/c0 [B, T, H] are the stack's layer-0
+        inputs (the frame encodings held by each row), which this layer's
+        own k/v projections turn into the extra keys (see _build_masks).
 
         Returns (m_out, c_out, aux_loss)."""
         B, T, H = m.shape
@@ -220,7 +279,21 @@ class M2CIntraCrossAttnLayer(nn.Module):
         # 3. Apply RoPE to Q, K.
         cos_2t = cos[:, :, :two_T]
         sin_2t = sin[:, :, :two_T]
-        q, k = _apply_rope(q, k, cos_2t, sin_2t)
+        q_r, k = _apply_rope(q, k, cos_2t, sin_2t)
+
+        if direction is not None:
+            # A.10: extra keys/values from the layer-0 frame encodings,
+            # same projections, same rotary positions as the rows that
+            # hold them. Appended after the 2T hidden keys.
+            assert m0 is not None and c0 is not None, 'A.10 needs m0/c0'
+            k_x = interleave(self._split_heads(self.k_m(m0)),
+                             self._split_heads(self.k_c(c0)))
+            v_x = interleave(self._split_heads(self.v_m(m0)),
+                             self._split_heads(self.v_c(c0)))
+            _, k_x = _apply_rope(q, k_x, cos_2t, sin_2t)
+            k = torch.cat([k, k_x], dim=2)                      # [B, h, 4T, d]
+            v = torch.cat([v, v_x], dim=2)
+        q = q_r
 
         # 4. Two SDPA passes with key-modality masks.
         mask_M, mask_C = self._build_masks(two_T, q.device, direction)
@@ -308,11 +381,12 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
             torch.tensor(1 if time_rope_aligned else 0, dtype=torch.long),
         )
         # A.10 -- same-frame edge (see M2CIntraCrossAttnLayer._build_masks).
-        # Per training example one stream FOLLOWS the other within the
-        # frame: the follower's query row reads the key row that holds the
-        # leader's current frame. Direction is drawn uniformly per example
-        # (training_step) and alternated per batch at validation; decode
-        # draws it per frame. Motivation (E1, merge job 221331): the
+        # Per FRAME one stream FOLLOWS the other: the follower's query row
+        # reads an extra key holding the leader's current-frame encoding.
+        # Direction is drawn uniformly per (example, frame) at training,
+        # alternated per frame at validation (phase alternating per
+        # batch) and at decode -- the same distribution everywhere.
+        # Motivation (E1, merge job 221331): the
         # commit-then-condition decode of A.3 -- an exact one-direction
         # conditional emulated with two forwards and a query slot -- landed
         # coupling and coverage on the reference, and its alternating form
@@ -328,7 +402,11 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
         self.sf_dir_emb = nn.Embedding(2, self.hidden_size)
         with torch.no_grad():
             self.sf_dir_emb.weight.zero_()
-        self._sf_dir = None          # LongTensor [B] for the current forward
+        # Direction for the current forward: LongTensor [B] or [B, T], or
+        # a rule string resolved once T is known in _global_interaction:
+        # 'random' (per frame, training) / 'alt0' / 'alt1' (alternating,
+        # melody leads on even / odd frames).
+        self._sf_dir = None
         # Drop the inherited single-backbone global stack; we replace it
         # with our custom intra/cross-attn stack below.
         del self.global_roformer
@@ -376,26 +454,30 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
     def same_frame(self):
         return bool(self.same_frame_flag.item())
 
-    def _sample_sf_dir(self, batch_size, device, batch_idx=None):
-        """Direction per example: uniform at training; at validation
-        alternate per batch so both conditionals are scored."""
-        if not self.same_frame:
+    def _resolve_sf_dir(self, B, T, device):
+        """Turn self._sf_dir into a LongTensor [B, T] or None."""
+        d = self._sf_dir
+        if d is None or not self.same_frame:
             return None
-        if batch_idx is None:
-            return torch.randint(0, 2, (batch_size,), device=device)
-        return torch.full((batch_size,), int(batch_idx) % 2,
-                          dtype=torch.long, device=device)
+        if isinstance(d, str):
+            if d == 'random':
+                return torch.randint(0, 2, (B, T), device=device)
+            phase = {'alt0': 0, 'alt1': 1}[d]
+            t = torch.arange(T, device=device)
+            return ((t + phase) % 2).view(1, T).expand(B, T)
+        return M2CIntraCrossAttnLayer.expand_direction(d, B, T)
 
     def training_step(self, batch, batch_idx):
-        self._sf_dir = self._sample_sf_dir(batch[0].shape[0], batch[0].device)
+        self._sf_dir = 'random' if self.same_frame else None
         try:
             return super().training_step(batch, batch_idx)
         finally:
             self._sf_dir = None
 
     def validation_step(self, batch, batch_idx):
-        self._sf_dir = self._sample_sf_dir(batch[0].shape[0], batch[0].device,
-                                           batch_idx=batch_idx)
+        # alternate per frame like the decode; phase alternates per batch
+        # so both conditionals are scored at every frame parity
+        self._sf_dir = (f'alt{int(batch_idx) % 2}' if self.same_frame else None)
         try:
             return super().validation_step(batch, batch_idx)
         finally:
@@ -423,17 +505,22 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
         cos, sin = _rope_freqs(two_T, head_dim, device=h.device, dtype=h.dtype,
                                time_aligned=self.time_rope_aligned)
 
-        direction = self._sf_dir if self.same_frame else None
+        direction = self._resolve_sf_dir(B, T, h.device)
+        m0 = c0 = None
         if direction is not None:
-            # follower rows: chord rows under direction 0, mel rows under 1
-            emb = self.sf_dir_emb(direction).to(dtype=h.dtype)[:, None, :]
-            d = direction.view(-1, 1, 1)
+            # extra keys are the RAW frame encodings (before the follower
+            # embedding), so an extra key carries the leader's frame only
+            m0, c0 = m, c
+            # follower rows: chord row of frame t under d_t = 0, mel row
+            # under d_t = 1; a learned embedding marks them
+            emb = self.sf_dir_emb(direction).to(dtype=h.dtype)      # [B, T, H]
+            d = direction.unsqueeze(-1)
             m = m + emb * (d == 1)
             c = c + emb * (d == 0)
 
         total_aux = torch.zeros((), device=h.device, dtype=h.dtype)
         for layer in self.global_layers:
-            m, c, aux = layer(m, c, cos, sin, direction)
+            m, c, aux = layer(m, c, cos, sin, direction, m0, c0)
             total_aux = total_aux + aux
 
         out = torch.stack([m, c], dim=2).reshape(B, two_T, H)
