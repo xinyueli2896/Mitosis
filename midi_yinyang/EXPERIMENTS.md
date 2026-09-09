@@ -638,6 +638,19 @@ watch on the retrain. The story for the paper: the fully shared models
 overshoot the reference's coupling, refinement undershoots it, and the
 conditional decode lands on it.
 
+**Second results table (2026-09-09): coherence / repetition / general.**
+`coherence_metrics.py` + `score_coherence.sbatch` (CPU, on the outputs
+already generated): bar-level repetition and periodicity, symbolic
+structureness indicators (SI on the bar self-similarity matrix at 3-7 /
+8-14 / 15+ bars), prompt-relative tonal drift, pitch-class entropy (1 and
+4 bars), chord-progression irregularity, groove similarity; degenerate
+repetition (exact-copy bars, repeated melodic 4-grams, longest loop);
+MusPy-style pitch range / entropy / scale consistency and chord-type
+counts. All on the tick grid over the scored window, for output and
+reference alike; read among systems with the reference as a row, paired
+Wilcoxon vs the paper decode. Verified on synthetic varied-vs-looped
+songs. The H1-H3 table stays the pre-registered result.
+
 ### E1 — Co-generation (RQ1)
 
 Both streams are generated jointly, conditioned on a 4-bar prompt of
