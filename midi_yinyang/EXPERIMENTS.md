@@ -651,6 +651,26 @@ reference alike; read among systems with the reference as a row, paired
 Wilcoxon vs the paper decode. Verified on synthetic varied-vs-looped
 songs. The H1-H3 table stays the pre-registered result.
 
+**Coherence table result (score_coherence, 8 songs).** Reference: chord
+copy-bars 0.39, melody copy-bars 0.16, melodic 4-gram repeats 0.21, CPI
+0.48, GS 0.71, PCE4 2.67, drift -0.06. Alternating commit: 0.55 / 0.22 /
+0.23 / 0.36 / 0.79 / 2.59 / -0.17 -- couples, but repeats: chord bars
+copied more, progressions more regular, rhythm more uniform, less pitch
+variety. Two-pass and chord-led: melodic 4-grams 0.37-0.38 (sig.).
+Refine K=4: 0.43 / 0.17 / 0.21 / 0.45 / 0.74 / 2.63 / -0.20 -- variety
+at the reference, i.e. refinement decorrelates but does not loop. S1 /
+S-scratch: fewer copies and MORE irregular progressions than real music
+(CPI 0.55 / 0.65); WS almost never repeats a bar (0.01) and holds the
+prompt's key (drift -0.04). Every duet drifts 2-3x the reference,
+whatever the decode: a backbone property (the long-term-structure
+deficit), to be scored on the retrains. Trade-off to state in the
+paper: refinement keeps variety and loses coupling; the conditional
+decode gains coupling and loops; the shared models are more varied than
+the reference. Next cheap lever: the follower is sampled at T=0.9 /
+top-p 0.95 on an already confident conditional -- E1 system A3ctcaT
+(ctc_alt, T=1.0, top-p 1.0) tests whether variety returns without
+losing coupling.
+
 ### E1 — Co-generation (RQ1)
 
 Both streams are generated jointly, conditioned on a 4-bar prompt of

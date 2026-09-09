@@ -318,7 +318,7 @@ generate() {
             --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$cp" \
             --model-size large --moe-num-experts 4 --moe-topk 2 ;;
-    A3|A3f|A3K0|A3ctc|A3ctcc|A3ctc2|A3ctca|A3c|A3fc)
+    A3|A3f|A3K0|A3ctc|A3ctcc|A3ctc2|A3ctca|A3ctcaT|A3c|A3fc)
         # Decode variants share the A3 checkpoint and differ only in the
         # env the decoder reads (A3_REFINE_STEPS / A3_SCHEDULE):
         #   A3K0    refinement depth 0: the AR head's draft is the output
@@ -342,6 +342,7 @@ generate() {
             A3ctcc)   denv=(A3_SCHEDULE=ctc_c) ;;
             A3ctc2)   denv=(A3_SCHEDULE=ctc2_m) ;;
             A3ctca)   denv=(A3_SCHEDULE=ctc_alt) ;;   # leader alternates per frame: symmetric in expectation
+            A3ctcaT)  denv=(A3_SCHEDULE=ctc_alt A3_FINAL_TEMP=1.0 A3_TOP_P=1.0) ;;   # same, follower sampled at T=1, no nucleus cut (repetition check)
             A3c|A3fc) denv=(A3_SCHEDULE="${A3C_SCHEDULE:-ctc_m}") ;;
         esac
         env ${denv[@]+"${denv[@]}"} python cp_transformer_m2c_duet_block_diffusion_combined.py \

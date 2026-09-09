@@ -42,7 +42,7 @@ import numpy as np
 from aggregate_eval_results import wilcoxon_signed_rank, metric_target
 
 # display order and paper names; ids not listed are appended as-is
-SYSTEM_ORDER = ['A3ctca', 'A3ctc', 'A3ctc2', 'A3', 'A3K0', 'A3ctcc', 'A3f', 'A3c', 'A3fc', 'A10', 'A1', 'A1cp8', 'S1', 'S-scratch', 'P-mc', 'P-cm', 'WS']
+SYSTEM_ORDER = ['A3ctca', 'A3ctcaT', 'A3ctc', 'A3ctc2', 'A3', 'A3K0', 'A3ctcc', 'A3f', 'A3c', 'A3fc', 'A10', 'A1', 'A1cp8', 'S1', 'S-scratch', 'P-mc', 'P-cm', 'WS']
 SYSTEM_NAME = {
     'A3': r'Duet, refine $K{=}4$',
     'A3f': r'Duet, slot sees $t{-}1$',
@@ -50,6 +50,7 @@ SYSTEM_NAME = {
     'A3fc': r'Duet, cond. slots + $t{-}1$',
     'A3K0': r'Duet, no refinement',
     'A3ctca': r'Duet (ours), alternating commit',
+    'A3ctcaT': r'Duet, alternating commit, $T{=}1$',
     'A3ctc': r'Duet, commit m$\to$c',
     'A3ctcc': r'Duet, commit c $\to$ m',
     'A3ctc2': r'Duet, commit both passes',
