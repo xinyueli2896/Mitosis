@@ -45,5 +45,7 @@ CSV="results/E1_${RUN}_metrics.csv"
 [[ -f "$CSV" ]] || { echo "ERROR: $CSV missing"; exit 1; }
 
 python e1_paper_table.py --csv "$CSV" --out "results/E1_paper_${RUN}" --baseline "$BASELINE"
-echo "----- results/E1_paper_${RUN}.tex -----"
+echo "----- results/E1_paper_${RUN}_consistency.tex  (IEEE two-column table, the paper's) -----"
+cat "results/E1_paper_${RUN}_consistency.tex"
+echo "----- results/E1_paper_${RUN}.tex  (full H1-H3 table, supplementary) -----"
 cat "results/E1_paper_${RUN}.tex"

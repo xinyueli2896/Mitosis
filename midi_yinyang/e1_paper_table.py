@@ -231,8 +231,9 @@ def main():
     lines.append(
         r'\caption{Co-generation on ' + str(len(n_songs)) + ' held-out POP909 songs that no '
         r'compared system trained on (mean$\pm$std over songs, 3 samples per song averaged '
-        r'first). $^*$ pre-registered primary endpoint. Bold: closest to the reference in '
-        r'the row. $^{+}$/$^{-}$: significantly closer to / farther from the reference than '
+        r'first). $^*$ pre-registered primary endpoint. Bold: smallest mean per-song '
+        r'distance to the reference in the row (not the column mean nearest the reference '
+        r'mean). $^{+}$/$^{-}$: significantly closer to / farther from the reference than '
         r'\emph{' + SYSTEM_NAME.get(args.baseline, args.baseline) + r'} '
         r'(one-sided paired Wilcoxon on per-song distances, $p<' + f'{args.alpha:g}' + r'$).}')
     lines.append(r'\label{tab:e1}')
