@@ -8,7 +8,8 @@
 # Env knobs (--export=ALL,KEY=val):
 #   RUN        metrics suffix (default mixed_matched ->
 #              results/E1_mixed_matched_metrics.csv, the merged 8-song set)
-#   BASELINE   default A3ctc (the paper's decode; A3 = refine K=4 ablation)
+#   BASELINE   default A3ctca (alternating commit, the symmetric decode;
+#              A3 = refine K=4 ablation, A3ctc/A3ctcc = one-directional diagnostics)
 #
 # Example:
 #   sbatch midi_yinyang/e1_paper_table.sbatch
@@ -37,7 +38,7 @@ cd "$MY"
 mkdir -p /home/xinyue.li/logs results
 
 RUN="${RUN:-mixed_matched}"
-BASELINE="${BASELINE:-A3ctc}"
+BASELINE="${BASELINE:-A3ctca}"
 CSV="results/E1_${RUN}_metrics.csv"
 [[ -f "$CSV" ]] || { echo "ERROR: $CSV missing"; exit 1; }
 

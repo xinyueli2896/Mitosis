@@ -610,6 +610,15 @@ passes) 0.122, p=0.008; A3f 0.074; S1 0.147; WS 0.152. Reading:
    reference on coupling (-0.006) and coverage (+0.021).
 4. A3f (t-1 mask, refine K=4) moves coupling 0.053 -> 0.074 only; the
    mask was not the main issue.
+**Alternating-leader result (merge job 221331).** A3ctca: coupling 0.097
+(ref 0.088; closest of all 13 systems), coverage 0.593 (ref 0.595;
+closest), PCS 0.497 / MCTD 1.365 (between the two one-directional
+variants, as expected from a 50/50 mix), survival_min 0.867 and
+melody density 0.84 (the chord-led frames' melody thinning, halved),
+harmonic rhythm 0.181 (n.s. vs 0.136). It is the paper's decode for the
+current checkpoint and the anchor the A3fc retrain is compared to; the
+melody|chord conditional is what the retrain must fix.
+
 Constraint (2026-09-09): the paper's decode must let both streams read
 each other FAIRLY in time and direction. ctc_m is one-directional (the
 chord reads the melody's current frame, never the reverse) and is a

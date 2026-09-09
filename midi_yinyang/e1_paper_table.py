@@ -49,7 +49,7 @@ SYSTEM_NAME = {
     'A3c': r'Duet, conditional slots',
     'A3fc': r'Duet, cond. slots + $t{-}1$',
     'A3K0': r'Duet, no refinement',
-    'A3ctca': r'Duet, commit alternating',
+    'A3ctca': r'Duet (ours), alternating commit',
     'A3ctc': r'Duet, commit m$\to$c',
     'A3ctcc': r'Duet, commit c $\to$ m',
     'A3ctc2': r'Duet, commit both passes',
@@ -315,8 +315,9 @@ def consistency_table(per_song, systems, baseline, out, n_songs, alpha):
 
 # marker/colour per system id: ours black filled; families share a shape
 _STYLE = {
-    'A3ctc': dict(marker='o', color='black', mfc='black'),
-    'A3': dict(marker='o', color='black', mfc='0.6'),
+    'A3ctca': dict(marker='o', color='black', mfc='black'),
+    'A3ctc': dict(marker='o', color='black', mfc='0.35'),
+    'A3': dict(marker='o', color='black', mfc='0.7'),
     'A3f': dict(marker='o', color='black', mfc='0.6'),
     'A1': dict(marker='o', color='black', mfc='white'),
     'S1': dict(marker='s', color='0.35', mfc='0.35'),
