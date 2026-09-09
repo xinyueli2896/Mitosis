@@ -4,7 +4,40 @@ Terminology (settled): melody and chords are *streams* (general term,
 `\strm{}` / `\strms{}` macros); *modality* appears only in the
 positioning passage; *domain* = corpus; *part* is music-only prose.
 
-## Short abstract (2026-09-09, ~220 words)
+## Abstract, 150-word cap (2026-09-09) -- CURRENT
+
+```latex
+% \newcommand{\strm}{\textit{stream}}  \newcommand{\strms}{\textit{streams}}
+\begin{abstract}
+Cross-modal generation, far (vision and language) or near (text and
+speech), is mostly posed as one signal given the other. Joint
+generation raises a question conditioning never faces: each signal
+needs its own computation, yet the two must agree at every instant.
+Joint models settle it in advance, sharing everything or partitioning
+by modality; the choice is untested, since paired data is too scarce
+for a fully shared yardstick. We study two \strms{} of one modality,
+melody and chords in symbolic music: one representation, two
+grammars, and abundant paired data on which the fully shared
+generator is established. Our duet transformer is one autoregressive
+model over the interleaved \strms{}, \strm{}-specific in its attention
+projections and its router over a shared, unassigned expert pool;
+query slots let each \strm{} condition on its partner's current frame.
+On held-out songs, one checkpoint generates both \strms{}, matching
+shared and cascaded baselines while keeping both coupled.
+\end{abstract}
+```
+
+Cut relative to the 220-word version (all go to the introduction /
+method, on top of the list below): "as distinct in content as two
+modalities" and "one clock" (testbed sentence); "so specialisation is
+learned, not imposed" (now carried by "unassigned"); "masked predictors
+of the current frame refined iteratively at inference" (slot
+description -> method); "in either direction" and "no compared system
+trained on" (results sentence -> experimental setup); the phrasing of
+the two distances ("bridged by learned alignment" / "sharing content but
+not form" -> introduction §1).
+
+## 220-word version (2026-09-09), superseded
 
 ```latex
 % \newcommand{\strm}{\textit{stream}}  \newcommand{\strms}{\textit{streams}}
