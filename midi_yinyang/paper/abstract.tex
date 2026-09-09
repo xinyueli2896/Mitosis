@@ -1,0 +1,18 @@
+% \newcommand{\strm}{\textit{stream}}  \newcommand{\strms}{\textit{streams}}
+\begin{abstract}
+Cross-modal pairs lie far apart, as vision and language, or near, as
+text and speech, sharing content, not form. Generation is moving from
+conditioning to joint production. This raises a question conditioning
+avoids: each signal needs its own computation, yet the two must agree
+at every instant. Joint models fix the split in advance, sharing
+everything or partitioning by modality. Neither can be tested across
+modalities against one model trained from scratch on both: paired
+data is too scarce. We study two \strms{} of one modality, melody and
+chords: one representation, two grammars, abundant paired data and an
+established fully shared generator. Our duet transformer, an
+autoregressive model over interleaved \strms{}, is \strm{}-specific in
+attention projections and its router over a shared, unassigned expert
+pool; query slots let each \strm{} read its partner's current frame.
+On held-out songs one checkpoint matches shared and cascaded
+baselines, keeping both \strms{} coupled.
+\end{abstract}
