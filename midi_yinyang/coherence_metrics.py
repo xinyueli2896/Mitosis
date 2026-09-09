@@ -57,7 +57,7 @@ Usage (via score_coherence.sbatch):
         --ref-b-dir temp/E1_matched_p6/prompts/chord \\
         --prompt-frames 96 --total-frames 416 --out results/E1_p96_matched_coherence.csv
     python coherence_metrics.py --table results/E1_mixed_matched_coherence.csv \\
-        --baseline A3ctca --out results/E1_paper_coherence
+        --baseline A3ctcaT --out results/E1_paper_coherence
 """
 import argparse
 import csv
@@ -303,7 +303,7 @@ TABLE_COLS = [('si_mid', 'SI$_{\\mathrm{mid}}$'), ('rep_chroma', 'Rep.'),
               ('drift_slope', 'Drift'), ('pce4', 'PCE$_4$'), ('cpi', 'CPI'),
               ('gs', 'GS'), ('copy_bar_a', 'Copy$_m$'), ('copy_bar_b', 'Copy$_c$'),
               ('ngram4_a', '4-gram$_m$'), ('scale_consistency_a', 'Scale')]
-ORDER = ['A3ctca', 'A3ctcaT', 'A3ctc', 'A3ctc2', 'A3', 'A3K0', 'A3ctcc', 'A3f', 'A3c', 'A3fc',
+ORDER = ['A3ctcaT', 'A3ctca', 'A3ctc', 'A3ctc2', 'A3', 'A3K0', 'A3ctcc', 'A3f', 'A3c', 'A3fc',
          'A10', 'A1', 'A1cp8', 'S1', 'S-scratch', 'P-mc', 'P-cm', 'WS']
 
 
@@ -394,7 +394,7 @@ def main():
     p.add_argument('--chord-programs', default='48')
     p.add_argument('--out', required=True)
     p.add_argument('--table', help='coherence CSV -> LaTeX table at --out')
-    p.add_argument('--baseline', default='A3ctca')
+    p.add_argument('--baseline', default='A3ctcaT')
     args = p.parse_args()
     if args.table:
         make_table(args.table, args.baseline, args.out)

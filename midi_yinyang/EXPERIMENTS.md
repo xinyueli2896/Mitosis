@@ -671,6 +671,34 @@ top-p 0.95 on an already confident conditional -- E1 system A3ctcaT
 (ctc_alt, T=1.0, top-p 1.0) tests whether variety returns without
 losing coupling.
 
+**A3ctcaT result (merge 222147 + score_coherence, 8 songs): the
+repetition was a sampling artefact.** Follower at T=1 / no nucleus cut,
+same alternating schedule. Repetition goes back to the reference:
+chord copy-bars 0.41 (ref 0.39; A3ctca 0.55, p<0.05), melody copy-bars
+0.14 (ref 0.16), melodic 4-grams 0.13 (ref 0.21; A3ctca 0.23, p<0.05),
+CPI 0.45 (ref 0.48; A3ctca 0.36, p<0.05), PCE4 2.65 (ref 2.67), drift
+-0.14 (A3ctca -0.17). GS 0.78 stays above the reference's 0.71 (rhythm
+more uniform than real music: every ctc decode shows it). Coupling is
+NOT lost: 0.133 (ref 0.088, A3ctca 0.097; p=0.008 vs A3's 0.053),
+coverage 0.609 (ref 0.595), CTnCTR 0.868 (ref 0.859), PCS 0.495, MCTD
+1.364 (+0.039 vs ref). Coupling above the reference is not a
+chord-tone overshoot -- coverage and CTnCTR sit on the reference -- but
+a lower coverage under the 2-bar shift, i.e. the melody is more
+specific to its own chords than the reference is. Costs: melody
+density 0.81 and empty_rate_a 0.724 (p=0.039 vs A3), the same chord-led
+thinning as A3ctca (0.84); survival_min 0.879 (n.s.); harmonic rhythm
+JSD 0.179 (p=0.023 two-sided vs A3's 0.136) -- the H3 cost of ctc
+decodes, unchanged. Decision (2026-09-09): A3ctcaT is the paper's
+decode (default BASELINE in e1_paper_table.sbatch and
+score_coherence.sbatch; first in SYSTEM_ORDER / ORDER, named "Duet
+(ours), alternating commit"; A3ctca stays as the T=0.9 / top-p 0.95
+row that shows the sampling effect). Story: refinement decorrelates
+(coupling 0.053), shared models overshoot (0.147/0.152), the
+alternating commit at T=1 lands at the reference's variety with
+coupling intact. Remaining backbone deficits for the retrains: melody
+thinning when the chord leads, harmonic rhythm, tonal drift 2x the
+reference.
+
 ### E1 — Co-generation (RQ1)
 
 Both streams are generated jointly, conditioned on a 4-bar prompt of

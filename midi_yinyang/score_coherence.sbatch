@@ -9,7 +9,7 @@
 #   COH_GROUPS "run:out_root:prompt:total" entries, space-separated
 #              (default the two matched groups)
 #   RESULT_TAG default matched -> results/E1_mixed_<TAG>_coherence.csv
-#   BASELINE   default A3ctca (the paper's decode)
+#   BASELINE   default A3ctcaT (the paper's decode: alternating commit, T=1)
 #
 # Example:
 #   sbatch midi_yinyang/score_coherence.sbatch
@@ -38,7 +38,7 @@ mkdir -p /home/xinyue.li/logs results
 
 COH_GROUPS="${COH_GROUPS:-p96_matched:temp/E1_matched_p6:96:416 p128_matched:temp/E1_matched_p8:128:448}"
 RESULT_TAG="${RESULT_TAG:-matched}"
-BASELINE="${BASELINE:-A3ctca}"
+BASELINE="${BASELINE:-A3ctcaT}"
 
 CSVS=()
 for g in $COH_GROUPS; do

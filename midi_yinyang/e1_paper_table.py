@@ -42,15 +42,15 @@ import numpy as np
 from aggregate_eval_results import wilcoxon_signed_rank, metric_target
 
 # display order and paper names; ids not listed are appended as-is
-SYSTEM_ORDER = ['A3ctca', 'A3ctcaT', 'A3ctc', 'A3ctc2', 'A3', 'A3K0', 'A3ctcc', 'A3f', 'A3c', 'A3fc', 'A10', 'A1', 'A1cp8', 'S1', 'S-scratch', 'P-mc', 'P-cm', 'WS']
+SYSTEM_ORDER = ['A3ctcaT', 'A3ctca', 'A3ctc', 'A3ctc2', 'A3', 'A3K0', 'A3ctcc', 'A3f', 'A3c', 'A3fc', 'A10', 'A1', 'A1cp8', 'S1', 'S-scratch', 'P-mc', 'P-cm', 'WS']
 SYSTEM_NAME = {
     'A3': r'Duet, refine $K{=}4$',
     'A3f': r'Duet, slot sees $t{-}1$',
     'A3c': r'Duet, conditional slots',
     'A3fc': r'Duet, cond. slots + $t{-}1$',
     'A3K0': r'Duet, no refinement',
-    'A3ctca': r'Duet (ours), alternating commit',
-    'A3ctcaT': r'Duet, alternating commit, $T{=}1$',
+    'A3ctcaT': r'Duet (ours), alternating commit',
+    'A3ctca': r'Duet, alternating commit, $T{=}0.9$, top-$p$ 0.95',
     'A3ctc': r'Duet, commit m$\to$c',
     'A3ctcc': r'Duet, commit c $\to$ m',
     'A3ctc2': r'Duet, commit both passes',
@@ -317,7 +317,8 @@ def consistency_table(per_song, systems, baseline, out, n_songs, alpha):
 
 # marker/colour per system id: ours black filled; families share a shape
 _STYLE = {
-    'A3ctca': dict(marker='o', color='black', mfc='black'),
+    'A3ctcaT': dict(marker='o', color='black', mfc='black'),
+    'A3ctca': dict(marker='o', color='black', mfc='0.2'),
     'A3ctc': dict(marker='o', color='black', mfc='0.35'),
     'A3': dict(marker='o', color='black', mfc='0.7'),
     'A3f': dict(marker='o', color='black', mfc='0.6'),
