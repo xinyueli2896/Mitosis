@@ -699,6 +699,26 @@ coupling intact. Remaining backbone deficits for the retrains: melody
 thinning when the chord leads, harmonic rhythm, tonal drift 2x the
 reference.
 
+**Overfitting on POP909 and the A.1 checkpoint (2026-09-10).** Melchord
+training is 811 songs, one random window per song per epoch, 101
+steps/epoch at global batch 8. The A.1 melchord cp4tar W&B run bottoms
+at ~1k steps (10 epochs, val 0.27) and rises to 0.62 by 7.3k with train
+loss still falling; the A.9 runs (with and without the query loss)
+rise from 1k the same way. The E1 causal duet is the val-selected
+checkpoint, i.e. the 10-epoch model (best and last.ckpt written 7 s
+apart on 2026-08-12; the 7.3k-step chart is a later job under the
+same name, nature unresolved). The A.3 family shows no rise in
+val_loss, but val_loss sums AR + 2*query + aux and the query term can
+mask an overfitting clean-row loss; whether the paper's A3 checkpoint
+carries an overfit AR head is OPEN until its val_ar_loss_content curve
+is read. Consequence: the duet trainer now also saves a best-1 on
+val_ar_loss_content into <run>/best_ar/, so the AR-selected weights
+exist for every new run. Training-capacity decision (two 2-GPU slots):
+A3fc cp8 long (COND_SLOT_PROB=0.8, the decode's regime as the training
+regime) and A.10 same-frame cp8 long (the alternating rule built into
+the architecture), both gated/tracked on val_ar_loss_content at 1k-5k
+steps; the A9 batch-4 controls are deferred.
+
 ### E1 — Co-generation (RQ1)
 
 Both streams are generated jointly, conditioned on a 4-bar prompt of

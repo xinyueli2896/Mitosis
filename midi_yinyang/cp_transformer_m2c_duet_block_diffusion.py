@@ -1737,6 +1737,22 @@ if __name__ == '__main__':
         strategy = 'auto'
 
     extra_callbacks = []
+    # Second best-1 on the CLEAN-ROW loss alone (2026-09-10). val_loss
+    # sums AR + query_loss_weight * query + aux; the query term can keep
+    # improving for hundreds of epochs while the clean-row AR loss
+    # overfits POP909 (811 songs, 101 steps/epoch: the slot-free A.1
+    # melchord run bottoms at ~10 epochs and then doubles). A
+    # val_loss-selected file may therefore carry an overfit AR head.
+    # Written into <run>/best_ar/ so resolve_best_ckpt never finds two
+    # monitored metrics in one directory; point CKPT_* at that subdir
+    # to evaluate the AR-selected weights instead.
+    import os as _os_ckpt
+    extra_callbacks.append(L.callbacks.ModelCheckpoint(
+        monitor='val_ar_loss_content', save_top_k=1, save_last=False,
+        enable_version_counter=False,
+        dirpath=_os_ckpt.path.join(ckpt_dir, 'best_ar'),
+        filename=model_name + '.{epoch:02d}.{step}.{val_ar_loss_content:.5f}',
+    ))
     if args.step_ckpt_every > 0:
         # Insurance against a monotonically worsening val_loss. With
         # save_top_k on val_loss, a run whose val_loss bottoms early
