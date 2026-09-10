@@ -176,6 +176,9 @@ def main():
         sorted(s for s in per_song if s not in SYSTEM_ORDER)
     if args.baseline not in per_song:
         raise SystemExit(f'baseline {args.baseline} not in CSV ({sorted(per_song)})')
+    missing = [s for s in systems if s not in per_song]
+    if missing:
+        raise SystemExit(f'--systems not in CSV: {missing} (have {sorted(per_song)})')
 
     n_songs = sorted({sg for s in systems for sg in per_song[s]})
     print(f'[table] {len(n_songs)} songs: {" ".join(n_songs)}; systems: {" ".join(systems)}')

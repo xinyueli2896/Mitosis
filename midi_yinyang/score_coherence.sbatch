@@ -10,6 +10,10 @@
 #              (default the two matched groups)
 #   RESULT_TAG default matched -> results/E1_mixed_<TAG>_coherence.csv
 #   BASELINE   default A3ctcaT (the paper's decode: alternating commit, T=1)
+#   SYSTEMS    optional space-separated row list for the table (order kept);
+#              default every system in the merged CSV. Use it for a
+#              one-duet presentation table, e.g.
+#              SYSTEMS="A3ctcaT A1 S1 S-scratch P-mc P-cm WS"
 #
 # Example:
 #   sbatch midi_yinyang/score_coherence.sbatch
@@ -39,6 +43,7 @@ mkdir -p /home/xinyue.li/logs results
 COH_GROUPS="${COH_GROUPS:-p96_matched:temp/E1_matched_p6:96:416 p128_matched:temp/E1_matched_p8:128:448}"
 RESULT_TAG="${RESULT_TAG:-matched}"
 BASELINE="${BASELINE:-A3ctcaT}"
+SYSTEMS="${SYSTEMS:-}"
 
 CSVS=()
 for g in $COH_GROUPS; do
@@ -57,6 +62,6 @@ done
 MERGED="results/E1_mixed_${RESULT_TAG}_coherence.csv"
 python merge_e1_metrics.py --out "$MERGED" "${CSVS[@]}"
 python coherence_metrics.py --table "$MERGED" --baseline "$BASELINE" \
-    --out "results/E1_paper_${RESULT_TAG}_coherence"
+    --out "results/E1_paper_${RESULT_TAG}_coherence" ${SYSTEMS:+--systems $SYSTEMS}
 echo "----- results/E1_paper_${RESULT_TAG}_coherence.tex -----"
 cat "results/E1_paper_${RESULT_TAG}_coherence.tex"

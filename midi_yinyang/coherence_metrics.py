@@ -307,14 +307,20 @@ ORDER = ['A3fcaT', 'A3fcaTar', 'A3fcK4', 'A3ctcaT', 'A3ctca', 'A3ctc', 'A3ctc2',
          'A10', 'A1', 'A1cp8', 'S1', 'S-scratch', 'P-mc', 'P-cm', 'WS']
 
 
-def make_table(csv_path, baseline, out, alpha=0.05):
+def make_table(csv_path, baseline, out, alpha=0.05, systems=None):
     from aggregate_eval_results import wilcoxon_signed_rank
     from e1_paper_table import SYSTEM_NAME
     per = {}
     with open(csv_path) as fh:
         for r in csv.DictReader(fh):
             per.setdefault(r['system'], {}).setdefault(r['song'], []).append(r)
-    systems = [s for s in ORDER if s in per] + sorted(s for s in per if s not in ORDER)
+    if systems:
+        missing = [s for s in systems if s not in per]
+        if missing:
+            raise SystemExit(f'--systems not in CSV: {missing} (have {sorted(per)})')
+        systems = list(systems)
+    else:
+        systems = [s for s in ORDER if s in per] + sorted(s for s in per if s not in ORDER)
 
     def song_means(system, metric):
         d = {}
@@ -395,9 +401,11 @@ def main():
     p.add_argument('--out', required=True)
     p.add_argument('--table', help='coherence CSV -> LaTeX table at --out')
     p.add_argument('--baseline', default='A3ctcaT')
+    p.add_argument('--systems', nargs='*', default=None,
+                   help='table only: restrict and order the rows (default: every system in the CSV)')
     args = p.parse_args()
     if args.table:
-        make_table(args.table, args.baseline, args.out)
+        make_table(args.table, args.baseline, args.out, systems=args.systems)
         return
     args.mel_programs = {int(x) for x in args.mel_programs.split(',')}
     args.chord_programs = {int(x) for x in args.chord_programs.split(',')}
