@@ -731,6 +731,45 @@ direction per frame in training/validation/decode. The revised audit
 checks, filler-invariant decode consistency, batched) passes locally on
 CPU; the cluster run gates the training job as before.
 
+**A3fc first evaluation (2026-09-10; checkpoint at ~65k of 100k steps,
+merge 226545 + score_coherence, 8 songs).** Systems: A3fcaT (paper
+decode ctc_alt T=1 on the val_loss-selected ckpt), A3fcaTar (same on
+best_ar/), A3fcK4 (refine K=4). Read against A3ctcaT (A3 cp4tar, same
+decode):
+- H1: the melody thinning is FIXED. density_ratio_a 0.98 (A3ctcaT
+  0.81), survival_a 0.950 (p=0.039 two-sided vs A3; A3ctcaT 0.892),
+  survival_min 0.925 -- the best of all 17 systems. But the chord
+  stream thinned instead: density_ratio_b 0.83 (p=0.039 vs A3's
+  1.00; A3ctcaT 0.96), empty_rate_b 0.911 (p=0.023).
+- H2: comparable. coverage 0.624 (+0.029 vs ref; A3ctcaT +0.014),
+  CTnCTR 0.884, PCS 0.503, MCTD 1.366, coupling 0.111+-0.034 (A3ctcaT
+  0.133+-0.079; ref 0.088) -- both above the reference, A3fcaT with
+  half the spread.
+- H3: worse. harmonic rhythm 0.208 (A3ctcaT 0.179, A3 0.136), melody
+  onset grid 0.162 (0.141), melody duration 0.129 (0.100). Hypothesis
+  to check: cp8 chords carry sevenths and voice movement that the
+  pc-set change counter reads as extra chord changes.
+- Coherence: more repetitive and less varied than A3ctcaT: PCE4 2.56
+  (p<0.05; ref 2.67, A3ctcaT 2.65), CPI 0.41 (ref 0.48; 0.45), chord
+  copy-bars 0.47 (ref 0.39; 0.41). Drift -0.12 (better than -0.14).
+- A3fcaTar (AR-selected weights): coverage 0.584, coupling 0.097,
+  density_a 0.93 -- between the two; no reason to prefer it.
+- **A3fcK4 (refine K=4 on the conditional-slot ckpt): coupling 0.150
+  (p=0.008 vs A3's 0.053)** -- conditional-slot training REPAIRS the
+  decorrelation of parallel refinement; coverage 0.612, CTnCTR 0.911,
+  CPI 0.506 and chord copy-bars 0.34 (variety at/under the reference),
+  but harmonic rhythm 0.218 (p=0.039, the worst) and survival_min
+  0.854. The coupling deficit of refinement was a training-regime
+  effect, not a decode effect; this is a paper-grade ablation.
+Decision: A3ctcaT stays the paper's decode and the supervisor-table
+duet. On the pre-registered endpoints A3ctcaT wins harmonic rhythm
+(0.179 vs 0.208) and coverage delta (+0.014 vs +0.029), A3fcaT wins
+survival (0.925 vs 0.879); A3ctcaT is also nearer the reference on
+every coherence column. A3fc fixed the targeted deficit and moved the
+cost to the chord stream, H3 and repetition. Re-evaluate at 100k (the
+schedule is still annealing); the refine-repair result stands
+regardless.
+
 ### E1 — Co-generation (RQ1)
 
 Both streams are generated jointly, conditioned on a 4-bar prompt of
