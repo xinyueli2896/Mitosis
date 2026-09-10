@@ -28,8 +28,11 @@
 #   ALIGNED_DIR   default: /home/xinyue.li/POP909-Dataset/POP909-aligned
 #   MELODY_DIR    default: /home/xinyue.li/POP909-Dataset/POP909-melody
 #   CHORD_DIR     default: /home/xinyue.li/POP909-Dataset/POP909-chord
-#   SKIP_TOKENIZE 1 = write the aligned/melody/chord folders only (eval fix)
-#   ALIGN_LEGACY  1 = the pre-2026-09-10 aligner layout (see preprocess_pop909_align.py)
+#   SKIP_TOKENIZE 1 = write the aligned/melody/chord folders only
+# NOTE (2026-09-10): this align stage keeps the historical layout (beat i
+# at tick (i+1)*PPQ, downbeats ignored). The current beat-aligner is
+# pop909_beat_align.py via align_pop909.sbatch, which writes aligned/,
+# melody/ and chord/ from the raw dataset in one pass.
 #   FORCE=1       re-run stages whose output already exists.
 #
 # When MELODY_DIR and CHORD_DIR are already populated (e.g. downloaded from
@@ -94,8 +97,7 @@ else
         echo "[align] ERROR: no aligned midis and POP909_RAW=$POP909_RAW missing."
         exit 1
     fi
-    python preprocess_pop909_align.py --src "$POP909_RAW" --dst "$ALIGNED_DIR" \
-        $([[ "${ALIGN_LEGACY:-0}" == "1" ]] && echo --legacy)
+    python preprocess_pop909_align.py --src "$POP909_RAW" --dst "$ALIGNED_DIR"
 fi
 
 # --- 2. melody --------------------------------------------------------

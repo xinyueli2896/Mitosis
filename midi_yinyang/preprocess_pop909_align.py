@@ -7,31 +7,13 @@ note beat). The midi's note times in seconds are correct; only its tempo track
 is wrong. This script:
 
   * builds a new tempo schedule so audio beat i plays at output midi tick
-    (i + pad) * PPQ at exactly beat_midi[i] seconds, where pad puts the
-    song's FIRST DOWNBEAT (third column of beat_midi.txt) on a bar
-    boundary of the 4-beat tick grid: pad = (-d0) mod 4 for first-downbeat
-    index d0. The pad beats (0..3 of them) hold the audio lead-in before
-    beat 0, so output midi time t == audio time t still holds for every
-    event (the chord builder reuses this tempo map); with pad = 0 the
-    lead-in is dropped and anything before beat 0 clamps to tick 0.
+    (i + 1) * PPQ at exactly beat_midi[i] seconds (with a one-beat lead-in
+    segment for the audio time before beat 0);
   * re-positions every note/control/pitch event at the output tick that maps
     back to its original audio time under the new tempo schedule.
-  * verifies that beat d0 sits at a multiple of 4 * PPQ and refuses to
-    write the file otherwise.
-
-History (2026-09-10): the previous version wrote beat i at tick
-(i + 1) * PPQ -- a one-beat lead-in for every song -- and never read
-the downbeat column. Since only a third of POP909 songs start on a
-downbeat, the bar phase of the aligned corpus was spread over all four
-beats (14% on the grid, 34% one beat late, 31% half a bar, 21% one
-beat early; check_downbeat_phase.py). Training is unaffected (random
-crop windows, relative positions), but E1 prompts were cut at
-arbitrary beats, bar-based metrics used wrong bars, the whole-song
-baseline was fed mis-phased lead sheets, and the listening copies
-played off the DAW grid. --legacy reproduces the old layout.
 
 After realignment, output midi time t == audio time t for every event, AND the
-midi's beat grid (visible in DAWs) lines up with the audio beats and bars.
+midi's beat grid (visible in DAWs) lines up with the audio beats.
 
 Output: <out_root>/<id>.mid (preserves original PPQ).
 """
@@ -71,59 +53,27 @@ def build_tick_to_sec(mid):
     return tick_to_sec
 
 
-def first_downbeat_index(rows):
-    """Index of the first beat whose downbeat flag (last column) is set;
-    None when the file has no downbeat column or no flag."""
-    if rows.ndim < 2 or rows.shape[1] < 2:
-        return None
-    idx = np.where(rows[:, -1] >= 0.5)[0]
-    return int(idx[0]) if len(idx) else None
-
-
-def realign_midi(midi_path, beat_path, out_path, legacy=False):
+def realign_midi(midi_path, beat_path, out_path):
     mid = mido.MidiFile(midi_path)
     ppq = mid.ticks_per_beat
-    rows = np.loadtxt(beat_path)
-    if rows.ndim == 1:
-        rows = rows[None, :]
-    beats = rows[:, 0]
+    beats = np.loadtxt(beat_path)[:, 0]
     if len(beats) < 2:
         raise ValueError(f"need >=2 beats, got {len(beats)}")
 
-    if legacy:
-        pad = 1                                  # the old one-beat lead-in
-    else:
-        d0 = first_downbeat_index(rows)
-        if d0 is None:
-            raise ValueError("no downbeat flag in beat_midi.txt")
-        pad = (-d0) % 4                          # beat d0 -> tick multiple of 4*PPQ
-
-    # New tempo schedule, one segment per beat of ticks:
-    #   segments 0..pad-1   the pad beats, sharing the lead-in (beats[0] s);
-    #   segment pad + i     audio beat i -> i+1  (ticks (pad+i)*PPQ ..).
-    new_tempos = []
-    if pad > 0:
-        lead = max(beats[0], 1e-6) / pad
-        new_tempos += [int(round(lead * 1e6))] * pad
+    # New tempo schedule. tempo[0] = lead-in segment (ticks 0..PPQ taking beats[0] s);
+    # tempo[i] for i>=1 = audio beat (i-1)->i segment (ticks i*PPQ..(i+1)*PPQ).
+    new_tempos = [int(round(max(beats[0], 1e-6) * 1e6))]
     for dt in np.diff(beats):
         new_tempos.append(int(round(max(dt, 1e-6) * 1e6)))
     # cum[i] = output midi time at the start of segment i (= tick i * PPQ)
     cum = [0.0]
     for t in new_tempos[:-1]:
         cum.append(cum[-1] + t / 1e6)
-    t0 = 0.0 if pad > 0 else beats[0]            # audio time at tick 0
 
     def time_to_tick(t):
-        t = max(t - t0, 0.0)                     # pad == 0: lead-in clamps to tick 0
         idx = max(0, min(bisect.bisect_right(cum, t) - 1, len(new_tempos) - 1))
         rel = t - cum[idx]
         return int(round(idx * ppq + rel * 1e6 * ppq / new_tempos[idx]))
-
-    if not legacy:
-        db_tick = time_to_tick(beats[d0])
-        if db_tick % (4 * ppq) != 0:
-            raise AssertionError(
-                f"first downbeat (beat {d0}) lands at tick {db_tick}, not on the 4-beat grid")
 
     orig_tick_to_sec = build_tick_to_sec(mid)
 
@@ -165,9 +115,6 @@ def main():
     parser.add_argument("--src", default="POP909-Dataset/POP909")
     parser.add_argument("--dst", default="POP909-Dataset/POP909-aligned")
     parser.add_argument("--ids", nargs="*", default=None)
-    parser.add_argument("--legacy", action="store_true",
-                        help="reproduce the pre-2026-09-10 layout (beat i at tick (i+1)*PPQ, "
-                             "downbeats ignored)")
     args = parser.parse_args()
 
     song_dirs = sorted(d for d in glob(os.path.join(args.src, "*")) if os.path.isdir(d))
@@ -185,7 +132,7 @@ def main():
             failed.append((sid, "missing input"))
             continue
         try:
-            realign_midi(midi_path, beat_path, out_path, legacy=args.legacy)
+            realign_midi(midi_path, beat_path, out_path)
         except Exception as e:
             failed.append((sid, repr(e)))
         if (i + 1) % 50 == 0:
