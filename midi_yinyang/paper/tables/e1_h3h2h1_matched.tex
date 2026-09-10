@@ -1,0 +1,34 @@
+\begin{table*}[htbp]
+\caption{Co-generation on 8 held-out POP909 songs (mean$\pm$s.e.m.\ over songs; 3 samples per song averaged first). H3: stream grammar, Jensen--Shannon divergence to the reference continuation (lower is better). H2: melody--chord fit, read as distance to the reference pair, whose own values are given; higher is not better (a melody that only arpeggiates saturates all four). H1: stream integrity, target 1. $^*$: pre-registered primary endpoint. Bold: smallest mean per-song distance to the reference in the row. $^{\mathrm{+}}$/$^{\mathrm{-}}$: significantly closer to / farther from the reference than \emph{Duet (ours)} (one-sided paired Wilcoxon over songs, $p<0.05$).}
+\begin{center}
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{|l|c|c|c|c|c|c|c|c|}
+\hline
+\textbf{Metric} & \textbf{Ref.} & \textbf{Duet (ours)} & \textbf{Duet, causal} & \textbf{Shared, fine-tuned} & \textbf{Shared, scratch} & \textbf{Cascade m$\to$c} & \textbf{Cascade c$\to$m} & \textbf{Whole-song} \\
+\hline
+\multicolumn{9}{|l|}{\textit{H3 stream grammar}} \\
+\hline
+Harmonic rhythm JSD$^*$ & 0 & 0.179$\pm$0.046 & 0.151$\pm$0.052 & \textbf{0.137$\pm$0.033} & 0.206$\pm$0.083 & 0.161$\pm$0.060 & 0.190$\pm$0.049 & 0.205$\pm$0.038 \\
+Melody onset-grid JSD & 0 & 0.141$\pm$0.030 & 0.135$\pm$0.018 & 0.144$\pm$0.022 & 0.137$\pm$0.017 & \textbf{0.115$\pm$0.017} & 0.132$\pm$0.020 & 0.148$\pm$0.029 \\
+Chord onset-grid JSD & 0 & 0.074$\pm$0.024 & 0.065$\pm$0.028 & 0.070$\pm$0.017 & 0.135$\pm$0.042$^{\mathrm{-}}$ & \textbf{0.053$\pm$0.014} & 0.087$\pm$0.028 & 0.446$\pm$0.132$^{\mathrm{-}}$ \\
+Melody duration JSD & 0 & 0.100$\pm$0.023 & 0.119$\pm$0.018 & 0.108$\pm$0.022 & 0.098$\pm$0.022 & 0.111$\pm$0.029 & 0.096$\pm$0.016 & \textbf{0.075$\pm$0.009} \\
+Chord duration JSD & 0 & 0.095$\pm$0.024 & \textbf{0.071$\pm$0.031} & 0.075$\pm$0.017 & 0.107$\pm$0.045 & 0.096$\pm$0.030 & 0.101$\pm$0.029 & 0.109$\pm$0.019 \\
+\multicolumn{9}{|l|}{\textit{H2 inter-stream fit}} \\
+\hline
+Chord-tone coverage$^*$ & 0.595$\pm$0.030 & \textbf{0.609$\pm$0.023} & 0.574$\pm$0.021$^{\mathrm{-}}$ & 0.631$\pm$0.019$^{\mathrm{-}}$ & 0.576$\pm$0.010$^{\mathrm{-}}$ & 0.548$\pm$0.017$^{\mathrm{-}}$ & 0.602$\pm$0.022$^{\mathrm{-}}$ & 0.649$\pm$0.016 \\
+CTnCTR & 0.859$\pm$0.011 & \textbf{0.868$\pm$0.007} & 0.850$\pm$0.007 & 0.879$\pm$0.009 & 0.862$\pm$0.010 & 0.843$\pm$0.016$^{\mathrm{-}}$ & 0.880$\pm$0.010$^{\mathrm{-}}$ & 0.906$\pm$0.006$^{\mathrm{-}}$ \\
+PCS & 0.548$\pm$0.022 & 0.495$\pm$0.015 & 0.437$\pm$0.018$^{\mathrm{-}}$ & \textbf{0.545$\pm$0.022} & 0.431$\pm$0.013$^{\mathrm{-}}$ & 0.414$\pm$0.018$^{\mathrm{-}}$ & 0.473$\pm$0.025 & 0.557$\pm$0.020 \\
+MCTD & 1.325$\pm$0.020 & 1.364$\pm$0.012 & 1.405$\pm$0.018 & \textbf{1.328$\pm$0.014}$^{\mathrm{+}}$ & 1.401$\pm$0.010 & 1.416$\pm$0.017$^{\mathrm{-}}$ & 1.366$\pm$0.019 & 1.328$\pm$0.014$^{\mathrm{+}}$ \\
+Coupling & 0.088$\pm$0.023 & 0.133$\pm$0.028 & 0.105$\pm$0.012 & 0.147$\pm$0.020 & 0.096$\pm$0.010 & \textbf{0.108$\pm$0.015} & 0.102$\pm$0.017 & 0.152$\pm$0.027 \\
+\multicolumn{9}{|l|}{\textit{H1 stream integrity}} \\
+\hline
+Survival, min over streams$^*$ & 1 & 0.88$\pm$0.02 & 0.89$\pm$0.03 & 0.87$\pm$0.04 & 0.83$\pm$0.06 & \textbf{0.91$\pm$0.02} & 0.89$\pm$0.01 & 0.89$\pm$0.02 \\
+Chord survival & 1 & 0.96$\pm$0.02 & 0.99$\pm$0.01 & 0.99$\pm$0.01 & 1.00$\pm$0.00 & 0.99$\pm$0.01 & 0.97$\pm$0.01 & \textbf{1.00$\pm$0.00} \\
+Melody density ratio & 1 & 0.81$\pm$0.10 & 0.88$\pm$0.11 & \textbf{1.00$\pm$0.13} & 0.98$\pm$0.11 & 1.07$\pm$0.15 & 1.02$\pm$0.14 & 0.88$\pm$0.16 \\
+Chord density ratio & 1 & 0.96$\pm$0.08 & 0.95$\pm$0.07 & \textbf{1.00$\pm$0.07} & 0.92$\pm$0.08 & 1.00$\pm$0.09 & 1.13$\pm$0.10 & 0.89$\pm$0.07 \\
+\hline
+\end{tabular}
+\label{tab:e1}
+\end{center}
+\end{table*}
