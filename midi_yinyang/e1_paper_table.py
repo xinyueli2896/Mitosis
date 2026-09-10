@@ -42,12 +42,15 @@ import numpy as np
 from aggregate_eval_results import wilcoxon_signed_rank, metric_target
 
 # display order and paper names; ids not listed are appended as-is
-SYSTEM_ORDER = ['A3ctcaT', 'A3ctca', 'A3ctc', 'A3ctc2', 'A3', 'A3K0', 'A3ctcc', 'A3f', 'A3c', 'A3fc', 'A10', 'A1', 'A1cp8', 'S1', 'S-scratch', 'P-mc', 'P-cm', 'WS']
+SYSTEM_ORDER = ['A3fcaT', 'A3fcaTar', 'A3fcK4', 'A3ctcaT', 'A3ctca', 'A3ctc', 'A3ctc2', 'A3', 'A3K0', 'A3ctcc', 'A3f', 'A3c', 'A3fc', 'A10', 'A1', 'A1cp8', 'S1', 'S-scratch', 'P-mc', 'P-cm', 'WS']
 SYSTEM_NAME = {
     'A3': r'Duet, refine $K{=}4$',
     'A3f': r'Duet, slot sees $t{-}1$',
     'A3c': r'Duet, conditional slots',
     'A3fc': r'Duet, cond. slots + $t{-}1$',
+    'A3fcaT': r'Duet (cond.-slot trained, cp8), alternating commit',
+    'A3fcaTar': r'Duet (cond.-slot trained, cp8, AR-selected), alternating commit',
+    'A3fcK4': r'Duet (cond.-slot trained, cp8), refine $K{=}4$',
     'A3K0': r'Duet, no refinement',
     'A3ctcaT': r'Duet (ours), alternating commit',
     'A3ctca': r'Duet, alternating commit, $T{=}0.9$, top-$p$ 0.95',

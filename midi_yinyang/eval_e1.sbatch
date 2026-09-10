@@ -318,7 +318,7 @@ generate() {
             --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$cp" \
             --model-size large --moe-num-experts 4 --moe-topk 2 ;;
-    A3|A3f|A3K0|A3ctc|A3ctcc|A3ctc2|A3ctca|A3ctcaT|A3c|A3fc)
+    A3|A3f|A3K0|A3ctc|A3ctcc|A3ctc2|A3ctca|A3ctcaT|A3c|A3fc|A3fcaT|A3fcK4|A3fcaTar)
         # Decode variants share the A3 checkpoint and differ only in the
         # env the decoder reads (A3_REFINE_STEPS / A3_SCHEDULE):
         #   A3K0    refinement depth 0: the AR head's draft is the output
@@ -326,15 +326,21 @@ generate() {
         #   A3ctcc  commit-then-condition, chord leads (ctc_c)
         #   A3ctc2  two passes: chord | melody, then melody | chord (ctc2_m)
         #   A3c     conditional-slot ckpt (COND_SLOT_PROB), decoded ctc_m
-        #   A3fc    same on the A3f mask
+        #   A3fc    same on the A3f mask (diagnostic decode, A3C_SCHEDULE)
+        #   A3fcaT  the A3fc ckpt with the PAPER decode (ctc_alt, T=1, top-p 1)
+        #   A3fcK4  the A3fc ckpt with refine K=4 (does conditional-slot
+        #           training repair refinement's coupling?)
+        #   A3fcaTar  A3fcaT on the AR-selected weights (<run>/best_ar/)
         local ck cp="$MAX_POLYPHONY_DUET"
         case "$name" in
             A3f)  ck="$CKPT_A3F" ;;
             A3c)  ck="$CKPT_A3C";  cp="$MAX_POLYPHONY_CP8" ;;
-            A3fc) ck="$CKPT_A3FC"; cp="$MAX_POLYPHONY_CP8" ;;
+            A3fc|A3fcaT|A3fcK4) ck="$CKPT_A3FC"; cp="$MAX_POLYPHONY_CP8" ;;
+            A3fcaTar) ck="$CKPT_A3FC/best_ar"; cp="$MAX_POLYPHONY_CP8" ;;
             *)    ck="$CKPT_A3" ;;
         esac
         [[ -n "$ck" ]] || { echo "[$name] SKIPPED: checkpoint knob unset"; return 0; }
+        [[ -e "$ck" ]] || { echo "[$name] SKIPPED: $ck does not exist (yet)"; return 0; }
         local -a denv=()
         case "$name" in
             A3K0)     denv=(A3_REFINE_STEPS=0) ;;
@@ -344,6 +350,8 @@ generate() {
             A3ctca)   denv=(A3_SCHEDULE=ctc_alt) ;;   # leader alternates per frame: symmetric in expectation
             A3ctcaT)  denv=(A3_SCHEDULE=ctc_alt A3_FINAL_TEMP=1.0 A3_TOP_P=1.0) ;;   # same, follower sampled at T=1, no nucleus cut (repetition check)
             A3c|A3fc) denv=(A3_SCHEDULE="${A3C_SCHEDULE:-ctc_m}") ;;
+            A3fcaT|A3fcaTar) denv=(A3_SCHEDULE=ctc_alt A3_FINAL_TEMP=1.0 A3_TOP_P=1.0) ;;
+            A3fcK4)   denv=(A3_SCHEDULE=refine) ;;
         esac
         env ${denv[@]+"${denv[@]}"} python cp_transformer_m2c_duet_block_diffusion_combined.py \
             --ckpt "$ck/" \
