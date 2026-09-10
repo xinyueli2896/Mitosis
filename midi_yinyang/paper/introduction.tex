@@ -1,81 +1,70 @@
-% Introduction, halved (2026-09-10). Same three motivations as the
+% Introduction, cut to ~430 words of prose (2026-09-10; the ~560-word
+% version is at commit 7907539, the ~1100-word original with a
+% contributions list at 3df0259). Same three motivations as the
 % abstract: scientific (par. 2), testbed (par. 3), model (par. 4).
-% Citation keys are placeholders (no .bib yet); [RESULT] sentences wait
-% for the merged E1 table with the cp8 retrains (EXPERIMENTS.md, E1
-% follow-up). Placement notes (2026-09-10): transfusion = shared trunk,
-% modality-specific input/output layers; ualm = shared LM trunk, audio
-% encoder in, audio generation head out (verify the head's form against
-% the paper before saying more); bagel = mixture-of-transformers whose
-% split is understanding vs generation tokens, hence "or each token
-% role"; mot = per-modality weights, shared attention op; moshi and
-% mmdiffusion are the synchronous ones, cited apart from the taxonomy.
-% The full-length version (~1100 words, with a contributions list) is
-% in git history at commit 3df0259.
+% Citation keys resolve in refs.bib (ualm and sun2021 marked VERIFY);
+% [RESULT] sentences wait for the merged E1 table with the cp8 retrains.
+% Placement notes: transfusion = shared trunk, modality-specific
+% input/output layers; ualm = shared LM trunk, audio encoder in, audio
+% generation head out; bagel = mixture-of-transformers split by
+% understanding vs generation tokens, hence "or each token role"; mot =
+% per-modality weights, shared attention op; moshi and mmdiffusion are
+% the synchronous ones, cited apart from the taxonomy.
 \section{Introduction}
 \label{sec:intro}
 
 Generation across modalities is posed at one of two distances. Vision
 and language lie far apart, and the bridge between them is learned as
-an alignment~\cite{clip,flamingo}; text and speech lie near, sharing
-content in different form, and the bridge is a
-translation~\cite{tts,asr}. At either distance generation was posed
-as conditioning, one signal given the other in full. It is moving to
-joint production, speech with its text~\cite{moshi}, sound with
-video~\cite{mmdiffusion}, where the two signals unfold side by side
-and neither is finished before the other begins.
+an alignment~\cite{clip,flamingo}; text and speech lie near, and the
+bridge is a translation~\cite{tts,asr}. At either distance generation
+was posed as conditioning, one signal given the other in full. It is
+moving to joint production, speech with its text~\cite{moshi}, sound
+with video~\cite{mmdiffusion}, where neither signal is finished before
+the other begins.
 
-Joint production raises a question conditioning never faces. Each
+Joint production raises a question conditioning never faces: each
 signal follows its own grammar and needs computation of its own, yet
 at every instant what one does must fit what the other is doing.
-Unified multimodal models settle the split by design: one line shares
-every weight and separates the signals by a type token or by the input
-and output layers~\cite{chameleon,transfusion,ualm}, the other gives
-each modality, or each token role, its own attention and feed-forward
-weights~\cite{mot,bagel} or its own experts~\cite{moma}. The
-synchronous models that face the question at every
-instant~\cite{moshi,mmdiffusion} inherit one of these designs. Neither
-choice can be tested where it is made:
-paired data across modalities is scarce, so every such model starts
-from networks pretrained on one modality and trains only the bridge
-on pairs, and the natural control, one model trained from scratch on
-the pairs with everything shared, does not exist because the data for
-it does not.
+Unified multimodal models settle the split by design, sharing every
+weight but a type token or the input and output
+layers~\cite{chameleon,transfusion,ualm}, or giving each modality, or
+each token role, its own attention and feed-forward
+weights~\cite{mot,bagel} or experts~\cite{moma}; the synchronous
+models~\cite{moshi,mmdiffusion} inherit one of these designs. Neither
+choice can be tested where it is made. Paired data across modalities
+is scarce, so such models start from single-modality pretraining and
+train only the bridge on pairs; the control, one model trained from
+scratch on the pairs with everything shared, does not exist because
+the data for it does not.
 
-We ask the question where the control can be built: two \strms{} of
-one modality, melody and chords in symbolic music. A \strm{} shares
-its partner's representation and clock but not its grammar. Melody
-and chords have what makes two modalities interesting, distinct
-content under distinct rules, without what gets in the way: no
-translation is needed, since both are note events on one grid. Paired
-data is therefore abundant, and the fully shared generator, one
-sequence model over the merged note
-stream~\cite{cp_transformer,compose_embellish,whole_song}, is not a
-hypothetical control but the established design and the yardstick
-every other design must beat or explain. With one representation there
-is nothing to separate on but the music, so any specialisation a model
-learns is specialisation by grammar; and cross-modal pairs reach the
-same condition once tokenised into one vocabulary on one
-clock~\cite{moshi,audiopalm}, so what holds here holds past the point
-of alignment.
+We ask the question where the control can be built: two streams of
+one modality, melody and chords in symbolic music. A stream shares its
+partner's representation and clock but not its grammar, so the pair
+has what makes two modalities interesting, distinct content under
+distinct rules, without what gets in the way: no translation is
+needed, since both are note events on one grid. Paired data is
+therefore abundant, and the fully shared generator, one sequence model
+over the merged note
+stream~\cite{cp_transformer,compose_embellish,whole_song}, is the
+established design and the yardstick every other design must beat or
+explain. Any specialisation a model learns here is specialisation by
+grammar, the condition cross-modal pairs reach once tokenised into one
+vocabulary on one clock~\cite{moshi,audiopalm}.
 
-Within music the existing generators give up one side each. Lead-sheet
-models merge the \strms{} into one token sequence with every parameter
-shared~\cite{compose_embellish,mmm,whole_song}, so a \strm{}'s grammar
-has nowhere to form; harmonisation and chord-conditioned melody models
-fix a direction and give one \strm{} in
-full~\cite{yeh2021,sun2021,surprisenet}, so it was never written with
-its partner in view. We propose a duet transformer that keeps the
-\strms{} distinct while letting them shape each other as they unfold:
-one autoregressive model over the \strms{} interleaved frame by frame.
-Two components are \strm{}-specific, the attention projections and a
-router over a shared, unassigned pool of feed-forward experts, so
-which experts serve melody, chords or both is learned rather than
-imposed~\cite{moma}. Query slots, one per \strm{}, are trained as
-masked predictors of the current frame under random commitment of
-either partner; at decode one \strm{} is committed and the other
-conditioned on it, the leader alternating frame by frame, so each
-\strm{} reads its partner's current frame equally often. One
-checkpoint generates both \strms{} together or either given the other.
+Within music, lead-sheet models share every parameter over one merged
+sequence~\cite{compose_embellish,mmm,whole_song} and harmonisation
+models give one stream in full and fix the
+direction~\cite{yeh2021,sun2021,surprisenet}; neither keeps the
+streams distinct while letting them shape each other as they unfold.
+Our duet transformer does: one autoregressive model over the streams
+interleaved frame by frame, stream-specific in its attention
+projections and in a router over a shared, unassigned pool of
+feed-forward experts, so which experts serve melody, chords or both is
+learned rather than imposed~\cite{moma}. Query slots, one per stream,
+are trained as masked predictors of the current frame under random
+commitment of either partner; at decode one stream is committed and
+the other conditioned on it, the leader alternating frame by frame, so
+each stream reads its partner's current frame equally often.
 
 We evaluate on held-out POP909 songs that no compared system trained
 on, against the fully shared generator fine-tuned on the same data,
@@ -85,5 +74,5 @@ on the pre-registered endpoints against the fully shared yardstick;
 one on coupling, coverage on the true pairing minus coverage on a
 two-bar shift, stating which side of the reference each design lands
 on.] [INTERPRETABILITY RESULT: under a shared router most expert
-separation is explained by \strm{} identity alone; \strm{}-specific
+separation is explained by stream identity alone; stream-specific
 routers reallocate that capacity to content.]
