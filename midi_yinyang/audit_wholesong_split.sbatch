@@ -41,6 +41,8 @@
 #               of onsets off the 16th TICK grid (job 217761: 276 and 806
 #               triplet-encoded, 326 at 72%, 816 at 10%).
 #   KEEP_OFFGRID  default "326 816": songs kept despite the off-grid flag
+#   EXCLUDE       default "456": songs dropped regardless (irregular bars
+#                 inside the prompt); EXCLUDE="" keeps everything
 #               (checked by hand and judged fine); the flag is still
 #               printed with a (kept) mark.
 #   PROMPT_BARS default "6 8": candidate prompt lengths. Job 217761 found
@@ -83,9 +85,10 @@ DATASETS="${DATASETS:-pop909_chord_cp4_v2 pop909_melody_cp4_v2 pop909_chord_cp8_
 STAGE_DIR="${STAGE_DIR:-input/909_matched_split}"
 MEL_SRC="${MEL_SRC:-/home/xinyue.li/POP909-Dataset/POP909-melody}"
 CHORD_SRC="${CHORD_SRC:-/home/xinyue.li/POP909-Dataset/POP909-chord}"
-MIN_KEPT="${MIN_KEPT:-8}"
+MIN_KEPT="${MIN_KEPT:-7}"
 MAX_OFFGRID="${MAX_OFFGRID:-0.05}"
 KEEP_OFFGRID="${KEEP_OFFGRID:-326 816}"
+EXCLUDE="${EXCLUDE:-456}"        # irregular bars inside the prompt (2026-09-10)
 PROMPT_BARS="${PROMPT_BARS:-6 8}"
 GEN_FRAMES="${GEN_FRAMES:-320}"
 [[ -d "$MEL_SRC" && -d "$CHORD_SRC" ]] || { echo "ERROR: source folders missing: $MEL_SRC , $CHORD_SRC"; exit 1; }
@@ -109,7 +112,7 @@ python audit_wholesong_split.py \
     --mel-src "$MEL_SRC" --chord-src "$CHORD_SRC" \
     --stage-dir "$STAGE_DIR" --min-kept "$MIN_KEPT" --max-offgrid "$MAX_OFFGRID" \
     --prompt-bars $PROMPT_BARS --gen-frames "$GEN_FRAMES" \
-    --keep-offgrid $KEEP_OFFGRID
+    --keep-offgrid $KEEP_OFFGRID ${EXCLUDE:+--exclude $EXCLUDE}
 
 echo "================================================================"
 echo "E1 on the shared-clean set: one chain per group under $STAGE_DIR/p<N>, then"

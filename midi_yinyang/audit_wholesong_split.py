@@ -119,6 +119,10 @@ def main():
     p.add_argument('--keep-offgrid', type=int, nargs='*', default=[326, 816],
                    help='song ids whose off-grid flag is reported but does '
                         'not exclude them (checked by ear/score: 326, 816)')
+    p.add_argument('--exclude', type=int, nargs='*', default=[],
+                   help='song ids dropped from the stage regardless of the checks '
+                        '(2026-09-10: 456 -- 2-, 3- and 6-beat bars from bar 2 on, '
+                        'so its chords leave the 4-beat grid inside the prompt)')
     p.add_argument('--min-kept', type=int, default=8,
                    help='exit 1 if fewer songs survive the prompt check, so '
                         'a dependent E1 chain holds instead of scoring a '
@@ -355,6 +359,8 @@ def main():
                 gflags = [f'{g}(kept)' for g in gflags]
             elif gflags:
                 reasons.append('off the 16th tick grid / meter')
+            if s in args.exclude:
+                reasons.append('excluded by --exclude')
             verdict = 'ok' if not reasons else f'EXCLUDED ({"; ".join(reasons)})'
             off_s = '/'.join(f'{o:.1%}' for o in offs) or '-'
             tev_s = '/'.join(str(t) for t in tev) or '-'
