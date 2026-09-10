@@ -16,11 +16,11 @@
 Generation across modalities is posed at one of two distances. Vision
 and language lie far apart, and the bridge between them is learned as
 an alignment~\cite{clip,flamingo}; text and speech lie near, and the
-bridge is a translation~\cite{tts,asr}. At either distance generation
-was posed as conditioning, one signal given the other in full. It is
+bridge is a translation~\cite{tts,asr}. Either way generation was
+posed as conditioning, one signal given the other in full; it is
 moving to joint production, speech with its text~\cite{moshi}, sound
-with video~\cite{mmdiffusion}, where neither signal is finished before
-the other begins.
+with video~\cite{mmdiffusion}, neither finished before the other
+begins.
 
 Joint production raises a question conditioning never faces: each
 signal follows its own grammar and needs computation of its own, yet
@@ -31,18 +31,17 @@ layers~\cite{chameleon,transfusion,ualm}, or giving each modality, or
 each token role, its own attention and feed-forward
 weights~\cite{mot,bagel} or experts~\cite{moma}; the synchronous
 models~\cite{moshi,mmdiffusion} inherit one of these designs. Neither
-choice can be tested where it is made. Paired data across modalities
+choice can be tested where it is made: paired data across modalities
 is scarce, so such models start from single-modality pretraining and
-train only the bridge on pairs; the control, one model trained from
-scratch on the pairs with everything shared, does not exist because
-the data for it does not.
+train only the bridge on pairs, and the control, one model trained
+from scratch on the pairs with everything shared, does not exist
+because the data does not.
 
 We ask the question where the control can be built: two streams of
 one modality, melody and chords in symbolic music. A stream shares its
 partner's representation and clock but not its grammar, so the pair
-has what makes two modalities interesting, distinct content under
-distinct rules, without what gets in the way: no translation is
-needed, since both are note events on one grid. Paired data is
+has distinct content under distinct rules without needing translation:
+both are note events on one grid. Paired data is
 therefore abundant, and the fully shared generator, one sequence model
 over the merged note
 stream~\cite{cp_transformer,compose_embellish,whole_song}, is the
@@ -62,14 +61,14 @@ projections and in a router over a shared, unassigned pool of
 feed-forward experts, so which experts serve melody, chords or both is
 learned rather than imposed~\cite{moma}. Query slots, one per stream,
 are trained as masked predictors of the current frame under random
-commitment of either partner; at decode one stream is committed and
-the other conditioned on it, the leader alternating frame by frame, so
-each stream reads its partner's current frame equally often.
+commitment of either partner, and decoded by committing one stream and
+conditioning the other, the leader alternating frame by frame so each
+stream reads its partner's current frame equally often.
 
-We evaluate on held-out POP909 songs that no compared system trained
-on, against the fully shared generator fine-tuned on the same data,
-the same architecture trained from scratch, two domain-matched
-cascades, and a hierarchical whole-song model. [RESULT: one sentence
+We evaluate on held-out POP909 songs against the fully shared
+generator fine-tuned on the same data, the same architecture trained
+from scratch, two domain-matched cascades and a hierarchical
+whole-song model. [RESULT: one sentence
 on the pre-registered endpoints against the fully shared yardstick;
 one on coupling, coverage on the true pairing minus coverage on a
 two-bar shift, stating which side of the reference each design lands
