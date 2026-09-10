@@ -1,4 +1,5 @@
-% Introduction, cut to ~410 words of prose (2026-09-10; the ~560-word
+% Introduction (2026-09-10; first paragraph now summarises the production
+% formats of the field; the ~560-word
 % version is at commit 7907539, the ~1100-word original with a
 % contributions list at 3df0259). Same three motivations as the
 % abstract: scientific (par. 2), testbed (par. 3), model (par. 4).
@@ -16,21 +17,27 @@
 Generation across modalities is posed at one of two distances: vision
 and language lie far apart and the bridge is learned as an
 alignment~\cite{clip,flamingo}; text and speech lie near and the
-bridge is a translation~\cite{tts,asr}. Either way generation was
-posed as conditioning, one signal given the other in full; it is
-moving to joint production, speech with its text~\cite{moshi}, sound
-with video~\cite{mmdiffusion}, neither finished before the other
-begins.
+bridge is a translation~\cite{tts,asr}. At either distance most
+systems produce one modality at a time: one signal given the other in
+full, a cascade of such stages, or a unified model that writes the
+modalities segment by segment into one
+sequence~\cite{chameleon,transfusion,ualm,bagel}. A smaller line
+produces two at once. Token streams advance in lock-step with a fixed
+order inside each step, as the text token that precedes each frame of
+speech in Moshi~\cite{moshi} or the delayed codebooks of
+MusicGen~\cite{musicgen}; joint diffusion denoises both signals with
+no order at all~\cite{mmdiffusion}; and any-to-any or guidance methods
+couple two generators through a shared latent~\cite{codi,seeing_hearing},
+so that neither reads the other while it is written.
 
-Joint production raises a question conditioning never faces: each
-signal follows its own grammar and needs computation of its own, yet
-at every instant what one does must fit what the other is doing.
-Unified multimodal models settle the split by design, sharing every
+Producing two signals at once raises a question conditioning never
+faces: each signal follows its own grammar and needs computation of
+its own, yet at every instant what one does must fit what the other is
+doing. Existing designs settle the split in advance, sharing every
 weight but a type token or the input and output
-layers~\cite{chameleon,transfusion,ualm}, or giving each modality, or
-each token role, its own attention and feed-forward
-weights~\cite{mot,bagel} or experts~\cite{moma}; the synchronous
-models~\cite{moshi,mmdiffusion} inherit one of these designs. Neither
+layers~\cite{chameleon,transfusion,ualm,moshi}, or giving each
+modality, or each token role, its own attention and feed-forward
+weights~\cite{mot,bagel} or experts~\cite{moma}. Neither
 choice can be tested where it is made: paired data across modalities
 is scarce, so such models start from single-modality pretraining and
 train only the bridge on pairs; the control, everything shared and
@@ -60,8 +67,9 @@ feed-forward experts, so which experts serve melody, chords or both is
 learned rather than imposed~\cite{moma}. Query slots, one per stream,
 are trained as masked predictors of the current frame under random
 commitment of either partner; at decode the leader is committed and
-the follower conditioned on it, alternating frame by frame so each
-stream reads the other's current frame equally often.
+the follower conditioned on it, alternating frame by frame where the
+lock-step models fix the order for good, so each stream reads the
+other's current frame equally often.
 
 We evaluate on held-out POP909 songs against the fully shared
 generator fine-tuned on the same data and trained from scratch, two
