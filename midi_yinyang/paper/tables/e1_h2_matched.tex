@@ -1,5 +1,5 @@
 \begin{table*}[t]
-\caption{Melody--chord fit (H2) on 8 held-out POP909 songs, mean$\pm$s.e.m.\ over songs with 3 samples per song averaged first. All five statistics are computed between the generated melody and the generated chords on the continuation only; the reference pair is scored the same way and given in the first column. They are consonance statistics with a ceiling: a melody that only arpeggiates saturates the first four, so the reading is distance to the reference, not magnitude. Coupling is coverage on the true pairing minus coverage with the chord track shifted by two bars. $^*$: pre-registered primary endpoint. Bold: smallest mean per-song distance to the reference. $^{\mathrm{+}}$/$^{\mathrm{-}}$: significantly closer to / farther from the reference than \emph{Duet (ours)} (one-sided paired Wilcoxon over songs, $p<0.05$).}
+\caption{Melody--chord fit (H2) on 8 held-out POP909 songs, mean$\pm$s.e.m.\ over songs with 3 samples per song averaged first. All five statistics are computed between the generated melody and the generated chords on the continuation only; the reference pair is scored the same way and given in the first column. Arrows give the conventional direction, but all five are consonance statistics with a ceiling: a melody that only arpeggiates saturates the first four, so bold and significance are computed as distance to the reference, not magnitude. Coupling is coverage on the true pairing minus coverage with the chord track shifted by two bars. $^*$: pre-registered primary endpoint. Bold: smallest mean per-song distance to the reference. $^{\mathrm{+}}$/$^{\mathrm{-}}$: significantly closer to / farther from the reference than \emph{Duet (ours)} (one-sided paired Wilcoxon over songs, $p<0.05$).}
 \begin{center}
 \footnotesize
 \setlength{\tabcolsep}{4pt}
@@ -7,11 +7,11 @@
 \hline
 \textbf{Metric} & \textbf{Ref.} & \textbf{Duet (ours)} & \textbf{Duet, causal} & \textbf{Shared, fine-tuned} & \textbf{Shared, scratch} & \textbf{Cascade m$\to$c} & \textbf{Cascade c$\to$m} & \textbf{Whole-song} \\
 \hline
-Chord-tone coverage$^*$ & 0.595$\pm$0.030 & \textbf{0.609$\pm$0.023} & 0.574$\pm$0.021$^{\mathrm{-}}$ & 0.631$\pm$0.019$^{\mathrm{-}}$ & 0.576$\pm$0.010$^{\mathrm{-}}$ & 0.548$\pm$0.017$^{\mathrm{-}}$ & 0.602$\pm$0.022$^{\mathrm{-}}$ & 0.649$\pm$0.016 \\
-CTnCTR & 0.859$\pm$0.011 & \textbf{0.868$\pm$0.007} & 0.850$\pm$0.007 & 0.879$\pm$0.009 & 0.862$\pm$0.010 & 0.843$\pm$0.016$^{\mathrm{-}}$ & 0.880$\pm$0.010$^{\mathrm{-}}$ & 0.906$\pm$0.006$^{\mathrm{-}}$ \\
-PCS & 0.548$\pm$0.022 & 0.495$\pm$0.015 & 0.437$\pm$0.018$^{\mathrm{-}}$ & \textbf{0.545$\pm$0.022} & 0.431$\pm$0.013$^{\mathrm{-}}$ & 0.414$\pm$0.018$^{\mathrm{-}}$ & 0.473$\pm$0.025 & 0.557$\pm$0.020 \\
-MCTD & 1.325$\pm$0.020 & 1.364$\pm$0.012 & 1.405$\pm$0.018 & \textbf{1.328$\pm$0.014}$^{\mathrm{+}}$ & 1.401$\pm$0.010 & 1.416$\pm$0.017$^{\mathrm{-}}$ & 1.366$\pm$0.019 & 1.328$\pm$0.014$^{\mathrm{+}}$ \\
-Coupling & 0.088$\pm$0.023 & 0.133$\pm$0.028 & 0.105$\pm$0.012 & 0.147$\pm$0.020 & 0.096$\pm$0.010 & \textbf{0.108$\pm$0.015} & 0.102$\pm$0.017 & 0.152$\pm$0.027 \\
+Chord-tone coverage$^*$ ($\uparrow$) & 0.595$\pm$0.030 & \textbf{0.609$\pm$0.023} & 0.574$\pm$0.021$^{\mathrm{-}}$ & 0.631$\pm$0.019$^{\mathrm{-}}$ & 0.576$\pm$0.010$^{\mathrm{-}}$ & 0.548$\pm$0.017$^{\mathrm{-}}$ & 0.602$\pm$0.022$^{\mathrm{-}}$ & 0.649$\pm$0.016 \\
+CTnCTR ($\uparrow$) & 0.859$\pm$0.011 & \textbf{0.868$\pm$0.007} & 0.850$\pm$0.007 & 0.879$\pm$0.009 & 0.862$\pm$0.010 & 0.843$\pm$0.016$^{\mathrm{-}}$ & 0.880$\pm$0.010$^{\mathrm{-}}$ & 0.906$\pm$0.006$^{\mathrm{-}}$ \\
+PCS ($\uparrow$) & 0.548$\pm$0.022 & 0.495$\pm$0.015 & 0.437$\pm$0.018$^{\mathrm{-}}$ & \textbf{0.545$\pm$0.022} & 0.431$\pm$0.013$^{\mathrm{-}}$ & 0.414$\pm$0.018$^{\mathrm{-}}$ & 0.473$\pm$0.025 & 0.557$\pm$0.020 \\
+MCTD ($\downarrow$) & 1.325$\pm$0.020 & 1.364$\pm$0.012 & 1.405$\pm$0.018 & \textbf{1.328$\pm$0.014}$^{\mathrm{+}}$ & 1.401$\pm$0.010 & 1.416$\pm$0.017$^{\mathrm{-}}$ & 1.366$\pm$0.019 & 1.328$\pm$0.014$^{\mathrm{+}}$ \\
+Coupling ($\uparrow$) & 0.088$\pm$0.023 & 0.133$\pm$0.028 & 0.105$\pm$0.012 & 0.147$\pm$0.020 & 0.096$\pm$0.010 & \textbf{0.108$\pm$0.015} & 0.102$\pm$0.017 & 0.152$\pm$0.027 \\
 \hline
 \end{tabular}
 \label{tab:h2}
