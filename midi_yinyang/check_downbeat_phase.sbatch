@@ -8,6 +8,8 @@
 # Env knobs (--export=ALL,KEY=val):
 #   POP909_RAW   default /home/xinyue.li/POP909-Dataset/POP909
 #   ALIGNED_DIR  default /home/xinyue.li/POP909-Dataset/POP909-aligned
+#   CHORD_DIR    default /home/xinyue.li/POP909-Dataset/POP909-chord (the
+#                files actually used; phase measured from chord changes)
 #   IDS          default the 8 E1 songs
 
 #SBATCH --job-name=check_downbeat_phase
@@ -34,6 +36,7 @@ mkdir -p /home/xinyue.li/logs
 
 POP909_RAW="${POP909_RAW:-/home/xinyue.li/POP909-Dataset/POP909}"
 ALIGNED_DIR="${ALIGNED_DIR:-/home/xinyue.li/POP909-Dataset/POP909-aligned}"
+CHORD_DIR="${CHORD_DIR:-/home/xinyue.li/POP909-Dataset/POP909-chord}"
 IDS="${IDS:-004 046 136 326 456 466 746 816}"
 
-python check_downbeat_phase.py --raw "$POP909_RAW" --aligned "$ALIGNED_DIR" --ids $IDS
+python check_downbeat_phase.py --raw "$POP909_RAW" --aligned "$ALIGNED_DIR" --chord-dir "$CHORD_DIR" --ids $IDS

@@ -13,9 +13,21 @@ predicted shift, histograms the shift over the corpus, and, when the
 aligned melody folder is given, checks the aligned file: the tick of
 beat d0 must be (d0 + 1) * PPQ under the current aligner.
 
+--chord-dir mode (2026-09-10): the raw annotations are not on the
+cluster for most songs, so measure the phase on the files actually
+used. POP909 chords change on downbeats and half-bars far more than
+elsewhere, so the histogram of chord-change positions modulo 4 beats,
+on each chord file's own tick grid, locates the bar start: the modal
+position is the shift of that file (0 = on the grid). Two-beat
+ambiguity (0 vs 2) is resolved by preferring the larger count; the
+report prints all four counts so you can see how sharp the mode is.
+Also reports whether the file carries the aligner's lead-in signature
+(first tempo event above 1000 bpm).
+
 Usage (via check_downbeat_phase.sbatch, CPU):
     python check_downbeat_phase.py --raw /home/xinyue.li/POP909-Dataset/POP909 \\
         --aligned /home/xinyue.li/POP909-Dataset/POP909-aligned \\
+        --chord-dir /home/xinyue.li/POP909-Dataset/POP909-chord \\
         --ids 004 046 136 326 456 466 746 816
 """
 import argparse
@@ -41,12 +53,79 @@ def first_downbeat(rows):
     return int(idx[0]) if len(idx) else None
 
 
+def chord_phase(chord_dir, detail):
+    import mido
+    files = sorted(glob(os.path.join(chord_dir, '*.mid')))
+    print(f'=== chord-change phase on the files in {chord_dir} ({len(files)} files) ===')
+    print(f'{"song":>5} {"lead-in":>8} {"changes":>8}  counts at beat 0/1/2/3 of the 4-beat grid   mode  (shift)')
+    hist = Counter()
+    n = 0
+    for fp in files:
+        sid = os.path.splitext(os.path.basename(fp))[0]
+        mid = mido.MidiFile(fp)
+        ppq = mid.ticks_per_beat
+        first_bpm = None
+        # sounding pitch-class set per beat (quantised to the beat), then changes
+        notes = []
+        for tr in mid.tracks:
+            t = 0
+            on = {}
+            for msg in tr:
+                t += msg.time
+                if msg.type == 'set_tempo' and first_bpm is None:
+                    first_bpm = 6e7 / msg.tempo
+                if msg.type == 'note_on' and msg.velocity > 0:
+                    on[msg.note] = t
+                elif msg.type in ('note_off', 'note_on'):
+                    if msg.note in on:
+                        notes.append((on.pop(msg.note), t, msg.note))
+        if not notes:
+            continue
+        last = max(e for _, e, _ in notes)
+        n_beats = int(last // ppq) + 1
+        pcs = [set() for _ in range(n_beats)]
+        for s0, e0, pitch in notes:
+            b0 = int(s0 // ppq)
+            b1 = max(b0, int((e0 - 1) // ppq))
+            for b in range(b0, min(b1, n_beats - 1) + 1):
+                pcs[b].add(pitch % 12)
+        counts = [0, 0, 0, 0]
+        prev = None
+        n_ch = 0
+        for b, pc in enumerate(pcs):
+            if pc and pc != prev:
+                if prev is not None:
+                    counts[b % 4] += 1
+                    n_ch += 1
+                prev = pc
+            elif pc:
+                prev = pc
+        if n_ch < 4:
+            continue
+        mode = max(range(4), key=lambda k: counts[k])
+        hist[mode] += 1
+        n += 1
+        if sid in detail:
+            lead = 'yes' if (first_bpm or 0) > 1000 else 'no'
+            print(f'{sid:>5} {lead:>8} {n_ch:>8}  {counts[0]:>5} {counts[1]:>5} {counts[2]:>5} {counts[3]:>5}          {mode}  ({mode} beat{"s" if mode != 1 else ""} late)')
+    print()
+    print(f'corpus: {n} chord files with >= 4 changes; modal chord-change position on the 4-beat grid:')
+    for k in range(4):
+        print(f'  beat {k}: {hist.get(k, 0):>4}  ({100.0 * hist.get(k, 0) / max(n, 1):.1f}%)')
+    print('  beat 0 = bars start on the tick grid; beat 1 = the file is one beat late; beat 3 = one beat early')
+    print()
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--raw', default='/home/xinyue.li/POP909-Dataset/POP909')
     p.add_argument('--aligned', default=None, help='POP909-aligned folder (optional check)')
     p.add_argument('--ids', nargs='*', default=None, help='songs to print in full (default: histogram only)')
+    p.add_argument('--chord-dir', default=None, help='POP909-chord folder: measure the phase from chord changes')
     a = p.parse_args()
+
+    if a.chord_dir:
+        chord_phase(a.chord_dir, set(a.ids or []))
 
     dirs = sorted(d for d in glob(os.path.join(a.raw, '*')) if os.path.isdir(d))
     hist = Counter()
