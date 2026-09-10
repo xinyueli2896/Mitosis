@@ -56,7 +56,9 @@
 # FORCE=all) deletes those folders under temp/E1 and regenerates them.
 #
 # Env knobs (--export=ALL,KEY=val):
-#   SYSTEMS        default "A1 A3 A3f S1 S-scratch P-mc P-cm WS"
+#   SYSTEMS        default "A1 A3 A3f S1 S-scratch P-mc P-cm WS"; 'all' =
+#                  every known name (use with SKIP_INFER=1 / score_e1 to
+#                  rescore everything that is complete under OUT_ROOT)
 #   FORCE          default empty; space-separated names, or all
 #   CKPT_A1        default the melchord cp4tar intra-cross-attn run dir
 #   CKPT_A3        default the A3 cp4tar run dir (K4mg_melchord_cp4tar)
@@ -134,6 +136,15 @@ mkdir -p /home/xinyue.li/logs results
 
 # ---- knobs ------------------------------------------------------------
 SYSTEMS="${SYSTEMS:-A1 A3 A3f S1 S-scratch P-mc P-cm WS}"
+# SYSTEMS=all: every system name this script knows. Meant for the
+# score-only path (score_e1.sbatch), where it scores whatever is complete
+# under OUT_ROOT and skips the rest -- a rescore that names only the
+# default eight OVERWRITES the metrics CSV without the decode variants
+# (happened 2026-09-10, job 225780). With generation on, 'all' would try
+# to generate every system, so keep it to score-only runs.
+if [[ "$SYSTEMS" == "all" ]]; then
+    SYSTEMS="A1 A1cp8 A3 A3f A3K0 A3ctc A3ctcc A3ctc2 A3ctca A3ctcaT A3c A3fc A3fcaT A3fcaTar A3fcK4 A10 S1 S-scratch S0 P-mc P-cm WS"
+fi
 FORCE="${FORCE:-}"
 CKPT_A1="${CKPT_A1:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_melchord_cp4tar_batch_8_schedule}"
 CKPT_A3="${CKPT_A3:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_K4mg_melchord_cp4tar_batch_8_schedule}"
