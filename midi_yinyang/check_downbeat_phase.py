@@ -166,7 +166,7 @@ def main():
             print('[aligned] mido not available; skipping the file check')
             return
         print()
-        print('aligned-file check (tick of beat d0 should equal (d0+1)*PPQ under the current aligner):')
+        print('aligned-file check: where beat d0 (the first downbeat) sits in the aligned file, under both layouts')
         for sid in sorted(detail):
             mp = os.path.join(a.aligned, f'{sid}.mid')
             if not os.path.exists(mp):
@@ -193,10 +193,12 @@ def main():
                         break
             rows = read_beats(os.path.join(a.raw, sid, 'beat_midi.txt'))
             d0 = first_downbeat(rows)
+            pad = (-d0) % 4
             print(f'  {sid}: PPQ={ppq}  first tempo event {first_bpm:.0f} bpm  '
-                  f'first note at tick {first_note} = beat {first_note / ppq:.2f}  '
-                  f'd0={d0} -> downbeat at tick {(d0 + 1) * ppq} = beat {d0 + 1} '
-                  f'({"on" if (d0 + 1) % 4 == 0 else "OFF"} the 4-beat grid)')
+                  f'first note at tick {first_note} = beat {first_note / ppq:.2f}  d0={d0}: '
+                  f'legacy layout puts the downbeat at beat {d0 + 1} '
+                  f'({"on" if (d0 + 1) % 4 == 0 else "OFF"} the grid); '
+                  f'downbeat-aware layout at beat {d0 + pad} (on the grid)')
 
 
 if __name__ == '__main__':

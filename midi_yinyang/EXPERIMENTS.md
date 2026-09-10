@@ -800,6 +800,12 @@ the phase (eval-only: realign into *-v2 folders, re-stage, regenerate
 E1 for every system, rescore) and keep the 8 songs, noting the
 irregular bars; the metrics compare each system to the same reference
 on the same grid, so irregular bars affect all columns alike.
+Result on the rebuilt `-v2` chord folder (check_downbeat_phase, 909
+files): chord changes on grid beat 0 in 62% of songs (17% before); the
+rest are the irregular-bar songs. Of the 8 test songs, 004 136 746 are
+on the grid throughout, 326 and 466 through the prompt and most of the
+continuation, 046 456 816 only up to their irregular bar inside the
+prompt.
 
 ### E1 — Co-generation (RQ1)
 
