@@ -1,4 +1,4 @@
-% Introduction, cut to ~430 words of prose (2026-09-10; the ~560-word
+% Introduction, cut to ~410 words of prose (2026-09-10; the ~560-word
 % version is at commit 7907539, the ~1100-word original with a
 % contributions list at 3df0259). Same three motivations as the
 % abstract: scientific (par. 2), testbed (par. 3), model (par. 4).
@@ -13,9 +13,9 @@
 \section{Introduction}
 \label{sec:intro}
 
-Generation across modalities is posed at one of two distances. Vision
-and language lie far apart, and the bridge between them is learned as
-an alignment~\cite{clip,flamingo}; text and speech lie near, and the
+Generation across modalities is posed at one of two distances: vision
+and language lie far apart and the bridge is learned as an
+alignment~\cite{clip,flamingo}; text and speech lie near and the
 bridge is a translation~\cite{tts,asr}. Either way generation was
 posed as conditioning, one signal given the other in full; it is
 moving to joint production, speech with its text~\cite{moshi}, sound
@@ -33,27 +33,25 @@ weights~\cite{mot,bagel} or experts~\cite{moma}; the synchronous
 models~\cite{moshi,mmdiffusion} inherit one of these designs. Neither
 choice can be tested where it is made: paired data across modalities
 is scarce, so such models start from single-modality pretraining and
-train only the bridge on pairs, and the control, one model trained
-from scratch on the pairs with everything shared, does not exist
-because the data does not.
+train only the bridge on pairs; the control, everything shared and
+trained from scratch on the pairs, has no data to train on.
 
 We ask the question where the control can be built: two streams of
 one modality, melody and chords in symbolic music. A stream shares its
 partner's representation and clock but not its grammar, so the pair
 has distinct content under distinct rules without needing translation:
-both are note events on one grid. Paired data is
-therefore abundant, and the fully shared generator, one sequence model
-over the merged note
+both are note events on one grid. Paired data is abundant, and the
+fully shared generator, one sequence model over the merged note
 stream~\cite{cp_transformer,compose_embellish,whole_song}, is the
-established design and the yardstick every other design must beat or
-explain. Any specialisation a model learns here is specialisation by
-grammar, the condition cross-modal pairs reach once tokenised into one
-vocabulary on one clock~\cite{moshi,audiopalm}.
+established design and the yardstick every other must beat or explain.
+Specialisation learned here is specialisation by grammar, the
+condition cross-modal pairs reach once tokenised into one vocabulary
+on one clock~\cite{moshi,audiopalm}.
 
 Within music, lead-sheet models share every parameter over one merged
 sequence~\cite{compose_embellish,mmm,whole_song} and harmonisation
-models give one stream in full and fix the
-direction~\cite{yeh2021,sun2021,surprisenet}; neither keeps the
+models give one stream in full~\cite{yeh2021,sun2021,surprisenet};
+neither keeps the
 streams distinct while letting them shape each other as they unfold.
 Our duet transformer does: one autoregressive model over the streams
 interleaved frame by frame, stream-specific in its attention
@@ -61,14 +59,13 @@ projections and in a router over a shared, unassigned pool of
 feed-forward experts, so which experts serve melody, chords or both is
 learned rather than imposed~\cite{moma}. Query slots, one per stream,
 are trained as masked predictors of the current frame under random
-commitment of either partner, and decoded by committing one stream and
-conditioning the other, the leader alternating frame by frame so each
-stream reads its partner's current frame equally often.
+commitment of either partner; at decode the leader is committed and
+the follower conditioned on it, alternating frame by frame so each
+stream reads the other's current frame equally often.
 
 We evaluate on held-out POP909 songs against the fully shared
-generator fine-tuned on the same data, the same architecture trained
-from scratch, two domain-matched cascades and a hierarchical
-whole-song model. [RESULT: one sentence
+generator fine-tuned on the same data and trained from scratch, two
+domain-matched cascades and a whole-song model. [RESULT: one sentence
 on the pre-registered endpoints against the fully shared yardstick;
 one on coupling, coverage on the true pairing minus coverage on a
 two-bar shift, stating which side of the reference each design lands
