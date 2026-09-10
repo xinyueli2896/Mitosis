@@ -1,7 +1,14 @@
 % Introduction, halved (2026-09-10). Same three motivations as the
 % abstract: scientific (par. 2), testbed (par. 3), model (par. 4).
-% Citation keys are placeholders; [RESULT] sentences wait for the
-% merged E1 table with the cp8 retrains (EXPERIMENTS.md, E1 follow-up).
+% Citation keys are placeholders (no .bib yet); [RESULT] sentences wait
+% for the merged E1 table with the cp8 retrains (EXPERIMENTS.md, E1
+% follow-up). Placement notes (2026-09-10): transfusion = shared trunk,
+% modality-specific input/output layers; ualm = shared LM trunk, audio
+% encoder in, audio generation head out (verify the head's form against
+% the paper before saying more); bagel = mixture-of-transformers whose
+% split is understanding vs generation tokens, hence "or each token
+% role"; mot = per-modality weights, shared attention op; moshi and
+% mmdiffusion are the synchronous ones, cited apart from the taxonomy.
 % The full-length version (~1100 words, with a contributions list) is
 % in git history at commit 3df0259.
 \section{Introduction}
@@ -20,11 +27,14 @@ and neither is finished before the other begins.
 Joint production raises a question conditioning never faces. Each
 signal follows its own grammar and needs computation of its own, yet
 at every instant what one does must fit what the other is doing.
-Existing joint models settle the split by design, sharing everything
-but a type token or the input and output
-layers~\cite{chameleon,moshi,transfusion}, or giving each modality its
-own attention and feed-forward weights~\cite{mot,bagel} or its own
-experts~\cite{moma}. Neither choice can be tested where it is made:
+Unified multimodal models settle the split by design: one line shares
+every weight and separates the signals by a type token or by the input
+and output layers~\cite{chameleon,transfusion,ualm}, the other gives
+each modality, or each token role, its own attention and feed-forward
+weights~\cite{mot,bagel} or its own experts~\cite{moma}. The
+synchronous models that face the question at every
+instant~\cite{moshi,mmdiffusion} inherit one of these designs. Neither
+choice can be tested where it is made:
 paired data across modalities is scarce, so every such model starts
 from networks pretrained on one modality and trains only the bridge
 on pairs, and the natural control, one model trained from scratch on
