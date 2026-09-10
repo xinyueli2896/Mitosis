@@ -73,7 +73,7 @@ def chord_phase(chord_dir, detail):
             for msg in tr:
                 t += msg.time
                 if msg.type == 'set_tempo' and first_bpm is None:
-                    first_bpm = 6e7 / msg.tempo
+                    first_bpm = 6e7 / msg.tempo if msg.tempo > 0 else float('inf')
                 if msg.type == 'note_on' and msg.velocity > 0:
                     on[msg.note] = t
                 elif msg.type in ('note_off', 'note_on'):
@@ -180,7 +180,8 @@ def main():
                 t += msg.time
                 if msg.type == 'set_tempo':
                     tempos.append((t, msg.tempo))
-            first_bpm = 6e7 / tempos[0][1] if tempos else float('nan')
+            first_bpm = (6e7 / tempos[0][1] if tempos and tempos[0][1] > 0
+                         else float('inf') if tempos else float('nan'))
             # first note tick over all tracks
             first_note = None
             for tr in mid.tracks:
