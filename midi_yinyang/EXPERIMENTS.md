@@ -770,6 +770,37 @@ cost to the chord stream, H3 and repetition. Re-evaluate at 100k (the
 schedule is still annealing); the refine-repair result stands
 regardless.
 
+**Bar phase of the aligned POP909 data (2026-09-10).** Listening to
+the E1 prompts showed all but 004 and 136 off the beat. Cause, in
+`preprocess_pop909_align.py`: audio beat i was written at tick
+(i+1)*PPQ (a one-beat lead-in, the source of the 990/60,000,000 bpm
+first tempo events) and the downbeat column of beat_midi.txt was never
+read. Only 296/909 songs start on a downbeat, so the corpus bar phase
+under that aligner was 14% on the grid, 34% one beat late, 31% half a
+bar, 21% one beat early (`check_downbeat_phase.py` on the raw repo).
+The pre-aligned set on the cluster carries the same layout (004's
+first note at grid beat 11.00 = raw beat index 10 + 1). Training is
+NOT affected: every pass takes a fresh random crop window and positions
+are relative, so absolute phase was never visible. Evaluation IS:
+prompts cut at arbitrary beats, the whole-song baseline fed mis-phased
+lead sheets (its chord onset-grid JSD of 0.446 is the likely symptom),
+bar-based coherence columns on wrong bars, listening copies off the
+DAW grid. Fix: the aligner now pads (-d0) mod 4 beats so the first
+downbeat sits on a bar boundary, keeps midi time == audio time (the
+chord builder reuses the tempo map), and refuses to write a file whose
+first downbeat is off the grid; validated on all 909 raw songs (0
+failures, beat-time error <= 5 us). `--legacy` reproduces the old
+layout. Second, separate fact: POP909 bars are not all 4 beats (gap
+histogram over the corpus: 2 beats 923, 3 beats 313, 4 beats 69968,
+5 beats 184, 6 beats 2572); only 126 songs are regular throughout, 477
+through the first 32 bars. Of the 8 E1 songs, 004 136 746 are regular
+throughout; 046 456 816 have an irregular bar inside the prompt (bars
+3, 2, 2), 326 466 inside the continuation (bars 10, 12). Decision: fix
+the phase (eval-only: realign into *-v2 folders, re-stage, regenerate
+E1 for every system, rescore) and keep the 8 songs, noting the
+irregular bars; the metrics compare each system to the same reference
+on the same grid, so irregular bars affect all columns alike.
+
 ### E1 — Co-generation (RQ1)
 
 Both streams are generated jointly, conditioned on a 4-bar prompt of

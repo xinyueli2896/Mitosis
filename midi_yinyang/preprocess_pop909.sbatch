@@ -28,6 +28,8 @@
 #   ALIGNED_DIR   default: /home/xinyue.li/POP909-Dataset/POP909-aligned
 #   MELODY_DIR    default: /home/xinyue.li/POP909-Dataset/POP909-melody
 #   CHORD_DIR     default: /home/xinyue.li/POP909-Dataset/POP909-chord
+#   SKIP_TOKENIZE 1 = write the aligned/melody/chord folders only (eval fix)
+#   ALIGN_LEGACY  1 = the pre-2026-09-10 aligner layout (see preprocess_pop909_align.py)
 #   FORCE=1       re-run stages whose output already exists.
 #
 # When MELODY_DIR and CHORD_DIR are already populated (e.g. downloaded from
@@ -92,7 +94,8 @@ else
         echo "[align] ERROR: no aligned midis and POP909_RAW=$POP909_RAW missing."
         exit 1
     fi
-    python preprocess_pop909_align.py --src "$POP909_RAW" --dst "$ALIGNED_DIR"
+    python preprocess_pop909_align.py --src "$POP909_RAW" --dst "$ALIGNED_DIR" \
+        $([[ "${ALIGN_LEGACY:-0}" == "1" ]] && echo --legacy)
 fi
 
 # --- 2. melody --------------------------------------------------------
@@ -131,6 +134,15 @@ print(f'[midi-pairing] OK: {len(mel)} songs present in both folders.')
 EOF
 
 # --- 4. tokenize ------------------------------------------------------
+# SKIP_TOKENIZE=1: stop after the midi folders (2026-09-10: the
+# downbeat-aware realignment is an EVALUATION fix -- training windows
+# are random crops with relative positions, so the .pt files need not
+# be rebuilt, and rebuilding them under the same names would silently
+# change the data of every later training run).
+if [[ "${SKIP_TOKENIZE:-0}" == "1" ]]; then
+    echo "[tokenize] SKIP_TOKENIZE=1: midi folders written; not tokenizing."
+    exit 0
+fi
 # settings.py hardcodes the repo-relative POP909_MELODY_PATH/POP909_CHORD_PATH
 # ('POP909-Dataset/POP909-melody' etc.), so symlink those locations at the
 # actual data dirs. Refresh stale symlinks; refuse to shadow a real directory.
