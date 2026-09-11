@@ -373,7 +373,7 @@ def main():
 
     os.makedirs(os.path.join(a.dst, 'melody'), exist_ok=True)
     os.makedirs(os.path.join(a.dst, 'chord'), exist_ok=True)
-    irregular = {}
+    irregular, src_db = {}, {}
     if a.align_report:
         with open(a.align_report) as fh:
             for row in csv.DictReader(fh, delimiter='\t'):
@@ -381,6 +381,18 @@ def main():
                 irregular[row['id']] = (
                     {int(x) for x in raw.split(',') if x != ''} if raw
                     else set())
+                # TRUE downbeat frames. Essential, not decorative: with
+                # TIME_SIGS=0 the midi is a flat 4/4, so pretty_midi's
+                # get_downbeats returns multiples of 16 frames -- the
+                # GRID, not the song's downbeats. Past an irregular bar
+                # those differ, and cropping at a grid line then lands
+                # the prompt mid-bar while every internal check agrees
+                # with itself. audit_prompt_phase caught exactly that on
+                # songs 010, 456 and 816.
+                dbr = (row.get('downbeat_frames') or '').strip()
+                if dbr:
+                    src_db[row['id']] = [int(x) for x in dbr.split(',')
+                                         if x != '']
         n_irr = sum(1 for v in irregular.values() if v)
         print(f'[metre] {a.align_report}: {n_irr} of {len(irregular)} songs '
               f'have an irregular bar; windows will avoid them where possible')
@@ -395,7 +407,7 @@ def main():
         rows.append(dict(id=sid, first_both_bar='', crop_bar='',
                          crop_sec='', bars_remaining='',
                          pickup_has_melody='', metre_changes_in_prompt='',
-                         metre_changes_in_window='', irregular_bars='', window_regular='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
+                         metre_changes_in_window='', crop_frame='', irregular_bars='', window_regular='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
                          dropped='not in the source folder'))
         reasons[sid] = 'not in the source folder'
 
@@ -404,7 +416,7 @@ def main():
         rows.append(dict(id=sid, first_both_bar='', crop_bar='',
                          crop_sec='', bars_remaining='',
                          pickup_has_melody='', metre_changes_in_prompt='',
-                         metre_changes_in_window='', irregular_bars='', window_regular='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
+                         metre_changes_in_window='', crop_frame='', irregular_bars='', window_regular='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
                          dropped=why))
     for sid in ids:
         mp = os.path.join(a.mel_src, f'{sid}.mid')
@@ -422,6 +434,10 @@ def main():
                   max(n.end for n in chd_notes))
         n_tempo, bpm0, bpmm = tempo_summary(mel)
         bars, ts_list, spb = bar_starts(mel, end)
+        if sid in src_db and len(src_db[sid]) >= 2:
+            # prefer the SOURCE's true downbeats over the file's flat grid
+            fps = spb / 4.0                      # seconds per frame
+            bars = np.array([f * fps for f in src_db[sid]], dtype=float)
         bad = degenerate_grid(bars, end)
         if bad:
             stub(sid, bad)
@@ -434,8 +450,13 @@ def main():
         # B = the first bar the melody OFFICIALLY starts on (m_start) and
         # from which mel_bars consecutive bars have both streams. B >= 1
         # so the bar in front of it is free to hold the anacrusis.
-        irr = irregular.get(sid, set())
         win = prompt_bars + a.min_bars
+        if sid in src_db and len(src_db[sid]) >= 2:
+            # bar i is irregular when the gap to bar i+1 is not 16 frames
+            f = src_db[sid]
+            irr = {i for i, (x, y) in enumerate(zip(f, f[1:])) if y - x != 16}
+        else:
+            irr = irregular.get(sid, set())
 
         def clean(b):
             """Is the whole scored window, from the buffer bar, free of
@@ -500,6 +521,12 @@ def main():
                        if bars[start_bar] < t.time < bars[win_end])
         row = dict(id=sid, first_both_bar=B, crop_bar=start_bar,
                    crop_sec=f'{bars[start_bar]:.3f}',
+                   # the crop offset in FRAMES. Recorded rather than left
+                   # to be re-derived as crop_bar*16, which is only true
+                   # when bars are a flat 4/4 grid -- exactly the
+                   # assumption that made the first phase audit disagree
+                   # with the builder.
+                   crop_frame=int(round(bars[start_bar] / (spb / 4.0))),
                    bars_remaining=remaining,
                    pickup_has_melody=int(bool(m_hit[start_bar])),
                    metre_changes_in_prompt=n_ts_prompt,
