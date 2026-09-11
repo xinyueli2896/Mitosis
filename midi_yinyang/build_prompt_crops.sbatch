@@ -107,6 +107,9 @@ EXTRA_IDS="${EXTRA_IDS:-001 002 003 004 005}"
 FORCE_IDS="${FORCE_IDS:-004}"
 MEL_BARS="${MEL_BARS:-4}"
 MIN_BARS="${MIN_BARS:-25}"
+# every written file gets ONE set_tempo at this bpm; notes keep their
+# ticks exactly. 0 = copy the source tempo map verbatim.
+TEMPO="${TEMPO:-120}"
 REQUIRE_REGULAR="${REQUIRE_REGULAR:-0}"
 # default: the aligner's report sits one level above the melody folder
 ALIGN_REPORT="${ALIGN_REPORT:-$(dirname "$MEL_SRC")/align_grid_report.tsv}"
@@ -131,7 +134,7 @@ done
 python build_prompt_crops.py \
     --mel-src "$MEL_SRC" --chord-src "$CHORD_SRC" --dst "$DST" \
     --dataset "$DATASET" --split-ratio "$SPLIT_RATIO" \
-    --mel-bars "$MEL_BARS" --min-bars "$MIN_BARS" \
+    --mel-bars "$MEL_BARS" --min-bars "$MIN_BARS" --tempo "$TEMPO" \
     --extra-ids $EXTRA_IDS \
     ${FORCE_IDS:+--force-ids $FORCE_IDS} \
     ${ALIGN_REPORT:+--align-report "$ALIGN_REPORT"} \

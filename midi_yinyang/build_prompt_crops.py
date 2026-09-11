@@ -50,6 +50,7 @@ Usage (via build_prompt_crops.sbatch, CPU):
         --dataset pop909_melody_cp8_v2
 """
 import argparse
+import collections
 import csv
 import os
 import re
@@ -62,6 +63,10 @@ import pretty_midi as pm
 
 warnings.filterwarnings('ignore')
 RESOLUTION = 480
+
+# a note in TICKS -- see the block in main() on why nothing is measured
+# in seconds
+Note = collections.namedtuple('Note', 'start end pitch')
 
 
 def song_id(name):
@@ -216,7 +221,7 @@ def complete_bars(inst_notes, bars, tol):
     return out
 
 
-def crop_ticks(src_path, dst_path, tick0, pad_ticks=0):
+def crop_ticks(src_path, dst_path, tick0, pad_ticks=0, force_bpm=None):
     """Window a MIDI file in TICK space, changing nothing else.
 
     Cropping must be a pure windowing operation: every tempo and
@@ -239,10 +244,19 @@ def crop_ticks(src_path, dst_path, tick0, pad_ticks=0):
     so nothing appears from nowhere at bar 1 beat 1. Meta and control
     events before the cut are re-emitted at tick 0, because they set
     state the window needs (tempo, metre, program, key).
+
+    force_bpm replaces the tempo map with a single set_tempo at tick 0,
+    so every file in the set plays at one constant tempo. It touches no
+    note: every event keeps the exact tick it had, because a tick is a
+    musical position and the tempo map only says how fast those ticks go
+    by. The aligner writes a fixed-tempo grid where a tick IS a fixed
+    fraction of a beat, so this makes the rendered seconds agree with
+    the notation -- and it means a stray tempo map in the source cannot
+    reach the prompt set.
     """
     src = mido.MidiFile(src_path)
     out = mido.MidiFile(ticks_per_beat=src.ticks_per_beat, type=src.type)
-    for tr in src.tracks:
+    for ti, tr in enumerate(src.tracks):
         events, open_on, t = [], {}, 0
         for msg in tr:
             t += msg.time
@@ -262,14 +276,23 @@ def crop_ticks(src_path, dst_path, tick0, pad_ticks=0):
                 events.append((on_t - tick0 + pad_ticks, 1, on_msg))
                 events.append((max(t - tick0, on_t - tick0 + 1) + pad_ticks,
                                0, msg))
-            else:
-                events.append((max(t - tick0, 0) + pad_ticks, 2, msg))
+            elif not (force_bpm and msg.type == 'set_tempo'):
+                # State set before the cut belongs at tick 0, NOT at
+                # pad_ticks: a padded lead bar would otherwise play under
+                # whatever the format defaults to until the first real
+                # event, since the tempo and metre that govern it were
+                # pushed past it.
+                events.append((0 if t <= tick0 else t - tick0 + pad_ticks,
+                               2, msg))
         for stack in open_on.values():                 # never closed
             for on_t, on_msg in stack:
                 if on_t >= tick0:
                     events.append((on_t - tick0 + pad_ticks, 1, on_msg))
         events.sort(key=lambda e: (e[0], -e[1]))
         new_tr = mido.MidiTrack()
+        if force_bpm and ti == 0:
+            new_tr.append(mido.MetaMessage(
+                'set_tempo', tempo=mido.bpm2tempo(float(force_bpm)), time=0))
         prev = 0
         for tick, _, msg in events:
             new_tr.append(msg.copy(time=tick - prev))
@@ -346,6 +369,11 @@ def main():
                         'first note later than that makes its bar an '
                         'ANACRUSIS, and the crop then takes one bar in '
                         'front of it instead of two.')
+    p.add_argument('--tempo', type=float, default=120.0,
+                   help='tempo every written file gets, as a single '
+                        'set_tempo at tick 0 (default 120). No note moves: '
+                        'ticks are untouched, only the map that says how '
+                        'fast they go by. 0 keeps the source tempo map.')
     p.add_argument('--min-bars', type=int, default=25,
                    help='bars that must remain from the crop point, so '
                         'there is room for the generated continuation')
@@ -447,7 +475,7 @@ def main():
     # a line and the TSV never depends on which row happened to be first.
     COLS = ['id', 'grid_pre_pad', 'first_mel_frame', 'mel_offset_beats',
             'pickup_src', 'first_mel_bar', 'is_pickup', 'lead_bars',
-            'crop_bar',
+            'crop_bar', 'crop_tick',
             'crop_sec', 'crop_frame', 'pad_frames', 'bars_remaining',
             'pad_bars', 'lead_has_melody', 'pickup_has_melody',
             'metre_changes_in_prompt', 'metre_changes_in_window',
@@ -467,19 +495,40 @@ def main():
             stub(sid, 'no chord file')
             continue
         mel, chd = pm.PrettyMIDI(mp), pm.PrettyMIDI(cp_)
-        mel_notes = [n for i in mel.instruments for n in i.notes]
-        chd_notes = [n for i in chd.instruments for n in i.notes]
+        if mel.resolution != chd.resolution:
+            stub(sid, f'melody ppq {mel.resolution} != chord ppq '
+                      f'{chd.resolution}; the streams are not on one grid')
+            continue
+        # ---- everything below is in TICKS, not seconds ----------------
+        # A tick is a musical position; seconds are a tick times whatever
+        # tempo map the file happens to carry. Analysing in seconds and
+        # converting the crop point back with time_to_tick meant a source
+        # with a stray tempo map cropped at a DIFFERENT tick -- and
+        # measured the melody entering in a different bar -- than the
+        # same notes under a constant tempo. Each file's own time_to_tick
+        # takes pretty_midi's seconds back to that file's ticks exactly,
+        # and the aligner's grid is 4 frames to the beat, ppq ticks to
+        # the beat, so frames and ticks are the same grid at a fixed
+        # ratio and no tempo enters anywhere.
+        ppq = mel.resolution
+        tpf = ppq / 4.0                          # ticks per frame
+        mel_notes = [Note(mel.time_to_tick(n.start), mel.time_to_tick(n.end),
+                          n.pitch) for i in mel.instruments for n in i.notes]
+        chd_notes = [Note(chd.time_to_tick(n.start), chd.time_to_tick(n.end),
+                          n.pitch) for i in chd.instruments for n in i.notes]
         if not mel_notes or not chd_notes:
             stub(sid, 'empty stream')
             continue
         end = max(max(n.end for n in mel_notes),
                   max(n.end for n in chd_notes))
         n_tempo, bpm0, bpmm = tempo_summary(mel)
-        bars, ts_list, spb = bar_starts(mel, end)
+        bars_sec, ts_list, _ = bar_starts(mel, mel.tick_to_time(int(end)))
+        bars = np.array([mel.time_to_tick(s) for s in bars_sec], dtype=float)
+        spb = float(ppq)                         # ticks per beat
         db_frames, grid_pre_pad = None, 0
         if sid in src_db and len(src_db[sid]) >= 2:
             # prefer the SOURCE's true downbeats over the file's flat grid
-            fps = spb / 4.0                      # seconds per frame
+            fps = tpf                            # ticks per frame
             db_frames = list(src_db[sid])
             # ---- the PICKUP BAR is missing from downbeat_frames --------
             # The aligner sets origin_beat = -((-first_down) % 4), so a
@@ -594,12 +643,14 @@ def main():
             how = (how + '; ' if how else '') + \
                 f'only {n_both}/{a.mel_bars} prompt bars have both streams'
         remaining = len(bars) - start_bar
-        n_ts_prompt = sum(1 for t in ts_list
-                          if bars[start_bar] < t.time <
+        ts_ticks = [mel.time_to_tick(t.time) for t in ts_list]
+        n_ts_prompt = sum(1 for tt in ts_ticks
+                          if bars[start_bar] < tt <
                           bars[min(start_bar + prompt_bars, len(bars) - 1)])
         win_end = min(start_bar + prompt_bars + a.min_bars, len(bars) - 1)
-        n_ts_win = sum(1 for t in ts_list
-                       if bars[start_bar] < t.time < bars[win_end])
+        n_ts_win = sum(1 for tt in ts_ticks
+                       if bars[start_bar] < tt < bars[win_end])
+        tick0 = int(round(bars[start_bar]))
         row = dict(id=sid, grid_pre_pad=grid_pre_pad,
                    first_mel_frame=int(round(first_on / (spb / 4.0))),
                    # how far INTO its bar the melody enters. A real
@@ -613,7 +664,10 @@ def main():
                    pickup_src=pickup_src,
                    first_mel_bar=F, is_pickup=int(is_pickup),
                    lead_bars=lead_bars, crop_bar=start_bar,
-                   crop_sec=f'{bars[start_bar]:.3f}',
+                   crop_tick=tick0,
+                   # seconds AT THE WRITTEN TEMPO -- the only tempo the
+                   # prompt set has
+                   crop_sec=f'{tick0 / ppq * 60.0 / (a.tempo or bpmm):.3f}',
                    # the crop offset in FRAMES. Recorded rather than left
                    # to be re-derived as crop_bar*16, which is only true
                    # when bars are a flat 4/4 grid -- exactly the
@@ -650,18 +704,16 @@ def main():
             rows.append(row)
             continue
         row['dropped'] = ''
-        t0 = float(bars[start_bar])
-        # Each file converts the crop TIME to its own ticks through its
-        # own tempo map, so the two streams cut at the same musical
-        # instant even if their maps ever differ.
-        # one padded bar = 4 beats; both streams get the identical pad,
-        # so they stay in register
-        pad_m = pad_bars * 4 * mel.resolution
-        pad_c = pad_bars * 4 * chd.resolution
+        # ONE tick for both streams. They share a ppq (checked above)
+        # and the aligner's grid, so the same tick is the same musical
+        # instant in both -- no tempo map is consulted on the way.
+        # One padded bar = 4 beats; both streams get the identical pad.
+        pad_t = pad_bars * 4 * ppq
+        bpm = a.tempo if a.tempo > 0 else None
         crop_ticks(mp, os.path.join(a.dst, 'melody', f'{sid}.mid'),
-                   int(round(mel.time_to_tick(t0))), pad_ticks=pad_m)
+                   tick0, pad_ticks=pad_t, force_bpm=bpm)
         crop_ticks(cp_, os.path.join(a.dst, 'chord', f'{sid}.mid'),
-                   int(round(chd.time_to_tick(t0))), pad_ticks=pad_c)
+                   tick0, pad_ticks=pad_t, force_bpm=bpm)
         rows.append(row)
         kept.append(sid)
 
@@ -741,10 +793,30 @@ def main():
                 if not r['dropped'] and r['src_bpm_median']}
         nte = {r['src_tempo_events'] for r in rows
                if not r['dropped'] and r['src_tempo_events'] != ''}
-        print(f'  SOURCE tempo (carried through unchanged): '
-              f'{len(bpms)} distinct median bpm, tempo-event counts {sorted(nte)}'
+        print(f'  SOURCE tempo: {len(bpms)} distinct median bpm, tempo-event '
+              f'counts {sorted(nte)}'
               + ('' if len(bpms) == 1 and nte == {1}
-                 else '  <- v5 is NOT one constant tempo; the crop copies it verbatim'))
+                 else '  <- the source is NOT one constant tempo'))
+        # verify the WRITTEN files, not the intent
+        bad_t = []
+        for sid in kept:
+            for sub in ('melody', 'chord'):
+                mf = mido.MidiFile(os.path.join(a.dst, sub, f'{sid}.mid'))
+                tp = [round(mido.tempo2bpm(m.tempo), 3) for tr in mf.tracks
+                      for m in tr if m.type == 'set_tempo']
+                want = [round(a.tempo, 3)] if a.tempo > 0 else None
+                if want is not None and tp != want:
+                    bad_t.append((sid, sub, tp))
+        if a.tempo > 0:
+            print(f'  WRITTEN tempo: '
+                  + (f'every file is exactly one set_tempo at {a.tempo:g} bpm'
+                     if not bad_t else
+                     f'{len(bad_t)} file(s) are NOT a single {a.tempo:g}: '
+                     f'{bad_t[:6]}'))
+            if bad_t:
+                raise SystemExit('tempo forcing failed -- see above')
+        else:
+            print('  WRITTEN tempo: source map copied verbatim (--tempo 0)')
         if irregular:
             wr = [r for r in rows if not r['dropped'] and r['window_regular'] != '']
             nreg = sum(1 for r in wr if int(r['window_regular']))
