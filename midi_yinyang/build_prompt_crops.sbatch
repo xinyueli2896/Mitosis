@@ -27,6 +27,11 @@
 #                        is e.g. pop909_melody_cp8_v2_v5 -- or the split
 #                        will not match what the model never saw.
 #   IDS                  explicit ids; skips the held-out filter entirely
+#   EXTRA_IDS            ids ADDED to the held-out set (default "001 002
+#                        003 004 005", the songs cut before preprocessing:
+#                        absent from the dataset, so the index rule cannot
+#                        find them, but never trained on either). Refused
+#                        if any is in the TRAIN split. Set to " " for none.
 #   MEL_BARS             sounding bars in the prompt (default 4, so the
 #                        prompt is 5 bars including the buffer)
 #   MIN_BARS             bars that must remain after the crop so there is
@@ -69,6 +74,7 @@ DST="${DST:-input/heldout_v5}"
 DATASET="${DATASET:-pop909_melody_cp8_v2}"
 SPLIT_RATIO="${SPLIT_RATIO:-10}"
 IDS="${IDS:-}"
+EXTRA_IDS="${EXTRA_IDS:-001 002 003 004 005}"
 MEL_BARS="${MEL_BARS:-4}"
 MIN_BARS="${MIN_BARS:-25}"
 REQUIRE_REGULAR="${REQUIRE_REGULAR:-0}"
@@ -80,6 +86,7 @@ echo "CHORD_SRC=$CHORD_SRC"
 echo "DST=$DST   DATASET=$DATASET (idx %% $SPLIT_RATIO == 0 held out)"
 echo "prompt = 1 buffer bar + $MEL_BARS sounding bars; MIN_BARS=$MIN_BARS"
 echo "REQUIRE_REGULAR=$REQUIRE_REGULAR   IDS=${IDS:-<held-out split>}"
+echo "EXTRA_IDS=${EXTRA_IDS:-<none>}"
 echo "================================================================"
 
 for d in "$MEL_SRC" "$CHORD_SRC"; do
@@ -90,6 +97,7 @@ python build_prompt_crops.py \
     --mel-src "$MEL_SRC" --chord-src "$CHORD_SRC" --dst "$DST" \
     --dataset "$DATASET" --split-ratio "$SPLIT_RATIO" \
     --mel-bars "$MEL_BARS" --min-bars "$MIN_BARS" \
+    --extra-ids $EXTRA_IDS \
     ${IDS:+--ids $IDS} \
     $([[ "$REQUIRE_REGULAR" == "1" ]] && echo --require-regular)
 

@@ -88,11 +88,13 @@ def heldout_ids(stem, split_ratio=10, train_length=TRAIN_LENGTH):
         np.ones(len(lengths), dtype=bool)
     idx = np.arange(len(lengths))[keep]
     val = [i for i in idx if i % split_ratio == 0]
+    trn = [i for i in idx if i % split_ratio != 0]
     ids = {song_id(names[i]) for i in val if song_id(names[i])}
+    train_ids = {song_id(names[i]) for i in trn if song_id(names[i])}
     print(f'[split] {stem}: {len(lengths)} songs, {int(keep.sum())} at least '
           f'{train_length} frames, {len(val)} held out (idx %% {split_ratio} '
           f'== 0) -> {len(ids)} distinct song ids')
-    return ids
+    return ids, train_ids
 
 
 def bar_starts(mid, end_time):
@@ -192,6 +194,16 @@ def main():
                    help='dataset stem whose index %% split-ratio == 0 songs '
                         'are the held-out set (see audit_wholesong_split)')
     p.add_argument('--split-ratio', type=int, default=10)
+    p.add_argument('--extra-ids', nargs='*',
+                   default=['001', '002', '003', '004', '005'],
+                   help='ids to ADD to the held-out set. Default is the five '
+                        'songs cut before preprocessing: they are absent '
+                        'from the dataset entirely, so the index rule cannot '
+                        'find them, but they were never trained on and are '
+                        'therefore valid. Refused if any turns out to be in '
+                        'the TRAIN split -- that would be contamination, not '
+                        'a bonus song. Pass --extra-ids with no values for '
+                        'none.')
     p.add_argument('--no-length-filter', action='store_true',
                    help='skip the lengths >= 384 filter. Off by default so '
                         'the split matches audit_wholesong_split exactly; a '
@@ -217,12 +229,30 @@ def main():
     a = p.parse_args()
 
     prompt_bars = a.mel_bars + 1
-    want = set(a.ids) if a.ids else heldout_ids(
-        a.dataset, a.split_ratio,
-        train_length=None if a.no_length_filter else TRAIN_LENGTH)
     if a.ids:
+        want = set(a.ids)
         print(f'[split] explicit --ids given ({len(want)}); the held-out '
               f'filter is NOT applied')
+    else:
+        want, train_ids = heldout_ids(
+            a.dataset, a.split_ratio,
+            train_length=None if a.no_length_filter else TRAIN_LENGTH)
+        extra = {e for e in (a.extra_ids or []) if e}
+        bad = extra & train_ids
+        if bad:
+            raise SystemExit(
+                f'REFUSING: --extra-ids {sorted(bad)} are in the TRAIN split '
+                f'of {a.dataset}. Adding them would put training songs in the '
+                f'metrics. Drop them, or check you passed the dataset the '
+                f'model actually trains on.')
+        if extra:
+            already = extra & want
+            new = extra - want
+            print(f'[split] + {len(new)} manually held-out id(s) {sorted(new)}'
+                  + (f' ({sorted(already)} already in the split)'
+                     if already else '')
+                  + ' -- absent from the dataset, so never trained on')
+            want = want | extra
     have = {song_id(f) for f in glob(os.path.join(a.mel_src, '*.mid'))}
     ids = sorted(i for i in want if i and i in have)
     print(f'held-out candidates: {len(want)}; present in {a.mel_src}: '
