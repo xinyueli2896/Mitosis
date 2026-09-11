@@ -321,6 +321,45 @@ The main line is A.3 → A.5 → A.6, each strictly containing the
 previous; A.4 sits on that line too (it contains A.5), adding
 token-level corruption on top.
 
+### A.11 — partner-agreement discrimination head (2026-09-11)
+
+`--agree_head` on `cp_transformer_m2c_duet_block_diffusion.py` (wrapper
+`AGREE_HEAD=1`, family `A11`, E1 system to be added when a ckpt
+exists). Requires `--cond_slot_prob > 0`: the head is defined on the
+commit-then-condition pairs, where a leader is committed at k=0 and a
+follower masked at k=K. On a share `--agree_decoy_prob` (0.5) of those
+pairs the committed LEADER's slot content is swapped for the same
+stream's frame at a lag drawn uniformly over the A.7 calibrated bins,
+and a linear head on the FOLLOWER's slot row predicts genuine versus
+decoy. The follower's query loss is DROPPED on the swapped items, so
+the model is never trained to ignore a clashing partner.
+`--agree_loss_weight` (0.3) weights the detection cross-entropy.
+
+Why this and not A.7. D3PM ran the reconstruction comparison for
+plausible-replacement corruption and the absorbing mask won; A.7
+repeated it here and lost, for a mechanical reason the state-frequency
+table makes plain (mask 50% -> 5%, refinement seed 25% -> 0.25%).
+ELECTRA ran the DETECTION comparison and plausible replacements won
+decisively, its gain coming from a task defined over positions rather
+than from the plausibility itself; the audio-visual synchronisation
+literature builds exactly A.7's negatives, the same signal offset in
+time, and uses them for detection too. So A.11 keeps the decoys and
+moves them from the corruption schedule into a discrimination head.
+
+What is deliberately NOT touched: the corruption schedule (A.7's
+failure), the sequence length (A.9 swamped the MoE balance statistics
+by doubling it), and the decode path -- the head is training-only, so
+an A.11 checkpoint decodes exactly like A3fc and the two are a clean
+A/B on the objective alone. The quantity the head trains is the one
+`harmonic_coupling` scores: can this stream tell its true partner from
+the same partner a couple of bars away.
+
+Risks on record. The audio-visual work reports hard temporal negatives
+degrading downstream features when over-weighted, hence the small
+default weight and the calibrated bins spanning easy to hard. Gated by
+`audit_agree_head.sbatch` (leader swap, label/leader correspondence,
+reconstruction drop, off switch, eval unaffected).
+
 ### A.10 — same-frame edge on the causal duet (2026-09-09)
 
 `--same_frame` on `cp_transformer_m2c_intra_cross_attn.py` (wrapper

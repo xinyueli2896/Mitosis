@@ -155,7 +155,9 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  query_pairs=1, decoy_corruption=False,
                  decoy_mask_residual=0.25, decoy_lag_bins=None,
                  query_block=1, slot_sees_prev_frame=False,
-                 moe_aux_clean_only=False, cond_slot_prob=0.0, **kwargs):
+                 moe_aux_clean_only=False, cond_slot_prob=0.0,
+                 agree_head=False, agree_decoy_prob=0.5,
+                 agree_loss_weight=0.3, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- conditional slots (A.3c) ------------------------------------
@@ -173,6 +175,43 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         # never asks for a both-masked prediction; decode with
         # A3_SCHEDULE=ctc_* to use it. 0 = off (A.3 unchanged).
         self.cond_slot_prob = float(cond_slot_prob)
+        # --- A.11: partner-agreement discrimination head ------------------
+        # ELECTRA's finding is that a plausible-but-wrong replacement pays
+        # off as a DETECTION target, not as a reconstruction target (D3PM
+        # ran the reconstruction comparison and the absorbing mask won;
+        # A.7 repeated it here and lost). The audio-visual
+        # synchronisation literature builds exactly A.7's negatives, the
+        # same signal offset in time, and uses them for detection too.
+        # So: inside the conditional-slot regime, where a leader is
+        # committed and a follower is masked, replace the LEADER's frame
+        # by the same stream's frame at a calibrated lag for a share of
+        # the pairs, and ask a linear head on the FOLLOWER's slot row
+        # whether the partner it just read was genuine. The follower's
+        # reconstruction loss is dropped on those items, so the model is
+        # never taught to ignore a clashing partner -- ELECTRA's split of
+        # corrupted input into detection only.
+        #
+        # Nothing else moves: the corruption schedule is untouched (A.7's
+        # failure was starving the mask), the sequence length is
+        # untouched (A.9's failure was swamping the balance statistics),
+        # and the decode path is unchanged -- the head is a training-time
+        # objective that shapes the representation and is never called at
+        # inference. The quantity it trains is the one `harmonic_coupling`
+        # scores: can this stream tell its true partner from the same
+        # partner a couple of bars away.
+        self.register_buffer(
+            'agree_head_flag',
+            torch.tensor(1 if agree_head else 0, dtype=torch.long))
+        self.agree_decoy_prob = float(agree_decoy_prob)
+        self.agree_loss_weight = float(agree_loss_weight)
+        self.agree_proj = (nn.Linear(self.hidden_size, 2)
+                           if agree_head else None)
+        self._agree_lag_m = self._agree_lag_c = None
+        self._last_slot_h = None
+        if agree_head and cond_slot_prob <= 0:
+            raise ValueError(
+                'agree_head needs cond_slot_prob > 0: the head is defined '
+                'on the committed-leader / masked-follower pairs only.')
         self.register_buffer(
             'cond_slot_prob_flag',
             torch.tensor(self.cond_slot_prob, dtype=torch.float32),
@@ -409,6 +448,27 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
     @property
     def decoy_corruption(self):
         return bool(self.decoy_corruption_flag.item())
+
+    @property
+    def agree_head(self):
+        return bool(self.agree_head_flag.item())
+
+    def _draw_agree_lags(self, shape, device, T_full):
+        """A.11 negatives: a signed offset drawn uniformly over the
+        calibrated decoy bins, then uniformly inside the chosen bin.
+        Bins come from calibrate_decoy_lag (harmonic agreement vs lag on
+        the POP909 train split), so the negatives span easy to hard
+        rather than all being trivially far."""
+        bins = self.decoy_lag_bins
+        which = torch.randint(0, len(bins), shape, device=device)
+        lo = torch.tensor([b[0] for b in bins], device=device)[which]
+        hi = torch.tensor([b[1] for b in bins], device=device)[which]
+        span = (hi - lo + 1).clamp_min(1)
+        mag = lo + (torch.rand(shape, device=device) * span).long().clamp_max(
+            span - 1)
+        mag = mag.clamp(1, max(T_full - 1, 1))
+        sign = torch.where(torch.rand(shape, device=device) < 0.5, -1, 1)
+        return mag * sign
 
     def _draw_decoy_lags(self, k_t, T_full):
         """A.7: per-item signed lag for one slot. Split out so the audit
@@ -834,6 +894,24 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                 # embeddings replacing gt for the flagged items).
                 gt_m = h[:, 2 * t_j:2 * t_j + 1]           # [B, 1, H]
                 gt_c = h[:, 2 * t_j + 1:2 * t_j + 2]       # [B, 1, H]
+                # A.11: the committed leader is replaced by the same
+                # stream's frame at lag != 0 for the flagged items. Only
+                # the leader is touched; the follower stays masked.
+                for lag_all, mod, ref in ((self._agree_lag_m, 0, 'm'),
+                                          (self._agree_lag_c, 1, 'c')):
+                    if lag_all is None:
+                        continue
+                    lag = lag_all[:, j]                    # [B], 0 = genuine
+                    if not bool((lag != 0).any()):
+                        continue
+                    pos = 2 * ((int(t_j) + lag) % T_full) + mod
+                    dec = torch.gather(
+                        h, 1, pos.view(batch_size, 1, 1).expand(-1, 1, H))
+                    sel = (lag != 0).view(batch_size, 1, 1)
+                    if ref == 'm':
+                        gt_m = torch.where(sel, dec.to(gt_m.dtype), gt_m)
+                    else:
+                        gt_c = torch.where(sel, dec.to(gt_c.dtype), gt_c)
                 if sc_m_j is not None:
                     gt_m = torch.where(
                         sc_m_j.view(batch_size, 1, 1),
@@ -894,6 +972,10 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self._last_query_revealed = torch.stack(
             revealed, dim=1)                              # [B, 2Q, S]
 
+        if getattr(self, '_stash_slots', False):
+            # audit hook (off by default, zero cost): the slot INPUTS, so
+            # audit_agree_head can check the A.11 leader swap directly.
+            self._last_slots_in = torch.cat(slots, dim=1).detach()
         h_full = torch.cat([h_clean] + slots, dim=1)
         # h_full: [B, 2*T_full + 2*Q, H]
 
@@ -902,6 +984,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         # Split outputs (identical to parent at Q=1).
         h_clean_global = h_global[:, :seq_len]
         h_query_global = h_global[:, seq_len:]             # [B, 2Q, H]
+        self._last_slot_h = h_query_global                 # A.11 head input
 
         ar_logits = self.local_decode(h_clean_global, emb)
 
@@ -1032,6 +1115,10 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         n_pairs = len(tq)
         T_query = tq[0] if n_pairs == 1 else tq
 
+        # A.11 state for this call, set inside the conditional-slot draw.
+        agree_lag_m = agree_lag_c = agree_valid = agree_label = None
+        agree_lead_is_m = None
+
         K = self.diffusion_K
         if self.training:
             # Per-item, per-slot noise levels in {0, ..., K}. Sampling
@@ -1055,6 +1142,23 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                 k_m = torch.where(use_ctc, torch.where(lead_is_m, 0, K), k_m)
                 k_c = torch.where(use_ctc, torch.where(lead_is_m, K, 0), k_c)
                 self._last_ctc_frac = use_ctc.float().mean().detach()
+                if self.agree_head:
+                    # A.11: on a share of the ctc pairs the committed
+                    # leader is swapped for a lagged frame of its own
+                    # stream; the head must notice. Label 1 = decoy.
+                    is_dec = (torch.rand(batch_size, n_pairs,
+                                         device=x.device)
+                              < self.agree_decoy_prob) & use_ctc
+                    lags = self._draw_agree_lags(
+                        (batch_size, n_pairs), x.device, T_full)
+                    lags = torch.where(is_dec, lags,
+                                       torch.zeros_like(lags))
+                    agree_lag_m = torch.where(lead_is_m, lags,
+                                              torch.zeros_like(lags))
+                    agree_lag_c = torch.where(lead_is_m,
+                                              torch.zeros_like(lags), lags)
+                    agree_valid, agree_label = use_ctc, is_dec.long()
+                    agree_lead_is_m = lead_is_m
         else:
             # Eval: fully-masked (most informative single-pass setting).
             k_m = torch.full((batch_size, n_pairs), K, device=x.device,
@@ -1084,6 +1188,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                 with torch.no_grad():
                     k_full = torch.full((batch_size, n_pairs), K,
                                         device=x.device, dtype=torch.long)
+                    self._agree_lag_m = self._agree_lag_c = None
                     _, q_logits_sc, _ = self.forward(
                         x, T_query=T_query, k_m=k_full, k_c=k_full,
                     )
@@ -1120,6 +1225,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             else:
                 sc_mask_m = sc_mask_c = None
 
+        self._agree_lag_m, self._agree_lag_c = agree_lag_m, agree_lag_c
         ar_logits, query_logits, aux_loss = self.forward(
             x, T_query=T_query, k_m=k_m, k_c=k_c,
             sc_mask_m=sc_mask_m, sc_emb_m=sc_emb_m,
@@ -1169,6 +1275,30 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         ).view(batch_size, 2 * n_pairs, subseq_len)
         non_pad_q = (targets_query != self.tokenizer.pad_token).float()
         keep_q = self._query_loss_keep_mask(non_pad_q)
+        # A.11: no reconstruction on a corrupted partner (ELECTRA's split).
+        agree_loss = torch.zeros((), device=x.device)
+        self._last_agree_acc = torch.zeros((), device=x.device)
+        self._last_agree_frac = torch.zeros((), device=x.device)
+        if (self.agree_head and agree_valid is not None
+                and bool(agree_valid.any())):
+            idx = torch.arange(n_pairs, device=x.device)
+            fol_row = 2 * idx.view(1, -1) + torch.where(
+                agree_lead_is_m, 1, 0)                      # [B, P]
+            drop = torch.zeros(batch_size, 2 * n_pairs,
+                               dtype=torch.bool, device=x.device)
+            drop.scatter_(1, fol_row, (agree_label > 0) & agree_valid)
+            keep_q = keep_q * (~drop).unsqueeze(-1).to(keep_q.dtype)
+            slot_h = self._last_slot_h                      # [B, 2P, H]
+            fol_h = torch.gather(
+                slot_h, 1, fol_row.unsqueeze(-1).expand(-1, -1, slot_h.size(-1)))
+            logits_ag = self.agree_proj(fol_h)              # [B, P, 2]
+            v = agree_valid.reshape(-1)
+            la = logits_ag.reshape(-1, 2)[v]
+            lb = agree_label.reshape(-1)[v]
+            agree_loss = F.cross_entropy(la, lb)
+            self._last_agree_acc = (la.argmax(-1) == lb).float().mean().detach()
+            self._last_agree_frac = v.float().mean().detach()
+        self._last_agree_loss = agree_loss.detach()
         norm_q = keep_q.sum().clamp_min(1.0)
         query_loss = (per_token_q * keep_q).sum() / norm_q
         self._last_query_kept_frac = (
@@ -1201,6 +1331,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             ar_loss
             + self.query_loss_weight * query_loss
             + self.aux_loss_weight * aux_loss
+            + self.agree_loss_weight * agree_loss
         )
         return total_loss, aux_loss
 
@@ -1219,6 +1350,10 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.log('train_query_kept_frac', self._last_query_kept_frac)
         self.log('train_query_pairs', float(self._last_n_pairs))
         self.log('train_ctc_frac', getattr(self, '_last_ctc_frac', torch.zeros(())))
+        if self.agree_head:
+            self.log('train_agree_loss', self._last_agree_loss)
+            self.log('train_agree_acc', self._last_agree_acc)
+            self.log('train_agree_frac', self._last_agree_frac)
         return loss
 
     def on_before_optimizer_step(self, optimizer):
@@ -1505,6 +1640,18 @@ if __name__ == '__main__':
                              'at content t-2, one frame short of what '
                              'the AR head at the same phase sees. A.3f '
                              'alone; A.9 with --query_pairs -1.')
+    parser.add_argument('--agree_head', action='store_true', default=False,
+                        help='A.11: partner-agreement discrimination head on '
+                             'the conditional-slot pairs. Needs '
+                             '--cond_slot_prob > 0.')
+    parser.add_argument('--agree_decoy_prob', type=float, default=0.5,
+                        help='A.11: share of conditional-slot pairs whose '
+                             'committed leader is swapped for a lagged frame.')
+    parser.add_argument('--agree_loss_weight', type=float, default=0.3,
+                        help='A.11: weight on the detection cross-entropy. '
+                             'Keep it small -- the audio-visual literature '
+                             'reports hard temporal negatives degrading '
+                             'downstream features when over-weighted.')
     parser.add_argument('--cond_slot_prob', type=float, default=0.0,
                         help='A.3c: probability per (item, pair) that the '
                              'two slots are drawn in the commit-then-'
@@ -1577,6 +1724,9 @@ if __name__ == '__main__':
             fam = 'A9'                         # A.9 = A.3 kernel, slot sees
                                                # t-1, a query pair at EVERY
                                                # frame, A.3 decode
+        elif getattr(a, 'agree_head', False):
+            fam = 'A11'                        # conditional slots + the
+                                               # partner-agreement head
         elif a.slot_sees_prev_frame and a.cond_slot_prob > 0:
             fam = 'A3fc'                       # A.3f + conditional slots
         elif a.slot_sees_prev_frame:
@@ -1659,6 +1809,9 @@ if __name__ == '__main__':
                         .split(',')],
         query_block=args.query_block,
         cond_slot_prob=args.cond_slot_prob,
+        agree_head=bool(args.agree_head),
+        agree_decoy_prob=args.agree_decoy_prob,
+        agree_loss_weight=args.agree_loss_weight,
     )
     print(f'[scheme] {scheme_version}: slot_rope_aligned={not args.legacy_slot_rope}  '
           f'time_rope_aligned={bool(args.time_rope_aligned)}  '
@@ -1677,6 +1830,7 @@ if __name__ == '__main__':
           f'slot_sees_prev_frame={args.slot_sees_prev_frame}  '
           f'moe_aux_clean_only={args.moe_aux_clean_only}  '
           f'cond_slot_prob={args.cond_slot_prob}  '
+          f'agree_head={args.agree_head}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
           f'query_loss_weight={args.query_loss_weight}  '
           f'query_block={args.query_block}'
@@ -1829,6 +1983,9 @@ if __name__ == '__main__':
                     'query_pairs': args.query_pairs,
                     'slot_sees_prev_frame': bool(args.slot_sees_prev_frame),
                     'cond_slot_prob': args.cond_slot_prob,
+                    'agree_head': bool(args.agree_head),
+                    'agree_decoy_prob': args.agree_decoy_prob,
+                    'agree_loss_weight': args.agree_loss_weight,
                     'moe_aux_clean_only': bool(args.moe_aux_clean_only),
                     'aux_loss_weight': args.aux_loss_weight,
                     'query_block': args.query_block,

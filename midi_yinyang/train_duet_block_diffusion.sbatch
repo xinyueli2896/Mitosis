@@ -174,6 +174,15 @@
 #                           SLOT_SEES_PREV_FRAME=1). Decode with
 #                           A3_SCHEDULE=ctc_* (eval_e1 system A3c).
 #   --export=ALL,AUX_LOSS_WEIGHT=w   MoE balance-loss weight (0.01; 0 off)
+#   --export=ALL,AGREE_HEAD=1        A.11: partner-agreement detection
+#                           head on the conditional-slot pairs (needs
+#                           COND_SLOT_PROB > 0). AGREE_DECOY_PROB (0.5)
+#                           is the share of those pairs whose committed
+#                           leader is swapped for a lagged frame of its
+#                           own stream; AGREE_LOSS_WEIGHT (0.3) weights
+#                           the detection CE. Training-only: the decode
+#                           path is untouched, so an A.11 ckpt decodes
+#                           exactly like A3fc.
 #   --export=ALL,MOE_AUX_CLEAN_ONLY=1  balance statistics over clean
 #                           tokens only (query slots excluded). Both are
 #                           training-only: put them in RUN_TAG.
@@ -322,6 +331,9 @@ SLOT_SEES_PREV_FRAME="${SLOT_SEES_PREV_FRAME:-0}"
 # (one slot committed at k=0, the other masked at k=K); 0 = A.3's
 # independent uniform draw. Decode such a ckpt with A3_SCHEDULE=ctc_*.
 COND_SLOT_PROB="${COND_SLOT_PROB:-0}"
+AGREE_HEAD="${AGREE_HEAD:-0}"
+AGREE_DECOY_PROB="${AGREE_DECOY_PROB:-0.5}"
+AGREE_LOSS_WEIGHT="${AGREE_LOSS_WEIGHT:-0.3}"
 # MoE load-balancing loss: weight (0 disables it) and whether the
 # balance statistics see clean tokens only. Training-only knobs -- they
 # do not enter the run dir name, so record them in RUN_TAG.
@@ -410,6 +422,7 @@ if [[ -z "${MODEL_ABBR:-}" ]]; then
     elif [[ "$TOKEN_LEVEL_MASK" == "1" ]]; then FAM="A4legacy"
     elif [[ "$MASK_REVEALED_QUERY_LOSS" == "1" && "$QUERY_PAIRS" != "1" ]]; then FAM="A6"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" && "$QUERY_PAIRS" == "-1" ]]; then FAM="A9"
+    elif [[ "$AGREE_HEAD" == "1" ]]; then FAM="A11"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" && "$COND_SLOT_PROB" != "0" ]]; then FAM="A3fc"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" ]]; then FAM="A3f"
     elif [[ "$COND_SLOT_PROB" != "0" ]]; then FAM="A3c"
@@ -546,6 +559,11 @@ fi
 # early-run files and the converged weights are never written. 0 = off.
 if [[ "$SLOT_SEES_PREV_FRAME" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--slot_sees_prev_frame)
+fi
+if [[ "$AGREE_HEAD" == "1" ]]; then
+    EXTRA_TRAIN_ARGS+=(--agree_head
+                       --agree_decoy_prob "$AGREE_DECOY_PROB"
+                       --agree_loss_weight "$AGREE_LOSS_WEIGHT")
 fi
 if [[ "$MOE_AUX_CLEAN_ONLY" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--moe_aux_clean_only)
