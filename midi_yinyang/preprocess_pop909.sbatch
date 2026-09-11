@@ -2,8 +2,8 @@
 # SLURM batch script: end-to-end POP909 melody/chord preprocessing for the
 # melchord task (A.1/A.3/... training via tasks.py).
 #
-# Pipeline (each stage skippable / resumable -- stages that already have
-# output are only re-run with FORCE=1):
+# Pipeline (each stage skippable / resumable -- midi stages 1-3 are only
+# re-run with REBUILD_MIDI=1, tokenization with FORCE=1):
 #   1. align   preprocess_pop909_align.py:  POP909/<id>/{<id>.mid,beat_midi.txt}
 #              -> POP909-aligned/<id>.mid  (beat grid matches beat_midi.txt)
 #              Skipped automatically when ALIGNED_DIR already has midis
@@ -33,11 +33,22 @@
 # at tick (i+1)*PPQ, downbeats ignored). The current beat-aligner is
 # pop909_beat_align.py via align_pop909.sbatch, which writes aligned/,
 # melody/ and chord/ from the raw dataset in one pass.
-#   FORCE=1       re-run stages whose output already exists.
+#   FORCE=1       re-run TOKENIZATION even though the .pt exists. This
+#                 never touches the midi folders.
+#   REBUILD_MIDI=1  the ONLY way to re-run stages 1-3 into populated
+#                 folders. FORCE used to do this too, and it overwrote
+#                 the grid aligner's POP909-v5/{melody,chord} with this
+#                 script's OLD per-beat-tempo output -- every song came
+#                 back with a tempo event per beat and downbeats ignored.
+#                 Refused outright when the target folders belong to the
+#                 grid aligner (an align_grid_report.tsv sits beside
+#                 them): those are rebuilt by align_pop909_grid.sbatch,
+#                 never by this script.
 #
 # When MELODY_DIR and CHORD_DIR are already populated (e.g. downloaded from
-# HF: c0smic1atte/909_aligned), stages 1-3 are skipped entirely and only
-# tokenization + the pairing check run.
+# HF: c0smic1atte/909_aligned, or written by align_pop909_grid.sbatch),
+# stages 1-3 are skipped entirely and only tokenization + the pairing
+# check run.
 #
 # After this finishes, train A.3 on melody/chord with:
 #   sbatch --export=ALL,TASK=melchord midi_yinyang/train_duet_block_diffusion.sbatch
@@ -64,6 +75,7 @@ ALIGNED_DIR="${ALIGNED_DIR:-/home/xinyue.li/POP909-Dataset/POP909-aligned}"
 MELODY_DIR="${MELODY_DIR:-/home/xinyue.li/POP909-Dataset/POP909-melody}"
 CHORD_DIR="${CHORD_DIR:-/home/xinyue.li/POP909-Dataset/POP909-chord}"
 FORCE="${FORCE:-0}"
+REBUILD_MIDI="${REBUILD_MIDI:-0}"
 
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
@@ -80,18 +92,29 @@ echo "CHORD_DIR   = $CHORD_DIR    ($(count_mid "$CHORD_DIR") midis)"
 echo "================================================================"
 
 # Which build stages are actually needed? Melody/chord folders that are
-# already populated (e.g. downloaded pre-built) skip their stage; the
-# align stage only runs if some downstream stage still needs it.
+# already populated (e.g. downloaded pre-built, or written by the grid
+# aligner) skip their stage; the align stage only runs if some
+# downstream stage still needs it. FORCE does NOT reach these stages --
+# only REBUILD_MIDI=1 does, and never into the grid aligner's folders.
+for d in "$MELODY_DIR" "$CHORD_DIR"; do
+    if [[ -f "$(dirname "$d")/align_grid_report.tsv" && "$REBUILD_MIDI" == "1" ]]; then
+        echo "ERROR: $d belongs to the GRID aligner (align_grid_report.tsv is"
+        echo "       beside it). This script's stages 1-3 are the OLD per-beat-"
+        echo "       tempo pipeline and would overwrite it with the wrong files."
+        echo "       Rebuild that corpus with align_pop909_grid.sbatch instead."
+        exit 1
+    fi
+done
 NEED_MELODY=1
 NEED_CHORD=1
-if [[ "$FORCE" != "1" && "$(count_mid "$MELODY_DIR")" -gt 0 ]]; then NEED_MELODY=0; fi
-if [[ "$FORCE" != "1" && "$(count_mid "$CHORD_DIR")" -gt 0 ]]; then NEED_CHORD=0; fi
+if [[ "$REBUILD_MIDI" != "1" && "$(count_mid "$MELODY_DIR")" -gt 0 ]]; then NEED_MELODY=0; fi
+if [[ "$REBUILD_MIDI" != "1" && "$(count_mid "$CHORD_DIR")" -gt 0 ]]; then NEED_CHORD=0; fi
 
 # --- 1. align ---------------------------------------------------------
 if [[ "$NEED_MELODY" == "0" && "$NEED_CHORD" == "0" ]]; then
     echo "[align] melody and chord folders already populated; align not needed."
-elif [[ "$FORCE" != "1" && "$(count_mid "$ALIGNED_DIR")" -gt 0 ]]; then
-    echo "[align] $ALIGNED_DIR already populated; skipping (FORCE=1 to redo)."
+elif [[ "$REBUILD_MIDI" != "1" && "$(count_mid "$ALIGNED_DIR")" -gt 0 ]]; then
+    echo "[align] $ALIGNED_DIR already populated; skipping (REBUILD_MIDI=1 to redo)."
 else
     if [[ ! -d "$POP909_RAW" ]]; then
         echo "[align] ERROR: no aligned midis and POP909_RAW=$POP909_RAW missing."
