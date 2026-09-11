@@ -303,7 +303,7 @@ TABLE_COLS = [('si_mid', 'SI$_{\\mathrm{mid}}$'), ('rep_chroma', 'Rep.'),
               ('drift_slope', 'Drift'), ('pce4', 'PCE$_4$'), ('cpi', 'CPI'),
               ('gs', 'GS'), ('copy_bar_a', 'Copy$_m$'), ('copy_bar_b', 'Copy$_c$'),
               ('ngram4_a', '4-gram$_m$'), ('scale_consistency_a', 'Scale')]
-ORDER = ['A3fctcaT', 'A3fcaT', 'A3fcaTar', 'A3fcK4', 'A3ctcaT', 'A3ctca', 'A3ctc', 'A3ctc2', 'A3', 'A3K0', 'A3ctcc', 'A3f', 'A3c', 'A3fc',
+ORDER = ['A11aT', 'A11K4', 'A3fctcaT', 'A3fcaT', 'A3fcaTar', 'A3fcK4', 'A3ctcaT', 'A3ctca', 'A3ctc', 'A3ctc2', 'A3', 'A3K0', 'A3ctcc', 'A3f', 'A3c', 'A3fc',
          'A10', 'A1', 'A1cp8', 'S1', 'S-scratch', 'P-mc', 'P-cm', 'WS']
 
 
