@@ -251,10 +251,19 @@ def align_song(song_dir, dst, no_pad=False):
         os.makedirs(os.path.join(dst, sub), exist_ok=True)
         m.save(os.path.join(dst, sub, f'{sid}.mid'))
 
+    # How much of the song actually lands on the 4-beat grid. n_irregular
+    # counts the offending BARS, which badly understates the damage: one
+    # 2-beat bar early in the song throws every later downbeat off, so a
+    # song with a single irregular bar can still be misaligned almost
+    # end to end. This is the number to select test songs on.
+    db_phase = np.array([(bm.beat(rows[i, 0]) + pad) % 4 for i in downbeats])
+    on_bar = float(np.mean(np.minimum(db_phase, 4.0 - db_phase) < 0.01))
     return dict(id=sid, ppq=ppq, n_beats=len(rows), d0=d0, pad=pad,
                 lead_in_s=f'{rows[0, 0]:.3f}', n_bars=len(gaps),
                 n_irregular=len(irregular),
                 first_irregular_bar=(irregular[0] if irregular else ''),
+                n_downbeats=len(downbeats),
+                frac_downbeats_on_bar=f'{on_bar:.4f}',
                 chord_rows=n_rows)
 
 
@@ -285,9 +294,20 @@ def main():
             w.writeheader()
             w.writerows(rows)
     n_reg = sum(1 for r in rows if r['n_irregular'] == 0)
+    onb = np.array([float(r['frac_downbeats_on_bar']) for r in rows]) if rows \
+        else np.zeros(0)
     print(f'Done. {len(rows)} aligned, {len(failed)} failed -> {a.dst}')
     print(f'  pad distribution: { {k: sum(1 for r in rows if r["pad"] == k) for k in range(4)} }')
     print(f'  songs with every bar 4 beats: {n_reg}; with an irregular bar: {len(rows) - n_reg}')
+    if len(onb):
+        print('  DOWNBEATS ON THE 4-BEAT GRID (the number that matters):')
+        for lo, hi in ((1.0, 1.01), (0.99, 1.0), (0.9, 0.99), (0.5, 0.9),
+                       (0.0, 0.5)):
+            n = int(((onb >= lo) & (onb < hi)).sum())
+            tag = 'exactly 100%' if lo == 1.0 else f'{lo:.0%}-{hi:.0%}'
+            print(f'    {tag:>14}: {n:4d} songs')
+        print(f'    mean {onb.mean():.3f}; a song below 1.0 has its bar '
+              f'lines drifting off the annotated downbeats')
     for sid, err in failed[:20]:
         print(f'  FAILED {sid}: {err}')
 
