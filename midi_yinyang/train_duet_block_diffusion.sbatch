@@ -401,6 +401,13 @@ SC_AR_FRAC="${SC_AR_FRAC:-0}"
 SC_DRAFT_TEMP="${SC_DRAFT_TEMP:-0}"
 SC_K_CONSISTENT="${SC_K_CONSISTENT:-0}"
 SYM_K="${SYM_K:-0}"
+# MELCHORD_TAG selects a melchord dataset built from a different source
+# corpus (see PT_TAG in preprocess_pop909.sbatch). It goes into RUN_TAG
+# below as well, because the DATASET IS PART OF THE CONFIG: without that
+# a v4-data run and an old-data run share a directory and silently
+# auto-resume into each other.
+MELCHORD_TAG="${MELCHORD_TAG:-}"
+export MELCHORD_TAG
 MASK_K_PROB="${MASK_K_PROB:-}"
 SC_VAL="${SC_VAL:-0}"
 AGREE_HEAD="${AGREE_HEAD:-0}"
@@ -517,7 +524,7 @@ if [[ -z "${MODEL_ABBR:-}" ]]; then
     [[ "$FAM" == "A6" && "$QUERY_PAIRS" != "8" ]] && MODEL_ABBR="${MODEL_ABBR}q${QUERY_PAIRS}"
     [[ "$FAM" == A8* && "$QUERY_BLOCK" != "4" ]] && MODEL_ABBR="${MODEL_ABBR}b${QUERY_BLOCK}"
 fi
-RUN_DIR="ckpt/m2c_duet_block_diffusion_${SCHEME_VERSION}_large_gnl12_${MODEL_ABBR}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
+RUN_DIR="ckpt/m2c_duet_block_diffusion_${SCHEME_VERSION}_large_gnl12_${MODEL_ABBR}_${TASK}${MELCHORD_TAG}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
     CKPT="$RUN_DIR/last.ckpt"
     echo "[auto-resume] found $CKPT  (run dir: $RUN_DIR)"
@@ -572,6 +579,7 @@ if [[ -n "$CKPT" ]]; then
 else
     echo "Mode: COLD START (init from PRETRAINED -> INIT_CKPT=$INIT_CKPT)"
 fi
+echo "MELCHORD_TAG=${MELCHORD_TAG:-<none, historical dataset>}"
 echo "LR_TOTAL_STEPS=$LR_TOTAL_STEPS   VAL_CHECK_INTERVAL=$VAL_CHECK_INTERVAL   RUN_DIR=$RUN_DIR"
 echo "----------------------------------------------------------------"
 nvidia-smi || true

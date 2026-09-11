@@ -35,6 +35,13 @@ from dataclasses import dataclass
 # Override with MELCHORD_CP=4 to address the legacy cp4 datasets that
 # the pre-migration checkpoints were trained on.
 MELCHORD_CP = os.environ.get('MELCHORD_CP', '8')
+# MELCHORD_TAG picks a dataset built from a DIFFERENT source corpus --
+# set it to whatever POP909_PT_TAG the preprocessing used (e.g. '_v4').
+# Empty by default, so the paths are byte-identical to before. A run's
+# dataset is part of its config: train_duet_block_diffusion.sbatch puts
+# the tag in the run directory name so a v4-data run can never
+# auto-resume into an old-data one.
+MELCHORD_TAG = os.environ.get('MELCHORD_TAG', '')
 
 
 @dataclass(frozen=True)
@@ -58,8 +65,8 @@ TASKS = {
         # (1 bass + up to 4 upper tones -> up to 5 simultaneous notes; see
         # the MELCHORD_CP note above). Both streams tokenized at the same
         # budget. See preprocess_pop909.sbatch for the end-to-end pipeline.
-        mod_a_path=f'data/pop909_melody_cp{MELCHORD_CP}_v2.pt',
-        mod_b_path=f'data/pop909_chord_cp{MELCHORD_CP}_v2.pt',
+        mod_a_path=f'data/pop909_melody_cp{MELCHORD_CP}_v2{MELCHORD_TAG}.pt',
+        mod_b_path=f'data/pop909_chord_cp{MELCHORD_CP}_v2{MELCHORD_TAG}.pt',
         mod_a_default_program=24,
         mod_b_default_program=0,
     ),
@@ -73,8 +80,8 @@ TASKS = {
         # split as 'melchord', roles swapped. Used for the IN-DOMAIN
         # chord->mel cascade stage B (the published YinYang conditional
         # is Nottingham-trained, hence out of domain on POP909).
-        mod_a_path=f'data/pop909_chord_cp{MELCHORD_CP}_v2.pt',
-        mod_b_path=f'data/pop909_melody_cp{MELCHORD_CP}_v2.pt',
+        mod_a_path=f'data/pop909_chord_cp{MELCHORD_CP}_v2{MELCHORD_TAG}.pt',
+        mod_b_path=f'data/pop909_melody_cp{MELCHORD_CP}_v2{MELCHORD_TAG}.pt',
         mod_a_default_program=0,
         mod_b_default_program=24,
     ),

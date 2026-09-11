@@ -173,8 +173,15 @@ link_data_dir POP909-Dataset/POP909-chord  "$CHORD_DIR"
 # by cp_capacity_check.sbatch). Output names encode the budget, so
 # different budgets coexist under data/ without clobbering.
 MAX_POLYPHONY="${MAX_POLYPHONY:-8}"
-MEL_PT="data/pop909_melody_cp${MAX_POLYPHONY}_v2"
-CHORD_PT="data/pop909_chord_cp${MAX_POLYPHONY}_v2"
+# PT_TAG: suffix for the .pt names, so a dataset built from a DIFFERENT
+# source corpus (MELODY_DIR/CHORD_DIR pointing at, say, the v4 aligner's
+# output) lands beside the old one instead of overwriting the data every
+# existing checkpoint was trained on. Empty = the historical names.
+# Whatever you set here must be passed to training as MELCHORD_TAG.
+PT_TAG="${PT_TAG:-}"
+export POP909_PT_TAG="$PT_TAG"
+MEL_PT="data/pop909_melody_cp${MAX_POLYPHONY}_v2${PT_TAG}"
+CHORD_PT="data/pop909_chord_cp${MAX_POLYPHONY}_v2${PT_TAG}"
 
 if [[ "$FORCE" != "1" && -f "$MEL_PT.pt" ]]; then
     echo "[tokenize] $MEL_PT.pt exists; skipping melody."

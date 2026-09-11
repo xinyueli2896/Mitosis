@@ -311,6 +311,16 @@ def create_la_med(max_polyphony=16):
     la_folder = os.path.join(LA_DATASET_PATH, 'MIDIs')
     create_npy_dataset_from_midi(la_folder, max_polyphony, f'la_cp{max_polyphony}_v2_med_dedup', max_idx=50000, dedup=True)
 
+# POP909_PT_TAG: appended to the pop909 melody/chord dataset names, so a
+# dataset built from a DIFFERENT source corpus (e.g. the v4 aligner's
+# output) lands beside the old one instead of overwriting it. Empty by
+# default, so every existing name is unchanged. The source folders
+# themselves are POP909_MELODY_PATH / POP909_CHORD_PATH, which
+# preprocess_pop909.sbatch symlinks to MELODY_DIR / CHORD_DIR -- the tag
+# is what stops two different corpora sharing one .pt.
+PT_TAG = os.environ.get('POP909_PT_TAG', '')
+
+
 def create_pop909_melody(max_polyphony=8):
     # POP909 melody is monophonic; any budget leaves headroom for incidental
     # overlap. Default 8 keeps the two melchord streams at ONE shared budget
@@ -320,7 +330,7 @@ def create_pop909_melody(max_polyphony=8):
     create_npy_dataset_from_midi(
         POP909_MELODY_PATH,
         max_polyphony,
-        f'pop909_melody_cp{max_polyphony}_v2',
+        f'pop909_melody_cp{max_polyphony}_v2{PT_TAG}',
         ins_ids='all',
         scan_subfolders=False,
         filter=False,
@@ -337,7 +347,7 @@ def create_pop909_chord(max_polyphony=8):
     create_npy_dataset_from_midi(
         POP909_CHORD_PATH,
         max_polyphony,
-        f'pop909_chord_cp{max_polyphony}_v2',
+        f'pop909_chord_cp{max_polyphony}_v2{PT_TAG}',
         ins_ids='all',
         scan_subfolders=False,
         filter=False,
