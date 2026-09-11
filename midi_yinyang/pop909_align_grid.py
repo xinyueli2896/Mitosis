@@ -80,10 +80,51 @@ from build_pop909_chord_midi import chord_to_midi_pitches, parse_chord
 RESOLUTION = 480
 
 
+def bar_pos_of_beat0(strong, down, lookahead=8):
+    """Which beat of the bar annotation beat 0 is, from BOTH flag columns.
+
+    Column 3 marks the downbeat (bar position 0); column 2 marks the
+    half-bar beats (positions 0 and 2). So a row reading `1 0` -- strong
+    but not a downbeat -- IS bar position 2, and one reading `0 0` is
+    position 1 or 3 and cannot be resolved from that row alone: you have
+    to look at the next flagged beat. If the next beat is a downbeat this
+    one is position 3 (the 4th beat); if the next is merely strong this
+    one is position 1 (the 2nd beat).
+
+    Scanning to the FIRST FLAGGED beat generalises that and also resolves
+    the 12 songs where beats 0 and 1 are both unflagged. Downbeat is
+    tested before strong, so the 13 songs that mark a downbeat without
+    marking it strong still read correctly.
+
+    DIAGNOSTIC ONLY -- the origin does NOT use this. In 11 songs it
+    contradicts column 3 (its first flag sits at index 4 or 5), and
+    checking both hypotheses against where the CHORDS change settles it
+    against column 2: col3 puts more chord changes on a bar line in 8 of
+    the 11 (song 641: 93.9% vs 2.3%; song 213: 76.9% vs 14.8%), col2
+    wins only on 063, and two are ties. That is what you would expect --
+    anchoring on the first downbeat is exactly the constraint
+    pos0 = (-first_down) % 4 expresses, and overriding it with column 2
+    breaks the thing being anchored. Reported as bar_pos_from_col2 with
+    flags_disagree so a contradictory opening is visible per song.
+
+    Only the opening is consulted, never a vote over a window: 783 of 909
+    songs contain an irregular bar, and one inside the window drags a
+    vote onto the phase of the LATER section (a 32-beat vote disagrees
+    with this reading on 115 songs for that reason).
+    """
+    n = min(len(strong), lookahead)
+    for i in range(n):
+        if down[i]:
+            return (0 - i) % 4
+        if strong[i]:
+            return (2 - i) % 4
+    return 0
+
+
 def load_beats(path, fix_dropped=True, tol=0.15):
     """Column 1 of beat_midi.txt, optionally with dropped beats restored.
 
-    Returns (beat_times, downbeat_mask, n_inserted).
+    Returns (beat_times, downbeat_mask, n_inserted, bar_pos_of_beat0).
     """
     rows = np.loadtxt(path)
     if rows.ndim == 1:
@@ -91,13 +132,15 @@ def load_beats(path, fix_dropped=True, tol=0.15):
     if rows.shape[1] < 3:
         raise ValueError(f'{path}: expected 3 columns, got {rows.shape[1]}')
     bt = rows[:, 0].astype(float)
+    strong = rows[:, 1] >= 0.5
     down = rows[:, 2] >= 0.5
     if len(bt) < 2:
         raise ValueError(f'{path}: needs at least 2 beats')
     if np.any(np.diff(bt) <= 0):
         raise ValueError(f'{path}: beat times are not strictly increasing')
+    pos0 = bar_pos_of_beat0(strong, down)
     if not fix_dropped:
-        return bt, down, 0
+        return bt, down, 0, pos0
 
     d = np.diff(bt)
     med = float(np.median(d))
@@ -113,7 +156,7 @@ def load_beats(path, fix_dropped=True, tol=0.15):
                 n_ins += 1
         out_t.append(t_next)
         out_d.append(d_next)
-    return np.asarray(out_t), np.asarray(out_d), n_ins
+    return np.asarray(out_t), np.asarray(out_d), n_ins, pos0
 
 
 class GridMap:
@@ -219,8 +262,9 @@ def snap_stats(onsets, g):
 
 def align_song(song_dir, dst, sub, tempo, origin, fix_dropped, drop_tol):
     sid = os.path.basename(song_dir)
-    bt, down, n_ins = load_beats(os.path.join(song_dir, 'beat_midi.txt'),
-                                 fix_dropped=fix_dropped, tol=drop_tol)
+    bt, down, n_ins, pos0 = load_beats(
+        os.path.join(song_dir, 'beat_midi.txt'),
+        fix_dropped=fix_dropped, tol=drop_tol)
     db_idx = np.where(down)[0]
     if not len(db_idx):
         raise ValueError('no downbeat flag in column 3')
@@ -229,8 +273,10 @@ def align_song(song_dir, dst, sub, tempo, origin, fix_dropped, drop_tol):
         origin_beat = float(first_down)
     elif origin == 'bar':
         # negative origin == a positive shift: raw_beat - origin moves
-        # everything right by pad, so the first downbeat lands on a
-        # multiple of 4 and the pickup fills the bar before it.
+        # everything right by pad, so the FIRST DOWNBEAT lands on a
+        # multiple of 4 and the pickup fills the bar before it. Anchoring
+        # on column 3 is the constraint; see bar_pos_of_beat0 for why
+        # column 2 must not override it.
         origin_beat = -float((-first_down) % 4)
     else:
         origin_beat = 0.0
@@ -283,7 +329,11 @@ def align_song(song_dir, dst, sub, tempo, origin, fix_dropped, drop_tol):
     phase = (g.raw_beat(bt[db_idx]) - origin_beat) % 4
     on_bar = float(np.mean(np.minimum(phase, 4.0 - phase) < 1e-6))
     return dict(id=sid, n_beats=len(bt), inserted_beats=n_ins,
-                first_downbeat=first_down, origin=origin, sub=sub,
+                first_downbeat=first_down,
+                bar_pos_used=(-first_down) % 4,
+                bar_pos_from_col2=pos0,
+                flags_disagree=int(pos0 != (-first_down) % 4),
+                origin=origin, sub=sub,
                 tempo=tempo, n_notes=n_notes, notes_dropped=n_drop,
                 chord_rows=n_rows, chord_notes_dropped=c_drop,
                 n_bars=len(gaps), n_irregular=len(irregular),
@@ -358,6 +408,10 @@ def main():
         print(f'  notes dropped before beat 0: {int(dr.sum())}')
         print(f'  downbeats on the 4-beat grid: mean {onb.mean():.3f}; '
               f'{int((onb >= 1.0).sum())} songs at 100%')
+        fd_ = np.array([int(r['flags_disagree']) for r in rows])
+        print(f'  columns 2 and 3 contradict in the opening: '
+              f'{int(fd_.sum())} songs (origin follows column 3; see '
+              f'bar_pos_from_col2)')
         p95 = np.array([float(r['mel_snap_p95']) for r in rows])
         trp = np.array([float(r['mel_needs_sub24_frac']) for r in rows])
         print(f'  melody snap error (beats): median of p95 = '
