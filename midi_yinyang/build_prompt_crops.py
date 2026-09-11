@@ -8,17 +8,26 @@ intro ends, so it threw away most of the corpus and still left the
 prompts holding different amounts of music.
 
 This inverts it. The prompt is CUT TO the melody instead of hoping the
-melody arrives in time:
+melody arrives in time, and the anchor is the FIRST SOUNDING MELODY NOTE
+-- not a search for a convenient window. Let F be the bar holding that
+note:
 
-    bar 1        pickup / buffer -- whatever melody precedes the first
-                 full bar, or silence if the song has no pickup
-    bars 2..5    the first --mel-bars (default 4) consecutive bars in
-                 which BOTH streams sound
+    F is a pickup bar      melody enters partway through F, so the crop
+    (anacrusis)            begins ONE bar in front of it:
+                               bar 1     empty lead
+                               bar 2     the pickup, F
+                               bars 3..  --mel-bars sounding bars
 
-so every prompt carries four sounding bars of melody plus one bar of
-head-room, regardless of how long the intro was. Chord is cropped on
-exactly the same boundary -- everything before the pickup bar is
-discarded -- so the two streams stay in register by construction.
+    F is not a pickup      melody begins on F's bar line, so the crop
+                           begins TWO bars in front of it:
+                               bars 1-2  empty lead
+                               bars 3..  --mel-bars sounding bars
+
+Either way the prompt is --mel-bars + 2 bars and the melody enters at
+the same musical place in every song. Where the song has no such bars
+in front of F they are PADDED empty, so the anchor never slides. Chord
+is cropped and padded on exactly the same boundary, so the two streams
+stay in register by construction.
 
 Bars come from the file's OWN time signatures, so a song with a 6/4 bar
 is measured in its real bars rather than a fixed four beats. Songs whose
@@ -219,10 +228,11 @@ def crop_ticks(src_path, dst_path, tick0, pad_ticks=0):
     and a different tempo per song depending on what its first event
     happened to be. That is editing the source, not cropping it.
 
-    pad_ticks prepends that many EMPTY ticks, used when the song has no
-    bar before its pickup and one has to be manufactured. It is a pure
-    shift of everything that survives -- no note is created, and the
-    relative timing inside the window is untouched.
+    pad_ticks prepends that many EMPTY ticks, used when the song does not
+    have enough bars in front of its first melody note and the missing
+    ones have to be manufactured. It is a pure shift of everything that
+    survives -- no note is created, and the relative timing inside the
+    window is untouched.
 
     Notes are kept when their ONSET is at or after tick0 and shifted by
     -tick0 + pad_ticks; a note straddling the cut is dropped rather than truncated,
@@ -299,15 +309,14 @@ def main():
                         "usable, instead of being dropped or silently "
                         "scored across a bar-grid shift.")
     p.add_argument('--force-ids', nargs='*', default=[],
-                   help='ids to keep even when the normal rule rejects '
-                        'them. The crop point is still chosen, by the '
-                        'first fallback that works: melody-only bars, '
-                        'then any bar-aligned melody start, then any '
-                        'melody at all. MIN_BARS is waived too. The TSV '
-                        'records which rule was used in `forced`, so a '
-                        'forced song is never mistaken for one that '
-                        'passed -- use it when you have LISTENED to the '
-                        'song and know the crop is fine.')
+                   help='ids to keep even when a drop rule rejects them. '
+                        'The crop point itself never needs forcing any '
+                        'more -- it is the first sounding melody note, '
+                        'which every non-empty song has -- so this now '
+                        'only waives MIN_BARS and --require-regular. The '
+                        'TSV records it in `forced`, so a forced song is '
+                        'never mistaken for one that passed; use it when '
+                        'you have LISTENED to the song.')
     p.add_argument('--extra-ids', nargs='*',
                    default=['001', '002', '003', '004', '005'],
                    help='ids to ADD to the held-out set. Default is the five '
@@ -326,14 +335,17 @@ def main():
     p.add_argument('--ids', nargs='*', default=None,
                    help='explicit ids; skips the held-out split filter')
     p.add_argument('--mel-bars', type=int, default=4,
-                   help='consecutive sounding bars required in the prompt '
-                        '(the prompt is this + 1 pickup bar)')
+                   help='sounding bars of melody the prompt carries after '
+                        'the lead (the prompt is this + 2 bars: one empty '
+                        'lead plus the pickup, or two empty lead bars '
+                        'where the melody starts on a bar line)')
     p.add_argument('--head-beats', type=float, default=0.25,
-                   help='how close to a bar line a melody note must begin '
-                        'for that bar to count as the melody OFFICIALLY '
-                        'starting (in beats; 0.25 = a 16th). Bars the '
-                        'melody only wanders into partway through are '
-                        'anacrusis, and belong in the buffer bar.')
+                   help='how close to a bar line the first melody note must '
+                        'begin for that bar to count as the melody '
+                        'OFFICIALLY starting (in beats; 0.25 = a 16th). A '
+                        'first note later than that makes its bar an '
+                        'ANACRUSIS, and the crop then takes one bar in '
+                        'front of it instead of two.')
     p.add_argument('--min-bars', type=int, default=25,
                    help='bars that must remain from the crop point, so '
                         'there is room for the generated continuation')
@@ -410,21 +422,21 @@ def main():
               f'rejects them; `forced` in the TSV says which fallback was '
               f'used')
     rows, kept, reasons = [], [], {}
-    for sid in missing:
-        rows.append(dict(id=sid, first_both_bar='', crop_bar='',
-                         crop_sec='', bars_remaining='',
-                         pickup_has_melody='', metre_changes_in_prompt='',
-                         metre_changes_in_window='', pad_bars='', lead_has_melody='', pad_frames='', crop_frame='', irregular_bars='', window_regular='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
-                         dropped='not in the source folder'))
-        reasons[sid] = 'not in the source folder'
+    # Every row carries every column, so a song dropped early still gets
+    # a line and the TSV never depends on which row happened to be first.
+    COLS = ['id', 'first_mel_bar', 'is_pickup', 'lead_bars', 'crop_bar',
+            'crop_sec', 'crop_frame', 'pad_frames', 'bars_remaining',
+            'pad_bars', 'lead_has_melody', 'pickup_has_melody',
+            'metre_changes_in_prompt', 'metre_changes_in_window',
+            'irregular_bars', 'window_regular', 'src_tempo_events',
+            'src_bpm_first', 'src_bpm_median', 'forced', 'dropped']
 
     def stub(sid, why):
         reasons[sid] = why
-        rows.append(dict(id=sid, first_both_bar='', crop_bar='',
-                         crop_sec='', bars_remaining='',
-                         pickup_has_melody='', metre_changes_in_prompt='',
-                         metre_changes_in_window='', pad_bars='', lead_has_melody='', pad_frames='', crop_frame='', irregular_bars='', window_regular='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
-                         dropped=why))
+        rows.append(dict({c: '' for c in COLS}, id=sid, dropped=why))
+
+    for sid in missing:
+        stub(sid, 'not in the source folder')
     for sid in ids:
         mp = os.path.join(a.mel_src, f'{sid}.mid')
         cp_ = os.path.join(a.chord_src, f'{sid}.mid')
@@ -454,9 +466,6 @@ def main():
         tol = a.head_beats * spb
         m_start = complete_bars(mel_notes, bars, tol)
         both = m_hit & c_hit
-        # B = the first bar the melody OFFICIALLY starts on (m_start) and
-        # from which mel_bars consecutive bars have both streams. B >= 1
-        # so the bar in front of it is free to hold the anacrusis.
         win = prompt_bars + a.min_bars
         if sid in src_db and len(src_db[sid]) >= 2:
             # bar i is irregular when the gap to bar i+1 is not 16 frames
@@ -464,67 +473,53 @@ def main():
             irr = {i for i, (x, y) in enumerate(zip(f, f[1:])) if y - x != 16}
         else:
             irr = irregular.get(sid, set())
-
-        def clean(b):
-            """Is the whole scored window free of irregular bars? Bar b-2
-            is the lead, b-1 the pickup, so the window runs
-            [b-2, b-2+win) -- clamped at 0 where the lead is padded."""
-            lo = max(b - 2, 0)
-            return not any(lo <= x < lo + win for x in irr)
-
-        B, how = None, ''
-        # first pass: a window that is metrically regular
-        for b in range(1, len(bars) - a.mel_bars):
-            if m_start[b] and both[b:b + a.mel_bars].all() and clean(b):
-                B = b
-                break
-        if B is None and irr:
-            # fall back to the first valid start even if the window
-            # crosses a metre change, and SAY so in the row
-            for b in range(1, len(bars) - a.mel_bars):
-                if m_start[b] and both[b:b + a.mel_bars].all():
-                    B, how = b, 'window crosses a metre change'
-                    break
-        elif B is None:
-            for b in range(1, len(bars) - a.mel_bars):
-                if m_start[b] and both[b:b + a.mel_bars].all():
-                    B = b
-                    break
         forced = sid in force_ids
-        if B is None and forced:
-            # Fallbacks, most demanding first; `how` records which one.
-            for label, test in (
-                ('melody-only bars',
-                 lambda b: m_start[b] and m_hit[b:b + a.mel_bars].all()),
-                ('bar-aligned melody start', lambda b: m_start[b]),
-                ('any melody', lambda b: m_hit[b]),
-            ):
-                for b in range(1, max(len(bars) - a.mel_bars, 2)):
-                    if test(b):
-                        B, how = b, label
-                        break
-                if B is not None:
-                    break
-        if B is None:
-            # Say WHICH half of the condition failed, so this is
-            # actionable instead of a shrug. Either the melody never
-            # begins on a bar line (raise --head-beats) or the two
-            # streams are never both active for mel_bars in a row.
-            run = best = 0
-            for v in both:
-                run = run + 1 if v else 0
-                best = max(best, run)
-            stub(sid, f'no bar-aligned start with {a.mel_bars} consecutive '
-                      f'both-stream bars (longest both-stream run {best}; '
-                      f'{int(m_start.sum())} bar-aligned melody starts in '
-                      f'{len(bars)} bars)')
-            continue
-        # One bar in front of the pickup: the song's own if it has one,
-        # otherwise an empty bar manufactured by padding. The pickup bar
-        # itself stays where it was, at B-1.
-        lead = B - 2
-        pad_bars = 1 if lead < 0 else 0
-        start_bar = max(lead, 0)
+
+        # ------------------------------------------------------------
+        # F = the bar holding the FIRST SOUNDING MELODY NOTE.
+        #
+        # This is the anchor, and it is not negotiable -- no search, no
+        # fallback ladder. The previous version looked for the first bar
+        # with a bar-aligned melody start AND mel_bars of both-stream
+        # activity AND a regular metre, and slid later whenever one of
+        # those failed. Sliding moves the crop off the song's actual
+        # opening: songs 010 and 816 ended up with a "lead bar" that was
+        # really bar 2 of the tune, i.e. the model was handed melody in
+        # the bar that is supposed to be empty head-room. Anchoring on
+        # the first note cannot do that, and the metre/both-stream
+        # conditions become things REPORTED about the window rather than
+        # things that move it.
+        # ------------------------------------------------------------
+        first_on = float(min(n.start for n in mel_notes))
+        F = int(np.searchsorted(bars, first_on + 1e-9, side='right')) - 1
+        F = int(np.clip(F, 0, len(bars) - 1))
+        # a note a hair BEFORE a bar line is that bar's downbeat, played
+        # early -- not an anacrusis one bar earlier
+        if F + 1 < len(bars) and bars[F + 1] - first_on <= tol:
+            F += 1
+        # pickup iff the melody enters partway through F rather than on
+        # its bar line (complete_bars cannot be true here by sustain --
+        # F holds the first onset in the file)
+        is_pickup = not bool(m_start[F])
+        lead_bars = 1 if is_pickup else 2
+        start_bar = F - lead_bars
+        pad_bars = max(-start_bar, 0)
+        start_bar = max(start_bar, 0)
+        how = ''
+        # the mel_bars of melody the prompt is meant to carry begin after
+        # the pickup where there is one, on F itself where there is not
+        s0 = F + 1 if is_pickup else F
+
+        def clean(b0):
+            """Is the scored window [b0, b0+win) free of irregular bars?"""
+            return not any(b0 <= x < b0 + win for x in irr)
+
+        if irr and not clean(start_bar):
+            how = 'window crosses a metre change'
+        if not both[s0:s0 + a.mel_bars].all():
+            n_both = int(both[s0:s0 + a.mel_bars].sum())
+            how = (how + '; ' if how else '') + \
+                f'only {n_both}/{a.mel_bars} prompt bars have both streams'
         remaining = len(bars) - start_bar
         n_ts_prompt = sum(1 for t in ts_list
                           if bars[start_bar] < t.time <
@@ -532,7 +527,8 @@ def main():
         win_end = min(start_bar + prompt_bars + a.min_bars, len(bars) - 1)
         n_ts_win = sum(1 for t in ts_list
                        if bars[start_bar] < t.time < bars[win_end])
-        row = dict(id=sid, first_both_bar=B, crop_bar=start_bar,
+        row = dict(id=sid, first_mel_bar=F, is_pickup=int(is_pickup),
+                   lead_bars=lead_bars, crop_bar=start_bar,
                    crop_sec=f'{bars[start_bar]:.3f}',
                    # the crop offset in FRAMES. Recorded rather than left
                    # to be re-derived as crop_bar*16, which is only true
@@ -543,13 +539,18 @@ def main():
                    pad_frames=pad_bars * 16,
                    bars_remaining=remaining,
                    pad_bars=pad_bars,
-                   lead_has_melody=int(bool(m_hit[start_bar]))
-                   if not pad_bars else 0,
-                   pickup_has_melody=int(bool(m_hit[B - 1])),
+                   # 0 by construction -- there is no melody anywhere
+                   # before F -- and computed rather than asserted so a
+                   # future change to the anchor shows up here instead of
+                   # silently handing the model a head-room bar with a
+                   # tune in it.
+                   lead_has_melody=int(bool(m_hit[start_bar:F].any()))
+                   if F > start_bar else 0,
+                   pickup_has_melody=int(is_pickup and bool(m_hit[F])),
                    metre_changes_in_prompt=n_ts_prompt,
                    metre_changes_in_window=n_ts_win,
                    irregular_bars=len(irr),
-                   window_regular=int(bool(B is not None and clean(B))),
+                   window_regular=int(bool(clean(start_bar))),
                    src_tempo_events=n_tempo, src_bpm_first=f'{bpm0:.2f}',
                    src_bpm_median=f'{bpmm:.2f}',
                    forced=how)
@@ -584,24 +585,30 @@ def main():
     if rows:
         with open(os.path.join(a.dst, 'prompt_crops.tsv'), 'w',
                   newline='') as fh:
-            w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()),
-                               delimiter='\t')
+            w = csv.DictWriter(fh, fieldnames=COLS, delimiter='\t')
             w.writeheader()
             w.writerows(rows)
     print(f'KEPT {len(kept)} songs -> {a.dst}/{{melody,chord}}')
-    print(f'  prompt = 1 lead bar + 1 pickup bar + {a.mel_bars} sounding '
-          f'bars = {prompt_bars} bars ({prompt_bars * 16} frames)')
+    print(f'  prompt = {prompt_bars} bars ({prompt_bars * 16} frames) '
+          f'everywhere: lead + {a.mel_bars} sounding bars, where the lead '
+          f'is 1 bar + the pickup for a song with an anacrusis and 2 bars '
+          f'for one that starts on a bar line')
     if kept:
-        pk = np.array([r['pickup_has_melody'] for r in rows
-                       if not r['dropped']])
-        tw = np.array([r['metre_changes_in_window'] for r in rows
-                       if not r['dropped']])
-        cb = np.array([r['crop_bar'] for r in rows if not r['dropped']])
-        pb = np.array([int(r['pad_bars']) for r in rows if not r['dropped']])
-        print(f'  lead bar: {int((pb == 0).sum())} taken from the song, '
-              f'{int(pb.sum())} padded empty (no bar before the pickup)')
-        print(f'  pickup bar actually holds melody in {int(pk.sum())}/'
-              f'{len(pk)} (the rest start on a bar line, buffer is silent)')
+        keep_rows = [r for r in rows if not r['dropped']]
+        pk = np.array([int(r['pickup_has_melody']) for r in keep_rows])
+        tw = np.array([int(r['metre_changes_in_window']) for r in keep_rows])
+        cb = np.array([int(r['crop_bar']) for r in keep_rows])
+        pb = np.array([int(r['pad_bars']) for r in keep_rows])
+        lm = np.array([int(r['lead_has_melody']) for r in keep_rows])
+        print(f'  anchor: {int(pk.sum())}/{len(pk)} songs open with a '
+              f'PICKUP bar (1 bar in front), {int((pk == 0).sum())} start '
+              f'on a bar line (2 bars in front)')
+        print(f'  lead bars: {int((pb == 0).sum())} entirely from the song, '
+              f'{int((pb > 0).sum())} needed padding '
+              f'({int(pb.sum())} bars padded in total)')
+        if lm.sum():
+            print(f'  !! {int(lm.sum())} song(s) have MELODY in a lead bar '
+                  f'-- that should be impossible with a first-note anchor')
         print(f'  crop point: median bar {int(np.median(cb))}, '
               f'max {int(cb.max())}')
         bpms = {r['src_bpm_median'] for r in rows
@@ -620,9 +627,11 @@ def main():
                   + ('' if nreg == len(wr) else
                      f'  ({len(wr) - nreg} cross a metre change -- see '
                      f'`forced`)'))
-        fz = [r['id'] for r in rows if not r['dropped'] and r.get('forced')]
+        fz = [(r['id'], r['forced']) for r in keep_rows if r.get('forced')]
         if fz:
-            print(f'  FORCED (normal rule rejected, kept anyway): {fz}')
+            print(f'  {len(fz)} kept song(s) carry a caveat in `forced`:')
+            for s, why in fz[:12]:
+                print(f'      {s}: {why}')
         print(f'  metre changes inside the scored window: '
               f'{int((tw > 0).sum())} songs'
               + ('' if a.require_regular else

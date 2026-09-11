@@ -6,16 +6,24 @@
 # that both streams happen to sound within the first 6 or 8 bars. The
 # second is a property of how long the song's intro is, so it discarded
 # most of the corpus and still left prompts holding different amounts of
-# music. This crops TO the melody instead:
+# music. This crops TO the melody instead, anchored on the FIRST
+# SOUNDING MELODY NOTE. Let F be the bar holding it:
 #
-#     bar 1       pickup / buffer -- the anacrusis if the song has one,
-#                 silence if it starts on a bar line
-#     bars 2..5   the first MEL_BARS (4) consecutive bars in which BOTH
-#                 streams sound, beginning on a bar line
+#   F is a PICKUP bar (melody enters partway through it)
+#       crop one bar in front:   [ empty ][ pickup F ][ MEL_BARS bars ]
 #
-# Chord is cut on exactly the same boundary and everything before the
-# pickup bar is discarded, so the streams stay in register by
-# construction. Bars come from each file's OWN time signatures, so a
+#   F is NOT a pickup (melody begins on F's bar line)
+#       crop two bars in front:  [ empty ][ empty ][ MEL_BARS bars, from F ]
+#
+# so the prompt is MEL_BARS + 2 bars either way and the melody enters at
+# the same musical place in every song. Bars missing in front of F are
+# PADDED empty rather than letting the anchor slide -- the earlier
+# version searched for a convenient window and slid later, which put
+# real melody in the head-room bar on songs 010 and 816.
+#
+# Chord is cut and padded on exactly the same boundary, so the streams
+# stay in register by construction. Bars come from each file's OWN time
+# signatures (or the aligner's true downbeats, see ALIGN_REPORT), so a
 # song with a 6/4 bar is measured in its real bars.
 #
 # Env knobs (--export=ALL,KEY=val):
@@ -27,27 +35,25 @@
 #                        is e.g. pop909_melody_cp8_v2_v5 -- or the split
 #                        will not match what the model never saw.
 #   IDS                  explicit ids; skips the held-out filter entirely
-#   FORCE_IDS            ids kept even when the normal rule rejects them.
-#                        The crop point is still chosen, by the first
-#                        fallback that works (melody-only bars, then any
-#                        bar-aligned melody start, then any melody), and
-#                        MIN_BARS is waived. The TSV's `forced` column
-#                        records which fallback was used, so a forced
-#                        song is never mistaken for one that passed. Use
-#                        it for songs you have LISTENED to.
+#   FORCE_IDS            ids kept even when a drop rule rejects them.
+#                        The crop point never needs forcing any more --
+#                        it is the first sounding melody note, which
+#                        every non-empty song has -- so this now only
+#                        waives MIN_BARS and REQUIRE_REGULAR. Use it for
+#                        songs you have LISTENED to.
 #   EXTRA_IDS            ids ADDED to the held-out set (default "001 002
 #                        003 004 005", the songs cut before preprocessing:
 #                        absent from the dataset, so the index rule cannot
 #                        find them, but never trained on either). Refused
 #                        if any is in the TRAIN split. Set to " " for none.
 #   MEL_BARS             sounding bars in the prompt (default 4). The
-#                        prompt is MEL_BARS + 2 bars: a LEAD bar, the
-#                        pickup bar, then the sounding bars. The lead is
-#                        the song's own bar where it has one and an empty
-#                        padded bar where it does not -- pad_bars and
-#                        pad_frames in the TSV say which, and the padding
-#                        shifts both streams identically so they stay in
-#                        register.
+#                        prompt is always MEL_BARS + 2 bars, so
+#                        PROMPT_LENGTH = (MEL_BARS + 2) * 16 frames = 96.
+#                        The two bars in front come from the song where
+#                        it has them and are padded empty where it does
+#                        not -- pad_bars / pad_frames in the TSV say
+#                        which, and the padding shifts both streams
+#                        identically so they stay in register.
 #   MIN_BARS             bars that must remain after the crop so there is
 #                        room to generate (default 25)
 #   ALIGN_REPORT         align_grid_report.tsv from the aligner. Supplies
@@ -111,7 +117,8 @@ echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "MEL_SRC=$MEL_SRC"
 echo "CHORD_SRC=$CHORD_SRC"
 echo "DST=$DST   DATASET=$DATASET (idx %% $SPLIT_RATIO == 0 held out)"
-echo "prompt = 1 buffer bar + $MEL_BARS sounding bars; MIN_BARS=$MIN_BARS"
+echo "prompt = 2 lead bars (or 1 + pickup) + $MEL_BARS sounding bars"
+echo "       = $((MEL_BARS + 2)) bars = $(( (MEL_BARS + 2) * 16 )) frames; MIN_BARS=$MIN_BARS"
 echo "REQUIRE_REGULAR=$REQUIRE_REGULAR   IDS=${IDS:-<held-out split>}"
 echo "EXTRA_IDS=${EXTRA_IDS:-<none>}   FORCE_IDS=${FORCE_IDS:-<none>}"
 echo "ALIGN_REPORT=${ALIGN_REPORT:-<none: windows cannot avoid metre changes>}"

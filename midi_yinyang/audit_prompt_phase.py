@@ -42,9 +42,10 @@ def main():
                    help='the prompt set built by build_prompt_crops')
     p.add_argument('--report', required=True,
                    help='align_grid_report.tsv for the SOURCE corpus')
-    p.add_argument('--prompt-frames', type=int, default=80,
+    p.add_argument('--prompt-frames', type=int, default=96,
                    help='frames handed to the model before it takes over '
-                        '(5 bars = 80 at 16 frames per bar)')
+                        '(6 bars = 96 at 16 frames per bar: the lead plus '
+                        'MEL_BARS sounding bars)')
     p.add_argument('--gen-frames', type=int, default=320,
                    help='frames the model then generates, for the metre '
                         'check over the scored window')

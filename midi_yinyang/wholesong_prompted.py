@@ -138,7 +138,17 @@ def main():
                     continue
                 cb = row.get('crop_bar', '')
                 if cb != '':
-                    crops[row['id']] = int(cb)
+                    # pad_bars are EMPTY bars build_prompt_crops
+                    # manufactured in front of the song because it did
+                    # not have enough real ones before its first melody
+                    # note. The baseline's language images have no such
+                    # bars and none can be synthesised honestly, so the
+                    # baseline's prompt is shortened by exactly that
+                    # many bars instead -- which leaves it holding the
+                    # same REAL music, since the bars we padded are
+                    # silent.
+                    crops[row['id']] = (int(cb),
+                                        int(row.get('pad_bars') or 0))
         print(f'[crop] {len(crops)} songs with a crop point from '
               f'{args.crops_tsv}')
 
@@ -185,12 +195,13 @@ def main():
             # the baseline's song is bar 1 of ours. Slicing the language
             # images is the honest way to do it: every level keeps its
             # own encoding, only the window moves.
+            prompt_bars = args.prompt_bars
             if crops:
                 if name not in crops:
                     raise ValueError(
                         f'no crop point for {name} in {args.crops_tsv} '
                         f'(dropped there, or not a held-out song)')
-                cb = crops[name]
+                cb, pad = crops[name]
                 off_beats, off_16 = cb * nbpm, cb * nbpm * nspb
                 if off_beats >= L_beats or off_16 >= L_16:
                     raise ValueError(
@@ -202,11 +213,18 @@ def main():
                 L_16 -= off_16
                 print(f'  cropped to bar {cb} '
                       f'(-{off_beats} beats / -{off_16} sixteenths)')
+                if pad:
+                    prompt_bars = max(args.prompt_bars - pad, 1)
+                    print(f'  our prompt for {name} includes {pad} PADDED '
+                          f'empty bar(s); the baseline cannot have them, '
+                          f'so its prompt is {prompt_bars} bars -- the '
+                          f'same real music')
 
-            p_beats = args.prompt_bars * nbpm
-            p_16 = args.prompt_bars * nbpm * nspb
+            p_beats = prompt_bars * nbpm
+            p_16 = prompt_bars * nbpm * nspb
             print(f'  L = {L_beats} beats / {L_16} sixteenths; '
-                  f'prompt = {p_beats} beats / {p_16} sixteenths')
+                  f'prompt = {prompt_bars} bars = {p_beats} beats / '
+                  f'{p_16} sixteenths')
 
             n = args.n_samples
             # ---- form background ----------------------------------
@@ -235,7 +253,7 @@ def main():
                 frm_img = frm_ds.lang_to_img(0, 0, frm_bars,
                                              tgt_lgth=frm_bars)
                 frm_prompt = np.repeat(
-                    frm_img[np.newaxis, :, 0:args.prompt_bars], n, axis=0)
+                    frm_img[np.newaxis, :, 0:prompt_bars], n, axis=0)
                 f_canvas, f_slices, f_max_l = frm_op.create_canvas(
                     n_sample=n, prompt=frm_prompt)
                 frm_raw = frm_op.generation(f_canvas, f_slices, f_max_l,

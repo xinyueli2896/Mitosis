@@ -23,7 +23,10 @@ mkdir -p /home/xinyue.li/logs
 POP=/home/xinyue.li/POP909-Dataset
 SET="${SET:-input/heldout_v5}"
 REPORT="${REPORT:-$POP/POP909-v5/align_grid_report.tsv}"
-PROMPT_FRAMES="${PROMPT_FRAMES:-80}"
+# 6 bars: the lead (1 bar + pickup, or 2 bars) plus MEL_BARS=4 sounding
+# bars. Must match what build_prompt_crops wrote, or the "generation
+# starts on a downbeat" test is asking about the wrong frame.
+PROMPT_FRAMES="${PROMPT_FRAMES:-96}"
 GEN_FRAMES="${GEN_FRAMES:-320}"
 echo "SET=$SET  REPORT=$REPORT  PROMPT_FRAMES=$PROMPT_FRAMES"
 
