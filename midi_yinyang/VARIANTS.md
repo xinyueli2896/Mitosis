@@ -380,6 +380,40 @@ Training-only, like A.11: self-conditioning is gated on
 stays directly comparable across the whole A family (audit check 8).
 An A.12 checkpoint decodes exactly like A3fc.
 
+### A.12 draft-only configuration — what is left of k (2026-09-11)
+
+At `DIFFUSION_K=1 MASK_K_PROB=0 SYM_K=1 SELF_COND_PROB=1.0
+SC_AR_FRAC=1.0 SC_VAL=1` there is effectively NO k design. k is 0 in
+training (the endpoint coin never fires, the remainder draws from
+{0..K-1} = {0}) and 0 in validation (`sc_val` pins it), the mask coin
+at k=0 has rate 0/1, and self-conditioning always fires -- so every
+slot, every step, holds the AR draft. One state.
+
+`diffusion_K` must still be >= 1. It is not used by training; it sizes
+`k_emb` to K+1 = 2 entries so the decode can index `k_emb(1)` for the
+seed round of `A3_SCHEDULE=refine A3_REFINE_STEPS=1`. K=0 would give a
+single entry and the decode would index out of range.
+
+THREE PARAMETERS ARE THEREFORE DEAD in such a checkpoint, and none of
+them is a bug:
+
+| parameter | status |
+|---|---|
+| `k_emb_{m,c}(0)` | trained, but a CONSTANT added to every slot -- a learned bias, not a tag |
+| `k_emb_{m,c}(1)` | never trained (nothing draws k=1; eval pins 0) |
+| `mask_{m,c}_emb` | never trained (audit check 10: no slot holds it) |
+
+`k_emb(1)` and the mask embeddings ARE read at decode, but only in the
+seed round, whose prediction comes off the clean AR rows -- and clean
+rows never attend slots. So they stay at random init and reach nothing.
+Do not "repair" them; the way to bring them back is MASK_K_PROB > 0,
+which reintroduces the masked state on purpose.
+
+Also note `val_loss` for such a run is on its OWN SCALE and is not
+comparable with the rest of the A family: `sc_val` changes what
+validation measures (the revision task, not prediction-from-mask).
+`val_ar_loss_content` and `best_ar/` stay comparable.
+
 ### A.11 — partner-agreement discrimination head (2026-09-11)
 
 `--agree_head` on `cp_transformer_m2c_duet_block_diffusion.py` (wrapper
