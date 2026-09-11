@@ -198,6 +198,16 @@ N_SAMPLES="${N_SAMPLES:-3}"
 BASELINE="${BASELINE:-A3}"
 MEL_FOLDER="${MEL_FOLDER:-input/pop909_split/melody}"
 CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"
+# CROPS_TSV: build_prompt_crops' prompt_crops.tsv for the test set. Our
+# systems read the CROPPED midis, so their prompt is bar 0 of the crop
+# by construction. The whole-song baseline does not read our midis at
+# all -- it loads the song by POP909 index from its own dataset -- so
+# without this it prompts from the ORIGINAL song's bar 0: a different
+# prompt from every other row of the table. Default: the TSV beside
+# MEL_FOLDER when there is one (a build_prompt_crops set), else none
+# (the legacy pop909_split set, which was never cropped).
+CROPS_TSV="${CROPS_TSV:-$(dirname "$MEL_FOLDER")/prompt_crops.tsv}"
+[[ -f "$CROPS_TSV" ]] || CROPS_TSV=""
 OUT_ROOT="${OUT_ROOT:-temp/E1}"
 RESULT_TAG="${RESULT_TAG:-}"
 SKIP_INFER="${SKIP_INFER:-0}"
@@ -222,6 +232,7 @@ echo "E1 CO-GENERATION EVALUATION"
 echo "SYSTEMS=$SYSTEMS   FORCE=${FORCE:-<none>}   SKIP_INFER=$SKIP_INFER"
 echo "PROMPT_LENGTH=$PROMPT_LENGTH ($((PROMPT_LENGTH / 16)) bars)  GEN_LENGTH=$GEN_LENGTH  N_SAMPLES=$N_SAMPLES"
 echo "OUT_ROOT=$OUT_ROOT   BASELINE=$BASELINE"
+echo "MEL_FOLDER=$MEL_FOLDER   CROPS_TSV=${CROPS_TSV:-<none: WS/WSf prompt from the original bar 0>}"
 echo "A3 decode: REFINE=$A3_REFINE_STEPS temp=$A3_FINAL_TEMP top_p=$A3_TOP_P"
 echo "cp: duet=$MAX_POLYPHONY_DUET  specialists=$MAX_POLYPHONY_SPEC  S1/S0=$MAX_POLYPHONY_S1/$MAX_POLYPHONY_S0"
 echo "================================================================"
@@ -428,8 +439,15 @@ generate() {
         # System name WSf pins `generated` so both can sit in one table.
         local ws_form="${WS_FORM:-gt}"
         [[ "$name" == WSf ]] && ws_form=generated
+        # CROPS_TSV absolute: the wrapper cds into the baseline's tree.
+        # Without it the baseline is prompted from the song's own bar 0
+        # -- see the knob comment -- which is a different prompt from
+        # every other system's and cannot go in the same table.
+        local crops=""
+        [[ -n "$CROPS_TSV" ]] && crops="$(readlink -f "$CROPS_TSV")"
         OUT_DIR="$MY/$dir" SONG_IDS="$ids" N_SAMPLES="$N_SAMPLES" \
         PROMPT_BARS="$((PROMPT_LENGTH / 16))" WS_FORM="$ws_form" \
+        CROPS_TSV="$crops" \
             bash "$MY/infer_wholesong_prompted.sbatch" ;;
     *)  echo "ERROR: unknown system $name"; exit 1 ;;
     esac
