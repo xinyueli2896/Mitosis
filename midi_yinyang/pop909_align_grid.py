@@ -290,7 +290,7 @@ def snap_stats(onsets, g):
 
 
 def align_song(song_dir, dst, sub, tempo, origin, fix_dropped, drop_tol,
-               write_ts=True):
+               write_ts=False):
     sid = os.path.basename(song_dir)
     bt, down, n_ins, pos0 = load_beats(
         os.path.join(song_dir, 'beat_midi.txt'),
@@ -405,13 +405,18 @@ def main():
                         'bar 1 beat 1, pickup dropped. beat0: annotation '
                         'beat 0 at tick 0 -- wrong bar phase in the 601 '
                         'songs that do not start on a downbeat.')
-    p.add_argument('--no-time-signatures', action='store_true',
-                   help='do NOT write a time_signature per metre change. '
-                        'Default writes them, so a 6-beat bar reads as 6/4 '
-                        'and every bar line after it follows the music '
-                        'instead of a fixed 4. Pure metadata -- no tick '
-                        'moves -- and the only thing that fixes ALL of a '
-                        "song's phase regions rather than one.")
+    p.add_argument('--time-signatures', action='store_true', default=False,
+                   help='write a time_signature per metre change, so bar '
+                        'lines follow the music. OFF by default: the map '
+                        'is the more correct reading (chord changes land on '
+                        'its bar lines on 577 of 783 songs, against 1 for a '
+                        'fixed 4/4), but editors that cannot read mid-song '
+                        'metre changes -- GarageBand among them -- take the '
+                        'first event and ignore the rest, which makes a file '
+                        'that looked clean read wrong. No NOTE moves either '
+                        'way, verified tick-for-tick; only the bar lines do, '
+                        'and the tokenizer reads a fixed 16 frames per bar '
+                        'regardless.')
     p.add_argument('--no-fix-dropped', action='store_true',
                    help='do NOT restore beats the tracker missed')
     p.add_argument('--drop-tol', type=float, default=0.15,
@@ -433,7 +438,7 @@ def main():
         try:
             rows.append(align_song(d, a.dst, a.sub, a.tempo, a.origin,
                                    not a.no_fix_dropped, a.drop_tol,
-                                   write_ts=not a.no_time_signatures))
+                                   write_ts=a.time_signatures))
         except Exception as e:  # noqa: BLE001 - report and continue
             failed.append((os.path.basename(d), repr(e)))
         if (i + 1) % 100 == 0:
