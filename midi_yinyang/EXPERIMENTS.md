@@ -731,6 +731,39 @@ direction per frame in training/validation/decode. The revised audit
 checks, filler-invariant decode consistency, batched) passes locally on
 CPU; the cluster run gates the training job as before.
 
+**A.12 — the slot input the decode actually produces (2026-09-11).**
+Auditing the self-conditioning path against `_build_slot` in the
+inference module turned up three ways the training slot differs from
+the decode slot, all of them in code that predates this entry:
+
+1. The probe drafted from the QUERY head (`q_logits_sc.argmax`), but
+   both decodes seed from the AR CONTENT head — `general_inference`'s
+   round-K seed and the commit decode's committed leader are
+   `local_sampling` on the clean AR rows. On the audit's tiny model the
+   two sources disagree on 69% of tokens.
+2. The probe took an argmax; the paper decode commits at
+   `FINAL_TEMP=1.0 TOP_P=1.0`. Argmax drafts are sharper than anything
+   a slot meets at inference.
+3. The self-conditioning override wrote into the ground-truth branch
+   and the Bernoulli coin at rate k/K ran ON TOP of it, so with k drawn
+   uniformly half the drafts were discarded and replaced by the mask
+   embedding (all of them at k=K). Measured on the audit: 50% of
+   self-conditioned slots masked, vs 6% with the fix — so
+   `SELF_COND_PROB=0.5` was putting a draft in front of the model on
+   25% of slots, not 50%. This also means the intermediate k tags were
+   trained on a slot distribution the decode never produces: at
+   inference every k<K carries a WHOLE frame, never a partial one.
+
+Knobs `SC_AR_FRAC` / `SC_DRAFT_TEMP` / `SC_K_CONSISTENT`, all three
+defaulting to the old behaviour so every existing run stays comparable
+(audit check 1 verifies bit-for-bit). Gradient semantics are unchanged
+— the draft is built under `no_grad` and enters as a constant, as A.4's
+self-conditioning already did — so this changes the conditioning
+distribution only, not the objective. Training-only, so `val_loss` is
+identical across all knob settings and the A-family comparison and
+`resolve_best_ckpt` are unaffected. Gate:
+`sbatch midi_yinyang/audit_sc_ar_draft.sbatch`.
+
 **A3fc first evaluation (2026-09-10; checkpoint at ~65k of 100k steps,
 merge 226545 + score_coherence, 8 songs).** Systems: A3fcaT (paper
 decode ctc_alt T=1 on the val_loss-selected ckpt), A3fcaTar (same on

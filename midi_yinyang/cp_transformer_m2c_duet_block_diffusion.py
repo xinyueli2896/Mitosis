@@ -157,7 +157,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  query_block=1, slot_sees_prev_frame=False,
                  moe_aux_clean_only=False, cond_slot_prob=0.0,
                  agree_head=False, agree_decoy_prob=0.5,
-                 agree_loss_weight=0.3, **kwargs):
+                 agree_loss_weight=0.3, sc_ar_frac=0.0,
+                 sc_draft_temp=0.0, sc_k_consistent=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- conditional slots (A.3c) ------------------------------------
@@ -208,6 +209,59 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                            if agree_head else None)
         self._agree_lag_m = self._agree_lag_c = None
         self._last_slot_h = None
+        # --- A.12: self-conditioning drafts from the AR CONTENT HEAD ------
+        # Exposure gap found 2026-09-11. Self-conditioning already trains
+        # the slots on the model's own drafts rather than ground truth,
+        # but it draws those drafts from the QUERY logits of a
+        # fully-masked probe forward. Both decodes seed from the other
+        # head: the refinement loop's round-K seed and the commit
+        # decode's committed leader are both `local_sampling` on the
+        # CLEAN AR rows. So the first draft a slot ever sees at inference
+        # comes from a head whose output the slots were never trained on.
+        # sc_ar_frac is the share of self-conditioned items whose draft
+        # is taken from the AR rows instead, closing that gap.
+        #
+        self.register_buffer(
+            'sc_ar_frac_flag',
+            torch.tensor(float(sc_ar_frac), dtype=torch.float32))
+        self.sc_ar_frac = float(sc_ar_frac)
+        # --- what the k tag means (A.12) ---------------------------------
+        # The decode's slot is one of exactly three things (_build_slot in
+        # the inference module): the mask embedding tagged k=K (round K,
+        # no estimate yet), a COMPLETE previous-round frame tagged k=r for
+        # every r<K, or a complete committed frame tagged k=0. An
+        # intermediate k at inference therefore always means "a whole
+        # draft from one round ago" -- never a partially corrupted frame.
+        #
+        # Training's frame-level slot means something else: the k tag
+        # rides a Bernoulli coin at rate k/K over {all-mask, all-truth}.
+        # The self-conditioning override writes into the truth branch and
+        # the coin then runs ON TOP of it, so with k drawn uniformly half
+        # of all self-conditioned slots discard their draft and show the
+        # mask embedding instead (and at k=K, all of them do). The
+        # intermediate k tags are thus trained on a slot distribution the
+        # decode never produces, and the draft budget is halved.
+        #
+        # sc_k_consistent makes the training slot mean what the decode
+        # means: for a self-conditioned item the coin is replaced by
+        # is_masked = (k == K), so k=K is the mask endpoint and every
+        # k<K carries the whole draft, tagged with its round. Positions
+        # are still scored -- a drafted slot is never `revealed` (see
+        # _query_loss_keep_mask) -- so the task stays revision, not copy.
+        self.register_buffer(
+            'sc_k_consistent_flag',
+            torch.tensor(1 if sc_k_consistent else 0, dtype=torch.long))
+        self.sc_k_consistent = bool(sc_k_consistent)
+        # Draft SHARPNESS. The probe's argmax is a lower-entropy frame
+        # than anything the decode commits (the paper decode samples at
+        # temperature 1.0, top-p 1.0), so argmax drafts train the slots on
+        # cleaner input than they will ever see. sc_draft_temp > 0 samples
+        # the draft at that temperature instead; 0.0 keeps the argmax, so
+        # every pre-A.12 run reproduces exactly.
+        self.register_buffer(
+            'sc_draft_temp_flag',
+            torch.tensor(float(sc_draft_temp), dtype=torch.float32))
+        self.sc_draft_temp = float(sc_draft_temp)
         if agree_head and cond_slot_prob <= 0:
             raise ValueError(
                 'agree_head needs cond_slot_prob > 0: the head is defined '
@@ -692,6 +746,21 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         fully = (k_t == self.diffusion_K) | all_drawn | silent_drawn
         return corrupted, fully, drawn
 
+    def _draft_from_logits(self, logits):
+        """Turn probe logits [..., V] into draft tokens [...].
+
+        sc_draft_temp == 0 -> argmax (the historical behaviour, so every
+        pre-A.12 run reproduces bit-for-bit). Otherwise a categorical
+        sample at that temperature, which is what the decode actually
+        commits; see the sc_draft_temp note in __init__.
+        """
+        if self.sc_draft_temp <= 0:
+            return logits.argmax(dim=-1)
+        shape = logits.shape[:-1]
+        flat = logits.reshape(-1, logits.shape[-1]).float() / self.sc_draft_temp
+        return torch.multinomial(
+            F.softmax(flat, dim=-1), 1).view(shape)
+
     def _query_loss_keep_mask(self, non_pad_q):
         """Which query-slot positions the query loss may score.
 
@@ -929,8 +998,25 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                 # well-defined.
                 u_m = torch.rand(batch_size, device=h.device)
                 u_c = torch.rand(batch_size, device=h.device)
-                is_masked_m = (u_m < (k_m_t[:, j].float() / denom)).to(h.dtype)
-                is_masked_c = (u_c < (k_c_t[:, j].float() / denom)).to(h.dtype)
+                b_masked_m = u_m < (k_m_t[:, j].float() / denom)
+                b_masked_c = u_c < (k_c_t[:, j].float() / denom)
+                if self.sc_k_consistent:
+                    # A.12: where a draft was written into gt above, the
+                    # coin would throw it away with prob k/K. Use the
+                    # decode's rule instead -- mask ONLY at k=K, so every
+                    # k<K presents the whole draft tagged with its round.
+                    # Items without a draft keep the Bernoulli coin, so
+                    # the two regimes stay separable in the logs.
+                    endpoint_m = k_m_t[:, j] == K
+                    endpoint_c = k_c_t[:, j] == K
+                    if sc_m_j is not None:
+                        b_masked_m = torch.where(
+                            sc_m_j, endpoint_m, b_masked_m)
+                    if sc_c_j is not None:
+                        b_masked_c = torch.where(
+                            sc_c_j, endpoint_c, b_masked_c)
+                is_masked_m = b_masked_m.to(h.dtype)
+                is_masked_c = b_masked_c.to(h.dtype)
                 # [B] -> [B, 1, 1] for broadcasting.
                 is_masked_m = is_masked_m.view(batch_size, 1, 1)
                 is_masked_c = is_masked_c.view(batch_size, 1, 1)
@@ -1179,6 +1265,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         sc_mask_m = sc_emb_m = sc_mask_c = sc_emb_c = None
         sc_toks_m = sc_toks_c = None
         self._last_selfcond_frac = torch.zeros((), device=x.device)
+        self._last_sc_ar_frac = torch.zeros((), device=x.device)
         if self.training and self.self_cond_prob > 0:
             sc_mask_m = torch.rand(batch_size, n_pairs,
                                    device=x.device) < self.self_cond_prob
@@ -1189,15 +1276,51 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                     k_full = torch.full((batch_size, n_pairs), K,
                                         device=x.device, dtype=torch.long)
                     self._agree_lag_m = self._agree_lag_c = None
-                    _, q_logits_sc, _ = self.forward(
+                    ar_logits_sc, q_logits_sc, _ = self.forward(
                         x, T_query=T_query, k_m=k_full, k_c=k_full,
                     )
                     V = self.tokenizer.n_tokens
-                    toks = q_logits_sc.view(
+                    toks = self._draft_from_logits(q_logits_sc.view(
                         batch_size, n_pairs, 2, subseq_len, V,
-                    ).argmax(dim=-1)                    # [B, Q, 2, S]
+                    ))                                  # [B, Q, 2, S]
                     sc_toks_m = toks[:, :, 0]           # [B, Q, S]
                     sc_toks_c = toks[:, :, 1]
+                    if getattr(self, '_stash_slots', False):
+                        # audit hook: the QUERY-head draft, before any
+                        # AR-head substitution, so audit_sc_ar_draft can
+                        # show the two sources actually differ.
+                        self._last_q_draft_m = sc_toks_m.clone()
+                        self._last_q_draft_c = sc_toks_c.clone()
+                    if self.sc_ar_frac > 0:
+                        # A.12: the AR clean rows' own draft of frame
+                        # t_j -- row 2*t_j predicts melody t_j, row
+                        # 2*t_j+1 predicts chord t_j (the clean stream
+                        # is shifted one frame right). This is exactly
+                        # what general_inference reads to seed a round
+                        # and to commit a leader.
+                        ar4 = ar_logits_sc.view(
+                            batch_size, full_seq_len, subseq_len, V)
+                        rows_m = torch.tensor(
+                            [2 * t for t in tq], device=x.device)
+                        ar_toks_m = self._draft_from_logits(ar4[:, rows_m])
+                        ar_toks_c = self._draft_from_logits(ar4[:, rows_m + 1])
+                        use_ar_m = (torch.rand(batch_size, n_pairs,
+                                               device=x.device)
+                                    < self.sc_ar_frac)
+                        use_ar_c = (torch.rand(batch_size, n_pairs,
+                                               device=x.device)
+                                    < self.sc_ar_frac)
+                        sc_toks_m = torch.where(
+                            use_ar_m.unsqueeze(-1), ar_toks_m, sc_toks_m)
+                        sc_toks_c = torch.where(
+                            use_ar_c.unsqueeze(-1), ar_toks_c, sc_toks_c)
+                        self._last_sc_ar_frac = (
+                            0.5 * (use_ar_m.float().mean()
+                                   + use_ar_c.float().mean()).detach())
+                        if getattr(self, '_stash_slots', False):
+                            self._last_ar_draft_m = ar_toks_m.clone()
+                            self._last_ar_draft_c = ar_toks_c.clone()
+                            self._last_use_ar_m = use_ar_m.clone()
                     # A.4 corrupts at the TOKEN level, so it needs the
                     # draft tokens themselves, not their encoding; the
                     # frame-level branch needs the encoding.
@@ -1347,6 +1470,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.log('train_mean_k_m', self._last_mean_k_m)
         self.log('train_mean_k_c', self._last_mean_k_c)
         self.log('train_selfcond_frac', self._last_selfcond_frac)
+        if self.sc_ar_frac > 0:
+            self.log('train_sc_ar_frac', self._last_sc_ar_frac)
         self.log('train_query_kept_frac', self._last_query_kept_frac)
         self.log('train_query_pairs', float(self._last_n_pairs))
         self.log('train_ctc_frac', getattr(self, '_last_ctc_frac', torch.zeros(())))
@@ -1640,6 +1765,29 @@ if __name__ == '__main__':
                              'at content t-2, one frame short of what '
                              'the AR head at the same phase sees. A.3f '
                              'alone; A.9 with --query_pairs -1.')
+    parser.add_argument('--sc_ar_frac', type=float, default=0.0,
+                        help='A.12: share of self-conditioned slots whose '
+                             'draft comes from the AR CONTENT HEAD rather '
+                             'than the query logits. The decode seeds every '
+                             'round from the AR head, so at 0 the slots are '
+                             'never trained on the draft distribution they '
+                             'actually meet.')
+    parser.add_argument('--sc_draft_temp', type=float, default=0.0,
+                        help='A.12: sample the self-conditioning draft at '
+                             'this temperature instead of taking the argmax '
+                             '(0 = argmax, the pre-A.12 behaviour). The '
+                             'paper decode commits at temperature 1.0, so an '
+                             'argmax draft is sharper than anything the '
+                             'slots meet at inference.')
+    parser.add_argument('--sc_k_consistent', action='store_true',
+                        default=False,
+                        help='A.12: for self-conditioned slots, mask at k=K '
+                             'only instead of drawing a Bernoulli coin at '
+                             'rate k/K, so every k<K carries the WHOLE draft '
+                             'tagged with its round -- which is the only '
+                             'thing the decode ever puts in a slot. Without '
+                             'it half the drafts are discarded before the '
+                             'model sees them.')
     parser.add_argument('--agree_head', action='store_true', default=False,
                         help='A.11: partner-agreement discrimination head on '
                              'the conditional-slot pairs. Needs '
@@ -1724,6 +1872,11 @@ if __name__ == '__main__':
             fam = 'A9'                         # A.9 = A.3 kernel, slot sees
                                                # t-1, a query pair at EVERY
                                                # frame, A.3 decode
+        elif (getattr(a, 'sc_ar_frac', 0.0) > 0
+              or getattr(a, 'sc_k_consistent', False)):
+            fam = 'A12'                        # AR-head self-conditioning
+                                               # drafts (the decode's own
+                                               # seed distribution)
         elif getattr(a, 'agree_head', False):
             fam = 'A11'                        # conditional slots + the
                                                # partner-agreement head
@@ -1809,6 +1962,9 @@ if __name__ == '__main__':
                         .split(',')],
         query_block=args.query_block,
         cond_slot_prob=args.cond_slot_prob,
+        sc_ar_frac=args.sc_ar_frac,
+        sc_draft_temp=args.sc_draft_temp,
+        sc_k_consistent=bool(args.sc_k_consistent),
         agree_head=bool(args.agree_head),
         agree_decoy_prob=args.agree_decoy_prob,
         agree_loss_weight=args.agree_loss_weight,
@@ -1830,7 +1986,10 @@ if __name__ == '__main__':
           f'slot_sees_prev_frame={args.slot_sees_prev_frame}  '
           f'moe_aux_clean_only={args.moe_aux_clean_only}  '
           f'cond_slot_prob={args.cond_slot_prob}  '
-          f'agree_head={args.agree_head}  '
+          f'agree_head={args.agree_head}  sc_ar_frac={args.sc_ar_frac}  '
+          f'sc_draft_temp={args.sc_draft_temp}  '
+          f'sc_k_consistent={bool(args.sc_k_consistent)}'
+          f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
           f'query_loss_weight={args.query_loss_weight}  '
           f'query_block={args.query_block}'
@@ -1983,6 +2142,9 @@ if __name__ == '__main__':
                     'query_pairs': args.query_pairs,
                     'slot_sees_prev_frame': bool(args.slot_sees_prev_frame),
                     'cond_slot_prob': args.cond_slot_prob,
+                    'sc_ar_frac': args.sc_ar_frac,
+                    'sc_draft_temp': args.sc_draft_temp,
+                    'sc_k_consistent': bool(args.sc_k_consistent),
                     'agree_head': bool(args.agree_head),
                     'agree_decoy_prob': args.agree_decoy_prob,
                     'agree_loss_weight': args.agree_loss_weight,

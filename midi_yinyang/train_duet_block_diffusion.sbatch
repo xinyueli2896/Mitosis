@@ -174,6 +174,26 @@
 #                           SLOT_SEES_PREV_FRAME=1). Decode with
 #                           A3_SCHEDULE=ctc_* (eval_e1 system A3c).
 #   --export=ALL,AUX_LOSS_WEIGHT=w   MoE balance-loss weight (0.01; 0 off)
+#   --export=ALL,SC_AR_FRAC=p        A.12: share of self-conditioned
+#                           slots whose draft is taken from the AR
+#                           CONTENT HEAD instead of the query logits.
+#                           Both decodes seed from the AR head, so at 0
+#                           the slots never train on the draft
+#                           distribution they meet at inference.
+#   --export=ALL,SC_DRAFT_TEMP=T     A.12: sample the self-conditioning
+#                           draft at temperature T instead of taking
+#                           the argmax (0 = argmax, pre-A.12). The
+#                           paper decode commits at 1.0, so an argmax
+#                           draft is sharper than anything a slot meets.
+#   --export=ALL,SC_K_CONSISTENT=1   A.12: for self-conditioned slots
+#                           mask at k=K only, instead of a Bernoulli
+#                           coin at rate k/K. The decode puts exactly
+#                           three things in a slot -- mask at k=K, a
+#                           WHOLE draft tagged k=r for r<K, a whole
+#                           committed frame at k=0 -- and this makes
+#                           training's intermediate k mean the same.
+#                           Without it half the drafts are discarded
+#                           before the model ever sees them.
 #   --export=ALL,AGREE_HEAD=1        A.11: partner-agreement detection
 #                           head on the conditional-slot pairs (needs
 #                           COND_SLOT_PROB > 0). AGREE_DECOY_PROB (0.5)
@@ -331,6 +351,9 @@ SLOT_SEES_PREV_FRAME="${SLOT_SEES_PREV_FRAME:-0}"
 # (one slot committed at k=0, the other masked at k=K); 0 = A.3's
 # independent uniform draw. Decode such a ckpt with A3_SCHEDULE=ctc_*.
 COND_SLOT_PROB="${COND_SLOT_PROB:-0}"
+SC_AR_FRAC="${SC_AR_FRAC:-0}"
+SC_DRAFT_TEMP="${SC_DRAFT_TEMP:-0}"
+SC_K_CONSISTENT="${SC_K_CONSISTENT:-0}"
 AGREE_HEAD="${AGREE_HEAD:-0}"
 AGREE_DECOY_PROB="${AGREE_DECOY_PROB:-0.5}"
 AGREE_LOSS_WEIGHT="${AGREE_LOSS_WEIGHT:-0.3}"
@@ -422,6 +445,7 @@ if [[ -z "${MODEL_ABBR:-}" ]]; then
     elif [[ "$TOKEN_LEVEL_MASK" == "1" ]]; then FAM="A4legacy"
     elif [[ "$MASK_REVEALED_QUERY_LOSS" == "1" && "$QUERY_PAIRS" != "1" ]]; then FAM="A6"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" && "$QUERY_PAIRS" == "-1" ]]; then FAM="A9"
+    elif [[ "$SC_AR_FRAC" != "0" || "$SC_K_CONSISTENT" == "1" ]]; then FAM="A12"
     elif [[ "$AGREE_HEAD" == "1" ]]; then FAM="A11"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" && "$COND_SLOT_PROB" != "0" ]]; then FAM="A3fc"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" ]]; then FAM="A3f"
@@ -564,6 +588,15 @@ if [[ "$AGREE_HEAD" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--agree_head
                        --agree_decoy_prob "$AGREE_DECOY_PROB"
                        --agree_loss_weight "$AGREE_LOSS_WEIGHT")
+fi
+if [[ "$SC_AR_FRAC" != "0" ]]; then
+    EXTRA_TRAIN_ARGS+=(--sc_ar_frac "$SC_AR_FRAC")
+fi
+if [[ "$SC_DRAFT_TEMP" != "0" ]]; then
+    EXTRA_TRAIN_ARGS+=(--sc_draft_temp "$SC_DRAFT_TEMP")
+fi
+if [[ "$SC_K_CONSISTENT" == "1" ]]; then
+    EXTRA_TRAIN_ARGS+=(--sc_k_consistent)
 fi
 if [[ "$MOE_AUX_CLEAN_ONLY" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--moe_aux_clean_only)

@@ -321,6 +321,65 @@ The main line is A.3 → A.5 → A.6, each strictly containing the
 previous; A.4 sits on that line too (it contains A.5), adding
 token-level corruption on top.
 
+### A.12 — the slot input the decode actually produces (2026-09-11)
+
+`--sc_ar_frac`, `--sc_draft_temp`, `--sc_k_consistent` on
+`cp_transformer_m2c_duet_block_diffusion.py` (wrapper `SC_AR_FRAC`,
+`SC_DRAFT_TEMP`, `SC_K_CONSISTENT`; family `A12`; audit
+`audit_sc_ar_draft.sbatch`). Three separable repairs to ONE mismatch:
+what a query slot contains at training time is not what it contains at
+decode time. Nothing about the loss, the targets or the graph changes
+— the draft is built under `no_grad` and enters as a constant, exactly
+as A.4's self-conditioning already did — so this is a change of the
+conditioning DISTRIBUTION only.
+
+The decode (`_build_slot`, inference module) puts exactly three things
+in a slot: the mask embedding tagged k=K; a COMPLETE previous-round
+frame tagged k=r for every r<K; a complete committed frame tagged k=0.
+An intermediate k at inference always means "a whole draft from one
+round ago".
+
+1. **Draft source** (`sc_ar_frac`). The self-conditioning probe took
+   `q_logits_sc.argmax` — the QUERY head. But both decodes seed from
+   the AR CONTENT head: `general_inference`'s round-K seed and the
+   commit decode's committed leader are both `local_sampling` on the
+   clean AR rows. So the first draft a slot ever meets at inference
+   comes from a head whose output the slots were never trained on.
+   `sc_ar_frac` is the share of self-conditioned items whose draft is
+   read from rows `2*t_j` / `2*t_j+1` instead.
+2. **Draft sharpness** (`sc_draft_temp`). The probe's argmax is lower
+   entropy than anything the paper decode commits (A3ctcaT decodes at
+   `FINAL_TEMP=1.0 TOP_P=1.0`), so argmax drafts train the slots on
+   cleaner input than they will ever see. `> 0` samples at that
+   temperature; `0` keeps the argmax, so pre-A.12 runs reproduce.
+3. **Slot occupancy** (`sc_k_consistent`). The override wrote into the
+   ground-truth branch and the Bernoulli coin at rate k/K then ran ON
+   TOP of it, so with k drawn uniformly HALF of all self-conditioned
+   slots discarded their draft and showed the mask embedding instead —
+   and at k=K, all of them did. `SELF_COND_PROB=0.5 SC_AR_FRAC=1.0`
+   therefore put an AR draft in front of the model on 25% of slots, not
+   50%. With the flag, a self-conditioned slot masks at k=K only, so
+   every k<K carries the whole draft tagged with its round, which is
+   what the decode means by that tag. Drafted positions stay scored —
+   a self-conditioned slot is never `revealed` (see
+   `_query_loss_keep_mask`) — so the task is revision, not copy.
+
+Why this is not a copy-collapse hazard, which the slot's dual role as
+input AND target would otherwise invite: the target is ground truth
+while the slot holds a draft that is frequently wrong, so echoing the
+slot is punished on exactly the positions the objective cares about.
+And the AR term is untouched — clean rows never attend slots (audited),
+so a changed slot input cannot move it.
+
+Costs nothing: the probe forward already exists for A.4's
+self-conditioning; A.12 adds one argmax (or one `multinomial`) over
+logits already computed.
+
+Training-only, like A.11: self-conditioning is gated on
+`self.training`, so validation pins k=K with no override and `val_loss`
+stays directly comparable across the whole A family (audit check 8).
+An A.12 checkpoint decodes exactly like A3fc.
+
 ### A.11 — partner-agreement discrimination head (2026-09-11)
 
 `--agree_head` on `cp_transformer_m2c_duet_block_diffusion.py` (wrapper
