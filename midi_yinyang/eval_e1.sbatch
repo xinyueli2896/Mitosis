@@ -29,6 +29,12 @@
 #         the '_rev' ckpt) harmonizes.  Domain matched.
 #   P-cm  cascade: S-chord continues chords -> POP909 YinYang
 #         (chord2mel, non-rev) melodizes.  Domain matched.
+#   WSf   WS with its own form stage instead of oracle key+phrase over
+#         the generated region -- the matched, form-free protocol. Same
+#         prompt, same cascade, same checkpoints; only the background of
+#         the counterpoint stage changes. Song length stays oracle in
+#         both. Run WS and WSf together to show the baseline at its
+#         published best AND under the comparison our system faces.
 #   WS    external reference: whole-song-gen PROMPTED lead-sheet
 #         continuation, same 6-bar prompt, its own inpainting path.
 #
@@ -143,7 +149,7 @@ SYSTEMS="${SYSTEMS:-A1 A3 A3f S1 S-scratch P-mc P-cm WS}"
 # (happened 2026-09-10, job 225780). With generation on, 'all' would try
 # to generate every system, so keep it to score-only runs.
 if [[ "$SYSTEMS" == "all" ]]; then
-    SYSTEMS="A11aT A11K4 A1 A1cp8 A3 A3f A3fctcaT A3K0 A3ctc A3ctcc A3ctc2 A3ctca A3ctcaT A3c A3fc A3fcaT A3fcaTar A3fcK4 A10 S1 S-scratch S0 P-mc P-cm WS"
+    SYSTEMS="A11aT A11K4 A1 A1cp8 A3 A3f A3fctcaT A3K0 A3ctc A3ctcc A3ctc2 A3ctca A3ctcaT A3c A3fc A3fcaT A3fcaTar A3fcK4 A10 S1 S-scratch S0 P-mc P-cm WS WSf"
 fi
 FORCE="${FORCE:-}"
 CKPT_A1="${CKPT_A1:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_melchord_cp4tar_batch_8_schedule}"
@@ -409,14 +415,21 @@ generate() {
         PROMPT_LENGTH="$PROMPT_LENGTH" GEN_LENGTH="$GEN_LENGTH" \
         N_SAMPLES="$N_SAMPLES" MAX_POLYPHONY="$MAX_POLYPHONY_SPEC" \
             bash "$MY/pipeline_cogen.sbatch" ;;
-    WS)
+    WS|WSf)
         # whole-song-gen wants integer ids (its own POP909 index) and an
         # absolute OUT_DIR (it cds into its venv tree). It writes
         # <OUT_DIR>/<id zero-padded to 3>/co/sample_<i>.mid, which is
         # the split's naming.
         local ids; ids=$(for s in $SONG_IDS; do echo $((10#$s)); done | tr '\n' ' ')
+        # WS_FORM selects the baseline's protocol: gt = oracle key+phrase
+        # over the generated region (their published form-conditioned
+        # setting, in the baseline's favour), generated = its own form
+        # stage prompted on the same bars (the matched comparison).
+        # System name WSf pins `generated` so both can sit in one table.
+        local ws_form="${WS_FORM:-gt}"
+        [[ "$name" == WSf ]] && ws_form=generated
         OUT_DIR="$MY/$dir" SONG_IDS="$ids" N_SAMPLES="$N_SAMPLES" \
-        PROMPT_BARS="$((PROMPT_LENGTH / 16))" \
+        PROMPT_BARS="$((PROMPT_LENGTH / 16))" WS_FORM="$ws_form" \
             bash "$MY/infer_wholesong_prompted.sbatch" ;;
     *)  echo "ERROR: unknown system $name"; exit 1 ;;
     esac

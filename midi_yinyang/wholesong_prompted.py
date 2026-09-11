@@ -11,10 +11,24 @@ stays the authors'.
 Per test song (POP909 ids, default 1-5):
   1. read + analyze the song with their read_pop909_data /
      analyze_pop909_dataset (ground-truth languages at every level);
-  2. counterpoint stage: background = the song's GT form channels
-     (key + phrase, the form-conditioned protocol -- oracle form is an
-     advantage GIVEN TO THE BASELINE), prompt = GT reduced lead sheet
-     for the first --prompt-bars bars (nbpm rows per bar);
+  2. counterpoint stage: prompt = GT reduced lead sheet for the first
+     --prompt-bars bars (nbpm rows per bar). The background (key +
+     phrase) depends on --form:
+       gt        the song's GROUND-TRUTH form channels for the whole
+                 song, including the region being generated. This is
+                 their form-conditioned protocol and an oracle GIVEN
+                 TO THE BASELINE. Default, so earlier runs reproduce.
+       generated their OWN form stage, prompted with the GT form of the
+                 same --prompt-bars bars and left to predict key and
+                 phrase across the rest. Removes the only ground-truth
+                 leak into the generated region, which is what makes
+                 the comparison with a prompt-only system fair.
+     NOTE even under `generated` the song LENGTH stays oracle: the
+     generated form is truncated to the GT bar count, because a
+     fixed-length continuation protocol has to know where to stop for
+     the reference to be comparable. Length is a far weaker advantage
+     than key + phrase, but it is an advantage and the paper should
+     say so.
   3. lead-sheet stage: background = the GENERATED counterpoint expanded
      through their own expand_background, prompt = GT lead sheet for
      the same bars (nbpm*nspb rows per bar);
@@ -23,8 +37,8 @@ Per test song (POP909 ids, default 1-5):
      prompt region -- the eval harness scores frames prompt..total as
      usual. Layout: <out>/<songid>/co/sample_<i>.mid (duet_multi).
 
-The acc stage is skipped (out of scope) and the frm model is never
-loaded (form is ground truth).
+The acc stage is skipped (out of scope). The frm model is loaded only
+when --form generated.
 
 Run from the whole_song_gen repo root (the sbatch handles PYTHONPATH):
     python wholesong_prompted.py --song-ids 1 2 3 4 5 \
@@ -45,6 +59,14 @@ def main():
     ap.add_argument('--prompt-bars', type=int, default=6)
     ap.add_argument('--n-samples', type=int, default=3)
     ap.add_argument('--out-dir', required=True)
+    ap.add_argument('--form', choices=('gt', 'generated'), default='gt',
+                    help="where the counterpoint stage's key+phrase "
+                         "background comes from. gt = ground truth over "
+                         "the WHOLE song (their form-conditioned "
+                         "protocol, an oracle in the baseline's favour); "
+                         "generated = their own form stage prompted with "
+                         "the GT form of the prompt bars only. Song "
+                         "length stays oracle either way.")
     ap.add_argument('--bpm', type=float, default=90.0,
                     help='their output convention; scoring re-derives '
                          'the grid from the file tempo either way')
@@ -56,9 +78,11 @@ def main():
     from data_utils.pytorch_datasets.counterpoint_dataset import \
         CounterpointDataset
     from data_utils.pytorch_datasets.leadsheet_dataset import LeadSheetDataset
+    from data_utils.pytorch_datasets.form_dataset import FormDataset
     from data_utils.midi_output import note_mat_to_notes, piano_roll_to_note_mat
     from inference.generation_operations import (CounterpointGenOp,
-                                                 LeadSheetGenOp)
+                                                 FormGenOp, LeadSheetGenOp)
+    from inference.utils import quantize_generated_form_batch
     from data_utils.pytorch_datasets.const import LANGUAGE_DATASET_PARAMS
     # The dataset constructors default to the COUNTERPOINT geometry
     # (n_channels=10); the lead-sheet level is 12 channels. Their own
@@ -66,8 +90,9 @@ def main():
     # 6 phrase channels written at [6:12] overflow a 10-channel image.
     P_CTP = LANGUAGE_DATASET_PARAMS['counterpoint']
     P_LSH = LANGUAGE_DATASET_PARAMS['lead_sheet']
+    P_FRM = LANGUAGE_DATASET_PARAMS['form']
     from model import get_model_path
-    from params import params_ctp, params_lsh
+    from params import params_ctp, params_frm, params_lsh
     import torch
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -79,6 +104,20 @@ def main():
                                use_autoreg_cond=True, use_external_cond=False)
     lsh_op = LeadSheetGenOp(params_lsh, lsh_path, device,
                             use_autoreg_cond=True, use_external_cond=False)
+    frm_op = None
+    if args.form == 'generated':
+        # AUTOREG_PARAMS has no 'form' entry -- the form level is the top
+        # of the cascade and conditions on nothing, so both cond flags
+        # are off, matching their own form_generation().
+        frm_path, _, _ = get_model_path('results_default/frm---/v-default',
+                                        'default')
+        frm_op = FormGenOp(params_frm, frm_path, device,
+                           use_autoreg_cond=False, use_external_cond=False)
+        print('[form] generated: key+phrase predicted past the prompt '
+              '(no oracle form over the generated region)')
+    else:
+        print('[form] gt: ORACLE key+phrase over the whole song, '
+              "including the generated region (baseline's favour)")
 
     ok, failed = [], []
     for sid in args.song_ids:
@@ -125,8 +164,57 @@ def main():
                   f'prompt = {p_beats} beats / {p_16} sixteenths')
 
             n = args.n_samples
-            # ---- counterpoint: GT form background, GT 6-bar prompt ----
-            ctp_bg = np.repeat(ctp_img[np.newaxis, 2:], n, axis=0)
+            # ---- form background ----------------------------------
+            # ctp channels [0:2] are reduced mel + reduced chd (what the
+            # stage predicts); [2:10] are key + phrase, its background.
+            # That is the same 8-channel geometry the form level emits,
+            # which is why expand_background can feed one to the other.
+            n_bars = L_beats // nbpm
+            if args.form == 'gt':
+                ctp_bg = np.repeat(ctp_img[np.newaxis, 2:], n, axis=0)
+            else:
+                frm_ds = FormDataset(analyses, shift_high=0, shift_low=0,
+                                     max_l=P_FRM['max_l'], h=P_FRM['h'],
+                                     n_channels=P_FRM['n_channel'],
+                                     random_pitch_aug=False)
+                frm_ds.store_key(0, 0)
+                frm_ds.store_phrase(0)
+                # FormDataset rows are BARS (ctp rows are beats), so its
+                # own length is the bar count; prefer it over L_beats //
+                # nbpm where they disagree, and say so if they do.
+                frm_bars = frm_ds.lengths[0]
+                if frm_bars != n_bars:
+                    print(f'  [form] bar count {frm_bars} != L_beats//nbpm '
+                          f'{n_bars}; using {frm_bars}')
+                    n_bars = frm_bars
+                frm_img = frm_ds.lang_to_img(0, 0, frm_bars,
+                                             tgt_lgth=frm_bars)
+                frm_prompt = np.repeat(
+                    frm_img[np.newaxis, :, 0:args.prompt_bars], n, axis=0)
+                f_canvas, f_slices, f_max_l = frm_op.create_canvas(
+                    n_sample=n, prompt=frm_prompt)
+                frm_raw = frm_op.generation(f_canvas, f_slices, f_max_l,
+                                            quantize=False, n_sample=n)
+                frm_q, frm_lengths, frm_phrases = \
+                    quantize_generated_form_batch(np.stack(frm_raw, 0))
+                for i, (li, pi) in enumerate(zip(frm_lengths, frm_phrases)):
+                    flag = ' SHORT' if li < n_bars else ''
+                    print(f'  [form] sample {i}: predicted {li} bars'
+                          f'{flag}, phrases {pi}')
+                # Truncate (or right-pad) the predicted form to the GT bar
+                # count: the continuation protocol scores a fixed span, so
+                # length stays oracle even here. A sample whose predicted
+                # song end falls short is padded with its own last bar
+                # rather than with -1, which the ctp stage would read as
+                # "no background".
+                frm_use = np.zeros((n, P_FRM['n_channel'], n_bars,
+                                    P_FRM['h']), dtype=frm_q.dtype)
+                take = min(n_bars, frm_q.shape[2])
+                frm_use[:, :, 0:take] = frm_q[:, :, 0:take]
+                if take < n_bars:
+                    frm_use[:, :, take:] = frm_q[:, :, take - 1:take]
+                ctp_bg = ctp_op.expand_background(frm_use, nbpm)[:, :,
+                                                                0:L_beats]
             ctp_prompt = np.repeat(ctp_img[np.newaxis, 0:2, 0:p_beats],
                                    n, axis=0)
             canvas, slices, gen_max_l = ctp_op.create_canvas(
