@@ -3,6 +3,7 @@ import xf_midi
 import pretty_midi
 from settings import RWC_DATASET_PATH, LA_DATASET_PATH, NOTTINGHAM_DATASET_PATH, POP909_MELODY_PATH, POP909_CHORD_PATH
 import os
+import re
 from joblib import Parallel, delayed
 import torch
 import shutil
@@ -319,6 +320,36 @@ def create_la_med(max_polyphony=16):
 # preprocess_pop909.sbatch symlinks to MELODY_DIR / CHORD_DIR -- the tag
 # is what stops two different corpora sharing one .pt.
 PT_TAG = os.environ.get('POP909_PT_TAG', '')
+# POP909_EXCLUDE_IDS: song ids to CUT from the pop909 melody/chord
+# datasets entirely -- not held out by the index rule, but absent, the
+# way 001-005 were cut by hand before the original preprocessing. They
+# stay absent from the .txt, so build_prompt_crops adds them back
+# through --extra-ids and its train-split guard passes.
+#
+# This exists because rebuilding from a fresh aligner output reinstates
+# them: the aligner processes all 909 songs, so a song that used to be
+# cut lands back in the corpus and, at 002-005, in the TRAIN split.
+# Nothing warns you -- the guard in build_prompt_crops is what caught it.
+EXCLUDE_IDS = {i for i in
+               os.environ.get('POP909_EXCLUDE_IDS', '').replace(',', ' ').split()
+               if i}
+
+
+def _drop_excluded(folder):
+    """Files under `folder` whose 3-digit id is in EXCLUDE_IDS."""
+    if not EXCLUDE_IDS:
+        return None
+    keep = []
+    for f in sorted(os.listdir(folder)):
+        if not (f.endswith('.mid') or f.endswith('.MID')):
+            continue
+        m = re.search(r'(\d{3})', f)
+        if m and m.group(1) in EXCLUDE_IDS:
+            continue
+        keep.append(f)
+    print(f'[exclude] cutting ids {sorted(EXCLUDE_IDS)} from {folder}: '
+          f'{len(keep)} files kept')
+    return keep
 
 
 def create_pop909_melody(max_polyphony=8):
@@ -334,6 +365,7 @@ def create_pop909_melody(max_polyphony=8):
         ins_ids='all',
         scan_subfolders=False,
         filter=False,
+        include_files=_drop_excluded(POP909_MELODY_PATH),
     )
 
 
@@ -351,6 +383,7 @@ def create_pop909_chord(max_polyphony=8):
         ins_ids='all',
         scan_subfolders=False,
         filter=False,
+        include_files=_drop_excluded(POP909_CHORD_PATH),
     )
 
 

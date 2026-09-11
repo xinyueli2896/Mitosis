@@ -180,6 +180,13 @@ MAX_POLYPHONY="${MAX_POLYPHONY:-8}"
 # Whatever you set here must be passed to training as MELCHORD_TAG.
 PT_TAG="${PT_TAG:-}"
 export POP909_PT_TAG="$PT_TAG"
+# EXCLUDE_IDS: songs CUT from the dataset entirely, the way 001-005 were
+# cut by hand before the original preprocessing. Rebuilding from a fresh
+# aligner output silently reinstates them -- the aligner processes all
+# 909 -- which puts 002-005 back in the TRAIN split. Keep the cut here
+# and build_prompt_crops adds them to the held-out set via EXTRA_IDS.
+EXCLUDE_IDS="${EXCLUDE_IDS:-001 002 003 004 005}"
+export POP909_EXCLUDE_IDS="$EXCLUDE_IDS"
 MEL_PT="data/pop909_melody_cp${MAX_POLYPHONY}_v2${PT_TAG}"
 CHORD_PT="data/pop909_chord_cp${MAX_POLYPHONY}_v2${PT_TAG}"
 
