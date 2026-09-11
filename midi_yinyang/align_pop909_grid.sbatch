@@ -35,6 +35,18 @@
 #               of them show bar 1 beat 1 where the music has beat 4 of
 #               the pickup bar). NEITHER pads; downbeat drops the pickup
 #               and counts it. beat0 exists only to reproduce old output.
+#   TIME_SIGS   1 (default) writes a time_signature per metre change, so
+#               bar lines follow the music -- the only thing that fixes a
+#               song whose metre changes mid-way (song 010's melody lands
+#               on beat 3 without it). Judged against where the CHORDS
+#               change, the metre map beats a fixed 4/4 on 577 of 783
+#               songs and loses on 1, so it is the correct reading.
+#               BUT some editors -- GarageBand among them -- do not
+#               support mid-song metre changes: they take the first event
+#               and ignore the rest, which makes a previously clean-
+#               looking 4/4 file read wrong. Set TIME_SIGS=0 for a
+#               listening copy in such an editor. No NOTE moves either
+#               way (verified tick-for-tick); only the bar lines do.
 #   NO_FIX_DROPPED  1 = do not restore beats the tracker missed. Default
 #               restores them: a gap ~k x the local median means k-1
 #               beats were dropped and every note inside lands a beat
@@ -89,19 +101,21 @@ SUB="${SUB:-4}"
 TEMPO="${TEMPO:-120}"
 ORIGIN="${ORIGIN:-bar}"
 NO_FIX_DROPPED="${NO_FIX_DROPPED:-0}"
+TIME_SIGS="${TIME_SIGS:-1}"
 
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "POP909_RAW=$POP909_RAW"
 echo "DST=$DST  SUB=$SUB/beat  TEMPO=$TEMPO  ORIGIN=$ORIGIN"
-echo "NO_FIX_DROPPED=$NO_FIX_DROPPED  IDS=${IDS:-<all>}"
+echo "NO_FIX_DROPPED=$NO_FIX_DROPPED  TIME_SIGS=$TIME_SIGS  IDS=${IDS:-<all>}"
 echo "================================================================"
 
 python pop909_align_grid.py \
     --raw "$POP909_RAW" --dst "$DST" \
     --sub "$SUB" --tempo "$TEMPO" --origin "$ORIGIN" \
     ${IDS:+--ids $IDS} \
-    $([[ "$NO_FIX_DROPPED" == "1" ]] && echo --no-fix-dropped)
+    $([[ "$NO_FIX_DROPPED" == "1" ]] && echo --no-fix-dropped) \
+    $([[ "$TIME_SIGS" == "0" ]] && echo --no-time-signatures)
 
 echo "================================================================"
 echo "Report: $DST/align_grid_report.tsv"
