@@ -377,6 +377,16 @@ def align_song(song_dir, dst, sub, tempo, origin, fix_dropped, drop_tol,
                 chord_rows=n_rows, chord_notes_dropped=c_drop,
                 n_bars=len(gaps), n_irregular=len(irregular),
                 first_irregular_bar=(irregular[0] if irregular else ''),
+                # OUTPUT bar index of every bar whose length is not 4, so
+                # a consumer can avoid them WITHOUT the file carrying
+                # time signatures. With TIME_SIGS=0 the midi is a flat
+                # 4/4 and the metre is otherwise unrecoverable from it.
+                # origin_beat is the NEGATIVE shift, so output beat =
+                # raw beat - origin_beat; //4 because with TIME_SIGS=0
+                # the output grid is a flat four beats to the bar.
+                irregular_bars=','.join(
+                    str(int((int(db_idx[i]) - origin_beat) // 4))
+                    for i in irregular),
                 n_downbeats=len(db_idx),
                 frac_downbeats_on_bar=f'{on_bar:.4f}',
                 metre_changes=n_ts,

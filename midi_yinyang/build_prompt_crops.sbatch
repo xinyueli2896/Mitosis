@@ -44,6 +44,15 @@
 #                        prompt is 5 bars including the buffer)
 #   MIN_BARS             bars that must remain after the crop so there is
 #                        room to generate (default 25)
+#   ALIGN_REPORT         align_grid_report.tsv from the aligner. Supplies
+#                        each song's IRREGULAR BAR positions, which a flat
+#                        4/4 midi cannot carry once TIME_SIGS=0. Given it,
+#                        the crop point is chosen to land the scored
+#                        window in a metrically REGULAR stretch -- so a
+#                        song with a metre change elsewhere stays usable
+#                        instead of being dropped or silently scored
+#                        across a bar-grid shift. Default: the report
+#                        next to MEL_SRC, if one is there.
 #   REQUIRE_REGULAR      1 = drop songs whose metre changes inside the
 #                        scored window. Off by default so the set stays
 #                        large; the TSV reports it either way and those
@@ -87,6 +96,9 @@ FORCE_IDS="${FORCE_IDS:-004}"
 MEL_BARS="${MEL_BARS:-4}"
 MIN_BARS="${MIN_BARS:-25}"
 REQUIRE_REGULAR="${REQUIRE_REGULAR:-0}"
+# default: the aligner's report sits one level above the melody folder
+ALIGN_REPORT="${ALIGN_REPORT:-$(dirname "$MEL_SRC")/align_grid_report.tsv}"
+[[ -f "$ALIGN_REPORT" ]] || ALIGN_REPORT=""
 
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
@@ -96,6 +108,7 @@ echo "DST=$DST   DATASET=$DATASET (idx %% $SPLIT_RATIO == 0 held out)"
 echo "prompt = 1 buffer bar + $MEL_BARS sounding bars; MIN_BARS=$MIN_BARS"
 echo "REQUIRE_REGULAR=$REQUIRE_REGULAR   IDS=${IDS:-<held-out split>}"
 echo "EXTRA_IDS=${EXTRA_IDS:-<none>}   FORCE_IDS=${FORCE_IDS:-<none>}"
+echo "ALIGN_REPORT=${ALIGN_REPORT:-<none: windows cannot avoid metre changes>}"
 echo "================================================================"
 
 for d in "$MEL_SRC" "$CHORD_SRC"; do
@@ -108,6 +121,7 @@ python build_prompt_crops.py \
     --mel-bars "$MEL_BARS" --min-bars "$MIN_BARS" \
     --extra-ids $EXTRA_IDS \
     ${FORCE_IDS:+--force-ids $FORCE_IDS} \
+    ${ALIGN_REPORT:+--align-report "$ALIGN_REPORT"} \
     ${IDS:+--ids $IDS} \
     $([[ "$REQUIRE_REGULAR" == "1" ]] && echo --require-regular)
 

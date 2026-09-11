@@ -282,6 +282,16 @@ def main():
                    help='dataset stem whose index %% split-ratio == 0 songs '
                         'are the held-out set (see audit_wholesong_split)')
     p.add_argument('--split-ratio', type=int, default=10)
+    p.add_argument('--align-report', default=None,
+                   help="align_grid_report.tsv from the aligner. Supplies "
+                        "each song's IRREGULAR BAR positions, which the midi "
+                        "itself cannot carry once time signatures are off "
+                        "(a flat 4/4 file has no record of them). Given it, "
+                        "the crop point is chosen to put the scored window "
+                        "in a metrically REGULAR stretch where one exists -- "
+                        "so a song with a metre change elsewhere is still "
+                        "usable, instead of being dropped or silently "
+                        "scored across a bar-grid shift.")
     p.add_argument('--force-ids', nargs='*', default=[],
                    help='ids to keep even when the normal rule rejects '
                         'them. The crop point is still chosen, by the '
@@ -363,6 +373,18 @@ def main():
 
     os.makedirs(os.path.join(a.dst, 'melody'), exist_ok=True)
     os.makedirs(os.path.join(a.dst, 'chord'), exist_ok=True)
+    irregular = {}
+    if a.align_report:
+        with open(a.align_report) as fh:
+            for row in csv.DictReader(fh, delimiter='\t'):
+                raw = (row.get('irregular_bars') or '').strip()
+                irregular[row['id']] = (
+                    {int(x) for x in raw.split(',') if x != ''} if raw
+                    else set())
+        n_irr = sum(1 for v in irregular.values() if v)
+        print(f'[metre] {a.align_report}: {n_irr} of {len(irregular)} songs '
+              f'have an irregular bar; windows will avoid them where possible')
+
     force_ids = {i for i in (a.force_ids or []) if i}
     if force_ids:
         print(f'[force] keeping {sorted(force_ids)} even if the normal rule '
@@ -373,7 +395,7 @@ def main():
         rows.append(dict(id=sid, first_both_bar='', crop_bar='',
                          crop_sec='', bars_remaining='',
                          pickup_has_melody='', metre_changes_in_prompt='',
-                         metre_changes_in_window='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
+                         metre_changes_in_window='', irregular_bars='', window_regular='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
                          dropped='not in the source folder'))
         reasons[sid] = 'not in the source folder'
 
@@ -382,7 +404,7 @@ def main():
         rows.append(dict(id=sid, first_both_bar='', crop_bar='',
                          crop_sec='', bars_remaining='',
                          pickup_has_melody='', metre_changes_in_prompt='',
-                         metre_changes_in_window='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
+                         metre_changes_in_window='', irregular_bars='', window_regular='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
                          dropped=why))
     for sid in ids:
         mp = os.path.join(a.mel_src, f'{sid}.mid')
@@ -412,11 +434,33 @@ def main():
         # B = the first bar the melody OFFICIALLY starts on (m_start) and
         # from which mel_bars consecutive bars have both streams. B >= 1
         # so the bar in front of it is free to hold the anacrusis.
+        irr = irregular.get(sid, set())
+        win = prompt_bars + a.min_bars
+
+        def clean(b):
+            """Is the whole scored window, from the buffer bar, free of
+            irregular bars? Bar b-1 is the buffer, so the window runs
+            [b-1, b-1+win)."""
+            return not any(b - 1 <= x < b - 1 + win for x in irr)
+
         B, how = None, ''
+        # first pass: a window that is metrically regular
         for b in range(1, len(bars) - a.mel_bars):
-            if m_start[b] and both[b:b + a.mel_bars].all():
+            if m_start[b] and both[b:b + a.mel_bars].all() and clean(b):
                 B = b
                 break
+        if B is None and irr:
+            # fall back to the first valid start even if the window
+            # crosses a metre change, and SAY so in the row
+            for b in range(1, len(bars) - a.mel_bars):
+                if m_start[b] and both[b:b + a.mel_bars].all():
+                    B, how = b, 'window crosses a metre change'
+                    break
+        elif B is None:
+            for b in range(1, len(bars) - a.mel_bars):
+                if m_start[b] and both[b:b + a.mel_bars].all():
+                    B = b
+                    break
         forced = sid in force_ids
         if B is None and forced:
             # Fallbacks, most demanding first; `how` records which one.
@@ -460,6 +504,8 @@ def main():
                    pickup_has_melody=int(bool(m_hit[start_bar])),
                    metre_changes_in_prompt=n_ts_prompt,
                    metre_changes_in_window=n_ts_win,
+                   irregular_bars=len(irr),
+                   window_regular=int(bool(B is not None and clean(B))),
                    src_tempo_events=n_tempo, src_bpm_first=f'{bpm0:.2f}',
                    src_bpm_median=f'{bpmm:.2f}',
                    forced=how)
@@ -515,6 +561,14 @@ def main():
               f'{len(bpms)} distinct median bpm, tempo-event counts {sorted(nte)}'
               + ('' if len(bpms) == 1 and nte == {1}
                  else '  <- v5 is NOT one constant tempo; the crop copies it verbatim'))
+        if irregular:
+            wr = [r for r in rows if not r['dropped'] and r['window_regular'] != '']
+            nreg = sum(1 for r in wr if int(r['window_regular']))
+            print(f'  scored window metrically REGULAR in {nreg}/{len(wr)} '
+                  f'kept songs'
+                  + ('' if nreg == len(wr) else
+                     f'  ({len(wr) - nreg} cross a metre change -- see '
+                     f'`forced`)'))
         fz = [r['id'] for r in rows if not r['dropped'] and r.get('forced')]
         if fz:
             print(f'  FORCED (normal rule rejected, kept anyway): {fz}')
