@@ -68,6 +68,17 @@ def main():
     if not os.path.exists(crops_path):
         raise SystemExit(f'missing {crops_path}')
 
+    print(f'auditing {os.path.abspath(a.set)}')
+    stamp = os.path.join(a.set, 'build_stamp.txt')
+    if os.path.exists(stamp):
+        with open(stamp) as fh:
+            for line in fh:
+                print(f'  {line.rstrip()}')
+    else:
+        print('  no build_stamp.txt -- written by a builder older than the '
+              'lead-bar rule, so these files are almost certainly STALE')
+    print()
+
     fails, checked, no_src = [], 0, []
     warn_forced = []
     with open(crops_path) as fh:

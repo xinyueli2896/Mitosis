@@ -392,7 +392,28 @@ def main():
 
     os.makedirs(os.path.join(a.dst, 'melody'), exist_ok=True)
     os.makedirs(os.path.join(a.dst, 'chord'), exist_ok=True)
+    print(f'[dst] writing to {os.path.abspath(a.dst)}')
+    pre_existing = {
+        sub: sorted(glob(os.path.join(a.dst, sub, '*.mid')))
+        for sub in ('melody', 'chord')}
+    n_pre = sum(len(v) for v in pre_existing.values())
+    if n_pre:
+        print(f'[dst] {n_pre} midi(s) already there from an earlier build; '
+              f'kept songs are overwritten and anything no longer kept is '
+              f'REMOVED at the end, so the folder is one build, never two')
     irregular, src_db = {}, {}
+    if not a.align_report:
+        print('\n' + '!' * 68)
+        print('NO --align-report. Without it there are no annotated downbeats, '
+              'so:\n'
+              '  - the pickup test falls back to the midi bar lines and a\n'
+              '    +-head-beats tolerance, which cannot tell a manufactured\n'
+              '    pickup bar line from a real one;\n'
+              '  - bars come from the file, which is a flat 4/4 once the\n'
+              '    aligner runs with TIME_SIGS=0, so a metre change is\n'
+              '    invisible and the crop can land mid-bar.\n'
+              'Point ALIGN_REPORT at the aligner\'s align_grid_report.tsv.')
+        print('!' * 68 + '\n')
     if a.align_report:
         with open(a.align_report) as fh:
             for row in csv.DictReader(fh, delimiter='\t'):
@@ -643,6 +664,40 @@ def main():
                    int(round(chd.time_to_tick(t0))), pad_ticks=pad_c)
         rows.append(row)
         kept.append(sid)
+
+    # ---- one folder, one build -------------------------------------
+    # Overwriting the kept songs is not enough: a song dropped by this
+    # run keeps whatever an EARLIER run wrote, and anything that globs
+    # the folder picks it up. That is how a set built by an older rule
+    # goes on being used after the rule changes -- the files for the
+    # songs that still pass look new, and the rest are fossils.
+    keep_set = set(kept)
+    stale = [p for sub in ('melody', 'chord')
+             for p in glob(os.path.join(a.dst, sub, '*.mid'))
+             if song_id(p) not in keep_set]
+    for p in stale:
+        os.remove(p)
+    if stale:
+        print(f'[dst] removed {len(stale)} midi(s) left by an earlier build: '
+              f'{sorted({song_id(p) for p in stale})[:20]}')
+
+    import datetime
+    import subprocess
+    try:
+        head = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
+                              capture_output=True, text=True,
+                              cwd=os.path.dirname(os.path.abspath(__file__)))
+        head = head.stdout.strip() or 'unknown'
+    except Exception:                                       # noqa: BLE001
+        head = 'unknown'
+    with open(os.path.join(a.dst, 'build_stamp.txt'), 'w') as fh:
+        fh.write(f'built   {datetime.datetime.now().isoformat(timespec="seconds")}\n'
+                 f'commit  {head}\n'
+                 f'rule    lead = 1 bar + the pickup, or 2 bars; prompt = '
+                 f'{prompt_bars} bars = {prompt_bars * 16} frames\n'
+                 f'mel_src {os.path.abspath(a.mel_src)}\n'
+                 f'report  {a.align_report or "NONE -- midi-side pickup test"}\n'
+                 f'kept    {len(kept)}\n')
 
     rows.sort(key=lambda r: r['id'])
     if rows:
