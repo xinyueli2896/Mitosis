@@ -20,10 +20,27 @@ What this does, and how it differs from pop909_beat_align.py:
      pop909_beat_align.py never did: it rounded to 1/480 of a beat,
      which is not quantization at all, so off-grid performance timing
      survived into the tokenizer and got snapped there instead.
-  3. origin. --origin beat0 (default) leaves beat 0 at 0; --origin
-     downbeat subtracts the first downbeat index so bar 1 starts at
-     beat 0, and anything before it (the pickup) is reported and
-     dropped. Neither pads: nothing is inserted.
+  3. origin -- where the bar grid starts. POP909 songs often begin with
+     a PICKUP, so the first downbeat flag in column 3 sits at index 1, 2
+     or 3, not 0: only 308 of 909 songs start on a downbeat.
+
+       bar       (DEFAULT) shift everything by (-first_down) mod 4 beats
+                 so the first downbeat lands on a BAR LINE and the
+                 pickup occupies the tail of an incomplete bar 1 -- what
+                 a score does with an anacrusis. Nothing is dropped.
+                 The shift is ONE CONSTANT applied to every event: no
+                 time is inserted between notes, inter-onset distances
+                 are untouched, the file simply starts with up to 3
+                 empty beats.
+       downbeat  shift so the first downbeat is bar 1 beat 1. Same bar
+                 phase as `bar`, no leading empty beats, but the pickup
+                 lands before 0 and is dropped and counted.
+       beat0     annotation beat 0 stays at tick 0. Keeps the pickup and
+                 adds nothing, but the bar grid is then wrong in the 601
+                 songs that do not start on a downbeat: 286 of them put
+                 beat 0 at bar position 3, so a DAW shows bar 1 beat 1
+                 where the music has beat 4 of the pickup bar. Kept only
+                 to reproduce earlier output.
   4. write at CONSTANT tempo (--tempo, default 120, so a beat is exactly
      0.5 s). The hand-labelled tempo curve is gone and the note grid is
      metrically exact. pop909_beat_align.py instead wrote one tempo per
@@ -208,7 +225,15 @@ def align_song(song_dir, dst, sub, tempo, origin, fix_dropped, drop_tol):
     if not len(db_idx):
         raise ValueError('no downbeat flag in column 3')
     first_down = int(db_idx[0])
-    origin_beat = float(first_down) if origin == 'downbeat' else 0.0
+    if origin == 'downbeat':
+        origin_beat = float(first_down)
+    elif origin == 'bar':
+        # negative origin == a positive shift: raw_beat - origin moves
+        # everything right by pad, so the first downbeat lands on a
+        # multiple of 4 and the pickup fills the bar before it.
+        origin_beat = -float((-first_down) % 4)
+    else:
+        origin_beat = 0.0
 
     g = GridMap(bt, sub, origin_beat)
     spb = 60.0 / float(tempo)
@@ -280,10 +305,16 @@ def main():
                         '24 = POP909\'s own release, keeps triplets')
     p.add_argument('--tempo', type=float, default=120.0,
                    help='constant output tempo; 120 makes a beat 0.5 s')
-    p.add_argument('--origin', choices=('beat0', 'downbeat'), default='beat0',
-                   help='beat0 (default): beat 0 stays at 0, pickup kept. '
-                        'downbeat: shift so bar 1 starts at beat 0; the '
-                        'pickup then lands before 0 and is dropped')
+    p.add_argument('--origin', choices=('bar', 'downbeat', 'beat0'),
+                   default='bar',
+                   help='bar (default): shift by (-first_down) mod 4 so the '
+                        'first downbeat is on a BAR LINE and the pickup '
+                        'fills an incomplete first bar -- nothing dropped, '
+                        'and the shift is one constant so no time is '
+                        'inserted between notes. downbeat: first downbeat at '
+                        'bar 1 beat 1, pickup dropped. beat0: annotation '
+                        'beat 0 at tick 0 -- wrong bar phase in the 601 '
+                        'songs that do not start on a downbeat.')
     p.add_argument('--no-fix-dropped', action='store_true',
                    help='do NOT restore beats the tracker missed')
     p.add_argument('--drop-tol', type=float, default=0.15,

@@ -28,9 +28,13 @@
 #               the snap happens later instead of here. Prefer 4 and use
 #               the report to EXCLUDE songs a 16th grid mangles.
 #   TEMPO       constant output tempo (default 120: a beat is 0.5 s)
-#   ORIGIN      beat0 (default; beat 0 stays at 0, pickup kept) or
-#               downbeat (shift so bar 1 starts at beat 0; the pickup
-#               then lands before 0 and is dropped). NEITHER pads.
+#   ORIGIN      downbeat (DEFAULT): shift so the song's first downbeat
+#               is bar 1 beat 1. beat0: annotation beat 0 stays at tick
+#               0 -- but beat 0 is a downbeat in only 308 of 909 songs,
+#               so the other 601 read a whole number of beats EARLY (286
+#               of them show bar 1 beat 1 where the music has beat 4 of
+#               the pickup bar). NEITHER pads; downbeat drops the pickup
+#               and counts it. beat0 exists only to reproduce old output.
 #   NO_FIX_DROPPED  1 = do not restore beats the tracker missed. Default
 #               restores them: a gap ~k x the local median means k-1
 #               beats were dropped and every note inside lands a beat
@@ -83,7 +87,7 @@ DST="${DST:-/home/xinyue.li/POP909-Dataset/POP909-v4}"
 IDS="${IDS:-}"
 SUB="${SUB:-4}"
 TEMPO="${TEMPO:-120}"
-ORIGIN="${ORIGIN:-beat0}"
+ORIGIN="${ORIGIN:-bar}"
 NO_FIX_DROPPED="${NO_FIX_DROPPED:-0}"
 
 echo "================================================================"
