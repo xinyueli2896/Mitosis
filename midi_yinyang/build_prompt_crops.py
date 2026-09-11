@@ -424,7 +424,8 @@ def main():
     rows, kept, reasons = [], [], {}
     # Every row carries every column, so a song dropped early still gets
     # a line and the TSV never depends on which row happened to be first.
-    COLS = ['id', 'first_mel_bar', 'is_pickup', 'lead_bars', 'crop_bar',
+    COLS = ['id', 'grid_pre_pad', 'first_mel_bar', 'is_pickup',
+            'lead_bars', 'crop_bar',
             'crop_sec', 'crop_frame', 'pad_frames', 'bars_remaining',
             'pad_bars', 'lead_has_melody', 'pickup_has_melody',
             'metre_changes_in_prompt', 'metre_changes_in_window',
@@ -453,10 +454,30 @@ def main():
                   max(n.end for n in chd_notes))
         n_tempo, bpm0, bpmm = tempo_summary(mel)
         bars, ts_list, spb = bar_starts(mel, end)
+        db_frames, grid_pre_pad = None, 0
         if sid in src_db and len(src_db[sid]) >= 2:
             # prefer the SOURCE's true downbeats over the file's flat grid
             fps = spb / 4.0                      # seconds per frame
-            bars = np.array([f * fps for f in src_db[sid]], dtype=float)
+            db_frames = list(src_db[sid])
+            # ---- the PICKUP BAR is missing from downbeat_frames --------
+            # The aligner sets origin_beat = -((-first_down) % 4), so a
+            # song with an anacrusis is shifted until its first ANNOTATED
+            # downbeat lands on frame 16: the aligner has already made the
+            # pickup a full bar 0. But downbeat_frames lists annotated
+            # downbeats only, so its first entry is that frame 16 and bar
+            # 0 -- the pickup bar, the one this whole crop is defined
+            # relative to -- was not in the grid at all.
+            #
+            # Everything then went wrong in the same direction: the first
+            # melody note sat BEFORE bars[0], searchsorted returned -1,
+            # F clamped to 0 (the first FULL bar), the melody looked like
+            # it started on a bar line, and the crop began at frame 16 --
+            # throwing the anacrusis away and counting lead bars from the
+            # wrong place. Songs 001 and 003 are exactly this case.
+            while db_frames[0] > 0:
+                db_frames.insert(0, max(db_frames[0] - 16, 0))
+                grid_pre_pad += 1
+            bars = np.array([f * fps for f in db_frames], dtype=float)
         bad = degenerate_grid(bars, end)
         if bad:
             stub(sid, bad)
@@ -467,10 +488,13 @@ def main():
         m_start = complete_bars(mel_notes, bars, tol)
         both = m_hit & c_hit
         win = prompt_bars + a.min_bars
-        if sid in src_db and len(src_db[sid]) >= 2:
-            # bar i is irregular when the gap to bar i+1 is not 16 frames
-            f = src_db[sid]
-            irr = {i for i, (x, y) in enumerate(zip(f, f[1:])) if y - x != 16}
+        if db_frames is not None:
+            # bar i is irregular when the gap to bar i+1 is not 16 frames.
+            # Indexed against the SAME grid the crop uses, pickup bar
+            # included -- reading it off src_db instead would put every
+            # irregular bar one index early on a pickup song.
+            irr = {i for i, (x, y) in enumerate(zip(db_frames, db_frames[1:]))
+                   if y - x != 16}
         else:
             irr = irregular.get(sid, set())
         forced = sid in force_ids
@@ -491,6 +515,13 @@ def main():
         # things that move it.
         # ------------------------------------------------------------
         first_on = float(min(n.start for n in mel_notes))
+        if first_on < bars[0] - 1e-6:
+            # the grid still does not cover the music it is supposed to
+            # measure -- refuse rather than silently cut the opening off
+            stub(sid, f'melody begins {bars[0] - first_on:.3f}s BEFORE the '
+                      f'first bar line of the grid -- the crop would throw '
+                      f'the opening away')
+            continue
         F = int(np.searchsorted(bars, first_on + 1e-9, side='right')) - 1
         F = int(np.clip(F, 0, len(bars) - 1))
         # a note a hair BEFORE a bar line is that bar's downbeat, played
@@ -527,7 +558,8 @@ def main():
         win_end = min(start_bar + prompt_bars + a.min_bars, len(bars) - 1)
         n_ts_win = sum(1 for t in ts_list
                        if bars[start_bar] < t.time < bars[win_end])
-        row = dict(id=sid, first_mel_bar=F, is_pickup=int(is_pickup),
+        row = dict(id=sid, grid_pre_pad=grid_pre_pad,
+                   first_mel_bar=F, is_pickup=int(is_pickup),
                    lead_bars=lead_bars, crop_bar=start_bar,
                    crop_sec=f'{bars[start_bar]:.3f}',
                    # the crop offset in FRAMES. Recorded rather than left
@@ -611,6 +643,11 @@ def main():
                   f'-- that should be impossible with a first-note anchor')
         print(f'  crop point: median bar {int(np.median(cb))}, '
               f'max {int(cb.max())}')
+        gp = np.array([int(r['grid_pre_pad'] or 0) for r in keep_rows])
+        if gp.sum():
+            print(f'  {int((gp > 0).sum())} song(s) had their PICKUP BAR '
+                  f'restored to the grid (downbeat_frames starts at 16 on '
+                  f'a song the aligner shifted for an anacrusis)')
         bpms = {r['src_bpm_median'] for r in rows
                 if not r['dropped'] and r['src_bpm_median']}
         nte = {r['src_tempo_events'] for r in rows
