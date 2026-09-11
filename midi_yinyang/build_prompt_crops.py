@@ -205,6 +205,16 @@ def main():
                    help='dataset stem whose index %% split-ratio == 0 songs '
                         'are the held-out set (see audit_wholesong_split)')
     p.add_argument('--split-ratio', type=int, default=10)
+    p.add_argument('--force-ids', nargs='*', default=[],
+                   help='ids to keep even when the normal rule rejects '
+                        'them. The crop point is still chosen, by the '
+                        'first fallback that works: melody-only bars, '
+                        'then any bar-aligned melody start, then any '
+                        'melody at all. MIN_BARS is waived too. The TSV '
+                        'records which rule was used in `forced`, so a '
+                        'forced song is never mistaken for one that '
+                        'passed -- use it when you have LISTENED to the '
+                        'song and know the crop is fine.')
     p.add_argument('--extra-ids', nargs='*',
                    default=['001', '002', '003', '004', '005'],
                    help='ids to ADD to the held-out set. Default is the five '
@@ -276,12 +286,17 @@ def main():
 
     os.makedirs(os.path.join(a.dst, 'melody'), exist_ok=True)
     os.makedirs(os.path.join(a.dst, 'chord'), exist_ok=True)
+    force_ids = {i for i in (a.force_ids or []) if i}
+    if force_ids:
+        print(f'[force] keeping {sorted(force_ids)} even if the normal rule '
+              f'rejects them; `forced` in the TSV says which fallback was '
+              f'used')
     rows, kept, reasons = [], [], {}
     for sid in missing:
         rows.append(dict(id=sid, first_both_bar='', crop_bar='',
                          crop_sec='', bars_remaining='',
                          pickup_has_melody='', metre_changes_in_prompt='',
-                         metre_changes_in_window='',
+                         metre_changes_in_window='', forced='',
                          dropped='not in the source folder'))
         reasons[sid] = 'not in the source folder'
 
@@ -290,7 +305,8 @@ def main():
         rows.append(dict(id=sid, first_both_bar='', crop_bar='',
                          crop_sec='', bars_remaining='',
                          pickup_has_melody='', metre_changes_in_prompt='',
-                         metre_changes_in_window='', dropped=why))
+                         metre_changes_in_window='', forced='',
+                         dropped=why))
     for sid in ids:
         mp = os.path.join(a.mel_src, f'{sid}.mid')
         cp_ = os.path.join(a.chord_src, f'{sid}.mid')
@@ -314,11 +330,26 @@ def main():
         # B = the first bar the melody OFFICIALLY starts on (m_start) and
         # from which mel_bars consecutive bars have both streams. B >= 1
         # so the bar in front of it is free to hold the anacrusis.
-        B = None
+        B, how = None, ''
         for b in range(1, len(bars) - a.mel_bars):
             if m_start[b] and both[b:b + a.mel_bars].all():
                 B = b
                 break
+        forced = sid in force_ids
+        if B is None and forced:
+            # Fallbacks, most demanding first; `how` records which one.
+            for label, test in (
+                ('melody-only bars',
+                 lambda b: m_start[b] and m_hit[b:b + a.mel_bars].all()),
+                ('bar-aligned melody start', lambda b: m_start[b]),
+                ('any melody', lambda b: m_hit[b]),
+            ):
+                for b in range(1, max(len(bars) - a.mel_bars, 2)):
+                    if test(b):
+                        B, how = b, label
+                        break
+                if B is not None:
+                    break
         if B is None:
             # Say WHICH half of the condition failed, so this is
             # actionable instead of a shrug. Either the melody never
@@ -346,14 +377,15 @@ def main():
                    bars_remaining=remaining,
                    pickup_has_melody=int(bool(m_hit[start_bar])),
                    metre_changes_in_prompt=n_ts_prompt,
-                   metre_changes_in_window=n_ts_win)
-        if remaining < prompt_bars + a.min_bars:
+                   metre_changes_in_window=n_ts_win,
+                   forced=how)
+        if remaining < prompt_bars + a.min_bars and not forced:
             reasons[sid] = f'only {remaining} bars left (need ' \
                            f'{prompt_bars + a.min_bars})'
             row['dropped'] = reasons[sid]
             rows.append(row)
             continue
-        if a.require_regular and n_ts_win:
+        if a.require_regular and n_ts_win and not forced:
             reasons[sid] = f'{n_ts_win} metre change(s) in the window'
             row['dropped'] = reasons[sid]
             rows.append(row)
@@ -389,6 +421,9 @@ def main():
               f'{len(pk)} (the rest start on a bar line, buffer is silent)')
         print(f'  crop point: median bar {int(np.median(cb))}, '
               f'max {int(cb.max())}')
+        fz = [r['id'] for r in rows if not r['dropped'] and r.get('forced')]
+        if fz:
+            print(f'  FORCED (normal rule rejected, kept anyway): {fz}')
         print(f'  metre changes inside the scored window: '
               f'{int((tw > 0).sum())} songs'
               + ('' if a.require_regular else

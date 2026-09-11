@@ -27,6 +27,14 @@
 #                        is e.g. pop909_melody_cp8_v2_v5 -- or the split
 #                        will not match what the model never saw.
 #   IDS                  explicit ids; skips the held-out filter entirely
+#   FORCE_IDS            ids kept even when the normal rule rejects them.
+#                        The crop point is still chosen, by the first
+#                        fallback that works (melody-only bars, then any
+#                        bar-aligned melody start, then any melody), and
+#                        MIN_BARS is waived. The TSV's `forced` column
+#                        records which fallback was used, so a forced
+#                        song is never mistaken for one that passed. Use
+#                        it for songs you have LISTENED to.
 #   EXTRA_IDS            ids ADDED to the held-out set (default "001 002
 #                        003 004 005", the songs cut before preprocessing:
 #                        absent from the dataset, so the index rule cannot
@@ -75,6 +83,7 @@ DATASET="${DATASET:-pop909_melody_cp8_v2}"
 SPLIT_RATIO="${SPLIT_RATIO:-10}"
 IDS="${IDS:-}"
 EXTRA_IDS="${EXTRA_IDS:-001 002 003 004 005}"
+FORCE_IDS="${FORCE_IDS:-004}"
 MEL_BARS="${MEL_BARS:-4}"
 MIN_BARS="${MIN_BARS:-25}"
 REQUIRE_REGULAR="${REQUIRE_REGULAR:-0}"
@@ -86,7 +95,7 @@ echo "CHORD_SRC=$CHORD_SRC"
 echo "DST=$DST   DATASET=$DATASET (idx %% $SPLIT_RATIO == 0 held out)"
 echo "prompt = 1 buffer bar + $MEL_BARS sounding bars; MIN_BARS=$MIN_BARS"
 echo "REQUIRE_REGULAR=$REQUIRE_REGULAR   IDS=${IDS:-<held-out split>}"
-echo "EXTRA_IDS=${EXTRA_IDS:-<none>}"
+echo "EXTRA_IDS=${EXTRA_IDS:-<none>}   FORCE_IDS=${FORCE_IDS:-<none>}"
 echo "================================================================"
 
 for d in "$MEL_SRC" "$CHORD_SRC"; do
@@ -98,6 +107,7 @@ python build_prompt_crops.py \
     --dataset "$DATASET" --split-ratio "$SPLIT_RATIO" \
     --mel-bars "$MEL_BARS" --min-bars "$MIN_BARS" \
     --extra-ids $EXTRA_IDS \
+    ${FORCE_IDS:+--force-ids $FORCE_IDS} \
     ${IDS:+--ids $IDS} \
     $([[ "$REQUIRE_REGULAR" == "1" ]] && echo --require-regular)
 
