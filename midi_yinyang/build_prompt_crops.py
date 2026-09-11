@@ -47,6 +47,7 @@ import re
 import warnings
 from glob import glob
 
+import mido
 import numpy as np
 import pretty_midi as pm
 
@@ -206,35 +207,70 @@ def complete_bars(inst_notes, bars, tol):
     return out
 
 
-def crop(mid, t0, ts_list, spb):
-    """Everything from t0 on, shifted to 0. Notes starting before t0 are
-    discarded outright (the chord before the pickup bar goes with it);
-    a note straddling t0 is dropped rather than truncated, so no
-    half-note appears out of nowhere at bar 1 beat 1."""
-    times, tempi = mid.get_tempo_changes()
-    bpm = float(tempi[0]) if len(tempi) else 120.0
-    out = pm.PrettyMIDI(resolution=RESOLUTION, initial_tempo=bpm)
-    for inst in mid.instruments:
-        new = pm.Instrument(program=inst.program, is_drum=inst.is_drum,
-                            name=inst.name)
-        for n in inst.notes:
-            if n.start < t0 - 1e-9:
+def crop_ticks(src_path, dst_path, tick0):
+    """Window a MIDI file in TICK space, changing nothing else.
+
+    Cropping must be a pure windowing operation: every tempo and
+    time-signature event survives, and a surviving note keeps the exact
+    tick offsets it had relative to them. The previous version rebuilt
+    the file through pretty_midi with ONE tempo taken from tempi[0] while
+    keeping note times in SECONDS -- so any file carrying a tempo map came
+    out with different tick positions, i.e. a different notated rhythm,
+    and a different tempo per song depending on what its first event
+    happened to be. That is editing the source, not cropping it.
+
+    Notes are kept when their ONSET is at or after tick0 and shifted by
+    -tick0; a note straddling the cut is dropped rather than truncated,
+    so nothing appears from nowhere at bar 1 beat 1. Meta and control
+    events before the cut are re-emitted at tick 0, because they set
+    state the window needs (tempo, metre, program, key).
+    """
+    src = mido.MidiFile(src_path)
+    out = mido.MidiFile(ticks_per_beat=src.ticks_per_beat, type=src.type)
+    for tr in src.tracks:
+        events, open_on, t = [], {}, 0
+        for msg in tr:
+            t += msg.time
+            if msg.type == 'end_of_track':
                 continue
-            new.notes.append(pm.Note(velocity=n.velocity, pitch=n.pitch,
-                                     start=n.start - t0, end=n.end - t0))
-        out.instruments.append(new)
-    keep = []
-    cur = None
-    for t in ts_list:
-        if t.time <= t0 + 1e-9:
-            cur = t
-        else:
-            keep.append(pm.TimeSignature(t.numerator, t.denominator,
-                                         t.time - t0))
-    head = pm.TimeSignature(cur.numerator, cur.denominator, 0.0) if cur \
-        else pm.TimeSignature(4, 4, 0.0)
-    out.time_signature_changes = [head] + keep
-    return out
+            is_off = (msg.type == 'note_off'
+                      or (msg.type == 'note_on' and msg.velocity == 0))
+            if msg.type == 'note_on' and not is_off:
+                open_on.setdefault((msg.channel, msg.note), []).append((t, msg))
+            elif is_off:
+                stack = open_on.get((msg.channel, msg.note))
+                if not stack:
+                    continue
+                on_t, on_msg = stack.pop(0)
+                if on_t < tick0:
+                    continue
+                events.append((on_t - tick0, 1, on_msg))
+                events.append((max(t - tick0, on_t - tick0 + 1), 0, msg))
+            else:
+                events.append((max(t - tick0, 0), 2, msg))
+        for stack in open_on.values():                 # never closed
+            for on_t, on_msg in stack:
+                if on_t >= tick0:
+                    events.append((on_t - tick0, 1, on_msg))
+        events.sort(key=lambda e: (e[0], -e[1]))
+        new_tr = mido.MidiTrack()
+        prev = 0
+        for tick, _, msg in events:
+            new_tr.append(msg.copy(time=tick - prev))
+            prev = tick
+        new_tr.append(mido.MetaMessage('end_of_track', time=0))
+        out.tracks.append(new_tr)
+    out.save(dst_path)
+
+
+def tempo_summary(mid):
+    """(n tempo events, first bpm, median bpm) -- so a source that is not
+    the constant tempo you expect is visible per song rather than
+    surfacing later as 'why are the tempos all different'."""
+    _, tempi = mid.get_tempo_changes()
+    if not len(tempi):
+        return 0, 120.0, 120.0
+    return len(tempi), float(tempi[0]), float(np.median(tempi))
 
 
 def main():
@@ -337,7 +373,7 @@ def main():
         rows.append(dict(id=sid, first_both_bar='', crop_bar='',
                          crop_sec='', bars_remaining='',
                          pickup_has_melody='', metre_changes_in_prompt='',
-                         metre_changes_in_window='', forced='',
+                         metre_changes_in_window='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
                          dropped='not in the source folder'))
         reasons[sid] = 'not in the source folder'
 
@@ -346,7 +382,7 @@ def main():
         rows.append(dict(id=sid, first_both_bar='', crop_bar='',
                          crop_sec='', bars_remaining='',
                          pickup_has_melody='', metre_changes_in_prompt='',
-                         metre_changes_in_window='', forced='',
+                         metre_changes_in_window='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
                          dropped=why))
     for sid in ids:
         mp = os.path.join(a.mel_src, f'{sid}.mid')
@@ -362,6 +398,7 @@ def main():
             continue
         end = max(max(n.end for n in mel_notes),
                   max(n.end for n in chd_notes))
+        n_tempo, bpm0, bpmm = tempo_summary(mel)
         bars, ts_list, spb = bar_starts(mel, end)
         bad = degenerate_grid(bars, end)
         if bad:
@@ -423,6 +460,8 @@ def main():
                    pickup_has_melody=int(bool(m_hit[start_bar])),
                    metre_changes_in_prompt=n_ts_prompt,
                    metre_changes_in_window=n_ts_win,
+                   src_tempo_events=n_tempo, src_bpm_first=f'{bpm0:.2f}',
+                   src_bpm_median=f'{bpmm:.2f}',
                    forced=how)
         if remaining < prompt_bars + a.min_bars and not forced:
             reasons[sid] = f'only {remaining} bars left (need ' \
@@ -437,11 +476,13 @@ def main():
             continue
         row['dropped'] = ''
         t0 = float(bars[start_bar])
-        crop(mel, t0, ts_list, spb).write(
-            os.path.join(a.dst, 'melody', f'{sid}.mid'))
-        _, cts, _ = bar_starts(chd, end)
-        crop(chd, t0, cts or ts_list, spb).write(
-            os.path.join(a.dst, 'chord', f'{sid}.mid'))
+        # Each file converts the crop TIME to its own ticks through its
+        # own tempo map, so the two streams cut at the same musical
+        # instant even if their maps ever differ.
+        crop_ticks(mp, os.path.join(a.dst, 'melody', f'{sid}.mid'),
+                   int(round(mel.time_to_tick(t0))))
+        crop_ticks(cp_, os.path.join(a.dst, 'chord', f'{sid}.mid'),
+                   int(round(chd.time_to_tick(t0))))
         rows.append(row)
         kept.append(sid)
 
@@ -466,6 +507,14 @@ def main():
               f'{len(pk)} (the rest start on a bar line, buffer is silent)')
         print(f'  crop point: median bar {int(np.median(cb))}, '
               f'max {int(cb.max())}')
+        bpms = {r['src_bpm_median'] for r in rows
+                if not r['dropped'] and r['src_bpm_median']}
+        nte = {r['src_tempo_events'] for r in rows
+               if not r['dropped'] and r['src_tempo_events'] != ''}
+        print(f'  SOURCE tempo (carried through unchanged): '
+              f'{len(bpms)} distinct median bpm, tempo-event counts {sorted(nte)}'
+              + ('' if len(bpms) == 1 and nte == {1}
+                 else '  <- v5 is NOT one constant tempo; the crop copies it verbatim'))
         fz = [r['id'] for r in rows if not r['dropped'] and r.get('forced')]
         if fz:
             print(f'  FORCED (normal rule rejected, kept anyway): {fz}')
