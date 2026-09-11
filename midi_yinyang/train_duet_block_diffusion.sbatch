@@ -407,6 +407,13 @@ SYM_K="${SYM_K:-0}"
 # a v4-data run and an old-data run share a directory and silently
 # auto-resume into each other.
 MELCHORD_TAG="${MELCHORD_TAG:-}"
+# DOWNBEAT_MAP: .downbeats.pt from build_downbeat_map.py. Training
+# windows then start on REAL bar lines; without it the loader snaps with
+# offset %% 16, which stops being a bar line after an irregular bar, and
+# 46.5%% of POP909's beats sit after their song's first one. Default is
+# the file beside the dataset, so building the map is enough to turn it
+# on -- and its absence changes nothing.
+DOWNBEAT_MAP="${DOWNBEAT_MAP:-}"
 export MELCHORD_TAG
 MASK_K_PROB="${MASK_K_PROB:-}"
 SC_VAL="${SC_VAL:-0}"
@@ -658,6 +665,9 @@ if [[ "$SC_K_CONSISTENT" == "1" ]]; then
 fi
 if [[ "$SYM_K" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--sym_k)
+fi
+if [[ -n "$DOWNBEAT_MAP" ]]; then
+    EXTRA_TRAIN_ARGS+=(--downbeat_map "$DOWNBEAT_MAP")
 fi
 if [[ -n "$MASK_K_PROB" ]]; then
     EXTRA_TRAIN_ARGS+=(--mask_k_prob "$MASK_K_PROB")

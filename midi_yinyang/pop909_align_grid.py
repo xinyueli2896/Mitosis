@@ -384,6 +384,15 @@ def align_song(song_dir, dst, sub, tempo, origin, fix_dropped, drop_tol,
                 # origin_beat is the NEGATIVE shift, so output beat =
                 # raw beat - origin_beat; //4 because with TIME_SIGS=0
                 # the output grid is a flat four beats to the bar.
+                # TRUE downbeat positions in FRAMES (sub per beat), so a
+                # data loader can slice training windows at real bar
+                # lines. After an irregular bar these stop being
+                # multiples of 4*sub, which is exactly the case the
+                # loader's `offset -= offset % 16` gets wrong.
+                downbeat_frames=','.join(
+                    str(int(round((int(j) - origin_beat) * sub)))
+                    for j in db_idx
+                    if (int(j) - origin_beat) >= 0),
                 irregular_bars=','.join(
                     str(int((int(db_idx[i]) - origin_beat) // 4))
                     for i in irregular),

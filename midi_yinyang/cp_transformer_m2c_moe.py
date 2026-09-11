@@ -1091,8 +1091,33 @@ class FramedDataset(IterableDataset):
         split='all',
         split_ratio=10,
         mel_path=None,
+        downbeat_path=None,
     ):
         self.file_path = file_path
+        # DOWNBEAT MAP (optional). The window offset below is snapped with
+        # `offset -= offset % 16`, which assumes sixteen frames to a bar
+        # for the whole song. POP909 disagrees: 783 of 909 songs contain a
+        # bar that is not four beats, and after the first one the real
+        # downbeats stop being multiples of 16 -- 46.5% of all corpus
+        # beats sit after their song's first irregular bar. Every window
+        # in that material starts on a "bar line" that is not one, while
+        # the snapping itself teaches the model that frame 0 always is.
+        #
+        # Given a map (build_downbeat_map.py), the offset snaps DOWN to
+        # the song's nearest true downbeat instead. Absent, or for a song
+        # with no entry, the old rule applies unchanged -- so every
+        # existing run and every corpus without a report is untouched.
+        self.downbeats = None
+        if downbeat_path and os.path.exists(downbeat_path):
+            self.downbeats = torch.load(downbeat_path)
+            n_map = sum(1 for d in self.downbeats if len(d))
+            print(f'Downbeat map loaded from {downbeat_path}: '
+                  f'{n_map}/{len(self.downbeats)} songs snap to REAL bar '
+                  f'lines; the rest keep offset %% 16')
+        elif downbeat_path:
+            print(f'WARNING no downbeat map at {downbeat_path}; '
+                  f'windows will snap with offset %% 16, which is wrong '
+                  f'after an irregular bar')
         # mel_path override (passed when the task config knows both paths
         # explicitly, e.g. drumnondrum where the legacy 'chord' -> 'melody'
         # string replacement does not apply). Default None preserves the
@@ -1177,7 +1202,22 @@ class FramedDataset(IterableDataset):
                 raw_ids = self.valid_indices[batch_indices]
                 # Sample a window offset that fits in BOTH streams (use min length).
                 to_be_added = torch.floor(torch.rand(len(raw_ids), generator=gen) * (self.length[raw_ids] - self.target_length)).long()
-                to_be_added -= to_be_added % 16
+                if self.downbeats is None:
+                    to_be_added -= to_be_added % 16
+                else:
+                    # Snap DOWN to this song's nearest true downbeat, so
+                    # frame 0 of the window is a real bar line even after
+                    # an irregular bar. Snapping down never overflows the
+                    # window, which already fit at the unsnapped offset.
+                    for j, sid in enumerate(raw_ids.tolist()):
+                        db = self.downbeats[sid] if sid < len(self.downbeats) \
+                            else None
+                        if db is None or not len(db):
+                            to_be_added[j] -= to_be_added[j] % 16
+                            continue
+                        k = int(torch.searchsorted(
+                            db, to_be_added[j].reshape(1), right=True)) - 1
+                        to_be_added[j] = db[k] if k >= 0 else 0
                 # Per-stream absolute starts: same window offset, different cumulative bases.
                 starts_chord = to_be_added + self.start_chord[raw_ids]
                 starts_mel = to_be_added + self.start_mel[raw_ids]

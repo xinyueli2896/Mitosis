@@ -1902,6 +1902,14 @@ if __name__ == '__main__':
                              'is then on its own scale and NOT comparable '
                              'with the rest of the A family (val_ar_loss_'
                              'content still is).')
+    parser.add_argument('--downbeat_map', default=None,
+                        help='path to a .downbeats.pt from '
+                             'build_downbeat_map.py, so training windows '
+                             'start on REAL bar lines. Default: the file '
+                             'beside the mod_b dataset. Absent, the loader '
+                             'keeps offset %% 16, which is not a bar line '
+                             'after an irregular bar -- 46.5%% of POP909 '
+                             'beats are in that region.')
     parser.add_argument('--sym_k', action='store_true', default=False,
                         help='A.12 symmetric update: draw ONE level per '
                              'query pair and give it to BOTH slots, so '
@@ -2140,12 +2148,19 @@ if __name__ == '__main__':
     print(f'Global depth: {gnl}   gate_init_bias: {args.gate_init_bias}   '
           f'query_loss_weight: {args.query_loss_weight}')
 
+    # Windows snap to REAL bar lines when a downbeat map exists beside
+    # the dataset. Without it the loader falls back to offset %% 16,
+    # which stops being a bar line after an irregular bar -- 46.5% of
+    # POP909's beats sit in that region. Built by build_downbeat_map.py;
+    # --downbeat_map overrides the default location.
+    db_map = args.downbeat_map or (
+        os.path.splitext(mod_b_path)[0] + '.downbeats.pt')
     train_set = FramedDataset(mod_b_path, TRAIN_LENGTH,
                               args.batch_size, split='train',
-                              mel_path=mod_a_path)
+                              mel_path=mod_a_path, downbeat_path=db_map)
     val_set = FramedDataset(mod_b_path, TRAIN_LENGTH,
                             args.batch_size, split='val',
-                            mel_path=mod_a_path)
+                            mel_path=mod_a_path, downbeat_path=db_map)
     train_set_loader = DataLoader(train_set, batch_size=None, num_workers=0)
     val_set_loader = DataLoader(val_set, batch_size=None, num_workers=0)
 
