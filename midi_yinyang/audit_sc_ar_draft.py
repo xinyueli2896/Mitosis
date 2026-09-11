@@ -206,6 +206,48 @@ def main():
               if torch.is_tensor(t)),
           'the draft and its logged rate carry no graph')
 
+    print('--- 9. sym_k: both slots move together ---')
+    # K=1 is the setting the one-round parallel decode's tags match:
+    # k=1 is the masked seed round, k=0 the draft round.
+    def build_sym(cond=0.0, **kw):
+        torch.manual_seed(0)
+        n = M2CDuetBlockDiffusion(
+            large=False, with_velocity=False, moe_num_experts=4, moe_topk=2,
+            global_num_layers=2, gate_init_bias=0.0, diffusion_K=1,
+            slot_sees_prev_frame=True, cond_slot_prob=cond,
+            self_cond_prob=1.0, sc_ar_frac=1.0, sc_draft_temp=1.0,
+            moe_aux_clean_only=True, **kw)
+        n.train()
+        return n
+
+    def diag_frac(net, trials=8):
+        """Share of query pairs whose two slots sit at the same level."""
+        hits = tot = 0
+        for s in range(trials):
+            torch.manual_seed(200 + s)
+            net.loss(*b)
+            km, kc = net._last_k_m, net._last_k_c
+            hits += int((km == kc).sum())
+            tot += km.numel()
+        return hits / tot
+
+    sym = build_sym(sym_k=True)
+    ind = build_sym(sym_k=False)
+    check(diag_frac(sym) == 1.0,
+          'sym_k=1: every pair is on a diagonal (k, k) state')
+    fi = diag_frac(ind)
+    check(fi < 1.0,
+          f'sym_k=0: the independent draw is off-diagonal '
+          f'{100 * (1 - fi):.0f}% of the time')
+    ls, _ = sym.loss(*b)
+    ls.backward()
+    check(float(ls.detach()) > 0, 'sym_k trains (loss finite, backward runs)')
+    try:
+        build_sym(cond=0.8, sym_k=True)
+        check(False, 'sym_k + cond_slot_prob should be refused')
+    except ValueError:
+        check(True, 'sym_k + cond_slot_prob is refused at construction')
+
     print('--- 8. validation is unaffected ---')
     vals = []
     for kw in ({}, {'sc_ar_frac': 1.0},

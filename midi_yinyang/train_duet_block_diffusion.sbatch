@@ -194,6 +194,19 @@
 #                           training's intermediate k mean the same.
 #                           Without it half the drafts are discarded
 #                           before the model ever sees them.
+#   --export=ALL,SYM_K=1             A.12 symmetric update: draw ONE
+#                           level per query pair and give it to BOTH
+#                           slots, so every pair lands on a diagonal
+#                           (k, k) state. Those are the only states the
+#                           PARALLEL refine decode visits (it moves both
+#                           slots together and has no leader); an
+#                           independent draw spends half its pairs on
+#                           the leader/follower shape that belongs to
+#                           the ctc decode. Mutually exclusive with
+#                           COND_SLOT_PROB. Pair with DIFFUSION_K=1 and
+#                           decode A3_SCHEDULE=refine A3_REFINE_STEPS=1,
+#                           which is the only setting whose k TAGS match
+#                           (k=1 masked seed, k=0 draft round).
 #   --export=ALL,AGREE_HEAD=1        A.11: partner-agreement detection
 #                           head on the conditional-slot pairs (needs
 #                           COND_SLOT_PROB > 0). AGREE_DECOY_PROB (0.5)
@@ -354,6 +367,7 @@ COND_SLOT_PROB="${COND_SLOT_PROB:-0}"
 SC_AR_FRAC="${SC_AR_FRAC:-0}"
 SC_DRAFT_TEMP="${SC_DRAFT_TEMP:-0}"
 SC_K_CONSISTENT="${SC_K_CONSISTENT:-0}"
+SYM_K="${SYM_K:-0}"
 AGREE_HEAD="${AGREE_HEAD:-0}"
 AGREE_DECOY_PROB="${AGREE_DECOY_PROB:-0.5}"
 AGREE_LOSS_WEIGHT="${AGREE_LOSS_WEIGHT:-0.3}"
@@ -445,7 +459,8 @@ if [[ -z "${MODEL_ABBR:-}" ]]; then
     elif [[ "$TOKEN_LEVEL_MASK" == "1" ]]; then FAM="A4legacy"
     elif [[ "$MASK_REVEALED_QUERY_LOSS" == "1" && "$QUERY_PAIRS" != "1" ]]; then FAM="A6"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" && "$QUERY_PAIRS" == "-1" ]]; then FAM="A9"
-    elif [[ "$SC_AR_FRAC" != "0" || "$SC_K_CONSISTENT" == "1" ]]; then FAM="A12"
+    elif [[ "$SC_AR_FRAC" != "0" || "$SC_K_CONSISTENT" == "1" \
+            || "$SYM_K" == "1" ]]; then FAM="A12"
     elif [[ "$AGREE_HEAD" == "1" ]]; then FAM="A11"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" && "$COND_SLOT_PROB" != "0" ]]; then FAM="A3fc"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" ]]; then FAM="A3f"
@@ -597,6 +612,9 @@ if [[ "$SC_DRAFT_TEMP" != "0" ]]; then
 fi
 if [[ "$SC_K_CONSISTENT" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--sc_k_consistent)
+fi
+if [[ "$SYM_K" == "1" ]]; then
+    EXTRA_TRAIN_ARGS+=(--sym_k)
 fi
 if [[ "$MOE_AUX_CLEAN_ONLY" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--moe_aux_clean_only)

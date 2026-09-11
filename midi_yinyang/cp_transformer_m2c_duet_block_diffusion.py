@@ -158,7 +158,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  moe_aux_clean_only=False, cond_slot_prob=0.0,
                  agree_head=False, agree_decoy_prob=0.5,
                  agree_loss_weight=0.3, sc_ar_frac=0.0,
-                 sc_draft_temp=0.0, sc_k_consistent=False, **kwargs):
+                 sc_draft_temp=0.0, sc_k_consistent=False,
+                 sym_k=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- conditional slots (A.3c) ------------------------------------
@@ -262,6 +263,19 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             'sc_draft_temp_flag',
             torch.tensor(float(sc_draft_temp), dtype=torch.float32))
         self.sc_draft_temp = float(sc_draft_temp)
+        # Tie k_c to k_m so both slots always sit at the SAME level --
+        # the states the symmetric parallel decode visits. Mutually
+        # exclusive with cond_slot_prob, which exists to manufacture the
+        # opposite (one committed, one masked).
+        if sym_k and cond_slot_prob > 0:
+            raise ValueError(
+                'sym_k and cond_slot_prob are mutually exclusive: sym_k '
+                'puts both slots at one level (the parallel decode), '
+                'cond_slot_prob splits them into leader/follower (the '
+                'commit-then-condition decode).')
+        self.register_buffer(
+            'sym_k_flag', torch.tensor(1 if sym_k else 0, dtype=torch.long))
+        self.sym_k = bool(sym_k)
         if agree_head and cond_slot_prob <= 0:
             raise ValueError(
                 'agree_head needs cond_slot_prob > 0: the head is defined '
@@ -1218,6 +1232,18 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                                 device=x.device)
             k_c = torch.randint(0, K + 1, (batch_size, n_pairs),
                                 device=x.device)
+            if self.sym_k:
+                # A.12 symmetric update: ONE level per pair, both slots.
+                # The parallel refine decode moves both slots together --
+                # round r=K reads both drafts off the clean AR rows,
+                # round r<K puts both drafts in the slots and resamples
+                # both -- so the only (k_m, k_c) states it ever visits
+                # are the DIAGONAL ones. An independent draw spends half
+                # its pairs on the off-diagonal (one committed, one
+                # masked), which is the commit-then-condition shape this
+                # model is deliberately not using. Tying the draw puts
+                # every pair on a state the decode actually reaches.
+                k_c = k_m
             if self.cond_slot_prob > 0:
                 # A.3c: commit-then-condition regime for a share of the
                 # pairs -- leader committed (k=0), follower masked (k=K).
@@ -1251,6 +1277,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                              dtype=torch.long)
             k_c = torch.full((batch_size, n_pairs), K, device=x.device,
                              dtype=torch.long)
+        # Stash the FINAL levels (after every override) for the audits.
+        self._last_k_m, self._last_k_c = k_m, k_c
 
         # --- self-conditioning (exposure-gap closing) -----------------
         # At inference the slots carry the model's own previous-round
@@ -1779,6 +1807,15 @@ if __name__ == '__main__':
                              'paper decode commits at temperature 1.0, so an '
                              'argmax draft is sharper than anything the '
                              'slots meet at inference.')
+    parser.add_argument('--sym_k', action='store_true', default=False,
+                        help='A.12 symmetric update: draw ONE level per '
+                             'query pair and give it to BOTH slots, so '
+                             'every pair sits on a diagonal (k, k) state. '
+                             'Those are the only states the parallel '
+                             'refine decode visits; an independent draw '
+                             'spends half its pairs on the leader/follower '
+                             'shape that belongs to the ctc decode. '
+                             'Mutually exclusive with --cond_slot_prob.')
     parser.add_argument('--sc_k_consistent', action='store_true',
                         default=False,
                         help='A.12: for self-conditioned slots, mask at k=K '
@@ -1965,6 +2002,7 @@ if __name__ == '__main__':
         sc_ar_frac=args.sc_ar_frac,
         sc_draft_temp=args.sc_draft_temp,
         sc_k_consistent=bool(args.sc_k_consistent),
+        sym_k=bool(args.sym_k),
         agree_head=bool(args.agree_head),
         agree_decoy_prob=args.agree_decoy_prob,
         agree_loss_weight=args.agree_loss_weight,
@@ -1988,7 +2026,8 @@ if __name__ == '__main__':
           f'cond_slot_prob={args.cond_slot_prob}  '
           f'agree_head={args.agree_head}  sc_ar_frac={args.sc_ar_frac}  '
           f'sc_draft_temp={args.sc_draft_temp}  '
-          f'sc_k_consistent={bool(args.sc_k_consistent)}'
+          f'sc_k_consistent={bool(args.sc_k_consistent)}  '
+          f'sym_k={bool(args.sym_k)}'
           f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
           f'query_loss_weight={args.query_loss_weight}  '
@@ -2145,6 +2184,7 @@ if __name__ == '__main__':
                     'sc_ar_frac': args.sc_ar_frac,
                     'sc_draft_temp': args.sc_draft_temp,
                     'sc_k_consistent': bool(args.sc_k_consistent),
+                    'sym_k': bool(args.sym_k),
                     'agree_head': bool(args.agree_head),
                     'agree_decoy_prob': args.agree_decoy_prob,
                     'agree_loss_weight': args.agree_loss_weight,
