@@ -12,7 +12,14 @@
 #
 # Env knobs (--export=ALL,KEY=val):
 #   PROMPT_BARS default 6        N_SAMPLES default 3
-#   SONG_IDS    default "1 2 3 4 5"
+#   CROPS_TSV   prompt_crops.tsv from build_prompt_crops. Each song's
+#               representation is cropped to that song's crop_bar BEFORE
+#               prompting, so the baseline's bar 1 is OUR bar 1. Without
+#               it the baseline is prompted from bar 0 -- usually the
+#               intro -- while our systems see the melody entry, and the
+#               two are not answering the same question.
+#   SONG_IDS    default "1 2 3 4 5"; with CROPS_TSV set and SONG_IDS
+#               empty, the ids are taken FROM the TSV (kept rows only)
 #   OUT_DIR     default temp/wholesong_prompted
 #   WS_FORM     gt (default) | generated -- where the counterpoint
 #               stage's key+phrase background comes from.
@@ -59,7 +66,17 @@ mkdir -p /home/xinyue.li/logs
 
 PROMPT_BARS="${PROMPT_BARS:-6}"
 N_SAMPLES="${N_SAMPLES:-3}"
-SONG_IDS="${SONG_IDS:-1 2 3 4 5}"
+CROPS_TSV="${CROPS_TSV:-}"
+SONG_IDS="${SONG_IDS:-}"
+if [[ -z "$SONG_IDS" ]]; then
+    if [[ -n "$CROPS_TSV" && -f "$CROPS_TSV" ]]; then
+        # kept rows only: a dropped row has a non-empty `dropped` column
+        SONG_IDS=$(awk -F'\t' 'NR>1 && $NF=="" {print $1+0}' "$CROPS_TSV" | tr '\n' ' ')
+        echo "[ids] taken from $CROPS_TSV"
+    else
+        SONG_IDS="1 2 3 4 5"
+    fi
+fi
 OUT_DIR="${OUT_DIR:-$MY/temp/wholesong_prompted}"
 WS_FORM="${WS_FORM:-gt}"
 case "$WS_FORM" in
@@ -70,7 +87,9 @@ esac
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "T3': whole-song PROMPTED continuation"
-echo "PROMPT_BARS=$PROMPT_BARS  N_SAMPLES=$N_SAMPLES  SONG_IDS=$SONG_IDS"
+echo "PROMPT_BARS=$PROMPT_BARS  N_SAMPLES=$N_SAMPLES"
+echo "CROPS_TSV=${CROPS_TSV:-<none: prompting from bar 0>}"
+echo "SONG_IDS=$(echo $SONG_IDS | wc -w) songs"
 echo "WS_FORM=$WS_FORM$([[ "$WS_FORM" == gt ]] && echo '  (ORACLE form over the generated region)')"
 echo "OUT_DIR=$OUT_DIR"
 echo "================================================================"
@@ -105,6 +124,7 @@ python "$MY/wholesong_prompted.py" \
     --prompt-bars "$PROMPT_BARS" \
     --n-samples "$N_SAMPLES" \
     --form "$WS_FORM" \
+    ${CROPS_TSV:+--crops-tsv "$CROPS_TSV"} \
     --out-dir "$OUT_DIR"
 
 echo "================================================================"

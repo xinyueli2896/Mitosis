@@ -59,6 +59,16 @@ def main():
     ap.add_argument('--prompt-bars', type=int, default=6)
     ap.add_argument('--n-samples', type=int, default=3)
     ap.add_argument('--out-dir', required=True)
+    ap.add_argument('--crops-tsv', default=None,
+                    help="prompt_crops.tsv from build_prompt_crops. Each "
+                         "song's representation is cropped to that song's "
+                         "crop_bar BEFORE prompting, so the baseline's bar 1 "
+                         "is OUR bar 1. Without it the baseline is prompted "
+                         "from bar 0 of the song -- usually the intro -- "
+                         "while our systems see the melody entry, and the "
+                         "two are not answering the same question. Songs "
+                         "absent from the TSV, or dropped in it, are "
+                         "skipped.")
     ap.add_argument('--form', choices=('gt', 'generated'), default='gt',
                     help="where the counterpoint stage's key+phrase "
                          "background comes from. gt = ground truth over "
@@ -119,6 +129,19 @@ def main():
         print('[form] gt: ORACLE key+phrase over the whole song, '
               "including the generated region (baseline's favour)")
 
+    crops = {}
+    if args.crops_tsv:
+        import csv as _csv
+        with open(args.crops_tsv) as fh:
+            for row in _csv.DictReader(fh, delimiter='\t'):
+                if row.get('dropped'):
+                    continue
+                cb = row.get('crop_bar', '')
+                if cb != '':
+                    crops[row['id']] = int(cb)
+        print(f'[crop] {len(crops)} songs with a crop point from '
+              f'{args.crops_tsv}')
+
     ok, failed = [], []
     for sid in args.song_ids:
         name = str(sid).zfill(3)
@@ -157,6 +180,28 @@ def main():
             lsh_ds.store_chd(0, 0)
             L_16 = lsh_ds.lengths[0]
             lsh_img = lsh_ds.lang_to_img(0, 0, L_16, tgt_lgth=L_16)
+
+            # Crop THEIR representation to our crop point, so bar 1 of
+            # the baseline's song is bar 1 of ours. Slicing the language
+            # images is the honest way to do it: every level keeps its
+            # own encoding, only the window moves.
+            if crops:
+                if name not in crops:
+                    raise ValueError(
+                        f'no crop point for {name} in {args.crops_tsv} '
+                        f'(dropped there, or not a held-out song)')
+                cb = crops[name]
+                off_beats, off_16 = cb * nbpm, cb * nbpm * nspb
+                if off_beats >= L_beats or off_16 >= L_16:
+                    raise ValueError(
+                        f'crop_bar {cb} is past the end of {name} '
+                        f'({L_beats} beats / {L_16} sixteenths)')
+                ctp_img = ctp_img[:, off_beats:]
+                lsh_img = lsh_img[:, off_16:]
+                L_beats -= off_beats
+                L_16 -= off_16
+                print(f'  cropped to bar {cb} '
+                      f'(-{off_beats} beats / -{off_16} sixteenths)')
 
             p_beats = args.prompt_bars * nbpm
             p_16 = args.prompt_bars * nbpm * nspb
