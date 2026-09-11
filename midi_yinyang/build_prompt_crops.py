@@ -117,14 +117,25 @@ def bar_starts(mid, end_time):
 
 
 def sounding_bars(inst_notes, bars):
-    """Per bar, does any note ONSET fall in it."""
+    """Per bar, is the stream ACTIVE in it -- any note overlapping the bar,
+    not merely starting in it.
+
+    Onsets are the wrong test for the chord stream. A chord held across
+    two bars has an onset only in the first, so a song with slow harmonic
+    rhythm shows chord "activity" in every other bar and four consecutive
+    both-stream bars never occur, even though the chord sounds without a
+    gap. Measuring overlap asks the question actually meant: is there
+    harmony under the melody here.
+    """
     if not inst_notes:
         return np.zeros(len(bars), dtype=bool)
     on = np.array([n.start for n in inst_notes])
-    idx = np.searchsorted(bars, on, side='right') - 1
+    off = np.array([n.end for n in inst_notes])
+    ends = np.append(bars[1:], bars[-1] + (bars[-1] - bars[-2])
+                     if len(bars) > 1 else bars[-1] + 1.0)
     hit = np.zeros(len(bars), dtype=bool)
-    idx = idx[(idx >= 0) & (idx < len(bars))]
-    hit[idx] = True
+    for b, (t0, t1) in enumerate(zip(bars, ends)):
+        hit[b] = bool(np.any((on < t1 - 1e-9) & (off > t0 + 1e-9)))
     return hit
 
 
@@ -309,8 +320,18 @@ def main():
                 B = b
                 break
         if B is None:
-            stub(sid, f'no bar-aligned start with {a.mel_bars} '
-                      f'consecutive both-stream bars')
+            # Say WHICH half of the condition failed, so this is
+            # actionable instead of a shrug. Either the melody never
+            # begins on a bar line (raise --head-beats) or the two
+            # streams are never both active for mel_bars in a row.
+            run = best = 0
+            for v in both:
+                run = run + 1 if v else 0
+                best = max(best, run)
+            stub(sid, f'no bar-aligned start with {a.mel_bars} consecutive '
+                      f'both-stream bars (longest both-stream run {best}; '
+                      f'{int(m_start.sum())} bar-aligned melody starts in '
+                      f'{len(bars)} bars)')
             continue
         start_bar = B - 1
         remaining = len(bars) - start_bar
