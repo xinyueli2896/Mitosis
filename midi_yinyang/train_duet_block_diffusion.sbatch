@@ -259,8 +259,20 @@
 #                           each other and the clean stream is blind to
 #                           all of them. Cost is L: 2T+2 -> 2T+2Q, i.e.
 #                           at TRAIN_LENGTH=384 and Q=8, +2% sequence
-#                           and +3.7% attention for 8x the query
-#                           gradient. No rotary extrapolation (each
+#                           and +3.7% attention. NOT Q times the query
+#                           gradient (an earlier version of this note
+#                           said so and was wrong): query_loss is a
+#                           plain MEAN over kept query positions across
+#                           ALL pairs -- `(per_token_q * keep_q).sum()
+#                           / keep_q.sum()` -- so Q pairs give the SAME
+#                           gradient magnitude with ~sqrt(Q) less
+#                           variance, plus coverage of Q frames per
+#                           step instead of one. A.6 (Q=8) overfit
+#                           sooner, consistent with less gradient noise;
+#                           A.9 (Q=all) is parked, AR loss climbing. If
+#                           you want more query SIGNAL the knob is
+#                           QUERY_LOSS_WEIGHT, not Q.
+#                           No rotary extrapolation (each
 #                           pair takes its own frame's phase).
 #                           Training-only: inference decodes one frame
 #                           at a time, so parameters, the ckpt and the
