@@ -207,6 +207,27 @@
 #                           decode A3_SCHEDULE=refine A3_REFINE_STEPS=1,
 #                           which is the only setting whose k TAGS match
 #                           (k=1 masked seed, k=0 draft round).
+#   --export=ALL,MASK_K_PROB=p       A.12: rate at which a pair is drawn
+#                           at the MASK endpoint k=K, the rest uniform
+#                           over {0..K-1}. Unset = the plain uniform
+#                           draw. At K=1 this is "mask with prob p,
+#                           draft otherwise", and p=0 drops the mask
+#                           state from training entirely -- what the
+#                           symmetric one-round decode wants, since its
+#                           seed round reads the clean AR rows and
+#                           cannot see the slots. Keep DIFFUSION_K>=1
+#                           even at p=0: the decode indexes k_emb by
+#                           round number and needs k_emb(1) to exist for
+#                           the (inert) seed round. Requires SC_VAL=1.
+#   --export=ALL,SC_VAL=1            A.12: validate on the DRAFT state
+#                           instead of the masked one -- probe runs in
+#                           eval, every slot drafted, k pinned to 0,
+#                           drafts at argmax so val_loss is
+#                           deterministic. Needed whenever MASK_K_PROB=0
+#                           leaves the masked state untrained. val_loss
+#                           is then on its own scale and NOT comparable
+#                           across the A family; val_ar_loss_content
+#                           still is, and best_ar/ still tracks it.
 #   --export=ALL,AGREE_HEAD=1        A.11: partner-agreement detection
 #                           head on the conditional-slot pairs (needs
 #                           COND_SLOT_PROB > 0). AGREE_DECOY_PROB (0.5)
@@ -368,6 +389,8 @@ SC_AR_FRAC="${SC_AR_FRAC:-0}"
 SC_DRAFT_TEMP="${SC_DRAFT_TEMP:-0}"
 SC_K_CONSISTENT="${SC_K_CONSISTENT:-0}"
 SYM_K="${SYM_K:-0}"
+MASK_K_PROB="${MASK_K_PROB:-}"
+SC_VAL="${SC_VAL:-0}"
 AGREE_HEAD="${AGREE_HEAD:-0}"
 AGREE_DECOY_PROB="${AGREE_DECOY_PROB:-0.5}"
 AGREE_LOSS_WEIGHT="${AGREE_LOSS_WEIGHT:-0.3}"
@@ -460,7 +483,7 @@ if [[ -z "${MODEL_ABBR:-}" ]]; then
     elif [[ "$MASK_REVEALED_QUERY_LOSS" == "1" && "$QUERY_PAIRS" != "1" ]]; then FAM="A6"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" && "$QUERY_PAIRS" == "-1" ]]; then FAM="A9"
     elif [[ "$SC_AR_FRAC" != "0" || "$SC_K_CONSISTENT" == "1" \
-            || "$SYM_K" == "1" ]]; then FAM="A12"
+            || "$SYM_K" == "1" || -n "$MASK_K_PROB" ]]; then FAM="A12"
     elif [[ "$AGREE_HEAD" == "1" ]]; then FAM="A11"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" && "$COND_SLOT_PROB" != "0" ]]; then FAM="A3fc"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" ]]; then FAM="A3f"
@@ -615,6 +638,12 @@ if [[ "$SC_K_CONSISTENT" == "1" ]]; then
 fi
 if [[ "$SYM_K" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--sym_k)
+fi
+if [[ -n "$MASK_K_PROB" ]]; then
+    EXTRA_TRAIN_ARGS+=(--mask_k_prob "$MASK_K_PROB")
+fi
+if [[ "$SC_VAL" == "1" ]]; then
+    EXTRA_TRAIN_ARGS+=(--sc_val)
 fi
 if [[ "$MOE_AUX_CLEAN_ONLY" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--moe_aux_clean_only)

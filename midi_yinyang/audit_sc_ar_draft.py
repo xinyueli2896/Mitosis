@@ -248,7 +248,57 @@ def main():
     except ValueError:
         check(True, 'sym_k + cond_slot_prob is refused at construction')
 
-    print('--- 8. validation is unaffected ---')
+    print('--- 10. mask_k_prob=0 drops the mask state ---')
+    nm = build_sym(sym_k=True, mask_k_prob=0.0, sc_val=True)
+    torch.manual_seed(300)
+    nm.loss(*b)
+    check(int(nm._last_k_m.max()) == 0 and int(nm._last_k_c.max()) == 0,
+          'mask_k_prob=0: k never reaches the mask endpoint in training')
+    nm._stash_slots = True
+    torch.manual_seed(300)
+    nm.loss(*b)
+    nm._stash_slots = False
+    K1 = nm.diffusion_K
+    ks = torch.arange(K1 + 1)
+    any_mask = False
+    for mod in (0, 1):
+        me = (nm.mask_m_emb if mod == 0 else nm.mask_c_emb)
+        ke = (nm.k_emb_m if mod == 0 else nm.k_emb_c)
+        ref = me.view(1, -1) + ke(ks)
+        d = (nm._last_slots_in[:, mod].unsqueeze(1) - ref.unsqueeze(0))
+        any_mask |= bool((d.abs().amax(-1) < 1e-4).any())
+    check(not any_mask, '... and no slot holds the mask embedding')
+    check(nm.diffusion_K >= 1,
+          f'diffusion_K stays >= 1 so the decode can index k_emb for its '
+          f'seed round (K={nm.diffusion_K})')
+    try:
+        build_sym(mask_k_prob=0.0, sc_k_consistent=True)
+        check(False, 'mask_k_prob + sc_k_consistent should be refused')
+    except ValueError:
+        check(True, 'mask_k_prob + sc_k_consistent is refused')
+
+    print('--- 11. sc_val measures the draft state, deterministically ---')
+    nv = build_sym(sym_k=True, mask_k_prob=0.0, sc_val=True)
+    nv.eval()
+    with torch.no_grad():
+        torch.manual_seed(400)
+        v1, _ = nv.loss(*b)
+        torch.manual_seed(999)
+        v2, _ = nv.loss(*b)
+    check(abs(float(v1) - float(v2)) < 1e-6,
+          f'sc_val val_loss is deterministic across RNG states '
+          f'({float(v1):.6f} vs {float(v2):.6f})')
+    check(int(nv._last_k_m.max()) == 0,
+          '... k is pinned to 0 in eval, so the draft survives')
+    nv2 = build_sym(sym_k=True, mask_k_prob=0.0, sc_val=False)
+    nv2.eval()
+    with torch.no_grad():
+        torch.manual_seed(400)
+        v3, _ = nv2.loss(*b)
+    check(abs(float(v1) - float(v3)) > 1e-4,
+          'sc_val genuinely changes what validation measures')
+
+    print('--- 8. validation is unaffected (default knobs) ---')
     vals = []
     for kw in ({}, {'sc_ar_frac': 1.0},
                {'sc_ar_frac': 1.0, 'sc_draft_temp': 1.0},

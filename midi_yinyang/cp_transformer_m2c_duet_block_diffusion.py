@@ -159,7 +159,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  agree_head=False, agree_decoy_prob=0.5,
                  agree_loss_weight=0.3, sc_ar_frac=0.0,
                  sc_draft_temp=0.0, sc_k_consistent=False,
-                 sym_k=False, **kwargs):
+                 sym_k=False, mask_k_prob=None, sc_val=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- conditional slots (A.3c) ------------------------------------
@@ -276,6 +276,50 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.register_buffer(
             'sym_k_flag', torch.tensor(1 if sym_k else 0, dtype=torch.long))
         self.sym_k = bool(sym_k)
+        # --- dropping the mask state (A.12) ------------------------------
+        # Once every slot carries a model draft, k is not a corruption
+        # level: the draft is not a corruption of the target, it is a
+        # different object. All k still picks is mask-vs-draft, and the
+        # mask embedding is a distinct learned vector, so the tag is
+        # redundant with the content it labels.
+        #
+        # The masked half is also DEAD at decode. The seed round reads
+        # its prediction off the clean AR rows, and clean rows never
+        # attend the slots (audited), so whatever sits in a slot during
+        # that forward cannot reach the output. The only slot state the
+        # decode's output depends on is "both slots hold drafts".
+        #
+        # mask_k_prob=0 removes the mask draw from training entirely.
+        # diffusion_K must still be >= 1: the decode indexes k_emb by
+        # the round number, so a one-round parallel decode needs
+        # k_emb(1) to EXIST for the (inert) seed round even though
+        # nothing trains it. K=0 would size k_emb to one entry and the
+        # decode would index out of range.
+        if mask_k_prob is not None and not 0.0 <= float(mask_k_prob) <= 1.0:
+            raise ValueError(f'mask_k_prob must be in [0, 1], '
+                             f'got {mask_k_prob}')
+        if mask_k_prob is not None and sc_k_consistent:
+            raise ValueError(
+                'mask_k_prob and sc_k_consistent both decide when a slot '
+                'is masked; set one. (At K=1 sc_k_consistent is a no-op '
+                'anyway -- k=0 never masks, k=K always does.)')
+        self.mask_k_prob = (None if mask_k_prob is None
+                            else float(mask_k_prob))
+        self.register_buffer(
+            'mask_k_prob_flag',
+            torch.tensor(-1.0 if mask_k_prob is None else float(mask_k_prob),
+                         dtype=torch.float32))
+        # Validation normally pins k=K, i.e. the masked state. With the
+        # mask state untrained that measures the model on a task it
+        # never learned, so val_loss stops being a selection signal.
+        # sc_val instead presents validation the DRAFT state -- the
+        # probe runs in eval too, every slot is drafted, k is pinned to
+        # 0 -- so val_loss measures the revision task the decode runs.
+        # Drafts are taken at argmax regardless of sc_draft_temp, so the
+        # number stays deterministic across epochs.
+        self.register_buffer(
+            'sc_val_flag', torch.tensor(1 if sc_val else 0, dtype=torch.long))
+        self.sc_val = bool(sc_val)
         if agree_head and cond_slot_prob <= 0:
             raise ValueError(
                 'agree_head needs cond_slot_prob > 0: the head is defined '
@@ -760,7 +804,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         fully = (k_t == self.diffusion_K) | all_drawn | silent_drawn
         return corrupted, fully, drawn
 
-    def _draft_from_logits(self, logits):
+    def _draft_from_logits(self, logits, temp=None):
         """Turn probe logits [..., V] into draft tokens [...].
 
         sc_draft_temp == 0 -> argmax (the historical behaviour, so every
@@ -768,10 +812,11 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         sample at that temperature, which is what the decode actually
         commits; see the sc_draft_temp note in __init__.
         """
-        if self.sc_draft_temp <= 0:
+        t = self.sc_draft_temp if temp is None else float(temp)
+        if t <= 0:
             return logits.argmax(dim=-1)
         shape = logits.shape[:-1]
-        flat = logits.reshape(-1, logits.shape[-1]).float() / self.sc_draft_temp
+        flat = logits.reshape(-1, logits.shape[-1]).float() / t
         return torch.multinomial(
             F.softmax(flat, dim=-1), 1).view(shape)
 
@@ -1228,10 +1273,23 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             #   handle every (k_m, k_c) combination at train time.
             # Per pair as well as per item: one forward then covers
             # n_pairs points of the (k_m, k_c) grid instead of one.
-            k_m = torch.randint(0, K + 1, (batch_size, n_pairs),
-                                device=x.device)
-            k_c = torch.randint(0, K + 1, (batch_size, n_pairs),
-                                device=x.device)
+            if self.mask_k_prob is None:
+                k_m = torch.randint(0, K + 1, (batch_size, n_pairs),
+                                    device=x.device)
+                k_c = torch.randint(0, K + 1, (batch_size, n_pairs),
+                                    device=x.device)
+            else:
+                # Split the draw: the mask endpoint at an explicit rate,
+                # everything else uniform over the non-endpoint levels.
+                # At K=1 that is exactly "mask with prob p, draft
+                # otherwise", and p=0 drops the mask state entirely.
+                def _draw():
+                    lo = torch.randint(0, max(K, 1), (batch_size, n_pairs),
+                                       device=x.device)
+                    hit = (torch.rand(batch_size, n_pairs, device=x.device)
+                           < self.mask_k_prob)
+                    return torch.where(hit, torch.full_like(lo, K), lo)
+                k_m, k_c = _draw(), _draw()
             if self.sym_k:
                 # A.12 symmetric update: ONE level per pair, both slots.
                 # The parallel refine decode moves both slots together --
@@ -1272,10 +1330,13 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                     agree_valid, agree_label = use_ctc, is_dec.long()
                     agree_lead_is_m = lead_is_m
         else:
-            # Eval: fully-masked (most informative single-pass setting).
-            k_m = torch.full((batch_size, n_pairs), K, device=x.device,
+            # Eval: fully-masked (most informative single-pass setting)
+            # -- unless sc_val, where validation measures the DRAFT
+            # state instead and k is pinned to 0 so the draft survives.
+            k_eval = 0 if self.sc_val else K
+            k_m = torch.full((batch_size, n_pairs), k_eval, device=x.device,
                              dtype=torch.long)
-            k_c = torch.full((batch_size, n_pairs), K, device=x.device,
+            k_c = torch.full((batch_size, n_pairs), k_eval, device=x.device,
                              dtype=torch.long)
         # Stash the FINAL levels (after every override) for the audits.
         self._last_k_m, self._last_k_c = k_m, k_c
@@ -1294,11 +1355,18 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         sc_toks_m = sc_toks_c = None
         self._last_selfcond_frac = torch.zeros((), device=x.device)
         self._last_sc_ar_frac = torch.zeros((), device=x.device)
-        if self.training and self.self_cond_prob > 0:
-            sc_mask_m = torch.rand(batch_size, n_pairs,
-                                   device=x.device) < self.self_cond_prob
-            sc_mask_c = torch.rand(batch_size, n_pairs,
-                                   device=x.device) < self.self_cond_prob
+        if (self.training or self.sc_val) and self.self_cond_prob > 0:
+            if self.training:
+                sc_mask_m = torch.rand(batch_size, n_pairs,
+                                       device=x.device) < self.self_cond_prob
+                sc_mask_c = torch.rand(batch_size, n_pairs,
+                                       device=x.device) < self.self_cond_prob
+            else:
+                # sc_val: every slot drafted, no coin -- validation is a
+                # fixed measurement, not a sample of the training mix.
+                sc_mask_m = torch.ones(batch_size, n_pairs,
+                                       dtype=torch.bool, device=x.device)
+                sc_mask_c = sc_mask_m.clone()
             if bool(sc_mask_m.any()) or bool(sc_mask_c.any()):
                 with torch.no_grad():
                     k_full = torch.full((batch_size, n_pairs), K,
@@ -1308,9 +1376,12 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                         x, T_query=T_query, k_m=k_full, k_c=k_full,
                     )
                     V = self.tokenizer.n_tokens
+                    # Validation takes argmax regardless of
+                    # sc_draft_temp, so val_loss is deterministic.
+                    dtemp = None if self.training else 0.0
                     toks = self._draft_from_logits(q_logits_sc.view(
                         batch_size, n_pairs, 2, subseq_len, V,
-                    ))                                  # [B, Q, 2, S]
+                    ), temp=dtemp)                      # [B, Q, 2, S]
                     sc_toks_m = toks[:, :, 0]           # [B, Q, S]
                     sc_toks_c = toks[:, :, 1]
                     if getattr(self, '_stash_slots', False):
@@ -1330,8 +1401,10 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                             batch_size, full_seq_len, subseq_len, V)
                         rows_m = torch.tensor(
                             [2 * t for t in tq], device=x.device)
-                        ar_toks_m = self._draft_from_logits(ar4[:, rows_m])
-                        ar_toks_c = self._draft_from_logits(ar4[:, rows_m + 1])
+                        ar_toks_m = self._draft_from_logits(
+                            ar4[:, rows_m], temp=dtemp)
+                        ar_toks_c = self._draft_from_logits(
+                            ar4[:, rows_m + 1], temp=dtemp)
                         use_ar_m = (torch.rand(batch_size, n_pairs,
                                                device=x.device)
                                     < self.sc_ar_frac)
@@ -1807,6 +1880,28 @@ if __name__ == '__main__':
                              'paper decode commits at temperature 1.0, so an '
                              'argmax draft is sharper than anything the '
                              'slots meet at inference.')
+    parser.add_argument('--mask_k_prob', type=float, default=None,
+                        help='A.12: rate at which a query pair is drawn at '
+                             'the MASK endpoint k=K; the rest are uniform '
+                             'over {0..K-1}. Default (unset) is the plain '
+                             'uniform draw over {0..K}. At K=1 this reads '
+                             '"mask with probability p, draft otherwise", '
+                             'and p=0 drops the mask state from training '
+                             'entirely -- which is what the symmetric '
+                             'one-round decode wants, since its seed round '
+                             'reads the clean AR rows and cannot see the '
+                             'slots at all. Needs --sc_val, or validation '
+                             'measures a state nothing trained.')
+    parser.add_argument('--sc_val', action='store_true', default=False,
+                        help='A.12: present VALIDATION the draft state '
+                             'instead of the masked one -- run the probe '
+                             'in eval, draft every slot, pin k=0. Drafts '
+                             'are argmax regardless of --sc_draft_temp so '
+                             'val_loss stays deterministic. Use whenever '
+                             'the mask state is untrained; note val_loss '
+                             'is then on its own scale and NOT comparable '
+                             'with the rest of the A family (val_ar_loss_'
+                             'content still is).')
     parser.add_argument('--sym_k', action='store_true', default=False,
                         help='A.12 symmetric update: draw ONE level per '
                              'query pair and give it to BOTH slots, so '
@@ -2003,6 +2098,8 @@ if __name__ == '__main__':
         sc_draft_temp=args.sc_draft_temp,
         sc_k_consistent=bool(args.sc_k_consistent),
         sym_k=bool(args.sym_k),
+        mask_k_prob=args.mask_k_prob,
+        sc_val=bool(args.sc_val),
         agree_head=bool(args.agree_head),
         agree_decoy_prob=args.agree_decoy_prob,
         agree_loss_weight=args.agree_loss_weight,
@@ -2027,7 +2124,8 @@ if __name__ == '__main__':
           f'agree_head={args.agree_head}  sc_ar_frac={args.sc_ar_frac}  '
           f'sc_draft_temp={args.sc_draft_temp}  '
           f'sc_k_consistent={bool(args.sc_k_consistent)}  '
-          f'sym_k={bool(args.sym_k)}'
+          f'sym_k={bool(args.sym_k)}  '
+          f'mask_k_prob={args.mask_k_prob}  sc_val={bool(args.sc_val)}'
           f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
           f'query_loss_weight={args.query_loss_weight}  '
@@ -2185,6 +2283,8 @@ if __name__ == '__main__':
                     'sc_draft_temp': args.sc_draft_temp,
                     'sc_k_consistent': bool(args.sc_k_consistent),
                     'sym_k': bool(args.sym_k),
+                    'mask_k_prob': args.mask_k_prob,
+                    'sc_val': bool(args.sc_val),
                     'agree_head': bool(args.agree_head),
                     'agree_decoy_prob': args.agree_decoy_prob,
                     'agree_loss_weight': args.agree_loss_weight,
