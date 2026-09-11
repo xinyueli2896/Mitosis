@@ -98,15 +98,43 @@ def heldout_ids(stem, split_ratio=10, train_length=TRAIN_LENGTH):
 
 
 def bar_starts(mid, end_time):
-    """Bar-start times in seconds, from the file's OWN metre map."""
+    """Bar-start times in seconds, from the file's OWN metre and tempo map.
+
+    Uses pretty_midi's get_downbeats(), which walks the full tempo map
+    and the time-signature changes together. The hand-rolled walk this
+    replaces took bpm from the FIRST tempo event and stepped by a
+    constant -- fine for a file the grid aligner wrote (one tempo), and
+    catastrophic for one carrying a lead-in artefact: song 004's v5
+    melody opens with an absurd tempo, so every "bar" spanned a sliver
+    of a second, the walk hit its 10000-bar cap before the first note,
+    and EVERY bar test came back false. That is what made 004 impossible
+    to keep even with --force-ids.
+
+    Falls back to the constant-tempo walk only if get_downbeats returns
+    nothing, and reports a degenerate grid rather than silently handing
+    back 10000 meaningless bars.
+    """
     ts = sorted(mid.time_signature_changes, key=lambda t: t.time) or \
         [pm.TimeSignature(4, 4, 0.0)]
-    tempo = mid.estimate_tempo() if False else None
-    # constant tempo by construction (the aligner writes one); take it
-    # from the tempo map rather than guessing
     times, tempi = mid.get_tempo_changes()
-    bpm = float(tempi[0]) if len(tempi) else 120.0
-    spb = 60.0 / bpm
+    bpm = float(np.median(tempi)) if len(tempi) else 120.0
+    spb = 60.0 / max(bpm, 1e-6)
+
+    try:
+        db = np.asarray(mid.get_downbeats(), dtype=float)
+    except Exception:                                   # noqa: BLE001
+        db = np.zeros(0)
+    db = db[np.isfinite(db)]
+    if len(db) >= 2:
+        step = float(np.median(np.diff(db)))
+        # extend past the last downbeat so a note in the final bar is
+        # still inside a bar
+        while len(db) and db[-1] <= end_time and step > 1e-6:
+            db = np.append(db, db[-1] + step)
+            if len(db) > 20000:
+                break
+        return db, ts, spb
+
     out, t, i = [], 0.0, 0
     while t <= end_time + 1e-6 and len(out) < 10000:
         while i + 1 < len(ts) and ts[i + 1].time <= t + 1e-9:
@@ -114,6 +142,19 @@ def bar_starts(mid, end_time):
         out.append(t)
         t += ts[i].numerator * spb * (4.0 / ts[i].denominator)
     return np.array(out), ts, spb
+
+
+def degenerate_grid(bars, end_time):
+    """Is this bar grid unusable? A grid that covers a tiny fraction of
+    the music, or has almost no bars, means the tempo map is broken --
+    report that instead of 'no bar-aligned start', which blames the
+    melody for a timing artefact."""
+    if len(bars) < 2:
+        return 'bar grid has < 2 bars'
+    if bars[-1] < 0.5 * end_time:
+        return (f'bar grid covers only {bars[-1]:.1f}s of {end_time:.1f}s '
+                f'({len(bars)} bars) -- broken tempo map')
+    return ''
 
 
 def sounding_bars(inst_notes, bars):
@@ -322,6 +363,10 @@ def main():
         end = max(max(n.end for n in mel_notes),
                   max(n.end for n in chd_notes))
         bars, ts_list, spb = bar_starts(mel, end)
+        bad = degenerate_grid(bars, end)
+        if bad:
+            stub(sid, bad)
+            continue
         m_hit = sounding_bars(mel_notes, bars)
         c_hit = sounding_bars(chd_notes, bars)
         tol = a.head_beats * spb
