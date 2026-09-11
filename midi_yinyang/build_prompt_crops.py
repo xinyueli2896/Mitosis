@@ -424,8 +424,8 @@ def main():
     rows, kept, reasons = [], [], {}
     # Every row carries every column, so a song dropped early still gets
     # a line and the TSV never depends on which row happened to be first.
-    COLS = ['id', 'grid_pre_pad', 'first_mel_bar', 'is_pickup',
-            'lead_bars', 'crop_bar',
+    COLS = ['id', 'grid_pre_pad', 'first_mel_frame', 'pickup_src',
+            'first_mel_bar', 'is_pickup', 'lead_bars', 'crop_bar',
             'crop_sec', 'crop_frame', 'pad_frames', 'bars_remaining',
             'pad_bars', 'lead_has_melody', 'pickup_has_melody',
             'metre_changes_in_prompt', 'metre_changes_in_window',
@@ -528,10 +528,30 @@ def main():
         # early -- not an anacrusis one bar earlier
         if F + 1 < len(bars) and bars[F + 1] - first_on <= tol:
             F += 1
-        # pickup iff the melody enters partway through F rather than on
-        # its bar line (complete_bars cannot be true here by sustain --
-        # F holds the first onset in the file)
-        is_pickup = not bool(m_start[F])
+        # ---- is F a PICKUP bar? Ask beat_midi.txt, not the midi -------
+        # beat_midi.txt column 3 flags the downbeat of every bar, and the
+        # aligner carries those straight through to downbeat_frames. So
+        # the question "does the melody start on a bar line or partway
+        # into one" has an exact answer in the annotation: is the first
+        # onset's frame one of the ANNOTATED downbeats?
+        #
+        # Exact beats the midi-side test twice over. It needs no
+        # --head-beats tolerance, so a note a 16th after the downbeat is
+        # no longer read as being on it. And it is not fooled by the
+        # pickup bar line the grid above had to manufacture: a song whose
+        # anacrusis fills its whole pickup bar starts at frame 0, which
+        # IS a bar line on that grid but is NOT an annotated downbeat --
+        # correctly a pickup, where complete_bars would have called it a
+        # bar-line start and given it two lead bars.
+        annotated = set(src_db.get(sid, ()))
+        if annotated:
+            first_frame = int(round(first_on / (spb / 4.0)))
+            is_pickup = first_frame not in annotated
+            pickup_src = 'beat_midi downbeat flags'
+        else:
+            # no report: fall back to the midi's own bar lines and tol
+            is_pickup = not bool(m_start[F])
+            pickup_src = f'midi bar lines, +-{a.head_beats} beat'
         lead_bars = 1 if is_pickup else 2
         start_bar = F - lead_bars
         pad_bars = max(-start_bar, 0)
@@ -559,6 +579,8 @@ def main():
         n_ts_win = sum(1 for t in ts_list
                        if bars[start_bar] < t.time < bars[win_end])
         row = dict(id=sid, grid_pre_pad=grid_pre_pad,
+                   first_mel_frame=int(round(first_on / (spb / 4.0))),
+                   pickup_src=pickup_src,
                    first_mel_bar=F, is_pickup=int(is_pickup),
                    lead_bars=lead_bars, crop_bar=start_bar,
                    crop_sec=f'{bars[start_bar]:.3f}',
@@ -632,9 +654,12 @@ def main():
         cb = np.array([int(r['crop_bar']) for r in keep_rows])
         pb = np.array([int(r['pad_bars']) for r in keep_rows])
         lm = np.array([int(r['lead_has_melody']) for r in keep_rows])
-        print(f'  anchor: {int(pk.sum())}/{len(pk)} songs open with a '
-              f'PICKUP bar (1 bar in front), {int((pk == 0).sum())} start '
+        ip = np.array([int(r['is_pickup']) for r in keep_rows])
+        srcs = {r['pickup_src'] for r in keep_rows}
+        print(f'  anchor: {int(ip.sum())}/{len(ip)} songs open with a '
+              f'PICKUP bar (1 bar in front), {int((ip == 0).sum())} start '
               f'on a bar line (2 bars in front)')
+        print(f'  pickup decided by: {sorted(srcs)}')
         print(f'  lead bars: {int((pb == 0).sum())} entirely from the song, '
               f'{int((pb > 0).sum())} needed padding '
               f'({int(pb.sum())} bars padded in total)')
