@@ -424,8 +424,9 @@ def main():
     rows, kept, reasons = [], [], {}
     # Every row carries every column, so a song dropped early still gets
     # a line and the TSV never depends on which row happened to be first.
-    COLS = ['id', 'grid_pre_pad', 'first_mel_frame', 'pickup_src',
-            'first_mel_bar', 'is_pickup', 'lead_bars', 'crop_bar',
+    COLS = ['id', 'grid_pre_pad', 'first_mel_frame', 'mel_offset_beats',
+            'pickup_src', 'first_mel_bar', 'is_pickup', 'lead_bars',
+            'crop_bar',
             'crop_sec', 'crop_frame', 'pad_frames', 'bars_remaining',
             'pad_bars', 'lead_has_melody', 'pickup_has_melody',
             'metre_changes_in_prompt', 'metre_changes_in_window',
@@ -580,6 +581,14 @@ def main():
                        if bars[start_bar] < t.time < bars[win_end])
         row = dict(id=sid, grid_pre_pad=grid_pre_pad,
                    first_mel_frame=int(round(first_on / (spb / 4.0))),
+                   # how far INTO its bar the melody enters. A real
+                   # anacrusis sits near the end of the bar (001 enters
+                   # on beat 3 of 4); a phrase that merely starts on the
+                   # off-beat of its own first bar sits near the start
+                   # (003 enters on beat 0.5). Both are "not on a
+                   # downbeat", so the annotation calls both a pickup --
+                   # this column is what lets you see the difference.
+                   mel_offset_beats=f'{(first_on - bars[F]) / spb:.2f}',
                    pickup_src=pickup_src,
                    first_mel_bar=F, is_pickup=int(is_pickup),
                    lead_bars=lead_bars, crop_bar=start_bar,

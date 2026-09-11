@@ -23,6 +23,12 @@ converts both into the cropped file's own frame numbering, and asks:
      the two streams enter the model in register?
   4. does the song's own metre stay regular across prompt + scored
      window (the thing --align-report steers for)?
+  5. does the melody actually enter where the crop rule says it should
+     -- inside bar 1 for a song with a pickup, on bar 2's downbeat for
+     one without? This is the "is there a bar in front of the pickup
+     bar" question, asked of the WRITTEN NOTES. A set built by an older
+     builder, or left un-rebuilt after the rule changed, fails here
+     instead of having to be opened in a DAW to be noticed.
 
 Usage (via audit_prompt_phase.sbatch, CPU):
     python audit_prompt_phase.py --set input/heldout_v5 \\
@@ -116,6 +122,34 @@ def main():
             if any(b - a_ != 16 for a_, b in zip([pad] + inside, inside)):
                 fails.append((sid, 'metre changes inside prompt + scored '
                                    'window'))
+            # ---- 5. does the melody enter where the rule says? --------
+            # Read the written notes, not the builder's bookkeeping.
+            lead = row.get('lead_bars', '')
+            if lead != '':
+                lead = int(lead)
+                try:
+                    import pretty_midi as pm
+                    mm = pm.PrettyMIDI(mel)
+                    ons = [n.start for i in mm.instruments for n in i.notes]
+                except Exception as exc:                    # noqa: BLE001
+                    fails.append((sid, f'cannot read the melody: {exc}'))
+                    ons = []
+                if ons:
+                    # 16 frames to the bar, 4 frames to the beat; the
+                    # crop is written at one constant tempo
+                    spf = 60.0 / 120.0 / 4.0
+                    f0 = min(ons) / spf
+                    if lead == 1:
+                        lo, hi, what = 16.0, 32.0, 'inside bar 1 (the pickup)'
+                    else:
+                        lo, hi, what = 32.0, 32.0 + 1e-6, "on bar 2's downbeat"
+                    if not (lo - 1e-6 <= f0 < hi):
+                        fails.append((sid, (
+                            f'the melody enters at frame {f0:.1f} (bar '
+                            f'{f0 / 16:.2f}); with lead_bars={lead} it must '
+                            f'enter {what}. There is no full bar of '
+                            f'head-room in front of it -- this set was '
+                            f'built by an older rule, REBUILD it.')))
             if row.get('forced'):
                 warn_forced.append((sid, row['forced']))
 
@@ -138,8 +172,8 @@ def main():
               'decode will run and simply be worse.')
         sys.exit(1)
     print('ALL PROMPTS PHASE-CORRECT: frame 0 and the generation boundary '
-          'are both true downbeats, and the metre holds across the scored '
-          'window.')
+          'are both true downbeats, the metre holds across the scored '
+          'window, and every melody enters with its full lead in front.')
 
 
 if __name__ == '__main__':
