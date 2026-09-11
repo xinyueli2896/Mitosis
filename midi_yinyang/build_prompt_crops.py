@@ -255,23 +255,42 @@ def main():
             want = want | extra
     have = {song_id(f) for f in glob(os.path.join(a.mel_src, '*.mid'))}
     ids = sorted(i for i in want if i and i in have)
+    missing = sorted(i for i in want if i and i not in have)
     print(f'held-out candidates: {len(want)}; present in {a.mel_src}: '
-          f'{len(ids)}\n')
+          f'{len(ids)}')
+    if missing:
+        print(f'  NOT IN THE SOURCE FOLDER ({len(missing)}): '
+              f'{missing[:20]}{" ..." if len(missing) > 20 else ""}')
+    print()
 
     os.makedirs(os.path.join(a.dst, 'melody'), exist_ok=True)
     os.makedirs(os.path.join(a.dst, 'chord'), exist_ok=True)
     rows, kept, reasons = [], [], {}
+    for sid in missing:
+        rows.append(dict(id=sid, first_both_bar='', crop_bar='',
+                         crop_sec='', bars_remaining='',
+                         pickup_has_melody='', metre_changes_in_prompt='',
+                         metre_changes_in_window='',
+                         dropped='not in the source folder'))
+        reasons[sid] = 'not in the source folder'
+
+    def stub(sid, why):
+        reasons[sid] = why
+        rows.append(dict(id=sid, first_both_bar='', crop_bar='',
+                         crop_sec='', bars_remaining='',
+                         pickup_has_melody='', metre_changes_in_prompt='',
+                         metre_changes_in_window='', dropped=why))
     for sid in ids:
         mp = os.path.join(a.mel_src, f'{sid}.mid')
         cp_ = os.path.join(a.chord_src, f'{sid}.mid')
         if not os.path.exists(cp_):
-            reasons[sid] = 'no chord file'
+            stub(sid, 'no chord file')
             continue
         mel, chd = pm.PrettyMIDI(mp), pm.PrettyMIDI(cp_)
         mel_notes = [n for i in mel.instruments for n in i.notes]
         chd_notes = [n for i in chd.instruments for n in i.notes]
         if not mel_notes or not chd_notes:
-            reasons[sid] = 'empty stream'
+            stub(sid, 'empty stream')
             continue
         end = max(max(n.end for n in mel_notes),
                   max(n.end for n in chd_notes))
@@ -290,7 +309,8 @@ def main():
                 B = b
                 break
         if B is None:
-            reasons[sid] = f'no bar-aligned start with {a.mel_bars} consecutive both-stream bars'
+            stub(sid, f'no bar-aligned start with {a.mel_bars} '
+                      f'consecutive both-stream bars')
             continue
         start_bar = B - 1
         remaining = len(bars) - start_bar
@@ -327,6 +347,7 @@ def main():
         rows.append(row)
         kept.append(sid)
 
+    rows.sort(key=lambda r: r['id'])
     if rows:
         with open(os.path.join(a.dst, 'prompt_crops.tsv'), 'w',
                   newline='') as fh:
