@@ -234,6 +234,35 @@ def read_chords(path, g, sec_per_beat):
     return mapped, n_rows, dropped
 
 
+def time_signatures(db_out_beats, gaps, sec_per_beat):
+    """A time_signature event per METRE CHANGE, so the bar lines follow
+    the music instead of a fixed 4.
+
+    POP909 annotates bars of 2, 3, 5, 6, 7, 8 and 12 beats as well as 4
+    (a 6-beat bar alone occurs 2572 times). On a fixed 4-beat grid every
+    bar after the first irregular one is phase-shifted by the difference
+    -- song 010's melody enters two beats late for exactly this reason,
+    and NO choice of origin can fix more than one of a song's phase
+    regions. Writing the real metre fixes all of them at once, and is
+    pure metadata: not a tick moves.
+
+    db_out_beats: each downbeat's position in OUTPUT beats (so the first
+    is already a multiple of 4, the pickup filling whole 4/4 bars before
+    it). gaps[i] is the length in beats of the bar starting at
+    db_out_beats[i]. Beats are quarter notes here, so the denominator is
+    always 4 and a 6-beat bar is 6/4.
+    """
+    out = [pm.TimeSignature(4, 4, 0.0)]
+    cur = 4
+    for start, num in zip(db_out_beats, gaps):
+        num = int(num)
+        if num == cur or num < 1:
+            continue
+        out.append(pm.TimeSignature(num, 4, float(start) * sec_per_beat))
+        cur = num
+    return out
+
+
 def snap_stats(onsets, g):
     """How far the melody actually moves, and whether a FINER grid holds it.
 
@@ -260,7 +289,8 @@ def snap_stats(onsets, g):
             float(np.mean((d24 < tol) & (d4 >= tol))))
 
 
-def align_song(song_dir, dst, sub, tempo, origin, fix_dropped, drop_tol):
+def align_song(song_dir, dst, sub, tempo, origin, fix_dropped, drop_tol,
+               write_ts=True):
     sid = os.path.basename(song_dir)
     bt, down, n_ins, pos0 = load_beats(
         os.path.join(song_dir, 'beat_midi.txt'),
@@ -315,6 +345,15 @@ def align_song(song_dir, dst, sub, tempo, origin, fix_dropped, drop_tol):
     ci.notes = cnotes
     chd_out.instruments.append(ci)
 
+    gaps_all = np.diff(db_idx)
+    n_ts = 0
+    if write_ts and len(gaps_all):
+        db_out = (g.raw_beat(bt[db_idx[:-1]]) - origin_beat)
+        ts = time_signatures(db_out, gaps_all, spb)
+        n_ts = len(ts) - 1          # the 4/4 at time 0 is not a change
+        for m in (out, mel_out, chd_out):
+            m.time_signature_changes = list(ts)
+
     for sub_dir, m in (('aligned', out), ('melody', mel_out),
                        ('chord', chd_out)):
         os.makedirs(os.path.join(dst, sub_dir), exist_ok=True)
@@ -340,6 +379,7 @@ def align_song(song_dir, dst, sub, tempo, origin, fix_dropped, drop_tol):
                 first_irregular_bar=(irregular[0] if irregular else ''),
                 n_downbeats=len(db_idx),
                 frac_downbeats_on_bar=f'{on_bar:.4f}',
+                metre_changes=n_ts,
                 mel_snap_median=f'{snap_med:.5f}',
                 mel_snap_p95=f'{snap_p95:.5f}',
                 mel_needs_sub24_frac=f'{trip:.4f}')
@@ -365,6 +405,13 @@ def main():
                         'bar 1 beat 1, pickup dropped. beat0: annotation '
                         'beat 0 at tick 0 -- wrong bar phase in the 601 '
                         'songs that do not start on a downbeat.')
+    p.add_argument('--no-time-signatures', action='store_true',
+                   help='do NOT write a time_signature per metre change. '
+                        'Default writes them, so a 6-beat bar reads as 6/4 '
+                        'and every bar line after it follows the music '
+                        'instead of a fixed 4. Pure metadata -- no tick '
+                        'moves -- and the only thing that fixes ALL of a '
+                        "song's phase regions rather than one.")
     p.add_argument('--no-fix-dropped', action='store_true',
                    help='do NOT restore beats the tracker missed')
     p.add_argument('--drop-tol', type=float, default=0.15,
@@ -385,7 +432,8 @@ def main():
     for i, d in enumerate(dirs):
         try:
             rows.append(align_song(d, a.dst, a.sub, a.tempo, a.origin,
-                                   not a.no_fix_dropped, a.drop_tol))
+                                   not a.no_fix_dropped, a.drop_tol,
+                                   write_ts=not a.no_time_signatures))
         except Exception as e:  # noqa: BLE001 - report and continue
             failed.append((os.path.basename(d), repr(e)))
         if (i + 1) % 100 == 0:
@@ -412,6 +460,10 @@ def main():
         print(f'  columns 2 and 3 contradict in the opening: '
               f'{int(fd_.sum())} songs (origin follows column 3; see '
               f'bar_pos_from_col2)')
+        ts_ = np.array([r['metre_changes'] for r in rows])
+        print(f'  metre changes written: {int(ts_.sum())} across '
+              f'{int((ts_ > 0).sum())} songs (max {int(ts_.max())} in one); '
+              f'{int((ts_ == 0).sum())} songs are 4/4 throughout')
         p95 = np.array([float(r['mel_snap_p95']) for r in rows])
         trp = np.array([float(r['mel_needs_sub24_frac']) for r in rows])
         print(f'  melody snap error (beats): median of p95 = '
