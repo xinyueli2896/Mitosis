@@ -59,7 +59,13 @@ def song_id(name):
     return m.group(1) if m else None
 
 
-def heldout_ids(stem, split_ratio=10, train_length=None):
+# FramedDataset target length. audit_wholesong_split filters to songs at
+# least this long BEFORE taking the modulo, so matching it matters: a
+# shorter song is not in the dataset at all and is neither train nor val.
+TRAIN_LENGTH = 384
+
+
+def heldout_ids(stem, split_ratio=10, train_length=TRAIN_LENGTH):
     """Song ids never trained on, by the FramedDataset rule.
 
     Mirrors audit_wholesong_split.our_val: a song is held out iff its
@@ -78,11 +84,15 @@ def heldout_ids(stem, split_ratio=10, train_length=None):
             i, nm = line.rstrip('\n').split('\t', 1)
             names[int(i)] = nm
     lengths = torch.load(lpt)
-    keep = (lengths >= train_length) if train_length else \
+    keep = (np.asarray(lengths) >= train_length) if train_length else \
         np.ones(len(lengths), dtype=bool)
-    idx = np.arange(len(lengths))[np.asarray(keep)]
+    idx = np.arange(len(lengths))[keep]
     val = [i for i in idx if i % split_ratio == 0]
-    return {song_id(names[i]) for i in val if song_id(names[i])}
+    ids = {song_id(names[i]) for i in val if song_id(names[i])}
+    print(f'[split] {stem}: {len(lengths)} songs, {int(keep.sum())} at least '
+          f'{train_length} frames, {len(val)} held out (idx %% {split_ratio} '
+          f'== 0) -> {len(ids)} distinct song ids')
+    return ids
 
 
 def bar_starts(mid, end_time):
@@ -182,6 +192,11 @@ def main():
                    help='dataset stem whose index %% split-ratio == 0 songs '
                         'are the held-out set (see audit_wholesong_split)')
     p.add_argument('--split-ratio', type=int, default=10)
+    p.add_argument('--no-length-filter', action='store_true',
+                   help='skip the lengths >= 384 filter. Off by default so '
+                        'the split matches audit_wholesong_split exactly; a '
+                        'shorter song is not in the dataset at all, so it is '
+                        'untrained but is not what "held out" has meant here.')
     p.add_argument('--ids', nargs='*', default=None,
                    help='explicit ids; skips the held-out split filter')
     p.add_argument('--mel-bars', type=int, default=4,
@@ -202,7 +217,12 @@ def main():
     a = p.parse_args()
 
     prompt_bars = a.mel_bars + 1
-    want = set(a.ids) if a.ids else heldout_ids(a.dataset, a.split_ratio)
+    want = set(a.ids) if a.ids else heldout_ids(
+        a.dataset, a.split_ratio,
+        train_length=None if a.no_length_filter else TRAIN_LENGTH)
+    if a.ids:
+        print(f'[split] explicit --ids given ({len(want)}); the held-out '
+              f'filter is NOT applied')
     have = {song_id(f) for f in glob(os.path.join(a.mel_src, '*.mid'))}
     ids = sorted(i for i in want if i and i in have)
     print(f'held-out candidates: {len(want)}; present in {a.mel_src}: '
