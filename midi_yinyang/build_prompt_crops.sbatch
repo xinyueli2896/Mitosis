@@ -40,8 +40,14 @@
 #                        absent from the dataset, so the index rule cannot
 #                        find them, but never trained on either). Refused
 #                        if any is in the TRAIN split. Set to " " for none.
-#   MEL_BARS             sounding bars in the prompt (default 4, so the
-#                        prompt is 5 bars including the buffer)
+#   MEL_BARS             sounding bars in the prompt (default 4). The
+#                        prompt is MEL_BARS + 2 bars: a LEAD bar, the
+#                        pickup bar, then the sounding bars. The lead is
+#                        the song's own bar where it has one and an empty
+#                        padded bar where it does not -- pad_bars and
+#                        pad_frames in the TSV say which, and the padding
+#                        shifts both streams identically so they stay in
+#                        register.
 #   MIN_BARS             bars that must remain after the crop so there is
 #                        room to generate (default 25)
 #   ALIGN_REPORT         align_grid_report.tsv from the aligner. Supplies
@@ -127,7 +133,7 @@ python build_prompt_crops.py \
 
 echo "================================================================"
 echo "Set: $DST/{melody,chord}   report: $DST/prompt_crops.tsv"
-echo "Every prompt is now the first $((MEL_BARS + 1)) bars of the file, so"
-echo "PROMPT_LENGTH = $(( (MEL_BARS + 1) * 16 )) frames for every song --"
+echo "Every prompt is now the first $((MEL_BARS + 2)) bars of the file, so"
+echo "PROMPT_LENGTH = $(( (MEL_BARS + 2) * 16 )) frames for every song --"
 echo "no more per-song p6/p8 groups to merge."
 echo "================================================================"

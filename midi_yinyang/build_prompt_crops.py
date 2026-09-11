@@ -207,7 +207,7 @@ def complete_bars(inst_notes, bars, tol):
     return out
 
 
-def crop_ticks(src_path, dst_path, tick0):
+def crop_ticks(src_path, dst_path, tick0, pad_ticks=0):
     """Window a MIDI file in TICK space, changing nothing else.
 
     Cropping must be a pure windowing operation: every tempo and
@@ -219,8 +219,13 @@ def crop_ticks(src_path, dst_path, tick0):
     and a different tempo per song depending on what its first event
     happened to be. That is editing the source, not cropping it.
 
+    pad_ticks prepends that many EMPTY ticks, used when the song has no
+    bar before its pickup and one has to be manufactured. It is a pure
+    shift of everything that survives -- no note is created, and the
+    relative timing inside the window is untouched.
+
     Notes are kept when their ONSET is at or after tick0 and shifted by
-    -tick0; a note straddling the cut is dropped rather than truncated,
+    -tick0 + pad_ticks; a note straddling the cut is dropped rather than truncated,
     so nothing appears from nowhere at bar 1 beat 1. Meta and control
     events before the cut are re-emitted at tick 0, because they set
     state the window needs (tempo, metre, program, key).
@@ -244,14 +249,15 @@ def crop_ticks(src_path, dst_path, tick0):
                 on_t, on_msg = stack.pop(0)
                 if on_t < tick0:
                     continue
-                events.append((on_t - tick0, 1, on_msg))
-                events.append((max(t - tick0, on_t - tick0 + 1), 0, msg))
+                events.append((on_t - tick0 + pad_ticks, 1, on_msg))
+                events.append((max(t - tick0, on_t - tick0 + 1) + pad_ticks,
+                               0, msg))
             else:
-                events.append((max(t - tick0, 0), 2, msg))
+                events.append((max(t - tick0, 0) + pad_ticks, 2, msg))
         for stack in open_on.values():                 # never closed
             for on_t, on_msg in stack:
                 if on_t >= tick0:
-                    events.append((on_t - tick0, 1, on_msg))
+                    events.append((on_t - tick0 + pad_ticks, 1, on_msg))
         events.sort(key=lambda e: (e[0], -e[1]))
         new_tr = mido.MidiTrack()
         prev = 0
@@ -336,7 +342,8 @@ def main():
                         'window (prompt + min-bars)')
     a = p.parse_args()
 
-    prompt_bars = a.mel_bars + 1
+    # lead bar + pickup bar + the sounding bars
+    prompt_bars = a.mel_bars + 2
     if a.ids:
         want = set(a.ids)
         print(f'[split] explicit --ids given ({len(want)}); the held-out '
@@ -407,7 +414,7 @@ def main():
         rows.append(dict(id=sid, first_both_bar='', crop_bar='',
                          crop_sec='', bars_remaining='',
                          pickup_has_melody='', metre_changes_in_prompt='',
-                         metre_changes_in_window='', crop_frame='', irregular_bars='', window_regular='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
+                         metre_changes_in_window='', pad_bars='', lead_has_melody='', pad_frames='', crop_frame='', irregular_bars='', window_regular='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
                          dropped='not in the source folder'))
         reasons[sid] = 'not in the source folder'
 
@@ -416,7 +423,7 @@ def main():
         rows.append(dict(id=sid, first_both_bar='', crop_bar='',
                          crop_sec='', bars_remaining='',
                          pickup_has_melody='', metre_changes_in_prompt='',
-                         metre_changes_in_window='', crop_frame='', irregular_bars='', window_regular='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
+                         metre_changes_in_window='', pad_bars='', lead_has_melody='', pad_frames='', crop_frame='', irregular_bars='', window_regular='', src_tempo_events='', src_bpm_first='', src_bpm_median='', forced='',
                          dropped=why))
     for sid in ids:
         mp = os.path.join(a.mel_src, f'{sid}.mid')
@@ -459,10 +466,11 @@ def main():
             irr = irregular.get(sid, set())
 
         def clean(b):
-            """Is the whole scored window, from the buffer bar, free of
-            irregular bars? Bar b-1 is the buffer, so the window runs
-            [b-1, b-1+win)."""
-            return not any(b - 1 <= x < b - 1 + win for x in irr)
+            """Is the whole scored window free of irregular bars? Bar b-2
+            is the lead, b-1 the pickup, so the window runs
+            [b-2, b-2+win) -- clamped at 0 where the lead is padded."""
+            lo = max(b - 2, 0)
+            return not any(lo <= x < lo + win for x in irr)
 
         B, how = None, ''
         # first pass: a window that is metrically regular
@@ -511,7 +519,12 @@ def main():
                       f'{int(m_start.sum())} bar-aligned melody starts in '
                       f'{len(bars)} bars)')
             continue
-        start_bar = B - 1
+        # One bar in front of the pickup: the song's own if it has one,
+        # otherwise an empty bar manufactured by padding. The pickup bar
+        # itself stays where it was, at B-1.
+        lead = B - 2
+        pad_bars = 1 if lead < 0 else 0
+        start_bar = max(lead, 0)
         remaining = len(bars) - start_bar
         n_ts_prompt = sum(1 for t in ts_list
                           if bars[start_bar] < t.time <
@@ -527,8 +540,12 @@ def main():
                    # assumption that made the first phase audit disagree
                    # with the builder.
                    crop_frame=int(round(bars[start_bar] / (spb / 4.0))),
+                   pad_frames=pad_bars * 16,
                    bars_remaining=remaining,
-                   pickup_has_melody=int(bool(m_hit[start_bar])),
+                   pad_bars=pad_bars,
+                   lead_has_melody=int(bool(m_hit[start_bar]))
+                   if not pad_bars else 0,
+                   pickup_has_melody=int(bool(m_hit[B - 1])),
                    metre_changes_in_prompt=n_ts_prompt,
                    metre_changes_in_window=n_ts_win,
                    irregular_bars=len(irr),
@@ -552,10 +569,14 @@ def main():
         # Each file converts the crop TIME to its own ticks through its
         # own tempo map, so the two streams cut at the same musical
         # instant even if their maps ever differ.
+        # one padded bar = 4 beats; both streams get the identical pad,
+        # so they stay in register
+        pad_m = pad_bars * 4 * mel.resolution
+        pad_c = pad_bars * 4 * chd.resolution
         crop_ticks(mp, os.path.join(a.dst, 'melody', f'{sid}.mid'),
-                   int(round(mel.time_to_tick(t0))))
+                   int(round(mel.time_to_tick(t0))), pad_ticks=pad_m)
         crop_ticks(cp_, os.path.join(a.dst, 'chord', f'{sid}.mid'),
-                   int(round(chd.time_to_tick(t0))))
+                   int(round(chd.time_to_tick(t0))), pad_ticks=pad_c)
         rows.append(row)
         kept.append(sid)
 
@@ -568,14 +589,17 @@ def main():
             w.writeheader()
             w.writerows(rows)
     print(f'KEPT {len(kept)} songs -> {a.dst}/{{melody,chord}}')
-    print(f'  prompt = 1 pickup bar + {a.mel_bars} sounding bars '
-          f'= {prompt_bars} bars')
+    print(f'  prompt = 1 lead bar + 1 pickup bar + {a.mel_bars} sounding '
+          f'bars = {prompt_bars} bars ({prompt_bars * 16} frames)')
     if kept:
         pk = np.array([r['pickup_has_melody'] for r in rows
                        if not r['dropped']])
         tw = np.array([r['metre_changes_in_window'] for r in rows
                        if not r['dropped']])
         cb = np.array([r['crop_bar'] for r in rows if not r['dropped']])
+        pb = np.array([int(r['pad_bars']) for r in rows if not r['dropped']])
+        print(f'  lead bar: {int((pb == 0).sum())} taken from the song, '
+              f'{int(pb.sum())} padded empty (no bar before the pickup)')
         print(f'  pickup bar actually holds melody in {int(pk.sum())}/'
               f'{len(pk)} (the rest start on a bar line, buffer is silent)')
         print(f'  crop point: median bar {int(np.median(cb))}, '

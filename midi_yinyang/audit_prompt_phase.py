@@ -15,7 +15,8 @@ cannot certify itself. For each kept song it takes the source's
 downbeat_frames (from align_grid_report.tsv) and that song's crop_bar,
 converts both into the cropped file's own frame numbering, and asks:
 
-  1. is frame 0 of the prompt a true downbeat?
+  1. does the prompt begin on a bar line -- a true downbeat, or a
+     padded lead bar that ends on one?
   2. is frame PROMPT_LENGTH -- where the model takes over -- a true
      downbeat?
   3. do melody and chord carry the same number of frames of prompt, so
@@ -87,12 +88,22 @@ def main():
                                    'set; crop_bar*16 is not a safe substitute'))
                 continue
             off = int(cf)
-            local = {d - off for d in db if d >= off}
+            pad = int((row.get('pad_frames') or 0) or 0)
+            # output frame = source frame - crop point + any padded lead
+            local = {d - off + pad for d in db if d >= off}
 
-            if 0 not in local:
+            # With a padded lead bar frame 0 is synthetic: we made it a
+            # bar line, and what must be checked is that the pad ends
+            # exactly on the first real downbeat. With no pad, pad == 0
+            # and this is the plain "frame 0 is a downbeat" test.
+            if pad not in local:
                 nearest = min(local, default=None)
-                fails.append((sid, f'frame 0 is NOT a downbeat '
-                                   f'(nearest is {nearest})'))
+                fails.append((sid, f'the prompt does not begin on a bar '
+                                   f'line: expected a downbeat at frame '
+                                   f'{pad}, nearest is {nearest}'))
+            if pad and pad % 16:
+                fails.append((sid, f'padded lead is {pad} frames, not a '
+                                   f'whole number of bars'))
             if a.prompt_frames not in local:
                 below = max((x for x in local if x <= a.prompt_frames),
                             default=None)
@@ -100,8 +111,8 @@ def main():
                                    f'{a.prompt_frames}, which is NOT a '
                                    f'downbeat (last one at {below})'))
             win = a.prompt_frames + a.gen_frames
-            inside = sorted(x for x in local if 0 < x < win)
-            if any(b - a_ != 16 for a_, b in zip([0] + inside, inside)):
+            inside = sorted(x for x in local if pad < x < win)
+            if any(b - a_ != 16 for a_, b in zip([pad] + inside, inside)):
                 fails.append((sid, 'metre changes inside prompt + scored '
                                    'window'))
             if row.get('forced'):
