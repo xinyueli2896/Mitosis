@@ -147,8 +147,14 @@ def main():
                     # many bars instead -- which leaves it holding the
                     # same REAL music, since the bars we padded are
                     # silent.
-                    crops[row['id']] = (int(cb),
-                                        int(row.get('pad_bars') or 0))
+                    # pad_frames may not be whole bars (the builder pads
+                    # to the frame that puts the melody's downbeat at
+                    # bar 2); the baseline works in bars, so round UP --
+                    # it may see slightly less real music, never more
+                    # than us, and never a bar we synthesised.
+                    import math
+                    pf = int(float(row.get('pad_frames') or 0))
+                    crops[row['id']] = (int(cb), math.ceil(pf / 16))
         print(f'[crop] {len(crops)} songs with a crop point from '
               f'{args.crops_tsv}')
 

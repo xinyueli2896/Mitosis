@@ -15,11 +15,14 @@
 #   F is NOT a pickup (melody begins on F's bar line)
 #       crop two bars in front:  [ empty ][ empty ][ MEL_BARS bars, from F ]
 #
-# so the prompt is MEL_BARS + 2 bars either way and the melody enters at
-# the same musical place in every song. Bars missing in front of F are
-# PADDED empty rather than letting the anchor slide -- the earlier
-# version searched for a convenient window and slid later, which put
-# real melody in the head-room bar on songs 010 and 816.
+# so the prompt is MEL_BARS + 2 bars either way, and the melody's FIRST
+# FULL DOWNBEAT IS ALWAYS AT FRAME 32 (bar 2). What the song has in
+# front of that is kept; where it has less, silence is padded -- to the
+# frame, so a partial pickup bar still ends on its downbeat and stays a
+# pickup bar. Whether F is a pickup comes from beat_midi.txt (is the
+# first note on an annotated downbeat or not). The earlier version
+# searched for a convenient window and slid later, which put real
+# melody in the head-room bar on songs 010 and 816.
 #
 # Chord is cut and padded on exactly the same boundary, so the streams
 # stay in register by construction. Bars come from each file's OWN time

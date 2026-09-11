@@ -110,27 +110,35 @@ def main():
             # output frame = source frame - crop point + any padded lead
             local = {d - off + pad for d in db if d >= off}
 
-            # With a padded lead bar frame 0 is synthetic: we made it a
-            # bar line, and what must be checked is that the pad ends
-            # exactly on the first real downbeat. With no pad, pad == 0
-            # and this is the plain "frame 0 is a downbeat" test.
-            if pad not in local:
-                nearest = min(local, default=None)
-                fails.append((sid, f'the prompt does not begin on a bar '
-                                   f'line: expected a downbeat at frame '
-                                   f'{pad}, nearest is {nearest}'))
-            if pad and pad % 16:
-                fails.append((sid, f'padded lead is {pad} frames, not a '
-                                   f'whole number of bars'))
+            # The invariant the builder promises: every annotated
+            # downbeat inside the prompt sits on the output's own bar
+            # grid (a multiple of 16), and the melody's first full
+            # downbeat -- the anchor -- is at frame 32. The pad is
+            # whatever made that true, so it need not be whole bars, and
+            # frame 0 need not itself be an annotated downbeat (it is
+            # not, when the aligner left the opening bar partial). What
+            # matters is the phase: a pickup must still end on a bar
+            # line, or it is no longer a pickup.
+            win = a.prompt_frames + a.gen_frames
+            off_grid = sorted(x for x in local if 0 <= x < win and x % 16)
+            if off_grid:
+                fails.append((sid, f'annotated downbeats land OFF the bar '
+                                   f'grid at output frames {off_grid[:6]} '
+                                   f'-- the pickup is no longer a pickup'))
+            if 32 not in local:
+                below = max((x for x in local if x <= 32), default=None)
+                fails.append((sid, f"the melody's first full downbeat "
+                                   f'should be at frame 32 (bar 2); no '
+                                   f'annotated downbeat there (last one '
+                                   f'at {below})'))
             if a.prompt_frames not in local:
                 below = max((x for x in local if x <= a.prompt_frames),
                             default=None)
                 fails.append((sid, f'generation starts at frame '
                                    f'{a.prompt_frames}, which is NOT a '
                                    f'downbeat (last one at {below})'))
-            win = a.prompt_frames + a.gen_frames
-            inside = sorted(x for x in local if pad < x < win)
-            if any(b - a_ != 16 for a_, b in zip([pad] + inside, inside)):
+            inside = sorted(x for x in local if 32 <= x < win)
+            if any(b - a_ != 16 for a_, b in zip(inside, inside[1:])):
                 fails.append((sid, 'metre changes inside prompt + scored '
                                    'window'))
             # ---- 5. does the melody enter where the rule says? --------
@@ -169,8 +177,8 @@ def main():
         print(f'  {len(no_src)} had no source downbeat map, skipped: '
               f'{no_src[:10]}{" ..." if len(no_src) > 10 else ""}')
     if warn_forced:
-        print(f'  {len(warn_forced)} were FORCED past the normal rule '
-              f'(expected to be odd): {[s for s, _ in warn_forced][:10]}')
+        print(f'  {len(warn_forced)} carry a caveat in `forced` (kept, but '
+              f'look): {[s for s, _ in warn_forced][:10]}')
     print()
     if fails:
         print(f'{len(fails)} PROBLEM(S):')

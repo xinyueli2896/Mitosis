@@ -23,11 +23,16 @@ note:
                                bars 1-2  empty lead
                                bars 3..  --mel-bars sounding bars
 
-Either way the prompt is --mel-bars + 2 bars and the melody enters at
-the same musical place in every song. Where the song has no such bars
-in front of F they are PADDED empty, so the anchor never slides. Chord
-is cropped and padded on exactly the same boundary, so the two streams
-stay in register by construction.
+Either way the prompt is --mel-bars + 2 bars, and the one invariant
+every prompt shares is that THE MELODY'S FIRST FULL DOWNBEAT IS AT
+FRAME 32 (bar 2). Whatever the song has in front of that is kept, and
+where it has less than two bars' worth the difference is PADDED with
+silence -- to the frame, not to the bar, so a pickup the aligner left
+as a partial bar still ends exactly on its downbeat. The pickup bar in
+the song stays a pickup bar in the prompt. Chord is cropped and padded
+on exactly the same tick, so the two streams stay in register by
+construction. Whether F is a pickup bar comes from beat_midi.txt: the
+first note is on an annotated downbeat, or it is not.
 
 Bars come from the file's OWN time signatures, so a song with a 6/4 bar
 is measured in its real bars rather than a fixed four beats. Songs whose
@@ -624,20 +629,52 @@ def main():
             is_pickup = not bool(m_start[F])
             pickup_src = f'midi bar lines, +-{a.head_beats} beat'
         lead_bars = 1 if is_pickup else 2
-        start_bar = F - lead_bars
-        pad_bars = max(-start_bar, 0)
-        start_bar = max(start_bar, 0)
+        # ANCHOR = the bar whose downbeat the melody's phrase begins on:
+        # the bar after the pickup, or F itself. Both rules put it two
+        # bars into the prompt -- lead + pickup, or lead + lead -- so
+        # the one invariant every prompt shares is
+        #
+        #     the anchor downbeat lands at output frame 32 (bar 2)
+        #
+        # and everything in front of it is whatever the song had there,
+        # padded with silence where the song had less than two bars.
+        anchor = F + 1 if is_pickup else F
+        if anchor >= len(bars):
+            stub(sid, 'melody enters in the last bar of the grid')
+            continue
+        start_bar = max(anchor - 2, 0)
         how = ''
-        # the mel_bars of melody the prompt is meant to carry begin after
-        # the pickup where there is one, on F itself where there is not
-        s0 = F + 1 if is_pickup else F
+        # The pad is measured in FRAMES, to what makes the invariant
+        # hold -- not in whole bars. A whole-bar pad only keeps the
+        # pickup a pickup when the bar it sits in is already a full 4/4
+        # bar. When the aligner leaves the opening bar partial (a
+        # two-beat bar 0), a whole bar in front puts the downbeat in the
+        # middle of output bar 1, the anacrusis stops being an anacrusis,
+        # and every bar-based metric is a half-bar out of phase. Padding
+        # to the frame keeps the pickup exactly where it was relative to
+        # its downbeat, whatever length the aligner gave the bar.
+        pad_t = int(round(32 * tpf - (bars[anchor] - bars[start_bar])))
+        if pad_t < 0:
+            # a LONG bar in front (6/4 etc.) pushes the anchor past frame
+            # 32; front padding cannot fix that, and the window-regular
+            # column already says the bar is irregular
+            how = 'a long bar in front puts the anchor past frame 32'
+            pad_t = 0
+        pad_frames = int(round(pad_t / tpf))
+        pad_bars = pad_frames / 16.0
+        # the mel_bars of melody the prompt is meant to carry begin on
+        # the anchor
+        s0 = anchor
 
         def clean(b0):
-            """Is the scored window [b0, b0+win) free of irregular bars?"""
-            return not any(b0 <= x < b0 + win for x in irr)
+            """Is the window from the ANCHOR on free of irregular bars?
+            Bars in front of the anchor are the lead, and a short one
+            there (the aligner's partial opening bar) is exactly what the
+            frame pad repairs; a long one is flagged above."""
+            return not any(anchor <= x < b0 + win for x in irr)
 
         if irr and not clean(start_bar):
-            how = 'window crosses a metre change'
+            how = (how + '; ' if how else '') + 'window crosses a metre change'
         if not both[s0:s0 + a.mel_bars].all():
             n_both = int(both[s0:s0 + a.mel_bars].sum())
             how = (how + '; ' if how else '') + \
@@ -674,9 +711,9 @@ def main():
                    # assumption that made the first phase audit disagree
                    # with the builder.
                    crop_frame=int(round(bars[start_bar] / (spb / 4.0))),
-                   pad_frames=pad_bars * 16,
+                   pad_frames=pad_frames,
                    bars_remaining=remaining,
-                   pad_bars=pad_bars,
+                   pad_bars=f'{pad_bars:g}',
                    # 0 by construction -- there is no melody anywhere
                    # before F -- and computed rather than asserted so a
                    # future change to the anchor shows up here instead of
@@ -707,8 +744,7 @@ def main():
         # ONE tick for both streams. They share a ppq (checked above)
         # and the aligner's grid, so the same tick is the same musical
         # instant in both -- no tempo map is consulted on the way.
-        # One padded bar = 4 beats; both streams get the identical pad.
-        pad_t = pad_bars * 4 * ppq
+        # Both streams get the identical pad, in ticks.
         bpm = a.tempo if a.tempo > 0 else None
         crop_ticks(mp, os.path.join(a.dst, 'melody', f'{sid}.mid'),
                    tick0, pad_ticks=pad_t, force_bpm=bpm)
@@ -768,7 +804,7 @@ def main():
         pk = np.array([int(r['pickup_has_melody']) for r in keep_rows])
         tw = np.array([int(r['metre_changes_in_window']) for r in keep_rows])
         cb = np.array([int(r['crop_bar']) for r in keep_rows])
-        pb = np.array([int(r['pad_bars']) for r in keep_rows])
+        pb = np.array([float(r['pad_bars']) for r in keep_rows])
         lm = np.array([int(r['lead_has_melody']) for r in keep_rows])
         ip = np.array([int(r['is_pickup']) for r in keep_rows])
         srcs = {r['pickup_src'] for r in keep_rows}
