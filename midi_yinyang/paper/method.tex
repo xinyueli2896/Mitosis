@@ -25,7 +25,13 @@
 %            whole frame, which is two entries -- and predicts what p
 %            itself carries. Do not state the
 %            unshifted map and the shifted one as if they were the
-%            same sequence. RoPE is applied at the PREDICTION FRAME
+%            same sequence.
+%            PARITY flips with the indexing base. Paper (1-indexed,
+%            per Eq. 1): odd p = x = melody, even p = y = chord. Code
+%            (0-indexed): h[:, 0::2] is mod_a = melody, h[:, 1::2] is
+%            mod_b = chord, i.e. EVEN = melody. Same fact -- melody is
+%            the first entry of a frame -- so do not "fix" either to
+%            match the other. RoPE is applied at the PREDICTION FRAME
 %            ceil(p/2), NOT at p: the diffusion model overrides
 %            _run_global_stack and halves the position vector under
 %            time_rope_aligned (v1.2), so x_t and y_t share a rotary
