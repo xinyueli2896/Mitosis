@@ -217,6 +217,18 @@ CHORD_FOLDER="${CHORD_FOLDER:-input/pop909_split/chord}"
 # (the legacy pop909_split set, which was never cropped).
 CROPS_TSV="${CROPS_TSV:-$(dirname "$MEL_FOLDER")/prompt_crops.tsv}"
 [[ -f "$CROPS_TSV" ]] || CROPS_TSV=""
+# DUET_CHORD_PROGRAM: the midi program the staged CHORD prompts carry,
+# which is a TOKEN the duet models read (a frame is (program, pitch-dur)
+# pairs, so roughly half of a chord frame's content tokens are it).
+# Default 0, because EVERY duet checkpoint that exists today was
+# finetuned on a corpus where POP909's MELODY track and the chord
+# builder both left the program at 0 -- while POP909-v5's aligner writes
+# 48, so an untouched v5 prompt is off-distribution in half the content
+# of every chord frame. The single-stream baselines are unaffected
+# either way: merged_tagged below force-tags the chord to 48 itself.
+# Set 48 to evaluate a checkpoint trained on a tagged corpus, or empty
+# to leave the source untouched. See EXPERIMENTS.md E4d.
+DUET_CHORD_PROGRAM="${DUET_CHORD_PROGRAM-0}"
 OUT_ROOT="${OUT_ROOT:-temp/E1}"
 RESULT_TAG="${RESULT_TAG:-}"
 SKIP_INFER="${SKIP_INFER:-0}"
@@ -241,6 +253,7 @@ echo "E1 CO-GENERATION EVALUATION"
 echo "SYSTEMS=$SYSTEMS   FORCE=${FORCE:-<none>}   SKIP_INFER=$SKIP_INFER"
 echo "PROMPT_LENGTH=$PROMPT_LENGTH ($((PROMPT_LENGTH / 16)) bars)  GEN_LENGTH=$GEN_LENGTH  N_SAMPLES=$N_SAMPLES"
 echo "OUT_ROOT=$OUT_ROOT   BASELINE=$BASELINE"
+echo "DUET_CHORD_PROGRAM=${DUET_CHORD_PROGRAM:-<source untouched>} (merged_tagged is always 48)"
 echo "MEL_FOLDER=$MEL_FOLDER   CROPS_TSV=${CROPS_TSV:-<none: WS/WSf prompt from the original bar 0>}"
 echo "A3 decode: REFINE=$A3_REFINE_STEPS temp=$A3_FINAL_TEMP top_p=$A3_TOP_P"
 echo "cp: duet=$MAX_POLYPHONY_DUET  specialists=$MAX_POLYPHONY_SPEC  S1/S0=$MAX_POLYPHONY_S1/$MAX_POLYPHONY_S0"
@@ -280,6 +293,34 @@ else
     mkdir -p "$EVAL_MEL" "$EVAL_CHORD"
     cp -f "$MEL_FOLDER"/*.mid "$MEL_FOLDER"/*.MID "$EVAL_MEL"/ 2>/dev/null || true
     cp -f "$CHORD_FOLDER"/*.mid "$CHORD_FOLDER"/*.MID "$EVAL_CHORD"/ 2>/dev/null || true
+    if [[ -n "$DUET_CHORD_PROGRAM" ]]; then
+        python - "$EVAL_CHORD" "$DUET_CHORD_PROGRAM" <<'RETAG'
+import glob, os, sys
+import mido
+folder, prog = sys.argv[1], int(sys.argv[2])
+changed = seen = 0
+for f in sorted(glob.glob(os.path.join(folder, '*.mid'))):
+    m = mido.MidiFile(f)
+    hit = False
+    for tr in m.tracks:
+        for msg in tr:
+            if msg.type == 'program_change':
+                if msg.program != prog:
+                    msg.program = prog
+                    hit = True
+                seen += 1
+    # a track with no program_change plays on the channel default (0);
+    # only worth inserting one when we want something else
+    if not seen and prog != 0:
+        m.tracks[-1].insert(0, mido.Message('program_change', program=prog,
+                                            time=0))
+        hit = True
+    if hit:
+        m.save(f)
+        changed += 1
+print(f'[prompts] chord program -> {prog}: rewrote {changed} file(s)')
+RETAG
+    fi
 fi
 N_EVAL=$(ls "$EVAL_MEL" | wc -l)
 [[ "$N_EVAL" -gt 0 ]] || { echo "ERROR: no midis in $MEL_FOLDER"; exit 1; }
