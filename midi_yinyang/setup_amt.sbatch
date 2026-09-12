@@ -18,30 +18,44 @@
 #   FORCE=1    re-clone and re-install even if the venv is there
 #
 #   sbatch midi_yinyang/setup_amt.sbatch
+#
+# PORTABLE: this script is meant to run on a cluster that is NOT the one
+# the rest of the repo assumes. It derives the repo root from where
+# sbatch was invoked, does not require the `mitosis` conda env, and
+# names no partition -- pass -p/-q yourself if your site needs them:
+#   sbatch -p <partition> -q <qos> midi_yinyang/<this script>
+# Logs land in the submission directory rather than ~/logs.
 
 #SBATCH --job-name=setup_amt
-#SBATCH --output=/home/xinyue.li/logs/%x_%j.out
-#SBATCH --error=/home/xinyue.li/logs/%x_%j.err
+#SBATCH --output=%x_%j.out
+#SBATCH --error=%x_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH -p cscc-cpu-p
-#SBATCH -q cscc-cpu-qos
 #SBATCH --time=02:00:00
 
 set -euo pipefail
-source ~/.bashrc
+# ~/.bashrc and conda are this-cluster conventions; tolerate their
+# absence. Everything below runs out of the package's own venv.
+[[ -f ~/.bashrc ]] && source ~/.bashrc || true
 
-CONDA_ENV=mitosis
-REPO_DIR=/home/xinyue.li/Mitosis
-MY="$REPO_DIR/midi_yinyang"
+# Repo root: where sbatch was invoked, so a clone anywhere works.
+REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
+if [[ -f "$REPO_DIR/midi_yinyang/amt_prompted.py" ]]; then
+    MY="$REPO_DIR/midi_yinyang"
+elif [[ -f "$REPO_DIR/amt_prompted.py" ]]; then
+    MY="$REPO_DIR"
+else
+    echo "ERROR: cannot find amt_prompted.py from REPO_DIR=$REPO_DIR."
+    echo "       Submit from the repo root, or pass REPO_DIR=<clone path>."
+    exit 1
+fi
 AMT_DIR="${AMT_DIR:-$MY/external/anticipation}"
 MODEL="${MODEL:-stanford-crfm/music-medium-800k}"
 FORCE="${FORCE:-0}"
 
-conda activate "$CONDA_ENV"
-mkdir -p /home/xinyue.li/logs "$MY/external"
+mkdir -p "$MY/external"
 
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"

@@ -52,25 +52,40 @@
 #                  Say which one a table row used.
 #
 #   sbatch midi_yinyang/infer_amt_prompted.sbatch
+#
+# PORTABLE: this script is meant to run on a cluster that is NOT the one
+# the rest of the repo assumes. It derives the repo root from where
+# sbatch was invoked, does not require the `mitosis` conda env, and
+# names no partition -- pass -p/-q yourself if your site needs them:
+#   sbatch -p <partition> -q <qos> midi_yinyang/<this script>
+# Logs land in the submission directory rather than ~/logs.
 
 #SBATCH --job-name=infer_amt_prompted
-#SBATCH --output=/home/xinyue.li/logs/%x_%j.out
-#SBATCH --error=/home/xinyue.li/logs/%x_%j.err
+#SBATCH --output=%x_%j.out
+#SBATCH --error=%x_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:1
-#SBATCH -p cscc-gpu-p
-#SBATCH -q cscc-gpu-qos
 #SBATCH --time=12:00:00
 
 set -euo pipefail
-source ~/.bashrc
+# ~/.bashrc and conda are this-cluster conventions; tolerate their
+# absence. Everything below runs out of the package's own venv.
+[[ -f ~/.bashrc ]] && source ~/.bashrc || true
 
-CONDA_ENV=mitosis
-REPO_DIR=/home/xinyue.li/Mitosis
-MY="$REPO_DIR/midi_yinyang"
+# Repo root: where sbatch was invoked, so a clone anywhere works.
+REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
+if [[ -f "$REPO_DIR/midi_yinyang/amt_prompted.py" ]]; then
+    MY="$REPO_DIR/midi_yinyang"
+elif [[ -f "$REPO_DIR/amt_prompted.py" ]]; then
+    MY="$REPO_DIR"
+else
+    echo "ERROR: cannot find amt_prompted.py from REPO_DIR=$REPO_DIR."
+    echo "       Submit from the repo root, or pass REPO_DIR=<clone path>."
+    exit 1
+fi
 AMT_DIR="${AMT_DIR:-$MY/external/anticipation}"
 
 MEL_FOLDER="${MEL_FOLDER:-$MY/input/heldout_v5/melody}"
@@ -87,8 +102,6 @@ MODEL="${MODEL:-stanford-crfm/music-medium-800k}"
 RESTRICT="${RESTRICT:-1}"
 IDS="${IDS:-}"
 
-conda activate "$CONDA_ENV"
-mkdir -p /home/xinyue.li/logs
 
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
@@ -102,9 +115,12 @@ echo "================================================================"
 [[ -d "$AMT_DIR/.venv" ]] || {
     echo "ERROR: no venv at $AMT_DIR/.venv -- run setup_amt.sbatch first"
     exit 1; }
-# Merge the two streams into one tagged file per song, in the MITOSIS
-# env (merge_melody_chord needs mido, and the AMT venv is deliberately
-# minimal). Done before the venv switch below.
+# The package's own venv, which setup_amt also gave mido and
+# pretty_midi -- so the merge below runs in it too and this script needs
+# no conda env at all. Isolated on purpose: the package pins its own
+# transformers and the repo's vendored fork must not shadow it.
+# shellcheck disable=SC1091
+source "$AMT_DIR/.venv/bin/activate"
 cd "$MY"
 if [[ -z "$MERGED_FOLDER" ]]; then
     MERGED_FOLDER="$OUT_DIR/_merged_tagged"
@@ -127,10 +143,6 @@ else
     echo "[merge] using $MERGED_FOLDER as given"
 fi
 
-# Isolated venv: the package pins its own transformers, and the repo's
-# vendored fork must not be on the path in front of it.
-# shellcheck disable=SC1091
-source "$AMT_DIR/.venv/bin/activate"
 
 python "$MY/amt_prompted.py" \
     --merged-folder "$MERGED_FOLDER" \
