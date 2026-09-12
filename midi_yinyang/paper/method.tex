@@ -110,13 +110,17 @@ rotary $2T$, outside the range the backbone was trained on.
 Interleaving rather than concatenating is what makes $[x_t, y_t]$ a
 temporal unit: the two streams share one position axis and one clock,
 and neither is a block appended to the other.
-Within this sequence each stream keeps its own query, key, value and
-output projections, $\{\mathbf{W}^{Q}_{s}, \mathbf{W}^{K}_{s},
+
+That fixes the input. The model over it begins as the two backbones
+side by side: each stream keeps its own query, key, value and output
+projections, $\{\mathbf{W}^{Q}_{s}, \mathbf{W}^{K}_{s},
 \mathbf{W}^{V}_{s}, \mathbf{W}^{O}_{s}\}$ for $s \in \{x, y\}$,
 initialised from the corresponding pretrained backbone, and a position
 is projected by the matrices of its own stream --- so before any
 cross-stream term is active the model computes exactly what the two
-backbones computed separately.
+backbones computed separately. What the paired data has to buy, then,
+is only the coupling: which positions of one stream a position of the
+other should read, and when.
 
 Attention is factored into three key-masked passes over the same
 queries, keys and values, differing only in which positions a query
