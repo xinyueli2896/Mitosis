@@ -397,6 +397,59 @@ to our main corpus:
 | **Whole-song hierarchical generation** (cascaded diffusion; Wang / Min / Xia, ICLR 2024 — verify) | unconditional full-song generation: form → **lead sheet (melody+chord)** → accompaniment, POP909-trained | its lead-sheet stage is a direct external baseline for **E1 co-generation**; its form stage makes it the strongest available reference for the long-term-structure metrics |
 | **AccoMontage** (Zhao & Xia, ISMIR 2021; later versions exist — verify which) | conditional: lead sheet → piano accompaniment (phrase retrieval + texture style transfer over POP909) | no direct melchord arm — its slot is a future **accompaniment task**: Pop1K7's dropped `piano` track gives us paired (melody, chord, accompaniment) data to train our own arm against it |
 
+#### Third external baseline: Anticipatory Music Transformer (registered 2026-09-12)
+
+Thickstun, Hall, Donahue and Liang, arXiv:2306.08620; package
+`jthickstun/anticipation`, weights `stanford-crfm/music-medium-800k`.
+E1 system name **AMT**; `setup_amt.sbatch` once, then
+`infer_amt_prompted.sbatch` or `SYSTEMS="... AMT"`.
+
+Why it belongs here, and where it differs from the other two: it is the
+only external reference that CO-GENERATES both streams rather than
+producing one given the other. WS generates a lead sheet but through a
+form->leadsheet cascade, AccoMontage is conditional by construction,
+and both are POP909-native. AMT is a general-MIDI autoregressive model
+over arrival-time event triplets trained on **Lakh MIDI**, so it is
+also the only OUT-OF-DOMAIN reference: it answers "what does a large
+general-purpose symbolic model do on this task", which is a different
+question from "what does the best POP909-native system do", and the
+table should not blur them.
+
+Protocol, identical to every other E1 row: prompt with the first
+PROMPT_LENGTH frames of both streams, continue to GEN_LENGTH, score
+frames PROMPT_LENGTH..GEN_LENGTH. Input is `prompts/merged_tagged`, the
+same file S1 reads -- their note token is pitch x instrument, so the
+program tag is what makes the output splittable back into two streams.
+The time base is exact: frames are sixteenths at 120 BPM, their
+`events_to_midi` writes two beats per second, so 80 frames = 10s and
+416 = 52s with no resampling.
+
+**The anticipation mechanism is deliberately NOT used.** Passing one
+stream as `controls` is what the paper's accompaniment demo does, and
+it makes the task CONDITIONAL -- that is E3's question, not E1's. Their
+`generate` runs in plain AR mode when no controls are given. An
+anticipation-conditioned arm is the natural E3 entry and is worth
+adding there, where a conditional baseline is the right comparison.
+
+**One disclosed adaptation.** Their sampler only restricts the
+instrument set once 15 instruments are in play (`instr_logits`), so a
+two-instrument prompt leaves the model free to introduce a third, and a
+note on a third instrument belongs to neither of our streams.
+`RESTRICT=1` (default) masks note logits to the prompt's two
+instruments, through their own masking code via the same hook.
+`RESTRICT=0` runs the published sampler and `amt_notes.tsv` records how
+many notes then land off-stream. Run both once: if the unrestricted
+share is small the restriction is cosmetic and the published behaviour
+can be reported; if it is large, the restriction is load-bearing and
+the table must say so.
+
+**To verify before the number goes in a table** (the driver was written
+against the package's public API without the package installed):
+`generate(model, start_time, end_time, inputs, top_p)` argument order,
+that `ops.clip(..., seconds=True)` takes seconds, and that
+`add_token` still resolves `instr_logits` through the module global --
+`setup_amt.sbatch` asserts the last of these at install time.
+
 **Integration work (why this is its own pass, not a checkbox):**
 
 1. *Output conversion*: both emit their own representations; we need

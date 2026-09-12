@@ -37,6 +37,15 @@
 #         published best AND under the comparison our system faces.
 #   WS    external reference: whole-song-gen PROMPTED lead-sheet
 #         continuation, same 6-bar prompt, its own inpainting path.
+#   AMT   external reference: the Anticipatory Music Transformer
+#         (arXiv:2306.08620), prompted continuation of BOTH streams from
+#         merged_tagged. The only external arm that CO-generates rather
+#         than harmonising one stream given the other, and out of domain
+#         (Lakh MIDI, its own tokenization). Needs setup_amt.sbatch once.
+#         AMT_RESTRICT=0 runs the published sampler unmasked; the default
+#         1 restricts note logits to the prompt's two instruments so the
+#         output stays two streams -- say which a table row used.
+#         AMT_MODEL picks the size (default music-medium-800k).
 #
 # Every system: same prompt (PROMPT_LENGTH frames), same total length
 # (GEN_LENGTH), N_SAMPLES per song, scored on frames
@@ -168,7 +177,7 @@ SYSTEMS="${SYSTEMS:-A1 A3 A3f S1 S-scratch P-mc P-cm WS}"
 # (happened 2026-09-10, job 225780). With generation on, 'all' would try
 # to generate every system, so keep it to score-only runs.
 if [[ "$SYSTEMS" == "all" ]]; then
-    SYSTEMS="A11aT A11K4 A1 A1cp8 A3 A3f A3fctcaT A3K0 A3ctc A3ctcc A3ctc2 A3ctca A3ctcaT A3c A3fc A3fcaT A3fcaTar A3fcK4 A10 S1 S-scratch S0 P-mc P-cm WS WSf"
+    SYSTEMS="A11aT A11K4 A1 A1cp8 A3 A3f A3fctcaT A3K0 A3ctc A3ctcc A3ctc2 A3ctca A3ctcaT A3c A3fc A3fcaT A3fcaTar A3fcK4 A10 S1 S-scratch S0 P-mc P-cm WS WSf AMT"
 fi
 FORCE="${FORCE:-}"
 CKPT_A1="${CKPT_A1:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_melchord_cp4tar_batch_8_schedule}"
@@ -502,6 +511,21 @@ generate() {
         PROMPT_LENGTH="$PROMPT_LENGTH" GEN_LENGTH="$GEN_LENGTH" \
         N_SAMPLES="$N_SAMPLES" MAX_POLYPHONY="$MAX_POLYPHONY_SPEC" \
             bash "$MY/pipeline_cogen.sbatch" ;;
+    AMT)
+        # External SOTA: the Anticipatory Music Transformer (Thickstun et
+        # al., arXiv:2306.08620), prompted continuation of BOTH streams.
+        # It reads merged_tagged -- the same file S1 reads -- because its
+        # tokenizer carries the instrument in the note token, which is
+        # what makes the output splittable back into two streams.
+        # Anticipation controls are NOT used: controls would make this
+        # conditional generation, which is E3's question, not E1's.
+        [[ -d "$MY/external/anticipation/.venv" ]] || {
+            echo "[AMT] SKIPPED: run setup_amt.sbatch first"; return 0; }
+        MERGED_FOLDER="$MY/$EVAL_MERGED" OUT_DIR="$MY/$dir" \
+        PROMPT_FRAMES="$PROMPT_LENGTH" GEN_FRAMES="$GEN_LENGTH" \
+        N_SAMPLES="$N_SAMPLES" RESTRICT="${AMT_RESTRICT:-1}" \
+        MODEL="${AMT_MODEL:-stanford-crfm/music-medium-800k}" \
+            bash "$MY/infer_amt_prompted.sbatch" ;;
     WS|WSf)
         # whole-song-gen wants integer ids (its own POP909 index) and an
         # absolute OUT_DIR (it cds into its venv tree). It writes
