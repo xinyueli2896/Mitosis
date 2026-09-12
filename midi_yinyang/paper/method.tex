@@ -48,6 +48,15 @@
 %            vector first. Never call these "tokens": a position is the
 %            unit the transformer handles.
 %
+% PROVENANCE -- CHECK THE FRAMING. init_pretrained_into_duet_block_
+% diffusion.py duplicates ONE pretrained single-stream CP-transformer
+% into both streams' Q/K/V/O and replicates its dense FFN across the
+% experts. There are NOT two separately pretrained backbones in any run
+% so far. 3.2 now says so. 3.1 ("Transformers pretrained on each",
+% "the two pretrained backbones") and the introduction's framing of
+% merging two INDEPENDENTLY pretrained models still overstate it --
+% reconcile before submission.
+%
 % NO COMMITMENT LEVEL. The runs use K=1 with the masked state untrained,
 % which collapses the K+1-round schedule to draft-then-refine. The level
 % index k and its embedding are therefore gone from the exposition; the
@@ -115,18 +124,24 @@ The joint generation model \sys is designed to have two backbones
 operating side by side. Every attention block therefore carries two
 sets of query, key, value and output projections,
 $\{\mathbf{W}^{Q}_{s}, \mathbf{W}^{K}_{s}, \mathbf{W}^{V}_{s},
-\mathbf{W}^{O}_{s}\}$ for $s \in \{x, y\}$, each set initialised
-from the backbone pretrained on the corresponding stream and applied to
-the positions that carry it. With no cross-stream term active the block
-reduces to the two backbones' own attention, computed in parallel over
-disjoint halves of the sequence; \sys reproduces them exactly rather
-than approximating them. What the architecture so far contains is
-therefore two independent models sharing an index, and nothing that
-determines which positions of one stream a position of the other may
-read, or how strongly. The remainder of this section supplies that
-coupling in two places: the attention, where masks decide what may be
-read, and the feed-forward layer, where routing decides what
-computation serves each stream.
+\mathbf{W}^{O}_{s}\}$ for $s \in \{x, y\}$, each set applied to the
+positions that carry the corresponding stream. Both sets are obtained
+from one pretrained single-stream Transformer, by copying its
+projections into each and its feed-forward layer into every expert of
+Sec.~\ref{sec:permod_moe}. Melody and chord are two domains of one
+modality, so a single symbolic-music model is already a competent
+generator of either and one backbone suffices; where the streams are
+genuinely distinct modalities the construction is unchanged except that
+each set is taken from its own pretrained model. With no cross-stream
+term active the block reduces to the pretrained model's own attention,
+run in parallel over the two disjoint halves of the sequence, and \sys
+reproduces it exactly rather than approximating it. What the
+architecture so far contains is therefore two independent copies
+sharing an index, and nothing that determines which positions of one
+stream a position of the other may read, or how strongly. The remainder
+of this section supplies that coupling in two places: the attention,
+where masks decide what may be read, and the feed-forward layer, where
+routing decides what computation serves each stream.
 
 Attention is factored into three key-masked passes over the same
 queries, keys and values, differing only in which positions a query
