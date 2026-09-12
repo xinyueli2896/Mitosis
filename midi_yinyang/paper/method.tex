@@ -5,6 +5,10 @@
 %   3.3 per-stream expert routing  (\input method_per_part_moe.tex)
 %   3.4 order-free joint prediction: placeholder slots + refinement
 %
+% NO \paragraph HEADINGS (2026-09-12, by request). The transitions that
+% the headings used to carry now sit in the prose -- if a paragraph is
+% split or reordered, re-check its opening sentence.
+%
 % TERMINOLOGY: melody/chord are STREAMS, written x and y in the general
 % setup. Per EXPERIMENTS.md Decision 1 (amended 2026-09-04) "modality"
 % belongs to the general framework and the positioning clause, never to
@@ -38,7 +42,6 @@ backbones and fitted on a small paired corpus.
 \subsection{Interleaving two pretrained backbones}
 \label{sec:interleave}
 
-\paragraph{Sequence layout.}
 We place the two streams in one sequence, alternating by frame,
 \begin{equation}
   \mathbf{h}
@@ -52,37 +55,33 @@ row at position $p$ \emph{holds} frame $\lfloor p/2 \rfloor - 1$ and
 \emph{prediction frame}. Interleaving rather than concatenating is what
 makes $[x_t, y_t]$ a temporal unit: the two streams share one position
 axis and one clock, and neither is a block appended to the other.
+Within this sequence each stream keeps its own query, key, value and
+output projections, $\{\mathbf{W}^{Q}_{s}, \mathbf{W}^{K}_{s},
+\mathbf{W}^{V}_{s}, \mathbf{W}^{O}_{s}\}$ for $s \in \{x, y\}$,
+initialised from the corresponding pretrained backbone, and a position
+is projected by the matrices of its own stream --- so before any
+cross-stream term is active the model computes exactly what the two
+backbones computed separately.
 
-\paragraph{Stream-specific projections.}
-Each stream keeps its own query, key, value and output projections,
-$\{\mathbf{W}^{Q}_{s}, \mathbf{W}^{K}_{s}, \mathbf{W}^{V}_{s},
-\mathbf{W}^{O}_{s}\}$ for $s \in \{x, y\}$, initialised from the
-corresponding pretrained backbone. A position is projected by the
-matrices of its own stream, so before any cross-stream term is active
-the model computes exactly what the two backbones computed separately.
-
-\paragraph{Three attention passes.}
 Attention is factored into three key-masked passes over the same
 queries, keys and values, differing only in which positions a query may
 attend to. For a query at position $p$ of stream $s$ with prediction
-frame $t$:
-\begin{itemize}\itemsep2pt
-  \item $\mathcal{M}_{\text{intra}}$: the \emph{same} stream at
-        prediction frames $\le t$ --- the causal attention the
-        pretrained backbone already performs;
-  \item $\mathcal{M}_{\text{cross}}$: the \emph{other} stream at
-        prediction frames $< t$ --- the partner's committed past;
-  \item $\mathcal{M}_{\text{frame}}$: the other stream at prediction
-        frame exactly $t$ --- the partner's \emph{current} frame.
-\end{itemize}
-The first two are causal; the third is the within-frame edge that makes
-co-generation possible at all, and it is symmetric --- each stream's
-row for frame $t$ sees the other's row for frame $t$, in both
-directions. This is sound because of the shift: a row at prediction
-frame $t$ holds frame $t{-}1$, so the edge couples the two predictions
-of frame $t$ without either observing the other's value. Writing
-$\mathbf{u}_{\bullet}$ for the output of each pass, the three are
-recombined per position as
+frame $t$, $\mathcal{M}_{\text{intra}}$ admits the \emph{same} stream
+at prediction frames $\le t$, which is the causal attention the
+pretrained backbone already performs; $\mathcal{M}_{\text{cross}}$
+admits the \emph{other} stream at prediction frames $< t$, the
+partner's committed past; and $\mathcal{M}_{\text{frame}}$ admits the
+other stream at prediction frame exactly $t$, the partner's
+\emph{current} frame. The first two are causal; the third is the
+within-frame edge that makes co-generation possible at all, and it is
+symmetric --- each stream's row for frame $t$ sees the other's row for
+frame $t$, in both directions. This is sound because of the shift: a
+row at prediction frame $t$ holds frame $t{-}1$, so the edge couples
+the two predictions of frame $t$ without either observing the other's
+value.
+
+Writing $\mathbf{u}_{\bullet}$ for the output of each pass, the three
+are recombined per position as
 \begin{equation}
   \mathbf{o}_p = \mathbf{W}^{O}_{s}\bigl(
     \mathbf{u}_{\text{intra},p}
@@ -110,24 +109,20 @@ Eq.~\eqref{eq:interleave} leaves one ordering problem. Within frame $t$
 the interleaved sequence still places $x_t$ before $y_t$, so an
 autoregressive decode would draw $x_t$, commit it, and condition $y_t$
 on the committed value --- the fixed direction we set out to remove. We
-resolve this with a pair of placeholder slots and a joint refinement
-pass.
+resolve this by appending to the sequence two \emph{query slots}, one
+per stream, both assigned prediction frame $t$. Each attends to the
+committed past of both streams and to \emph{the other slot}, and to
+nothing else; clean rows never attend to slots, so the slots stay
+outside the autoregressive pathway. The two are symmetric by
+construction: they see the same past and one another, and neither is
+downstream of the other.
 
-\paragraph{Placeholder slots.}
-We append to the sequence two \emph{query slots}, one per stream, both
-assigned prediction frame $t$. Each attends to the committed past of
-both streams and to \emph{the other slot}, and to nothing else; clean
-rows never attend to slots, so the slots stay outside the
-autoregressive pathway. The two are symmetric by construction: they see
-the same past and one another, and neither is downstream of the other.
-
-\paragraph{Decoding a frame.}
-Frame $t$ is produced in two passes. First, a \emph{draft}: one forward
-yields $\tilde{x}_t, \tilde{y}_t$ from the autoregressive heads of the
-two clean rows whose prediction frame is $t$, already coupled through
-$\mathcal{M}_{\text{frame}}$ but with neither value observed by the
-other. Second, a \emph{refinement}: the drafts are encoded into the
-slots as
+Frame $t$ is then produced in two passes. The first is a \emph{draft}:
+one forward yields $\tilde{x}_t, \tilde{y}_t$ from the autoregressive
+heads of the two clean rows whose prediction frame is $t$, already
+coupled through $\mathcal{M}_{\text{frame}}$ but with neither value
+observed by the other. The second is a \emph{refinement}: the drafts
+are encoded into the slots as
 \begin{equation}
   \text{slot}_s \;\leftarrow\; \mathrm{enc}(\tilde{s}_t) + \mathbf{q}_s,
   \qquad s \in \{x, y\},
@@ -140,8 +135,7 @@ other's final value for frame $t$: the frame is negotiated rather than
 ordered. The construction admits further passes by re-encoding the
 committed estimates; we use one throughout.
 
-\paragraph{Training.}
-Training must put in the slots the same content decoding will. Each
+Training must put in the slots the same content decoding will, so each
 step runs two forwards over the same batch. The first is a no-grad
 probe whose autoregressive heads produce the draft, sampled at
 temperature $1$ to match the commitment the decode makes. The second
@@ -161,6 +155,8 @@ other is not.
 %    the final run's log line.
 %  * "we use one [refinement pass] throughout" = A3_SCHEDULE=refine
 %    with A3_REFINE_STEPS=1; confirm against the E1 decode config.
+%  * \ref{sec:routing} has no target yet -- the routing-analysis
+%    section is unwritten.
 %  * Hyperparameters (12 global layers, E=4, k=2, d_f=3d) belong in the
 %    experimental setup section, not here.
 % ---------------------------------------------------------------

@@ -8,6 +8,7 @@
 % Matches SimpleMoEFFN (cp_transformer_m2c_jointattn.py):
 % E=4 experts, top-k=2, routers bias-free, Switch aux at 0.01,
 % post-LN residual, gate_c seeded from gate_m at warm start.
+% NO \paragraph HEADINGS (2026-09-12, by request).
 % Preamble requirements: amsmath, amssymb, and bbm (for \mathbbm{1}).
 % ---------------------------------------------------------------
 \label{sec:permod_moe}
@@ -30,7 +31,6 @@ where $\mathbf{W}^{(1)}_i \in \mathbb{R}^{d_f \times d}$,
 $\mathbf{W}^{(2)}_i \in \mathbb{R}^{d \times d_f}$, and $\sigma$ is
 the GELU nonlinearity.
 
-\paragraph{Shared router.}
 The conventional layer scores every token with a single router
 $\mathbf{G} \in \mathbb{R}^{E \times d}$,
 \begin{equation}
@@ -50,7 +50,6 @@ its capacity re-deriving \emph{which stream a token belongs to} --- a
 bit the input already carries --- rather than \emph{what the token
 contains}.
 
-\paragraph{Per-stream routers over a shared pool.}
 We therefore give each stream its own router,
 $\mathbf{G}^{(x)}, \mathbf{G}^{(y)} \in \mathbb{R}^{E \times d}$, and
 score every token with the router of its own stream:
@@ -89,7 +88,6 @@ with $\mathcal{P}(x) \cap \mathcal{P}(y) = \varnothing$: same
 parameters and activated compute, but an integrator is no longer
 representable.
 
-\paragraph{Dispatch and objective.}
 Each token is dispatched to its top-$k$ experts
 $\mathcal{S}_t = \operatorname{top}\text{-}k(\mathbf{p}_t)$ with
 renormalized weights, and the layer output is the residually
@@ -121,8 +119,7 @@ the all-expert form would demand a uniform load that the masked
 routing cannot produce, penalizing that arm for its own
 architecture.)
 
-\paragraph{Parity.}
-Replacing Eq.~\eqref{eq:shared_router} with
+The change is cheap and exactly localised. Replacing Eq.~\eqref{eq:shared_router} with
 Eq.~\eqref{eq:permod_router} adds one bias-free $E \times d$ routing
 matrix per layer ($Ed$ parameters, ${\approx}10^{-3}$ of the layer)
 and changes neither the expert pool, the number of experts activated
