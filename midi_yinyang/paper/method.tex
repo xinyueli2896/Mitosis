@@ -99,8 +99,8 @@ The model reads this sequence shifted one frame --- two positions ---
 to the right, in the usual autoregressive way. Position $p$ therefore
 \emph{holds} what position $p{-}2$ carries, which is its own stream one
 frame earlier, since shifting by two preserves parity; and it
-\emph{predicts} what position $p$ itself carries, stream $s$ at frame
-$\lceil p/2 \rceil$, which we call $p$'s \emph{prediction frame}.
+\emph{predicts} what position $p$ itself carries: its own stream at
+frame $\lceil p/2 \rceil$, which we call $p$'s \emph{prediction frame}.
 The rotary embedding is applied at that prediction frame rather than at
 $p$, so the two entries of a frame share one rotary phase: simultaneity
 is encoded as distance zero, and within-stream distance is the musical
