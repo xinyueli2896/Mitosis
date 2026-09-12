@@ -17,10 +17,13 @@
 %   frame    ONE STEP OF THE SHARED CLOCK, carrying one entry of each
 %            stream. NOT a per-stream unit: the within-frame edge joins
 %            the two streams AT a frame, which is unsayable otherwise.
-%   position one entry of the interleaved sequence, indexed p -- two
-%            per frame. The standard transformer word; do NOT also use
-%            it in the metrical sense (say a frame is "one sixteenth
-%            note long", never "a sixteenth-note position").
+%   position ABSOLUTE index into the interleaved sequence, p = 1..2T --
+%            two per frame, and NOT a time index. Frame t occupies
+%            positions 2t-1 and 2t; RoPE encodes p, not t. Everything
+%            is 1-indexed, hence ceil(p/2) for the prediction frame --
+%            the code is 0-indexed and uses p//2. Do NOT also use
+%            "position" in the metrical sense (say a frame is "one
+%            sixteenth note long").
 %   clean    a position carrying a stream, as opposed to an appended
 %            query SLOT. Introduced where the slots are.
 %   sub-token  an atom of what a stream carries at a frame: a program
@@ -71,13 +74,20 @@ We place the two streams in one sequence, alternating by frame,
             \mathbf{h}^{x}_2,\ \mathbf{h}^{y}_2,\ \dots\,\bigr],
   \label{eq:interleave}
 \end{equation}
-shifted one frame --- two positions, since a frame contributes one per
-stream --- to the right in the usual autoregressive way, so position
-$p$ \emph{holds} frame $\lfloor p/2 \rfloor - 1$ and
-\emph{predicts} frame $\lfloor p/2 \rfloor$; we call the latter its
-\emph{prediction frame}. Interleaving rather than concatenating is what
-makes $[x_t, y_t]$ a temporal unit: the two streams share one position
-axis and one clock, and neither is a block appended to the other.
+where $p = 1, \dots, 2T$ indexes the sequence. This \emph{position} is
+an absolute index into the $2T$ entries, not a time index: each frame
+contributes two of them, odd $p$ carrying stream $x$ and even $p$
+stream $y$, and frame $t$ occupies positions $2t{-}1$ and $2t$. It is
+$p$, not $t$, that the rotary embedding encodes, so the two entries of
+a frame are one step apart in the model's positional geometry.
+
+The sequence is shifted one frame --- two positions --- to the right in
+the usual autoregressive way, so position $p$ \emph{holds} frame
+$\lceil p/2 \rceil - 1$ and \emph{predicts} frame
+$\lceil p/2 \rceil$; we call the latter its \emph{prediction frame}.
+Interleaving rather than concatenating is what makes $[x_t, y_t]$ a
+temporal unit: the two streams share one position axis and one clock,
+and neither is a block appended to the other.
 Within this sequence each stream keeps its own query, key, value and
 output projections, $\{\mathbf{W}^{Q}_{s}, \mathbf{W}^{K}_{s},
 \mathbf{W}^{V}_{s}, \mathbf{W}^{O}_{s}\}$ for $s \in \{x, y\}$,
@@ -133,7 +143,10 @@ the interleaved sequence still places $x_t$ before $y_t$, so an
 autoregressive decode would draw $x_t$, commit it, and condition $y_t$
 on the committed value --- the fixed direction we set out to remove. We
 resolve this by appending to the sequence two \emph{query slots}, one
-per stream, both assigned prediction frame $t$. Each attends to the
+per stream, both assigned prediction frame $t$. They take positions
+$2T{+}1$ and $2T{+}2$, after every clean position rather than at frame
+$t$'s own: a slot is identified by the frame it predicts and by its
+mask, not by where it sits. Each attends to the
 committed past of both streams and to \emph{the other slot}, and to
 nothing else. The positions of Eq.~\eqref{eq:interleave}, which we call
 \emph{clean} to distinguish them from the slots, never attend to a
