@@ -31,11 +31,12 @@
 Let $x = (x_1, \dots, x_T)$ and $y = (y_1, \dots, y_T)$ be two streams
 observed on a common clock, whose steps we call \emph{frames}, and let
 $\mathrm{LM}_x$ and $\mathrm{LM}_y$ be temporal Transformers pretrained
-independently on each. A frame $x_t$ is the content of stream $x$ at
-time $t$, and need not be a single token: where a frame carries
-several --- simultaneous notes, parallel codebook entries --- a local
-encoder maps them to one vector $\mathbf{h}^{x}_t \in \mathbb{R}^{d}$
-and a local decoder predicts them back from it autoregressively. The
+independently on each. At frame $t$ the two streams carry $x_t$ and
+$y_t$, neither of which need be a single token: where a stream carries
+several at one frame --- simultaneous notes, parallel codebook
+entries --- a local encoder maps them to one vector
+$\mathbf{h}^{x}_t \in \mathbb{R}^{d}$ and a local decoder predicts them
+back from it autoregressively. The
 transformer that sits between those two, and that carries all of the
 temporal dynamics below, therefore operates on one vector per frame
 per stream --- never on the tokens inside a frame. Our goal is a
@@ -45,9 +46,10 @@ backbones and fitted on a small paired corpus.
 
 In the instantiation we study, $x$ is the melody stream and $y$ the
 chord stream, and a frame is one sixteenth-note position of the
-metrical grid: a program and a pitch--duration token per simultaneous
-note, up to a fixed polyphony, closed by an end marker. Which stream is
-which is arbitrary --- no component below is specific to either role.
+metrical grid. What a stream carries at a frame is a program and a
+pitch--duration token per simultaneous note, up to a fixed polyphony,
+closed by an end marker. Which stream is which is arbitrary --- no
+component below is specific to either role.
 
 \subsection{Interleaving two pretrained backbones}
 \label{sec:interleave}
