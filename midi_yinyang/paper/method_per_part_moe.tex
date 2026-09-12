@@ -110,8 +110,9 @@ it is computed \emph{within each pool} and averaged, since the
 all-expert form would demand a uniform load that the masked routing
 cannot produce, penalizing that arm for its own architecture.
 
-The change is cheap and exactly localised. Replacing Eq.~\eqref{eq:shared_router} with
-Eq.~\eqref{eq:permod_router} adds one bias-free $E \times d$ routing
+The change is cheap and exactly localised. Replacing
+Eq.~\eqref{eq:shared_router} with Eq.~\eqref{eq:permod_router} adds
+one bias-free $E \times d$ routing
 matrix per layer ($Ed$ parameters, ${\approx}10^{-3}$ of the layer)
 and changes neither the expert pool, the number of experts activated
 per token ($k$ of $E$), nor any other computation, so comparisons

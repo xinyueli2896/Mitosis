@@ -9,10 +9,23 @@
 % the headings used to carry now sit in the prose -- if a paragraph is
 % split or reordered, re-check its opening sentence.
 %
-% TERMINOLOGY: melody/chord are STREAMS, written x and y in the general
-% setup. Per EXPERIMENTS.md Decision 1 (amended 2026-09-04) "modality"
-% belongs to the general framework and the positioning clause, never to
-% melody/chord.
+% TERMINOLOGY -- one word per concept, fixed 2026-09-12. If an edit
+% needs a new word for any of these, change it everywhere.
+%   stream   melody or chord; x and y in the general setup. "modality"
+%            belongs to the general framework and the positioning
+%            clause only (EXPERIMENTS.md Decision 1, amended 2026-09-04).
+%   frame    ONE STEP OF THE SHARED CLOCK, carrying one entry of each
+%            stream. NOT a per-stream unit: the within-frame edge joins
+%            the two streams AT a frame, which is unsayable otherwise.
+%   row      one entry of the interleaved sequence -- two per frame.
+%            Its index is its POSITION p. Say "row" for the thing,
+%            "position p" for the index, never "position" for the thing.
+%   clean    a row carrying a stream, as opposed to an appended query
+%            SLOT. Introduced where the slots are.
+%   token    an atom inside what a stream carries at a frame. The outer
+%            transformer never sees these.
+% Avoid "position" in the metrical sense (a sixteenth-note position) --
+% it collides with the sequence index.
 %
 % NO COMMITMENT LEVEL. The runs use K=1 with the masked state untrained,
 % which collapses the K+1-round schedule to draft-then-refine. The level
@@ -36,19 +49,18 @@ $y_t$, neither of which need be a single token: where a stream carries
 several at one frame --- simultaneous notes, parallel codebook
 entries --- a local encoder maps them to one vector
 $\mathbf{h}^{x}_t \in \mathbb{R}^{d}$ and a local decoder predicts them
-back from it autoregressively. The
-transformer that sits between those two, and that carries all of the
-temporal dynamics below, therefore operates on one vector per frame
-per stream --- never on the tokens inside a frame. Our goal is a
-single model of the joint process
+back from it autoregressively. The transformer that sits between those
+two, and that carries all of the temporal dynamics below, therefore
+operates on one vector per frame per stream --- never on the tokens
+inside a frame. Our goal is a single model of the joint process
 $p([x_t, y_t] \mid x_{<t}, y_{<t})$, built from the two pretrained
 backbones and fitted on a small paired corpus.
 
 In the instantiation we study, $x$ is the melody stream and $y$ the
-chord stream, and a frame is one sixteenth-note position of the
-metrical grid. What a stream carries at a frame is a program and a
-pitch--duration token per simultaneous note, up to a fixed polyphony,
-closed by an end marker. Which stream is which is arbitrary --- no
+chord stream, and a frame is one sixteenth note of the metrical grid.
+What a stream carries at a frame is a program and a pitch--duration
+token per simultaneous note, up to a fixed polyphony, closed by an end
+marker. Which stream is which is arbitrary --- no
 component below is specific to either role.
 
 \subsection{Interleaving two pretrained backbones}
@@ -61,9 +73,10 @@ We place the two streams in one sequence, alternating by frame,
             \mathbf{h}^{x}_2,\ \mathbf{h}^{y}_2,\ \dots\,\bigr],
   \label{eq:interleave}
 \end{equation}
-shifted one frame --- two positions, since a frame occupies one per
-stream --- to the right in the usual autoregressive way, so the
-row at position $p$ \emph{holds} frame $\lfloor p/2 \rfloor - 1$ and
+shifted one frame --- two entries, since a frame contributes one per
+stream --- to the right in the usual autoregressive way. We call each
+entry a \emph{row} and its index its \emph{position}, so the row at
+position $p$ \emph{holds} frame $\lfloor p/2 \rfloor - 1$ and
 \emph{predicts} frame $\lfloor p/2 \rfloor$; we call the latter its
 \emph{prediction frame}. Interleaving rather than concatenating is what
 makes $[x_t, y_t]$ a temporal unit: the two streams share one position
@@ -71,14 +84,14 @@ axis and one clock, and neither is a block appended to the other.
 Within this sequence each stream keeps its own query, key, value and
 output projections, $\{\mathbf{W}^{Q}_{s}, \mathbf{W}^{K}_{s},
 \mathbf{W}^{V}_{s}, \mathbf{W}^{O}_{s}\}$ for $s \in \{x, y\}$,
-initialised from the corresponding pretrained backbone, and a position
-is projected by the matrices of its own stream --- so before any
+initialised from the corresponding pretrained backbone, and a row is
+projected by the matrices of its own stream --- so before any
 cross-stream term is active the model computes exactly what the two
 backbones computed separately.
 
 Attention is factored into three key-masked passes over the same
-queries, keys and values, differing only in which positions a query may
-attend to. For a query at position $p$ of stream $s$ with prediction
+queries, keys and values, differing only in which rows a query may
+attend to. For the row at position $p$ of stream $s$ with prediction
 frame $t$, $\mathcal{M}_{\text{intra}}$ admits the \emph{same} stream
 at prediction frames $\le t$, which is the causal attention the
 pretrained backbone already performs; $\mathcal{M}_{\text{cross}}$
@@ -94,7 +107,7 @@ the two predictions of frame $t$ without either observing the other's
 value.
 
 Writing $\mathbf{u}_{\bullet}$ for the output of each pass, the three
-are recombined per position as
+are recombined per row as
 \begin{equation}
   \mathbf{o}_p = \mathbf{W}^{O}_{s}\bigl(
     \mathbf{u}_{\text{intra},p}
@@ -103,7 +116,7 @@ are recombined per position as
   \label{eq:gates}
 \end{equation}
 where $g^{c}_{s}, g^{f}_{s} \in (0,1)$ are per-stream scalar gates,
-each a sigmoid of a learned linear map of the position's hidden state.
+each a sigmoid of a learned linear map of the row's hidden state.
 Both are initialised with a large negative bias, so at step zero
 $g^{c} \approx g^{f} \approx 0$ and Eq.~\eqref{eq:gates} reduces to the
 two pretrained backbones running side by side without interaction. The
@@ -125,10 +138,11 @@ on the committed value --- the fixed direction we set out to remove. We
 resolve this by appending to the sequence two \emph{query slots}, one
 per stream, both assigned prediction frame $t$. Each attends to the
 committed past of both streams and to \emph{the other slot}, and to
-nothing else; clean rows never attend to slots, so the slots stay
-outside the autoregressive pathway. The two are symmetric by
-construction: they see the same past and one another, and neither is
-downstream of the other.
+nothing else. The rows of Eq.~\eqref{eq:interleave}, which we call
+\emph{clean} to distinguish them from the slots, never attend to a
+slot, so the slots stay outside the autoregressive pathway. The two
+slots are symmetric by construction: they see the same past and one
+another, and neither is downstream of the other.
 
 Frame $t$ is then produced in two passes. The first is a \emph{draft}:
 one forward yields $\tilde{x}_t, \tilde{y}_t$ from the autoregressive
