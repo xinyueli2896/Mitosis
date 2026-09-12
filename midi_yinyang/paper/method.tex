@@ -9,8 +9,10 @@
 % material (two projection sets and where they come from) went WITH the
 % attention, so 3.2 is now about the input sequence alone.
 %
-% THE THREE KEY SETS (Eq. kintra/kcross/kframe) are the paper's
-% statement of _build_masks in cp_transformer_m2c_duet_block.py. They
+% THE THREE KEY SETS -- intra, cross, within-frame, one paragraph each
+% (2026-09-12, by request: introduce the attention from those three
+% perspectives) -- are the paper's statement of _build_masks in
+% cp_transformer_m2c_duet_block.py. They
 % are DISJOINT and their union is every position with prediction frame
 % <= t -- check any edit against that, since the "partition" claim and
 % the gate-to-zero identity both rest on it. The code's clean-clean
@@ -148,79 +150,51 @@ independent copies sharing an index, with nothing deciding which
 positions of one stream a position of the other may read. The mask
 design below supplies that.
 
-A causal mask over $p$ is not that coupling, and not merely because it
-is too permissive. Positions $2t{-}1$ and $2t$ both predict frame $t$;
-ordering them by $p$ lets the chord position read the melody position
-while forbidding the reverse, reinstating inside every frame the fixed
-direction interleaving was meant to remove --- and leaving the two
-streams with different amounts of each other's history. What a position
-may read has to be stated in stream and frame, not in $p$. Writing
-$s(p)$ for the stream of position $p$ and $t(p) = \lceil p/2 \rceil$
-for its prediction frame, we split the keys admissible to $p$ into
-three sets,
-\begin{align}
-  \mathcal{K}_{\text{intra}}(p)
-    &= \{\, q : s(q) = s(p),\ t(q) \le t(p) \,\},
-    \label{eq:kintra}\\
-  \mathcal{K}_{\text{cross}}(p)
-    &= \{\, q : s(q) \neq s(p),\ t(q) < t(p) \,\},
-    \label{eq:kcross}\\
-  \mathcal{K}_{\text{frame}}(p)
-    &= \{\, q : s(q) \neq s(p),\ t(q) = t(p) \,\}.
-    \label{eq:kframe}
-\end{align}
-The first is the causal attention the pretrained backbone already
-performs, confined to its own stream; the second is the partner's
-committed past; the third is the partner's \emph{current} frame. They
-are pairwise disjoint, and their union is every position with
-prediction frame at most $t(p)$ --- by the shift, every position
-holding content strictly before frame $t(p)$, in either stream. The
-three sets therefore \emph{partition} the context a position is
-entitled to, rather than carving overlapping windows out of it.
+What a position may read is stated in stream and frame rather than in
+$p$. Writing $s(p)$ for the stream of position $p$ and
+$t(p) = \lceil p/2 \rceil$ for its prediction frame, attention is
+factored into three passes over the same queries, keys and values,
+differing only in the set of keys $\mathcal{K}_{\bullet}(p)$ a query
+may read. Each pass is a full attention with its own softmax over its
+own set, and returns a readout $\mathbf{u}_{\bullet,p}$.
 
-Each is realised as a separate attention pass over one set of queries,
-keys and values, the passes differing only in the mask:
-\begin{equation}
-  \mathbf{u}_{\bullet, p}
-  = \sum_{q \in \mathcal{K}_{\bullet}(p)} \alpha^{\bullet}_{pq}\,
-    \mathbf{W}^{V}_{s(q)} \mathbf{h}_q,
-  \quad
-  \alpha^{\bullet}_{p\cdot}
-  = \operatorname*{softmax}_{q \in \mathcal{K}_{\bullet}(p)}
-    \frac{\langle \mathbf{W}^{Q}_{s(p)} \mathbf{h}_p,\,
-                  \mathbf{W}^{K}_{s(q)} \mathbf{h}_q \rangle}
-         {\sqrt{d_h}},
-  \label{eq:pass}
-\end{equation}
-with the head index suppressed. The separate normalisations are the
-point: each $\mathbf{u}_{\bullet,p}$ is a complete attention readout
-over its own set, so the three can be scaled independently and a scale
-of zero removes that dependency exactly. One softmax over the union
-would admit no such factor --- suppressing the cross-stream keys there
-means driving their logits down, which is a thing to be learned rather
-than a state to start from. Note also that
-$\mathcal{K}_{\text{frame}}(p)$ is a singleton for a position of
-Eq.~\eqref{eq:interleave}, since a frame has exactly one position per
-stream; that pass is thus a
-gated read of the partner's state rather than a search over candidates,
-and it is given the same machinery only so that the query slots of
-Sec.~\ref{sec:slots}, whose rows are not singletons, need no separate
-path.
+The first is \emph{intra-stream},
+$\mathcal{K}_{\text{intra}}(p) = \{ q : s(q) = s(p),\, t(q) \le
+t(p)\}$: a position sees its own stream, causally. On the interleaved
+sequence this is attention with a stride of two, and it is exactly what
+the pretrained backbone does --- run alone, the block is the
+single-stream model, once per stream, unchanged.
 
-That within-frame edge is what an autoregressive model over
-Eq.~\eqref{eq:interleave} cannot have, and it is symmetric: the two
-positions predicting frame $t$ admit each other, in both directions. It
-is sound because of the shift. A position with prediction frame $t$
-holds its own stream at frame $t{-}1$, so the edge exchanges the two
-streams' \emph{context} for frame $t$ and not their values at it:
-$x_t$ and $y_t$ are formed knowing each other's state, never each
-other's outcome. Nothing in
-Eqs.~\eqref{eq:kintra}--\eqref{eq:kframe} is learned --- the sets are
-fixed functions of a position's parity and index, computed once per
-sequence length.
+The second is \emph{cross-stream},
+$\mathcal{K}_{\text{cross}}(p) = \{ q : s(q) \neq s(p),\, t(q) <
+t(p)\}$: a position sees the other stream at strictly earlier frames,
+the part of the partner that generation has already committed. This is
+the term that makes the model joint rather than two models sharing an
+index --- the melody position for frame $t$ is conditioned on the
+chords decided through $t{-}1$, and the chord position on the melody
+--- and it is causal, so it costs a decode nothing.
 
-Writing $\mathbf{u}_{\bullet}$ for the output of each pass, the three
-are recombined per position as
+The third is \emph{within-frame},
+$\mathcal{K}_{\text{frame}}(p) = \{ q : s(q) \neq s(p),\, t(q) =
+t(p)\}$: the single position of the other stream that predicts the same
+frame. It is the one edge an autoregressive model over
+Eq.~\eqref{eq:interleave} cannot have, and the only one that is not
+causal: the two positions predicting frame $t$ admit each other, in
+both directions, which is what lets $x_t$ and $y_t$ be settled together
+instead of one after the other. It is nonetheless sound, because of the
+shift --- a position with prediction frame $t$ holds its own stream at
+$t{-}1$, so the edge exchanges the two streams' \emph{context} for
+frame $t$ and not their values at it. Neither prediction observes the
+other's outcome.
+
+The three sets are disjoint, and their union is every position with
+prediction frame at most $t(p)$ --- by the shift, all content strictly
+before frame $t(p)$ in both streams. They partition the context a
+position is entitled to rather than carving overlapping windows out of
+it, and none of them is learned: they are fixed functions of a
+position's parity and index. What is learned is how much of each to
+use. Writing $\mathbf{u}_{\bullet}$ for the output of each pass, the
+three are recombined per position as
 \begin{equation}
   \mathbf{o}_p = \mathbf{W}^{O}_{s}\bigl(
     \mathbf{u}_{\text{intra},p}
