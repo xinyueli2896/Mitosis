@@ -191,7 +191,7 @@ python cp_transformer_inference.py \
     --midi-folder "$GEN_FOLDER" \
     --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
     --temperature 1.0 --n-samples "$N_SAMPLES" \
-    --max-polyphony "$MAX_POLYPHONY" --no-split-tracks \
+    --max-polyphony "$MAX_POLYPHONY" --no-split-tracks --skip-existing \
     --save-name "$STAGEA_SAVE_NAME"
 
 if [[ "$STAGE_B" == "y" ]]; then

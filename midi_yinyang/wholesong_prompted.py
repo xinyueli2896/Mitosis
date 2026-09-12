@@ -58,6 +58,10 @@ def main():
     ap.add_argument('--song-ids', type=int, nargs='+', default=[1, 2, 3, 4, 5])
     ap.add_argument('--prompt-bars', type=int, default=6)
     ap.add_argument('--n-samples', type=int, default=3)
+    ap.add_argument('--skip-existing', action='store_true',
+                    help='skip a song whose samples are all already '
+                         'written, so a killed run resumes instead of '
+                         'redoing the set')
     ap.add_argument('--out-dir', required=True)
     ap.add_argument('--crops-tsv', default=None,
                     help="prompt_crops.tsv from build_prompt_crops. Each "
@@ -162,6 +166,17 @@ def main():
     for sid in args.song_ids:
         name = str(sid).zfill(3)
         print(f'\n=== song {name} ===', flush=True)
+        # Every stage of the cascade runs per song, so the resumable
+        # unit is the song: skip only when all its samples are written.
+        # Without this a killed run redoes the songs it finished, since
+        # eval_e1's completeness test is per-system.
+        if args.skip_existing and all(
+                os.path.exists(os.path.join(args.out_dir, name, 'co',
+                                            f'sample_{i}.mid'))
+                for i in range(args.n_samples)):
+            print(f'  all {args.n_samples} samples already on disk, skipped')
+            ok.append(name)
+            continue
         try:
             dataset = read_pop909_dataset(song_ids=[sid])
             analyses = analyze_pop909_dataset(dataset)

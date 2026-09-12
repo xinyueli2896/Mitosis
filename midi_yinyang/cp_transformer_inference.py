@@ -167,8 +167,20 @@ def _decode_and_save(frames, save_path, tempo, restore_map):
 
 def continuation(model, midi_path, prompt_length=100, generation_length=384,
                  temperature=1.0, n_samples=1, tempo=120.0,
-                 split_named_tracks=True, max_polyphony=16):
+                 split_named_tracks=True, max_polyphony=16,
+                 skip_existing=False):
     name = os.path.basename(midi_path)
+    # All n_samples are drawn in ONE batched call, so the resumable unit
+    # is the song, not the sample: skip only when every continuation is
+    # already written. Without this a job killed part-way through a long
+    # folder redoes every song it finished, because the caller's
+    # completeness test is per-system.
+    if skip_existing and all(
+            os.path.exists(f'temp/{model.save_name}/'
+                           f'{name}_temp{temperature}_continuation_{i}.mid')
+            for i in range(n_samples)):
+        print(f'  [skip] {name}: all {n_samples} continuations already on disk')
+        return
     restore_map = {}
     tokenize_path = midi_path
     if split_named_tracks:
@@ -240,6 +252,12 @@ if __name__ == '__main__':
                    help='TOTAL frames incl. prompt (matches the m2c scripts)')
     p.add_argument('--temperature', type=float, default=1.0)
     p.add_argument('--n-samples', type=int, default=2)
+    p.add_argument('--skip-existing', action='store_true',
+                   help='skip a song whose continuations are all already '
+                        'written, so a killed run resumes instead of '
+                        'redoing the folder. Off by default; eval_e1 '
+                        'passes it, and FORCE there deletes the folder '
+                        'first so forcing still regenerates.')
     p.add_argument('--max-polyphony', type=int, default=16,
                    help='polyphony slots used to tokenize prompts. MUST match '
                         'the training data of --ckpt: 16 for the LA-pretrained '
@@ -282,6 +300,7 @@ if __name__ == '__main__':
                          n_samples=args.n_samples,
                          tempo=get_input_tempo(f),
                          split_named_tracks=not args.no_split_tracks,
-                         max_polyphony=args.max_polyphony)
+                         max_polyphony=args.max_polyphony,
+                         skip_existing=args.skip_existing)
         except Exception as e:
             print(f'  failed: {e!r}')

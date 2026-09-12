@@ -61,6 +61,15 @@
 # mid-way, only generates what is missing. FORCE="A1 P-mc" (or
 # FORCE=all) deletes those folders under temp/E1 and regenerates them.
 #
+# WITHIN a system the generators are also resumable: every arm is
+# invoked with --skip-existing, so a job that hits the wall part-way
+# through a system keeps what it wrote and continues from there. The
+# resumable unit is the sample for A1/A3 and the song for S1/S-scratch/
+# S0 and WS/WSf (those draw all their samples in one call). The ONE
+# exception is the cascades' stage B: yinyang_e3_driver's reuse cache is
+# keyed too loosely to be safe (see its --reuse-cache help), so a P-mc
+# or P-cm killed during stage B redoes stage B -- stage A is kept.
+#
 # Env knobs (--export=ALL,KEY=val):
 #   SYSTEMS        default "A1 A3 A3f S1 S-scratch P-mc P-cm WS"; 'all' =
 #                  every known name (use with SKIP_INFER=1 / score_e1 to
@@ -408,7 +417,7 @@ generate() {
             --midi-folder "$EVAL_MERGED" \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
             --temperature 1.0 --n-samples "$N_SAMPLES" \
-            --max-polyphony "$cp" \
+            --max-polyphony "$cp" --skip-existing \
             --save-name "${dir#temp/}" ;;
     P-mc|P-cm)
         local spec y

@@ -122,7 +122,7 @@ python "$MY/wholesong_deps.py"
 python "$MY/wholesong_prompted.py" \
     --song-ids $SONG_IDS \
     --prompt-bars "$PROMPT_BARS" \
-    --n-samples "$N_SAMPLES" \
+    --n-samples "$N_SAMPLES" --skip-existing \
     --form "$WS_FORM" \
     ${CROPS_TSV:+--crops-tsv "$CROPS_TSV"} \
     --out-dir "$OUT_DIR"
