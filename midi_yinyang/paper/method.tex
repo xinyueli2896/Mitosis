@@ -59,7 +59,8 @@ We place the two streams in one sequence, alternating by frame,
             \mathbf{h}^{x}_2,\ \mathbf{h}^{y}_2,\ \dots\,\bigr],
   \label{eq:interleave}
 \end{equation}
-shifted one frame to the right in the usual autoregressive way, so the
+shifted one frame --- two positions, since a frame occupies one per
+stream --- to the right in the usual autoregressive way, so the
 row at position $p$ \emph{holds} frame $\lfloor p/2 \rfloor - 1$ and
 \emph{predicts} frame $\lfloor p/2 \rfloor$; we call the latter its
 \emph{prediction frame}. Interleaving rather than concatenating is what
