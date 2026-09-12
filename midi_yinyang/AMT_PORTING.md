@@ -36,6 +36,30 @@ ls <clone>/midi_yinyang/input/heldout_v5/chord/*.mid  | wc -l   # 95
 The two counts must match: the merge pairs by filename and the wrapper
 refuses to run if they differ.
 
+## 1b. If that cluster has no SLURM
+
+The `#SBATCH` lines are comments, so both wrappers run as ordinary bash
+scripts with no changes. Run them from the repo root -- `REPO_DIR`
+falls back to `$PWD` -- and pass the knobs as plain environment
+variables instead of `--export`:
+
+```bash
+cd <clone>
+bash midi_yinyang/setup_amt.sbatch
+SELFTEST=1 bash midi_yinyang/infer_amt_prompted.sbatch
+OUT_DIR=$PWD/midi_yinyang/temp/E1_v5b/AMT bash midi_yinyang/infer_amt_prompted.sbatch
+```
+
+Two differences from the batch path. Output goes to your terminal
+rather than `%x_%j.out`, so redirect anything long
+(`... 2>&1 | tee amt.log`), and run it under `tmux`/`nohup` if the
+session can drop. And nothing allocates a GPU for you: set
+`CUDA_VISIBLE_DEVICES=<n>` yourself if the machine has more than one
+and you do not want device 0.
+
+Everything below applies unchanged -- read `sbatch ... --export=ALL,K=V`
+as `K=V bash ...`.
+
 ## 2. Setup, once
 
 ```bash
