@@ -17,18 +17,17 @@
 %   frame    ONE STEP OF THE SHARED CLOCK, carrying one entry of each
 %            stream. NOT a per-stream unit: the within-frame edge joins
 %            the two streams AT a frame, which is unsayable otherwise.
-%   row      one entry of the interleaved sequence -- two per frame.
-%            Its index is its POSITION p. Say "row" for the thing,
-%            "position p" for the index, never "position" for the thing.
-%   clean    a row carrying a stream, as opposed to an appended query
-%            SLOT. Introduced where the slots are.
+%   position one entry of the interleaved sequence, indexed p -- two
+%            per frame. The standard transformer word; do NOT also use
+%            it in the metrical sense (say a frame is "one sixteenth
+%            note long", never "a sixteenth-note position").
+%   clean    a position carrying a stream, as opposed to an appended
+%            query SLOT. Introduced where the slots are.
 %   sub-token  an atom of what a stream carries at a frame: a program
 %            id or a pitch--duration. The outer transformer never sees
 %            these -- the local encoder has collapsed them to one
-%            vector first. Never call these "tokens": a row is the unit
-%            the transformer handles.
-% Avoid "position" in the metrical sense (a sixteenth-note position) --
-% it collides with the sequence index.
+%            vector first. Never call these "tokens": a position is the
+%            unit the transformer handles.
 %
 % NO COMMITMENT LEVEL. The runs use K=1 with the masked state untrained,
 % which collapses the K+1-round schedule to draft-then-refine. The level
@@ -72,10 +71,9 @@ We place the two streams in one sequence, alternating by frame,
             \mathbf{h}^{x}_2,\ \mathbf{h}^{y}_2,\ \dots\,\bigr],
   \label{eq:interleave}
 \end{equation}
-shifted one frame --- two entries, since a frame contributes one per
-stream --- to the right in the usual autoregressive way. We call each
-entry a \emph{row} and its index its \emph{position}, so the row at
-position $p$ \emph{holds} frame $\lfloor p/2 \rfloor - 1$ and
+shifted one frame --- two positions, since a frame contributes one per
+stream --- to the right in the usual autoregressive way, so position
+$p$ \emph{holds} frame $\lfloor p/2 \rfloor - 1$ and
 \emph{predicts} frame $\lfloor p/2 \rfloor$; we call the latter its
 \emph{prediction frame}. Interleaving rather than concatenating is what
 makes $[x_t, y_t]$ a temporal unit: the two streams share one position
@@ -83,15 +81,15 @@ axis and one clock, and neither is a block appended to the other.
 Within this sequence each stream keeps its own query, key, value and
 output projections, $\{\mathbf{W}^{Q}_{s}, \mathbf{W}^{K}_{s},
 \mathbf{W}^{V}_{s}, \mathbf{W}^{O}_{s}\}$ for $s \in \{x, y\}$,
-initialised from the corresponding pretrained backbone, and a row is
-projected by the matrices of its own stream --- so before any
+initialised from the corresponding pretrained backbone, and a position
+is projected by the matrices of its own stream --- so before any
 cross-stream term is active the model computes exactly what the two
 backbones computed separately.
 
 Attention is factored into three key-masked passes over the same
-queries, keys and values, differing only in which rows a query may
-attend to. For the row at position $p$ of stream $s$ with prediction
-frame $t$, $\mathcal{M}_{\text{intra}}$ admits the \emph{same} stream
+queries, keys and values, differing only in which positions a query
+may attend to. For position $p$ of stream $s$ with prediction frame
+$t$, $\mathcal{M}_{\text{intra}}$ admits the \emph{same} stream
 at prediction frames $\le t$, which is the causal attention the
 pretrained backbone already performs; $\mathcal{M}_{\text{cross}}$
 admits the \emph{other} stream at prediction frames $< t$, the
@@ -99,14 +97,14 @@ partner's committed past; and $\mathcal{M}_{\text{frame}}$ admits the
 other stream at prediction frame exactly $t$, the partner's
 \emph{current} frame. The first two are causal; the third is the
 within-frame edge that makes co-generation possible at all, and it is
-symmetric --- each stream's row for frame $t$ sees the other's row for
-frame $t$, in both directions. This is sound because of the shift: a
-row at prediction frame $t$ holds frame $t{-}1$, so the edge couples
-the two predictions of frame $t$ without either observing the other's
-value.
+symmetric --- each stream's position for frame $t$ sees the other's
+position for frame $t$, in both directions. This is sound because of
+the shift: a position at prediction frame $t$ holds frame $t{-}1$, so
+the edge couples the two predictions of frame $t$ without either
+observing the other's value.
 
 Writing $\mathbf{u}_{\bullet}$ for the output of each pass, the three
-are recombined per row as
+are recombined per position as
 \begin{equation}
   \mathbf{o}_p = \mathbf{W}^{O}_{s}\bigl(
     \mathbf{u}_{\text{intra},p}
@@ -115,7 +113,7 @@ are recombined per row as
   \label{eq:gates}
 \end{equation}
 where $g^{c}_{s}, g^{f}_{s} \in (0,1)$ are per-stream scalar gates,
-each a sigmoid of a learned linear map of the row's hidden state.
+each a sigmoid of a learned linear map of the position's hidden state.
 Both are initialised with a large negative bias, so at step zero
 $g^{c} \approx g^{f} \approx 0$ and Eq.~\eqref{eq:gates} reduces to the
 two pretrained backbones running side by side without interaction. The
@@ -137,7 +135,7 @@ on the committed value --- the fixed direction we set out to remove. We
 resolve this by appending to the sequence two \emph{query slots}, one
 per stream, both assigned prediction frame $t$. Each attends to the
 committed past of both streams and to \emph{the other slot}, and to
-nothing else. The rows of Eq.~\eqref{eq:interleave}, which we call
+nothing else. The positions of Eq.~\eqref{eq:interleave}, which we call
 \emph{clean} to distinguish them from the slots, never attend to a
 slot, so the slots stay outside the autoregressive pathway. The two
 slots are symmetric by construction: they see the same past and one
@@ -145,7 +143,7 @@ another, and neither is downstream of the other.
 
 Frame $t$ is then produced in two passes. The first is a \emph{draft}:
 one forward yields $\tilde{x}_t, \tilde{y}_t$ from the autoregressive
-heads of the two clean rows whose prediction frame is $t$, already
+heads of the two clean positions whose prediction frame is $t$, already
 coupled through $\mathcal{M}_{\text{frame}}$ but with neither value
 observed by the other. The second is a \emph{refinement}: the drafts
 are encoded into the slots as
@@ -167,7 +165,7 @@ probe whose autoregressive heads produce the draft, sampled at
 temperature $1$ to match the commitment the decode makes. The second
 writes Eq.~\eqref{eq:slotinput} into the slots and is supervised, with
 cross-entropy on both slots against the true frame $t$ alongside the
-ordinary autoregressive loss on the clean rows. The draft is not a
+ordinary autoregressive loss on the clean positions. The draft is not a
 corrupted ground truth but a sample from the model's own predictive
 distribution --- wrong in the way the model is wrong --- which is
 exactly the state the slots meet at inference and which no corruption

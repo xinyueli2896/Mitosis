@@ -9,19 +9,19 @@
 % E=4 experts, top-k=2, routers bias-free, Switch aux at 0.01,
 % post-LN residual, gate_c seeded from gate_m at warm start.
 % NO \paragraph HEADINGS (2026-09-12, by request).
-% NOTATION follows method.tex's terminology block: rows are indexed by
-% p, hidden state h_p, layer output z_p, router probabilities pi_p. x
-% and y are STREAM NAMES and must not double as vectors, and the routed
-% unit is a ROW -- "token" is reserved for the atoms inside a frame,
-% which this layer never sees.
+% NOTATION follows method.tex's terminology block: positions are
+% indexed by p, hidden state h_p, layer output z_p, router
+% probabilities pi_p. x and y are STREAM NAMES and must not double as
+% vectors, and the routed unit is a POSITION -- "sub-token" is reserved
+% for the atoms inside a frame, which this layer never sees.
 % Preamble requirements: amsmath, amssymb. (bbm no longer needed --
 % the indicator went with the balance equation.)
 % ---------------------------------------------------------------
 \label{sec:permod_moe}
 
-Let $\mathbf{h}_p \in \mathbb{R}^{d}$ denote the hidden state of row
-$p$ of the interleaved sequence, and let $s_p \in \{x, y\}$ be the
-\emph{stream label} of that row (the two streams alternate
+Let $\mathbf{h}_p \in \mathbb{R}^{d}$ denote the hidden state at
+position $p$ of the interleaved sequence, and let $s_p \in \{x, y\}$
+be the \emph{stream label} of that position (the two streams alternate
 by frame; the appended query slots inherit the label of the stream
 they predict). Every transformer block ends in a sparsely gated
 mixture-of-experts (MoE) feed-forward layer with a pool of $E$ experts
@@ -37,7 +37,7 @@ where $\mathbf{W}^{(1)}_i \in \mathbb{R}^{d_f \times d}$,
 $\mathbf{W}^{(2)}_i \in \mathbb{R}^{d \times d_f}$, and $\sigma$ is
 the GELU nonlinearity.
 
-The conventional layer scores every row with a single router
+The conventional layer scores every position with a single router
 $\mathbf{G} \in \mathbb{R}^{E \times d}$,
 \begin{equation}
   \boldsymbol{\pi}_p = \operatorname{softmax}\bigl(\mathbf{G}\,
@@ -52,13 +52,13 @@ logits inherit an identity term $\mathbf{G}\,\mathbf{s}_{s_p}$ that
 separates the two streams regardless of content. In our routing
 analysis (Sec.~\ref{sec:routing}) this identity term accounts for the
 majority of the shared router's expert separation: the router spends
-its capacity re-deriving \emph{which stream a row belongs to} --- a bit
-the input already carries --- rather than \emph{what the row
-contains}.
+its capacity re-deriving \emph{which stream a position belongs to} ---
+a bit the input already carries --- rather than \emph{what that
+position contains}.
 
 We therefore give each stream its own router,
 $\mathbf{G}^{(x)}, \mathbf{G}^{(y)} \in \mathbb{R}^{E \times d}$, and
-score every row with the router of its own stream:
+score every position with the router of its own stream:
 \begin{equation}
   \boldsymbol{\pi}_p = \operatorname{softmax}\bigl(
   \mathbf{G}^{(s_p)}\,\mathbf{h}_p\bigr)
@@ -70,7 +70,7 @@ score every row with the router of its own stream:
 Within the population a given router ever scores, the stamp term
 $\mathbf{G}^{(s)}\mathbf{s}_{s}$ is a \emph{constant} logit offset: it
 can bias which experts a stream prefers overall, but it cannot make
-two rows of the same stream route differently. All routing
+two positions of the same stream route differently. All routing
 \emph{variation} within a stream is thus content-driven by
 construction, and the identity bit stops consuming router capacity.
 
@@ -94,7 +94,7 @@ with $\mathcal{P}(x) \cap \mathcal{P}(y) = \varnothing$: same
 parameters and activated compute, but an integrator is no longer
 representable.
 
-Each row is dispatched to its top-$k$ experts
+Each position is dispatched to its top-$k$ experts
 $\mathcal{S}_p = \operatorname{top}\text{-}k(\boldsymbol{\pi}_p)$ with
 renormalized weights, and the layer output is the residually
 connected mixture
@@ -107,8 +107,9 @@ connected mixture
 \end{equation}
 Load is balanced with the standard auxiliary term of
 \cite{fedus2022switch}, $\mathcal{L}_{\mathrm{bal}} = E \sum_{i} f_i
-P_i$, where $f_i$ is the fraction of a batch's rows that take expert
-$i$ as their top choice and $P_i$ their mean gate probability for it;
+P_i$, where $f_i$ is the fraction of a batch's positions that take
+expert $i$ as their top choice and $P_i$ their mean gate probability
+for it;
 it is averaged across layers and added to the training loss with
 weight $\lambda_{\mathrm{bal}} = 0.01$. In the hard-partition ablation
 it is computed \emph{within each pool} and averaged, since the
@@ -120,7 +121,7 @@ Eq.~\eqref{eq:shared_router} with Eq.~\eqref{eq:permod_router} adds
 one bias-free $E \times d$ routing
 matrix per layer ($Ed$ parameters, ${\approx}10^{-3}$ of the layer)
 and changes neither the expert pool, the number of experts activated
-per row ($k$ of $E$), nor any other computation, so comparisons
+per position ($k$ of $E$), nor any other computation, so comparisons
 against the shared-router and hard-partition arms are at parameter
 and compute parity. At initialization the two routers are copies of
 the pretrained shared router, making the first optimization step
