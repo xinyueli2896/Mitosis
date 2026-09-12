@@ -19,7 +19,13 @@
 %            the two streams AT a frame, which is unsayable otherwise.
 %   position ABSOLUTE index into the interleaved sequence, p = 1..2T --
 %            two per frame, and NOT a time index. Frame t occupies
-%            positions 2t-1 and 2t. RoPE is applied at the FRAME index
+%            positions 2t-1 and 2t IN EQ. 1 -- the CONTENT sequence.
+%            The model reads it SHIFTED, so position p then holds what
+%            p-2 carries -- its OWN STREAM one frame earlier, not a
+%            whole frame, which is two entries -- and predicts what p
+%            itself carries. Do not state the
+%            unshifted map and the shifted one as if they were the
+%            same sequence. RoPE is applied at the PREDICTION FRAME
 %            ceil(p/2), NOT at p: the diffusion model overrides
 %            _run_global_stack and halves the position vector under
 %            time_rope_aligned (v1.2), so x_t and y_t share a rotary
@@ -78,22 +84,23 @@ We place the two streams in one sequence, alternating by frame,
             \mathbf{h}^{x}_2,\ \mathbf{h}^{y}_2,\ \dots\,\bigr],
   \label{eq:interleave}
 \end{equation}
-where $p = 1, \dots, 2T$ indexes the sequence. This \emph{position} is
-an absolute index into the $2T$ entries, not a time index: each frame
-contributes two of them, odd $p$ carrying stream $x$ and even $p$
-stream $y$, and frame $t$ occupies positions $2t{-}1$ and $2t$. The
-rotary embedding, however, is applied at the FRAME index
-$\lceil p/2 \rceil$ rather than at $p$, so the two entries of a frame
-share one rotary position: simultaneity is encoded as distance zero,
-and within-stream distance is the musical distance the pretrained
-backbone already knows. Rotating by $p$ instead would double every
-musical interval and place a $T$-frame excerpt at rotary $2T$, outside
-the range the backbone was trained on.
+indexed by $p = 1, \dots, 2T$. We call $p$ the \emph{position}: an
+absolute index into the $2T$ entries, not a time index. Each frame
+contributes two entries, frame $t$ at $2t{-}1$ and $2t$, with odd $p$
+carrying stream $x$ and even $p$ stream $y$.
 
-The sequence is shifted one frame --- two positions --- to the right in
-the usual autoregressive way, so position $p$ \emph{holds} frame
-$\lceil p/2 \rceil - 1$ and \emph{predicts} frame
-$\lceil p/2 \rceil$; we call the latter its \emph{prediction frame}.
+The model reads this sequence shifted one frame --- two positions ---
+to the right, in the usual autoregressive way. Position $p$ therefore
+\emph{holds} what position $p{-}2$ carries, which is its own stream one
+frame earlier, since shifting by two preserves parity; and it
+\emph{predicts} what position $p$ itself carries, stream $s$ at frame
+$\lceil p/2 \rceil$, which we call $p$'s \emph{prediction frame}.
+The rotary embedding is applied at that prediction frame rather than at
+$p$, so the two entries of a frame share one rotary phase: simultaneity
+is encoded as distance zero, and within-stream distance is the musical
+distance the pretrained backbone already knows. Rotating by $p$ instead
+would double every musical interval and place a $T$-frame excerpt at
+rotary $2T$, outside the range the backbone was trained on.
 Interleaving rather than concatenating is what makes $[x_t, y_t]$ a
 temporal unit: the two streams share one position axis and one clock,
 and neither is a block appended to the other.
@@ -118,9 +125,9 @@ other stream at prediction frame exactly $t$, the partner's
 within-frame edge that makes co-generation possible at all, and it is
 symmetric --- each stream's position for frame $t$ sees the other's
 position for frame $t$, in both directions. This is sound because of
-the shift: a position at prediction frame $t$ holds frame $t{-}1$, so
-the edge couples the two predictions of frame $t$ without either
-observing the other's value.
+the shift: a position at prediction frame $t$ carries only its own
+stream at $t{-}1$, so the edge couples the two predictions of frame $t$
+without either observing the other's value.
 
 Writing $\mathbf{u}_{\bullet}$ for the output of each pass, the three
 are recombined per position as
