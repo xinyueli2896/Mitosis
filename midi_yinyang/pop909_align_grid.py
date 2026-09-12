@@ -290,7 +290,7 @@ def snap_stats(onsets, g):
 
 
 def align_song(song_dir, dst, sub, tempo, origin, fix_dropped, drop_tol,
-               write_ts=False):
+               write_ts=False, chord_program=48):
     sid = os.path.basename(song_dir)
     bt, down, n_ins, pos0 = load_beats(
         os.path.join(song_dir, 'beat_midi.txt'),
@@ -341,7 +341,14 @@ def align_song(song_dir, dst, sub, tempo, origin, fix_dropped, drop_tol,
     cnotes, n_rows, c_drop = read_chords(
         os.path.join(song_dir, 'chord_midi.txt'), g, spb)
     chd_out = pm.PrettyMIDI(resolution=RESOLUTION, initial_tempo=float(tempo))
-    ci = pm.Instrument(program=48, is_drum=False, name='CHORD')
+    # Program 48 (String Ensemble 1) by default, which is what makes the
+    # rendered chord audible against the melody -- but see E4d: the
+    # program is a TOKEN, so a chord program that differs from the
+    # melody's puts a constant stream label in the duet's content, a
+    # second route to stream identity beside the architectural stamp.
+    # The old duet corpus had 0 in both streams. Pass --chord-program 0
+    # for a corpus matching it.
+    ci = pm.Instrument(program=int(chord_program), is_drum=False, name='CHORD')
     ci.notes = cnotes
     chd_out.instruments.append(ci)
 
@@ -424,6 +431,16 @@ def main():
                         'bar 1 beat 1, pickup dropped. beat0: annotation '
                         'beat 0 at tick 0 -- wrong bar phase in the 601 '
                         'songs that do not start on a downbeat.')
+    p.add_argument('--chord-program', type=int, default=48,
+                   help='midi program for the CHORD instrument (default 48, '
+                        'String Ensemble 1). The program is a TOKEN, so this '
+                        'decides whether the duet corpus carries a constant '
+                        'stream label in its content: 48 differs from the '
+                        "melody's 0, while the pre-v5 duet corpus had 0 in "
+                        'both streams and the token carried no stream '
+                        'information. Pass 0 for the untagged arm of E4d. '
+                        'Irrelevant to the merged single-stream baselines, '
+                        'which are tagged separately by merge_melody_chord.')
     p.add_argument('--time-signatures', action='store_true', default=False,
                    help='write a time_signature per metre change, so bar '
                         'lines follow the music. OFF by default: the map '
@@ -457,7 +474,8 @@ def main():
         try:
             rows.append(align_song(d, a.dst, a.sub, a.tempo, a.origin,
                                    not a.no_fix_dropped, a.drop_tol,
-                                   write_ts=a.time_signatures))
+                                   write_ts=a.time_signatures,
+                                   chord_program=a.chord_program))
         except Exception as e:  # noqa: BLE001 - report and continue
             failed.append((os.path.basename(d), repr(e)))
         if (i + 1) % 100 == 0:

@@ -109,6 +109,14 @@ TEMPO="${TEMPO:-120}"
 ORIGIN="${ORIGIN:-bar}"
 NO_FIX_DROPPED="${NO_FIX_DROPPED:-0}"
 TIME_SIGS="${TIME_SIGS:-0}"
+# CHORD_PROGRAM: the CHORD instrument's midi program. 48 (default,
+# String Ensemble 1) makes the chord audible against the melody, but
+# the program is a TOKEN -- see EXPERIMENTS.md E4d. At 48 the duet
+# corpus carries a constant stream label in its content; the pre-v5
+# corpus had 0 in both streams and carried none. Pass 0 to build the
+# untagged arm. The merged single-stream baselines are tagged
+# separately by merge_melody_chord.py and are unaffected either way.
+CHORD_PROGRAM="${CHORD_PROGRAM:-48}"
 
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
@@ -120,6 +128,7 @@ echo "================================================================"
 python pop909_align_grid.py \
     --raw "$POP909_RAW" --dst "$DST" \
     --sub "$SUB" --tempo "$TEMPO" --origin "$ORIGIN" \
+    --chord-program "$CHORD_PROGRAM" \
     ${IDS:+--ids $IDS} \
     $([[ "$NO_FIX_DROPPED" == "1" ]] && echo --no-fix-dropped) \
     $([[ "$TIME_SIGS" == "1" ]] && echo --time-signatures)

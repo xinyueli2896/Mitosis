@@ -1294,6 +1294,64 @@ A3_ADAPTIVE early-exit that guards the headline K=4 configuration
 3. (Optional) **Temperature schedule**: piecewise draft/commit schedule
    vs linear annealing.
 
+#### E4d — PROGRAM-TOKEN STREAM TAG (registered 2026-09-12)
+
+**The finding this comes from.** A frame is (program, pitch-dur) pairs
+and `preprocess_large_midi_dataset` copies `ins.program` verbatim, so
+the program token is whatever the source folder carries. Across the
+systems trained so far that is NOT consistent:
+
+| system | corpus | melody | chord |
+|---|---|---|---|
+| A1, A3, A3ctcaT | two duet streams (old pipeline) | 0 | 0 |
+| S1, S-scratch | merged, tagged | 0 | 48 |
+| A.12 | two duet streams (POP909-v5) | 0 | 48 |
+
+POP909's MELODY track is `program_change=[0]` and
+`build_pop909_chord_midi.py` writes none, so the old duet corpus has a
+CONSTANT program across both streams -- the token carries no stream
+information at all. `pop909_align_grid.py` hardcodes
+`program=48` for its chord instrument, so the v5 duet corpus does.
+S1/S-scratch MUST differ: the single-stream tokenizer separates streams
+by program only and a same-program merge fuses irreversibly.
+
+**Why it matters beyond bookkeeping.** With chord=48 the content itself
+carries a constant stream label, which is a second route to stream
+identity alongside the architectural stamp (per-stream projections,
+position parity). The per-stream-router argument in the method is
+unaffected -- a constant within a stream cannot drive within-stream
+variation either way -- but the E6 stamp-share probes ("~69% of the
+shared router's separation is the architecture's stamp", jobs
+178945/178946) were measured on the OLD corpus, where the program was
+uninformative. That number must not be quoted against a v5 checkpoint
+without re-measuring.
+
+**The ablation.** Train the A.12 configuration twice, identical but for
+the chord stream's program token: tagged (48, as the v5 aligner
+writes) and untagged (0, matching the old duet corpus). Read:
+
+1. E1 endpoints -- does a free stream-identity token in the content
+   change co-generation quality at all? Expectation: no, the
+   architecture already separates the streams three ways over.
+2. E6 routing -- the stamp share and the purity tables. Expectation:
+   the tagged arm shifts separation from the projection-stamp pathway
+   to the content pathway, which is exactly the confound to control
+   for before the interpretability sentence is written.
+
+**Secondary consequence, already live.** The `heldout_v5` prompts carry
+chord=48, so A1/A3/A3ctcaT are being prompted with a value absent from
+their own finetuning distribution. It does not corrupt the metrics --
+`eval_metrics.load_streams` splits on instrument NAME first and the
+duet decoder names instruments after the stream -- but it is
+off-distribution input, and the audible tell is an output that changes
+timbre at the prompt boundary. Measure with an A/B against a
+program-0 copy of the prompts before deciding whether the old-corpus
+rows need regenerating.
+
+**Blocked on:** A.12 finishing its first run. Do not restart the run in
+flight for this -- the tagged arm IS the A.12 run now training, so the
+untagged arm is the one still to schedule.
+
 #### E4c — MoE ablation: A.2 vs A.2-dense
 
 **Promoted out of E4.** The dense arm is now one of the four arms of
