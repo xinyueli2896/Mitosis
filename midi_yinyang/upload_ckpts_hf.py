@@ -1,4 +1,4 @@
-"""Archive checkpoint run-directories to a private Hugging Face repo.
+"""Archive checkpoint run-directories to a Hugging Face repo.
 
 Uploads each matched directory under ckpt/ to the repo at the same
 relative path, then VERIFIES the upload by listing the remote tree and
@@ -6,8 +6,12 @@ comparing every file's size against the local one. Nothing is deleted
 unless --delete is passed AND that directory verified clean -- and even
 then each removal is logged file by file.
 
-The point is archival, not publication: create the repo PRIVATE (the
-default here) and it stays a personal storage bucket until you flip it.
+The default is PRIVATE -- archival, not publication -- and the repo
+stays a personal storage bucket until you flip it. --public creates it
+world-readable instead, which is what a large archive usually needs
+since public repos get a far more generous storage allowance. Weigh
+that once: published weights can be mirrored or indexed, and deleting
+the repo later does not reliably unpublish them.
 
 Auth: run `huggingface-cli login` once on the login node (stores the
 token under ~/.cache/huggingface/), or export HF_TOKEN.
@@ -114,6 +118,17 @@ def main():
     ap.add_argument('--delete', action='store_true',
                     help='remove each LOCAL dir after ITS verification '
                          'passes. Off by default.')
+    ap.add_argument('--public', action='store_true',
+                    help='create the repo PUBLIC. Off by default: a new '
+                         'repo is private, which is what archival wants. '
+                         'Public repos get a far more generous storage '
+                         'allowance, which is the usual reason to want '
+                         'this -- but the weights become world-readable '
+                         'and may be mirrored or indexed even if the repo '
+                         'is deleted later, so it is not a setting to '
+                         'flip back and forth. Ignored for a repo that '
+                         'already exists: change visibility in the repo '
+                         'settings instead.')
     args = ap.parse_args()
 
     dirs = []
@@ -133,15 +148,25 @@ def main():
         total += sz
         plans.append((d, want, sz))
         print(f'{sz / 1e9:10.2f}  {d}')
-    print(f'{total / 1e9:10.2f}  TOTAL -> {args.repo} (private)')
+    vis = 'PUBLIC' if args.public else 'private'
+    print(f'{total / 1e9:10.2f}  TOTAL -> {args.repo} ({vis})')
     if args.dry_run:
         print('[dry-run] stopping before any upload.')
         return
 
     token = resolve_token()
     api = HfApi(token=token)
-    create_repo(args.repo, repo_type='model', private=True, exist_ok=True,
-                token=token)
+    # exist_ok=True means `private` is only honoured when the repo is
+    # CREATED here; an existing repo keeps whatever visibility it has.
+    create_repo(args.repo, repo_type='model', private=not args.public,
+                exist_ok=True, token=token)
+    info = api.repo_info(args.repo, repo_type='model', token=token)
+    actual = 'PUBLIC' if not getattr(info, 'private', True) else 'private'
+    print(f'[repo] {args.repo} is {actual}')
+    if args.public and actual != 'PUBLIC':
+        print('[repo] WARNING: --public was passed but the repo is still '
+              'private -- it already existed. Change it in the repo '
+              'settings on huggingface.co, or upload to a new name.')
 
     failures = []
     for d, want, sz in plans:

@@ -70,12 +70,16 @@ fi
 EXTRA=()
 [[ "${DRY_RUN:-0}" == "1" ]] && EXTRA+=(--dry-run)
 [[ "${DELETE:-0}" == "1" ]] && EXTRA+=(--delete)
+# PUBLIC=1 creates the repo world-readable. Off by default. Only takes
+# effect when the repo is CREATED by this run -- an existing repo keeps
+# its visibility, and the script says which it ended up with.
+[[ "${PUBLIC:-0}" == "1" ]] && EXTRA+=(--public)
 
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
-echo "ARCHIVE CKPTS -> hf.co/$HF_REPO (private)"
+echo "ARCHIVE CKPTS -> hf.co/$HF_REPO ($([[ "${PUBLIC:-0}" == "1" ]] && echo PUBLIC || echo private))"
 echo "PATTERNS = $PATTERNS"
-echo "DRY_RUN=${DRY_RUN:-0}  DELETE=${DELETE:-0}"
+echo "DRY_RUN=${DRY_RUN:-0}  DELETE=${DELETE:-0}  PUBLIC=${PUBLIC:-0}"
 echo "================================================================"
 
 # shellcheck disable=SC2086
