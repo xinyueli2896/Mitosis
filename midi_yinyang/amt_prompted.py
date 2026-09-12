@@ -7,13 +7,18 @@ note = pitch x instrument. It is trained on Lakh MIDI, not on POP909,
 and it is the only external reference here that generates BOTH streams
 itself rather than harmonising one given the other.
 
-The E1 arm is co-generation, so this runs it the way E1 runs every
-other system: prompt with the first PROMPT_LENGTH frames of both
-streams and let the model continue to GEN_LENGTH. The anticipation
-machinery (controls interleaved DELTA seconds ahead) is what the model
-was trained with and stays available, but is NOT used here -- controls
-would make this conditional generation, which is E3's question, not
-E1's. `generate` runs in its own AR mode when no controls are passed.
+THIS ARM IS CO-GENERATION. The model produces melody and chord
+together: it is prompted with the first PROMPT_LENGTH frames of both
+streams and continues both to GEN_LENGTH, exactly as every other E1
+system is. Nothing about the model restricts it to conditional
+generation -- `generate` with `inputs` and no `controls` runs plain
+autoregressive continuation of whatever the prompt contains.
+
+The anticipation machinery (controls interleaved DELTA seconds ahead)
+is a SEPARATE capability of the same model, and it is the one not used
+here: handing it one stream as `controls` would fix that stream and ask
+only for the other, which is conditional generation and belongs in E3.
+Both modes are available from the same checkpoint; E1 wants the first.
 
     prompt (merged, melody program 0 / chord program 48)
       -> midi_to_events          their tokenizer

@@ -424,12 +424,16 @@ The time base is exact: frames are sixteenths at 120 BPM, their
 `events_to_midi` writes two beats per second, so 80 frames = 10s and
 416 = 52s with no resampling.
 
-**The anticipation mechanism is deliberately NOT used.** Passing one
-stream as `controls` is what the paper's accompaniment demo does, and
-it makes the task CONDITIONAL -- that is E3's question, not E1's. Their
-`generate` runs in plain AR mode when no controls are given. An
-anticipation-conditioned arm is the natural E3 entry and is worth
-adding there, where a conditional baseline is the right comparison.
+**The E1 arm co-generates; anticipation is a separate mode we do not
+use here.** Nothing about the model restricts it to conditional
+generation: `generate` with `inputs` and no `controls` is plain
+autoregressive continuation of whatever the prompt holds, which for a
+two-instrument prompt means both streams are produced by the model.
+Anticipation -- handing one stream in as `controls`, interleaved DELTA
+seconds ahead -- is the model's OTHER capability, and using it would
+fix that stream and ask only for the other. That is conditional
+generation, so it belongs in E3, where a conditional baseline is the
+right comparison; both modes come from the same checkpoint.
 
 **One disclosed adaptation.** Their sampler only restricts the
 instrument set once 15 instruments are in play (`instr_logits`), so a
