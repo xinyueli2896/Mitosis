@@ -166,6 +166,14 @@ def main():
                         "'duet' (<song>/<mode>.mid); pass the SAME value as "
                         'the single-stream baselines so every system carries '
                         'the same per-song sampling variance.')
+    p.add_argument('--skip-existing', action='store_true',
+                   help='do not regenerate a sample whose .mid is already '
+                        'on disk. Off by default so a plain re-run still '
+                        'redraws; eval_e1 passes it, because its DONE test '
+                        'is per-SYSTEM -- a job that walls part-way through '
+                        'one would otherwise throw away every sample it had '
+                        'already written. FORCE there deletes the folder '
+                        'first, so forcing still regenerates.')
     p.add_argument('--max-polyphony', type=int, default=16)
     p.add_argument('--max-songs', type=int, default=None)
     p.add_argument('--model-size', type=str, default='large',
@@ -233,6 +241,23 @@ def main():
             # systems carried ~3x the per-song sampling variance in exactly
             # the comparison being tested, costing power for no reason.
             for s in range(args.n_samples):
+                # Where this sample will land. Computed BEFORE generating
+                # so --skip-existing can avoid the work: a 12-hour job
+                # that walls part-way through a system otherwise redoes
+                # every sample it already wrote, because the caller's
+                # completeness test is per-system rather than per-sample.
+                if args.n_samples > 1:
+                    # 'duet_multi' layout: <song>/<mode>/sample_<i>_temp<T>.mid
+                    mode_dir = os.path.join(song_dir, mode)
+                    save_path = os.path.join(
+                        mode_dir, f'sample_{s}_temp{args.temperature}.mid')
+                else:
+                    # 'duet' layout: <song>/<mode>.mid (unchanged)
+                    mode_dir = None
+                    save_path = os.path.join(song_dir, f'{mode}.mid')
+                if args.skip_existing and os.path.exists(save_path):
+                    print(f'    sample {s}: already on disk, skipped')
+                    continue
                 try:
                     mel_frames, chord_frames = run_mode_for_song(
                         model, mode, mel_path, chord_path, args,
@@ -243,15 +268,8 @@ def main():
                     # mel_only / chord_only: write only the generated side.
                     write_mel = mode != 'chord_only'
                     write_chord = mode != 'mel_only'
-                    if args.n_samples > 1:
-                        # 'duet_multi' layout: <song>/<mode>/sample_<i>_temp<T>.mid
-                        mode_dir = os.path.join(song_dir, mode)
+                    if mode_dir is not None:
                         os.makedirs(mode_dir, exist_ok=True)
-                        save_path = os.path.join(
-                            mode_dir, f'sample_{s}_temp{args.temperature}.mid')
-                    else:
-                        # 'duet' layout: <song>/<mode>.mid (unchanged)
-                        save_path = os.path.join(song_dir, f'{mode}.mid')
                     # Preserve the prompt's tempo (beat grid) in the output.
                     # Source picked per mode: chord-driven modes read the
                     # chord prompt's tempo, everything else the mel prompt's.

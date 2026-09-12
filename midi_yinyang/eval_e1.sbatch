@@ -345,7 +345,7 @@ generate() {
             --output-dir "$dir" --modes co \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
             --temperature 1.0 --n-samples "$N_SAMPLES" \
-            --max-polyphony "$cp" \
+            --max-polyphony "$cp" --skip-existing \
             --model-size large --moe-num-experts 4 --moe-topk 2 ;;
     A3|A3f|A3fctcaT|A3K0|A3ctc|A3ctcc|A3ctc2|A3ctca|A3ctcaT|A3c|A3fc|A3fcaT|A3fcK4|A3fcaTar|A11aT|A11K4)
         # Decode variants share the A3 checkpoint and differ only in the
@@ -391,7 +391,7 @@ generate() {
             --output-dir "$dir" --modes co \
             --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
             --temperature 1.0 --n-samples "$N_SAMPLES" \
-            --max-polyphony "$cp" \
+            --max-polyphony "$cp" --skip-existing \
             --model-size large --moe-num-experts 4 --moe-topk 2 \
             --min-chord-tokens-before-eos 0 ;;
     S0|S1|S-scratch)
