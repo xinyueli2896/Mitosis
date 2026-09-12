@@ -133,7 +133,16 @@ def main():
                         'TSV records the notes that land off-stream.')
     p.add_argument('--skip-existing', action='store_true',
                    help='skip a song whose samples are all written')
+    p.add_argument('--max-songs', type=int, default=None,
+                   help='stop after N songs, for a smoke run')
     p.add_argument('--ids', nargs='*', default=None)
+    p.add_argument('--selftest', action='store_true',
+                   help='tokenize one song, round-trip it back to midi and '
+                        'report the time base and instrument preservation, '
+                        'WITHOUT loading the model. Run this first: the '
+                        'driver was written against the package API and '
+                        'this is what catches a signature or unit mismatch '
+                        'before a GPU is spent on it.')
     a = p.parse_args()
 
     import torch
@@ -155,7 +164,46 @@ def main():
                  if os.path.splitext(os.path.basename(f))[0] in want]
     if not files:
         raise SystemExit(f'no midis in {a.merged_folder}')
+    if a.max_songs is not None:
+        files = files[:a.max_songs]
     print(f'[amt] {len(files)} songs')
+
+    if a.selftest:
+        import pretty_midi as pm
+        f = files[0]
+        src = pm.PrettyMIDI(f)
+        print(f'\n[selftest] {os.path.basename(f)}')
+        print(f'  source instruments: '
+              f'{[(int(i.program), i.name, len(i.notes)) for i in src.instruments]}')
+        ev = midi_to_events(f)
+        print(f'  midi_to_events: {len(ev)} tokens = {len(ev) // 3} events')
+        print(f'  span: {ops.min_time(ev, seconds=True):.3f}s .. '
+              f'{ops.max_time(ev, seconds=True):.3f}s')
+        print(f'  instruments in events: {sorted(ops.get_instruments(ev))}')
+        clipped = ops.clip(ev, 0, prompt_s, clip_duration=False, seconds=True)
+        print(f'  clip to {prompt_s:g}s: {len(clipped) // 3} events, '
+              f'max_time {ops.max_time(clipped, seconds=True):.3f}s '
+              f'(must be <= {prompt_s:g})')
+        rt = events_to_midi(ev)
+        print(f'  events_to_midi: ticks_per_beat={rt.ticks_per_beat} '
+              f'(x2 beats/s = 120 BPM if {rt.ticks_per_beat * 2} == '
+              f'{int(rt.ticks_per_beat) * 2})')
+        rt.save('/tmp/_amt_selftest.mid')
+        back = pm.PrettyMIDI('/tmp/_amt_selftest.mid')
+        print(f'  round-trip instruments: '
+              f'{[(int(i.program), len(i.notes)) for i in back.instruments]}')
+        n_src = sum(len(i.notes) for i in src.instruments)
+        n_rt = sum(len(i.notes) for i in back.instruments)
+        print(f'  notes {n_src} -> {n_rt}'
+              + ('  OK' if abs(n_src - n_rt) <= 0.02 * n_src
+                 else '  <- LOSSY, check MAX_DURATION / polyphony limits'))
+        split, nm, nc, ns = split_by_program(back, a.mel_program,
+                                             a.chord_program)
+        print(f'  split: mel {nm}, chord {nc}, off-stream {ns}'
+              + ('  <- the tag did not survive tokenization'
+                 if ns else '  OK'))
+        print('\n[selftest] done; no model was loaded')
+        return
 
     print(f'[amt] loading {a.model}')
     model = AutoModelForCausalLM.from_pretrained(a.model).cuda().eval()
