@@ -37,7 +37,10 @@ above them operates on one vector per frame per stream; we write
 $\mathbf{h}^{x}_t, \mathbf{h}^{y}_t \in \mathbb{R}^{d}$ for these frame
 embeddings. Our goal is a single model of the joint process
 $p([x_t, y_t] \mid x_{<t}, y_{<t})$, built from the two pretrained
-backbones and fitted on a small paired corpus.
+backbones and fitted on a small paired corpus. In the instantiation we
+study, $x$ is the melody stream and $y$ the chord stream, and a frame
+is one sixteenth-note position of the metrical grid. Which stream is
+which is arbitrary: no component below is specific to either role.
 
 \subsection{Interleaving two pretrained backbones}
 \label{sec:interleave}
