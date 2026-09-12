@@ -35,9 +35,11 @@ independently on each. A frame $x_t$ is the content of stream $x$ at
 time $t$, and need not be a single token: where a frame carries
 several --- simultaneous notes, parallel codebook entries --- a local
 encoder maps them to one vector $\mathbf{h}^{x}_t \in \mathbb{R}^{d}$
-and a local decoder predicts them back from it autoregressively, so
-the model between them advances one vector per frame per stream. Our
-goal is a single model of the joint process
+and a local decoder predicts them back from it autoregressively. The
+transformer that sits between those two, and that carries all of the
+temporal dynamics below, therefore operates on one vector per frame
+per stream --- never on the tokens inside a frame. Our goal is a
+single model of the joint process
 $p([x_t, y_t] \mid x_{<t}, y_{<t})$, built from the two pretrained
 backbones and fitted on a small paired corpus.
 
