@@ -1,0 +1,172 @@
+% ---------------------------------------------------------------
+% Methodology. Three subsections matching the three designs named in
+% the introduction:
+%   3.1 setup + interleaving and the three attention passes
+%   3.2 per-stream expert routing  (\input method_per_part_moe.tex)
+%   3.3 order-free joint prediction: placeholder slots + refinement
+%
+% TERMINOLOGY: melody/chord are STREAMS. Per EXPERIMENTS.md Decision 1
+% (amended 2026-09-04) "modality" belongs to the general framework and
+% the positioning clause, not to melody/chord. NOTE: the existing
+% method_per_part_moe.tex says "part" throughout, from the pre-amendment
+% rule -- harmonise to "stream" before submission (see the note at the
+% \input below).
+%
+% Preamble: amsmath, amssymb, bbm (for \mathbbm{1}).
+% ---------------------------------------------------------------
+\section{Method}
+\label{sec:method}
+
+\subsection{Setup}
+\label{sec:setup}
+
+Let $x = (x_1, \dots, x_T)$ and $y = (y_1, \dots, y_T)$ be two streams
+sampled on a common clock, and let $\mathrm{LM}_x$ and $\mathrm{LM}_y$
+be temporal Transformers pretrained independently on each. A frame
+$x_t$ is itself a short sequence of tokens, encoded to a single vector
+by a local encoder and decoded back by a local decoder, so that the
+model above them operates on one vector per frame per stream; we write
+$\mathbf{h}^{x}_t, \mathbf{h}^{y}_t \in \mathbb{R}^{d}$ for these
+frame embeddings. Our goal is a single model of the joint process
+$p([x_t, y_t] \mid x_{<t}, y_{<t})$ built from the two pretrained
+backbones and fitted on a small paired corpus.
+
+\subsection{Interleaving two pretrained backbones}
+\label{sec:interleave}
+
+\paragraph{Sequence layout.}
+We place the two streams in one sequence, alternating by frame,
+\begin{equation}
+  \mathbf{h}
+  = \bigl[\,\mathbf{h}^{x}_1,\ \mathbf{h}^{y}_1,\
+            \mathbf{h}^{x}_2,\ \mathbf{h}^{y}_2,\ \dots\,\bigr],
+  \label{eq:interleave}
+\end{equation}
+so position $p$ carries frame $\lceil p/2 \rceil$ of stream
+$x$ if $p$ is odd and of stream $y$ if $p$ is even. The sequence is
+shifted one frame to the right in the usual autoregressive way, so the
+row at position $p$ \emph{holds} frame $\lfloor p/2 \rfloor - 1$ and
+\emph{predicts} frame $\lfloor p/2 \rfloor$; we call the latter its
+\emph{prediction frame}. Interleaving rather than concatenating is what
+makes $[x_t, y_t]$ a temporal unit: the two streams share one position
+axis and one clock, and neither is a block appended to the other.
+
+\paragraph{Stream-specific projections.}
+Each stream keeps its own query, key, value and output projections,
+$\{\mathbf{W}^{Q}_{s}, \mathbf{W}^{K}_{s}, \mathbf{W}^{V}_{s},
+\mathbf{W}^{O}_{s}\}$ for $s \in \{x, y\}$, initialised from the
+corresponding pretrained backbone. A position is projected by the
+matrices of its own stream, so before any cross-stream term is active
+the model computes exactly what the two pretrained backbones computed
+separately.
+
+\paragraph{Three attention passes.}
+Attention is factored into three key-masked passes over the same
+queries, keys and values, differing only in which positions each query
+may attend to. For a query at position $p$ with prediction frame
+$t = \lfloor p/2 \rfloor$ and stream $s$:
+\begin{itemize}\itemsep2pt
+  \item $\mathcal{M}_{\text{intra}}$: positions of the \emph{same}
+        stream at prediction frames $\le t$ --- the causal attention
+        the pretrained backbone already performs;
+  \item $\mathcal{M}_{\text{cross}}$: positions of the \emph{other}
+        stream at prediction frames $< t$ --- the partner's committed
+        past;
+  \item $\mathcal{M}_{\text{frame}}$: the position of the other stream
+        with prediction frame exactly $t$ --- the partner's
+        \emph{current} frame.
+\end{itemize}
+The first two are causal; the third is the within-frame edge that makes
+co-generation possible at all, and it is symmetric: each stream's row
+for frame $t$ sees the other's row for frame $t$, in both directions.
+Writing $\mathbf{u}_{\bullet}$ for the output of the corresponding
+pass, the three are recombined per position as
+\begin{equation}
+  \mathbf{o}_p = \mathbf{W}^{O}_{s}\bigl(
+    \mathbf{u}_{\text{intra},p}
+    + g^{c}_{s}(\mathbf{h}_p)\,\mathbf{u}_{\text{cross},p}
+    + g^{f}_{s}(\mathbf{h}_p)\,\mathbf{u}_{\text{frame},p}\bigr),
+  \label{eq:gates}
+\end{equation}
+where $g^{c}_{s}, g^{f}_{s} \in (0,1)$ are per-stream scalar gates,
+each a sigmoid of a learned linear map of the position's hidden state.
+Both gates are initialised with a large negative bias, so at step zero
+$g^{c} \approx g^{f} \approx 0$ and Eq.~\eqref{eq:gates} reduces to the
+pretrained backbones running side by side without interaction. The
+paired data is therefore spent learning \emph{when} the streams should
+read each other, starting from a model that already generates each
+stream well --- rather than learning both streams and their coupling at
+once.
+
+\subsection{Role specialization via per-stream expert routing}
+% Existing draft. Before submission: replace "part" with "stream"
+% throughout and re-key \label{sec:permod_moe} references.
+\input{method_per_part_moe}
+
+\subsection{Order-free joint prediction}
+\label{sec:slots}
+
+Eq.~\eqref{eq:interleave} leaves one ordering problem. Within frame
+$t$ the interleaved sequence still places $x_t$ before $y_t$, so a
+purely autoregressive decode would condition $y_t$ on $x_t$ and
+reintroduce exactly the fixed direction we set out to remove. We
+resolve this with placeholder slots and iterative refinement.
+
+\paragraph{Placeholder slots.}
+We append to the sequence a pair of \emph{query slots}, one per stream,
+both assigned prediction frame $t$. Their masks are those of
+Sec.~\ref{sec:interleave} with one addition and one restriction: each
+slot attends to the committed past of both streams, and to
+\emph{the other slot} --- and to nothing else. Clean rows never attend
+to slots, so the slots cannot leak into the autoregressive pathway.
+The two slots are thus symmetric by construction: each sees the same
+past and the same one partner, and neither is downstream of the other.
+
+\paragraph{Slot contents and refinement.}
+A slot input is a frame embedding plus a learned level embedding
+$\mathbf{e}_s(r)$ marking the refinement round $r$. Decoding frame $t$
+runs $K{+}1$ rounds:
+\begin{align}
+  \text{round } r = K:\quad
+    &\text{slot}_s \leftarrow \mathbf{m}_s + \mathbf{e}_s(K), \\
+  \text{round } r < K:\quad
+    &\text{slot}_s \leftarrow
+      \mathrm{enc}\bigl(\hat{z}^{\,(r+1)}_s\bigr) + \mathbf{e}_s(r),
+  \label{eq:refine}
+\end{align}
+where $\mathbf{m}_s$ is a learned mask embedding and
+$\hat{z}^{\,(r+1)}_s$ is the previous round's estimate of stream $s$'s
+frame. Both slots are updated \emph{together} at every round from the
+partner's previous-round estimate, and only the round-$0$ outputs are
+committed. The frame is therefore negotiated rather than ordered: at no
+round does either stream observe the other's final value for frame $t$.
+
+\paragraph{Training.}
+Training must place in the slots the same kind of content decoding will
+put there. We use a single level, $K = 1$, and one level per slot pair,
+so both slots always carry the same $r$ and every training state lies
+on the diagonal the symmetric decode actually visits; an independent
+draw per slot would spend half its examples on leader/follower states
+this decode never reaches. Each step runs two forwards. The first is a
+no-grad probe whose autoregressive content head yields a draft
+$\tilde{z}_s$ for frame $t$ of each stream, sampled at temperature $1$
+to match the decode's own commitment; the second forward places
+$\mathrm{enc}(\tilde{z}_s) + \mathbf{e}_s(0)$ in the slots and is
+supervised, with cross-entropy on both slots' predictions of frame $t$
+together with the ordinary autoregressive loss on the clean rows. The
+draft state is precisely the input Eq.~\eqref{eq:refine} constructs at
+$r = 0$, which the corruption process cannot produce on its own: it is
+not a noisy ground truth but a sample from the model's own
+distribution, wrong in the way the model is wrong.
+
+% ---------------------------------------------------------------
+% OPEN / TO VERIFY before submission:
+%  * "sampled at temperature 1" = SC_DRAFT_TEMP=1.0 in the launch
+%    config; confirm against the final run's log line.
+%  * K=1 with MASK_K_PROB=0 means the masked state (round r=K) is not
+%    trained; the decode's seed round reads the clean rows only, so the
+%    slots are inert there. Say this explicitly if a reviewer would
+%    otherwise ask why Eq. (5) top line is trained -- it is not.
+%  * Hyperparameters (12 global layers, E=4, k=2, d_f=3d) live in the
+%    experimental setup section, not here.
+% ---------------------------------------------------------------
