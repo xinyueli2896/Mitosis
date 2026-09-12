@@ -19,8 +19,12 @@
 %            the two streams AT a frame, which is unsayable otherwise.
 %   position ABSOLUTE index into the interleaved sequence, p = 1..2T --
 %            two per frame, and NOT a time index. Frame t occupies
-%            positions 2t-1 and 2t; RoPE encodes p, not t. Everything
-%            is 1-indexed, hence ceil(p/2) for the prediction frame --
+%            positions 2t-1 and 2t. RoPE is applied at the FRAME index
+%            ceil(p/2), NOT at p: the diffusion model overrides
+%            _run_global_stack and halves the position vector under
+%            time_rope_aligned (v1.2), so x_t and y_t share a rotary
+%            position and the slots land on t+1. Everything is
+%            1-indexed, hence ceil(p/2) for the prediction frame --
 %            the code is 0-indexed and uses p//2. Do NOT also use
 %            "position" in the metrical sense (say a frame is "one
 %            sixteenth note long").
@@ -77,9 +81,14 @@ We place the two streams in one sequence, alternating by frame,
 where $p = 1, \dots, 2T$ indexes the sequence. This \emph{position} is
 an absolute index into the $2T$ entries, not a time index: each frame
 contributes two of them, odd $p$ carrying stream $x$ and even $p$
-stream $y$, and frame $t$ occupies positions $2t{-}1$ and $2t$. It is
-$p$, not $t$, that the rotary embedding encodes, so the two entries of
-a frame are one step apart in the model's positional geometry.
+stream $y$, and frame $t$ occupies positions $2t{-}1$ and $2t$. The
+rotary embedding, however, is applied at the FRAME index
+$\lceil p/2 \rceil$ rather than at $p$, so the two entries of a frame
+share one rotary position: simultaneity is encoded as distance zero,
+and within-stream distance is the musical distance the pretrained
+backbone already knows. Rotating by $p$ instead would double every
+musical interval and place a $T$-frame excerpt at rotary $2T$, outside
+the range the backbone was trained on.
 
 The sequence is shifted one frame --- two positions --- to the right in
 the usual autoregressive way, so position $p$ \emph{holds} frame
@@ -143,12 +152,12 @@ the interleaved sequence still places $x_t$ before $y_t$, so an
 autoregressive decode would draw $x_t$, commit it, and condition $y_t$
 on the committed value --- the fixed direction we set out to remove. We
 resolve this by appending to the sequence two \emph{query slots}, one
-per stream, both assigned prediction frame $t$. They take positions
-$2T{+}1$ and $2T{+}2$, after every clean position rather than at frame
-$t$'s own: a slot is identified by the frame it predicts and by its
-mask, not by where it sits. Each attends to the
-committed past of both streams and to \emph{the other slot}, and to
-nothing else. The positions of Eq.~\eqref{eq:interleave}, which we call
+per stream, both assigned prediction frame $t$. They are appended
+after every clean position, but are given the rotary index $t{+}1$ ---
+the phase frame $t$'s content occupies in the shifted sequence --- so
+each slot sits where the frame it predicts belongs rather than at the
+end. Each attends to the committed past of both streams and to
+\emph{the other slot}, and to nothing else. The positions of Eq.~\eqref{eq:interleave}, which we call
 \emph{clean} to distinguish them from the slots, never attend to a
 slot, so the slots stay outside the autoregressive pathway. The two
 slots are symmetric by construction: they see the same past and one
@@ -188,6 +197,11 @@ other is not.
 
 % ---------------------------------------------------------------
 % TO VERIFY before submission:
+%  * SCHEME: the RoPE paragraph describes time_rope_aligned (v1.2).
+%    train_duet_block_diffusion.sbatch defaults TIME_ROPE_ALIGNED=0,
+%    which is v1.1 -- clean positions keep rotary == p and only the
+%    slots are re-indexed. CHECK the reported run's directory name:
+%    v1.2 matches this text, v1.1 does not.
 %  * "sampled at temperature 1" = SC_DRAFT_TEMP=1.0; confirm against
 %    the final run's log line.
 %  * "we use one [refinement pass] throughout" = A3_SCHEDULE=refine
