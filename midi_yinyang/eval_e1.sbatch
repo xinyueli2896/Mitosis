@@ -242,9 +242,15 @@ DUET_CHORD_PROGRAM="${DUET_CHORD_PROGRAM-0}"
 # NUM_GPUS: how many systems generate CONCURRENTLY, one per GPU, inside
 # this allocation. Detected from the allocation; override to run fewer
 # lanes than the GPUs held (e.g. to leave a device free).
+# Counted from the allocation itself, never by probing the device --
+# the cluster's submit filter rejects scripts carrying nvidia-smi and
+# friends as idle/monitoring commands.
 NUM_GPUS="${NUM_GPUS:-${SLURM_GPUS_ON_NODE:-}}"
-if [[ -z "$NUM_GPUS" ]]; then
-    NUM_GPUS=$(nvidia-smi -L 2>/dev/null | grep -c '^GPU' || echo 1)
+if [[ -z "$NUM_GPUS" && -n "${SLURM_JOB_GPUS:-}" ]]; then
+    NUM_GPUS=$(echo "$SLURM_JOB_GPUS" | tr ',' '\n' | grep -c .)
+fi
+if [[ -z "$NUM_GPUS" && -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+    NUM_GPUS=$(echo "$CUDA_VISIBLE_DEVICES" | tr ',' '\n' | grep -c .)
 fi
 [[ "$NUM_GPUS" -ge 1 ]] 2>/dev/null || NUM_GPUS=1
 OUT_ROOT="${OUT_ROOT:-temp/E1}"
@@ -277,7 +283,8 @@ echo "MEL_FOLDER=$MEL_FOLDER   CROPS_TSV=${CROPS_TSV:-<none: WS/WSf prompt from 
 echo "A3 decode: REFINE=$A3_REFINE_STEPS temp=$A3_FINAL_TEMP top_p=$A3_TOP_P"
 echo "cp: duet=$MAX_POLYPHONY_DUET  specialists=$MAX_POLYPHONY_SPEC  S1/S0=$MAX_POLYPHONY_S1/$MAX_POLYPHONY_S0"
 echo "================================================================"
-nvidia-smi | head -n 12 || true
+# (no nvidia-smi: the submit filter rejects it. The cuda pre-flight
+# below already names the devices through torch.)
 
 # ---- 0. pre-flight ----------------------------------------------------
 if [[ "$SKIP_INFER" != "1" && "$PREP_ONLY" != "1" ]]; then
@@ -595,8 +602,7 @@ if [[ "$SKIP_INFER" != "1" && ${#TODO[@]} -gt 0 ]]; then
             SCORED+=("$name")
         else
             echo "[$name] WARNING: incomplete (missing songs or samples); not scored"
-            echo "         tail of $GENLOG/$name.log:"
-            tail -n 15 "$GENLOG/$name.log" 2>/dev/null | sed 's/^/         /'
+            echo "         why: $GENLOG/$name.log"
         fi
     done
 fi
