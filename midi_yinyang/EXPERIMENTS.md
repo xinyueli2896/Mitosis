@@ -1384,8 +1384,13 @@ uninformative. That number must not be quoted against a v5 checkpoint
 without re-measuring.
 
 **The ablation.** Train the A.12 configuration twice, identical but for
-the chord stream's program token: tagged (48, as the v5 aligner
-writes) and untagged (0, matching the old duet corpus). Read:
+the chord stream's program token. TAGGED (48, as the v5 aligner writes)
+is the MAIN arm, decided 2026-09-12: it is what POP909-v5 already
+carries, so it is what A.12 trains on without any rebuild, and a
+content-side stream label is a defensible design rather than an
+accident once it is stated. UNTAGGED (0, matching the old duet corpus)
+is the ablation, and needs the corpus rebuilt with CHORD_PROGRAM=0.
+Read:
 
 1. E1 endpoints -- does a free stream-identity token in the content
    change co-generation quality at all? Expectation: no, the
@@ -1405,9 +1410,20 @@ timbre at the prompt boundary. Measure with an A/B against a
 program-0 copy of the prompts before deciding whether the old-corpus
 rows need regenerating.
 
-**Blocked on:** A.12 finishing its first run. Do not restart the run in
-flight for this -- the tagged arm IS the A.12 run now training, so the
-untagged arm is the one still to schedule.
+**Blocked on:** A.12 finishing its first run, which is the tagged arm.
+The untagged arm is the one still to schedule, and it needs three
+things before it can train: the aligner re-run with CHORD_PROGRAM=0,
+the .pt rebuilt from it under a DIFFERENT PT_TAG (so the two corpora do
+not overwrite each other), and a RUN_TAG that keeps the two runs in
+separate directories.
+
+**E1 consequence, to handle when A.12 joins the table.** A
+tagged-trained checkpoint needs chord prompts at 48 while every older
+duet needs 0, and eval_e1 stages ONE chord prompt folder per OUT_ROOT.
+Either stage both (prompts/chord at 0 and prompts/chord_tagged at 48,
+with a TAGGED_SYSTEMS knob choosing per system) or give A.12 its own
+OUT_ROOT with DUET_CHORD_PROGRAM=48 and reconcile the two metrics CSVs
+by hand. A.12 also has no generate() case in eval_e1 yet.
 
 #### E4c — MoE ablation: A.2 vs A.2-dense
 
