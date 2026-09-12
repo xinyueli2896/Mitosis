@@ -103,15 +103,25 @@
 #   RESULT_TAG     extra suffix on the result files
 #   SKIP_INFER=1   score only, generate nothing (no GPU needed: submit
 #                  through score_e1.sbatch, a CPU wrapper that forces it)
+#   NUM_GPUS       systems that generate CONCURRENTLY, one per GPU,
+#                  INSIDE this allocation. Detected from the allocation
+#                  (#SBATCH --gres=gpu:4); lower it to leave a device
+#                  free. This is the way to use several GPUs -- splitting
+#                  SYSTEMS across several one-GPU jobs makes each of them
+#                  queue separately. Lanes are STATIC round-robin over
+#                  the systems still to do, so the makespan is the
+#                  slowest lane: order SYSTEMS so the expensive ones do
+#                  not land on the same lane (same index modulo
+#                  NUM_GPUS). Per-system output goes to
+#                  OUT_ROOT/genlogs/<system>.log, since four concurrent
+#                  arms would otherwise interleave into one stream.
 #   PREP_ONLY=1    stage the prompt folders under OUT_ROOT and exit (no
-#                  GPU: submit through prep_e1.sbatch). Lets several
-#                  GPU jobs with disjoint SYSTEMS lists run in PARALLEL
-#                  on one OUT_ROOT without racing on the prompts:
-#                    J0=prep_e1  ->  jobA SYSTEMS="A3 S1 S-scratch"
-#                                    jobB SYSTEMS="A1 P-mc P-cm WS"
-#                                ->  score_e1 (afterok both)
-#                  A GPU job finding OUT_ROOT/prompts/.ready reuses the
-#                  staged prompts instead of rebuilding them.
+#                  GPU: submit through prep_e1.sbatch). Rarely needed now
+#                  that one job drives every GPU; still useful to stage
+#                  prompts on a CPU node before a GPU job starts, or to
+#                  run disjoint SYSTEMS lists on separate NODES. A GPU
+#                  job finding OUT_ROOT/prompts/.ready reuses the staged
+#                  prompts instead of rebuilding them.
 #   PIANO_COPIES   default 1: <system>_piano listening copies
 #   MIN_SONGS      default 2: refuse to run on a smaller staged set (a
 #                  1-song stage prints a full table with every +-0.000)
@@ -133,7 +143,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:4
 #SBATCH -p cscc-gpu-p
 #SBATCH -q cscc-gpu-qos
 #SBATCH --time=12:00:00
@@ -229,6 +239,14 @@ CROPS_TSV="${CROPS_TSV:-$(dirname "$MEL_FOLDER")/prompt_crops.tsv}"
 # Set 48 to evaluate a checkpoint trained on a tagged corpus, or empty
 # to leave the source untouched. See EXPERIMENTS.md E4d.
 DUET_CHORD_PROGRAM="${DUET_CHORD_PROGRAM-0}"
+# NUM_GPUS: how many systems generate CONCURRENTLY, one per GPU, inside
+# this allocation. Detected from the allocation; override to run fewer
+# lanes than the GPUs held (e.g. to leave a device free).
+NUM_GPUS="${NUM_GPUS:-${SLURM_GPUS_ON_NODE:-}}"
+if [[ -z "$NUM_GPUS" ]]; then
+    NUM_GPUS=$(nvidia-smi -L 2>/dev/null | grep -c '^GPU' || echo 1)
+fi
+[[ "$NUM_GPUS" -ge 1 ]] 2>/dev/null || NUM_GPUS=1
 OUT_ROOT="${OUT_ROOT:-temp/E1}"
 RESULT_TAG="${RESULT_TAG:-}"
 SKIP_INFER="${SKIP_INFER:-0}"
@@ -253,6 +271,7 @@ echo "E1 CO-GENERATION EVALUATION"
 echo "SYSTEMS=$SYSTEMS   FORCE=${FORCE:-<none>}   SKIP_INFER=$SKIP_INFER"
 echo "PROMPT_LENGTH=$PROMPT_LENGTH ($((PROMPT_LENGTH / 16)) bars)  GEN_LENGTH=$GEN_LENGTH  N_SAMPLES=$N_SAMPLES"
 echo "OUT_ROOT=$OUT_ROOT   BASELINE=$BASELINE"
+echo "NUM_GPUS=$NUM_GPUS (systems generate concurrently, one per GPU)"
 echo "DUET_CHORD_PROGRAM=${DUET_CHORD_PROGRAM:-<source untouched>} (merged_tagged is always 48)"
 echo "MEL_FOLDER=$MEL_FOLDER   CROPS_TSV=${CROPS_TSV:-<none: WS/WSf prompt from the original bar 0>}"
 echo "A3 decode: REFINE=$A3_REFINE_STEPS temp=$A3_FINAL_TEMP top_p=$A3_TOP_P"
@@ -503,7 +522,9 @@ generate() {
     esac
 }
 
+# ---- 2a. decide what needs generating (sequential, cheap) -------------
 SCORED=()
+TODO=()
 for name in $SYSTEMS; do
     dir=$(sys_dir "$name")
     echo "----------------------------------------------------------------"
@@ -520,16 +541,65 @@ for name in $SYSTEMS; do
         echo "[$name] SKIP: $(sys_root "$name") already has >= $N_SAMPLES co samples for all $N_EVAL songs"
         SCORED+=("$name"); continue
     fi
-    echo "[$name] generating -> $dir"
-    t0=$(date +%s)
-    generate "$name"
-    if is_complete "$name"; then
-        echo "[$name] done in $(( $(date +%s) - t0 ))s"
-        SCORED+=("$name")
-    else
-        echo "[$name] WARNING: incomplete after generation (missing songs or samples); not scored"
-    fi
+    TODO+=("$name")
 done
+
+# ---- 2b. generate, one system per GPU, inside THIS allocation ---------
+# Systems are dealt round-robin to the visible GPUs and each lane runs
+# its share sequentially, so a 4-GPU allocation does four systems at a
+# time without submitting four jobs that each have to queue. Every arm
+# works unchanged: the lane exports CUDA_VISIBLE_DEVICES and the
+# generators all call .cuda(), which then means that lane's device.
+#
+# Lanes are STATIC round-robin, not a work queue, so the makespan is set
+# by the slowest lane -- order SYSTEMS to balance it (put the expensive
+# ones first, and avoid landing two of them on the same lane modulo
+# NUM_GPUS).
+if [[ "$SKIP_INFER" != "1" && ${#TODO[@]} -gt 0 ]]; then
+    GENLOG="$OUT_ROOT/genlogs"
+    mkdir -p "$GENLOG"
+    N_LANES=$NUM_GPUS
+    [[ $N_LANES -gt ${#TODO[@]} ]] && N_LANES=${#TODO[@]}
+    echo "================================================================"
+    echo "GENERATING ${#TODO[@]} system(s) on $N_LANES GPU lane(s): ${TODO[*]}"
+    echo "per-system logs under $GENLOG/  (this log keeps only the summary)"
+    echo "================================================================"
+    lane_pids=()
+    for lane in $(seq 0 $((N_LANES - 1))); do
+        (
+            # EXPORT, not a command prefix: the arms reach the GPU through
+            # child python processes (and, for the cascades and WS, through
+            # a nested bash), so the variable has to be in the environment
+            # the subshell hands down, not a shell-local assignment.
+            export CUDA_VISIBLE_DEVICES="$lane"
+            for idx in "${!TODO[@]}"; do
+                [[ $(( idx % N_LANES )) -eq $lane ]] || continue
+                nm="${TODO[$idx]}"
+                t0=$(date +%s)
+                echo "[lane $lane / gpu $lane] $nm: start $(date +%T)"
+                if generate "$nm" > "$GENLOG/$nm.log" 2>&1; then
+                    echo "[lane $lane / gpu $lane] $nm: exit 0 after $(( $(date +%s) - t0 ))s"
+                else
+                    echo "[lane $lane / gpu $lane] $nm: FAILED after $(( $(date +%s) - t0 ))s -- see $GENLOG/$nm.log"
+                fi
+            done
+        ) &
+        lane_pids+=($!)
+    done
+    for pid in "${lane_pids[@]}"; do wait "$pid" || true; done
+    echo "================================================================"
+    echo "generation lanes finished; completeness below"
+    for name in "${TODO[@]}"; do
+        if is_complete "$name"; then
+            echo "[$name] complete"
+            SCORED+=("$name")
+        else
+            echo "[$name] WARNING: incomplete (missing songs or samples); not scored"
+            echo "         tail of $GENLOG/$name.log:"
+            tail -n 15 "$GENLOG/$name.log" 2>/dev/null | sed 's/^/         /'
+        fi
+    done
+fi
 
 # ---- 2b. piano listening copies (scored files keep chord on prog 48) --
 if [[ "$PIANO_COPIES" == "1" && ${#SCORED[@]} -gt 0 && "$SKIP_INFER" != "1" ]]; then
