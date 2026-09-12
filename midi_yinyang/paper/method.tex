@@ -29,20 +29,23 @@
 \label{sec:setup}
 
 Let $x = (x_1, \dots, x_T)$ and $y = (y_1, \dots, y_T)$ be two streams
-sampled on a common clock, and let $\mathrm{LM}_x$ and $\mathrm{LM}_y$
-be temporal Transformers pretrained independently on each. A frame
-$x_t$ holds the events at one grid position as a token sequence of its
-own --- a program and a pitch--duration token per simultaneous note, up
-to a fixed polyphony, closed by an end marker. A local encoder maps
-that sequence to a single vector $\mathbf{h}^{x}_t \in \mathbb{R}^{d}$
-and a local decoder predicts it back from that vector
-autoregressively, so the model between them advances one vector per
-frame per stream. Our goal is a single model of the joint process
+observed on a common clock, whose steps we call \emph{frames}, and let
+$\mathrm{LM}_x$ and $\mathrm{LM}_y$ be temporal Transformers pretrained
+independently on each. A frame $x_t$ is the content of stream $x$ at
+time $t$, and need not be a single token: where a frame carries
+several --- simultaneous notes, parallel codebook entries --- a local
+encoder maps them to one vector $\mathbf{h}^{x}_t \in \mathbb{R}^{d}$
+and a local decoder predicts them back from it autoregressively, so
+the model between them advances one vector per frame per stream. Our
+goal is a single model of the joint process
 $p([x_t, y_t] \mid x_{<t}, y_{<t})$, built from the two pretrained
-backbones and fitted on a small paired corpus. In the instantiation we
-study, $x$ is the melody stream and $y$ the chord stream, and a frame
-is one sixteenth-note position of the metrical grid. Which stream is
-which is arbitrary: no component below is specific to either role.
+backbones and fitted on a small paired corpus.
+
+In the instantiation we study, $x$ is the melody stream and $y$ the
+chord stream, and a frame is one sixteenth-note position of the
+metrical grid: a program and a pitch--duration token per simultaneous
+note, up to a fixed polyphony, closed by an end marker. Which stream is
+which is arbitrary --- no component below is specific to either role.
 
 \subsection{Interleaving two pretrained backbones}
 \label{sec:interleave}
