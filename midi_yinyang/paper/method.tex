@@ -112,20 +112,21 @@ temporal unit: the two streams share one position axis and one clock,
 and neither is a block appended to the other.
 
 The joint generation model \sys is designed to have two backbones
-operating side by side. Each stream therefore retains its own query,
-key, value and output projections, $\{\mathbf{W}^{Q}_{s},
-\mathbf{W}^{K}_{s}, \mathbf{W}^{V}_{s}, \mathbf{W}^{O}_{s}\}$ for
-$s \in \{x, y\}$, each initialised from the backbone pretrained on
-that stream, and every position is projected by the matrices of its own
-stream. Absent any cross-stream term the two halves of the sequence
-never interact, and \sys reproduces exactly what the two backbones
-computed separately --- the pretrained behaviour is preserved, not
-approximated. What is left to learn is the coupling alone: which
-positions of one stream a position of the other may read, and how
-strongly. The remainder of this section introduces it in two places,
-the attention, where masks decide what may be read, and the
-feed-forward layer, where routing decides what computation serves
-each stream.
+operating side by side. Every attention block therefore carries two
+sets of query, key, value and output projections,
+$\{\mathbf{W}^{Q}_{s}, \mathbf{W}^{K}_{s}, \mathbf{W}^{V}_{s},
+\mathbf{W}^{O}_{s}\}$ for $s \in \{x, y\}$, each set initialised
+from the backbone pretrained on the corresponding stream and applied to
+the positions that carry it. With no cross-stream term active the block
+reduces to the two backbones' own attention, computed in parallel over
+disjoint halves of the sequence; \sys reproduces them exactly rather
+than approximating them. What the architecture so far contains is
+therefore two independent models sharing an index, and nothing that
+determines which positions of one stream a position of the other may
+read, or how strongly. The remainder of this section supplies that
+coupling in two places: the attention, where masks decide what may be
+read, and the feed-forward layer, where routing decides what
+computation serves each stream.
 
 Attention is factored into three key-masked passes over the same
 queries, keys and values, differing only in which positions a query
