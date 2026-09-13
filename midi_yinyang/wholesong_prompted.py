@@ -289,16 +289,30 @@ def main():
                                      random_pitch_aug=False)
                 frm_ds.store_key(0, 0)
                 frm_ds.store_phrase(0)
-                # FormDataset rows are BARS (ctp rows are beats), so its
-                # own length is the bar count; prefer it over L_beats //
-                # nbpm where they disagree, and say so if they do.
-                frm_bars = frm_ds.lengths[0]
+                # FormDataset rows are BARS (ctp rows are beats), and its
+                # own length is the FULL song's bar count -- this dataset
+                # is built from `analyses`, which the crop above never
+                # touched.
+                frm_bars_full = frm_ds.lengths[0]
+                frm_img = frm_ds.lang_to_img(0, 0, frm_bars_full,
+                                             tgt_lgth=frm_bars_full)
+                # CROP IT, exactly as ctp_img and lsh_img were cropped.
+                # Until 2026-09-13 this slice was missing: the form
+                # prompt came from bars 0..prompt_bars-1 of the ORIGINAL
+                # song -- usually the intro -- while the note prompts
+                # started at crop_bar, and the whole generated form was
+                # then offset from the notes by crop_bar bars for the
+                # rest of the song. The gt arm never had this bug, since
+                # its background is ctp_img[2:], already cropped.
+                crop_b = 0
+                if crops:
+                    crop_b = crops[name][0]
+                    frm_img = frm_img[:, crop_b:]
+                frm_bars = frm_bars_full - crop_b
                 if frm_bars != n_bars:
-                    print(f'  [form] bar count {frm_bars} != L_beats//nbpm '
-                          f'{n_bars}; using {frm_bars}')
+                    print(f'  [form] cropped bar count {frm_bars} != '
+                          f'L_beats//nbpm {n_bars}; using {frm_bars}')
                     n_bars = frm_bars
-                frm_img = frm_ds.lang_to_img(0, 0, frm_bars,
-                                             tgt_lgth=frm_bars)
                 frm_prompt = np.repeat(
                     frm_img[np.newaxis, :, 0:prompt_bars], n, axis=0)
                 del frm_img          # prompt extracted; same rule
