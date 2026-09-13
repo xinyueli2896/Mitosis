@@ -34,7 +34,12 @@ Per test song (POP909 ids, default 1-5):
      the same bars (nbpm*nspb rows per bar);
   4. write one midi per sample: MELODY / CHORD tracks (programs 0/48)
      via their piano_roll_to_note_mat, full length including the
-     prompt region -- the eval harness scores frames prompt..total as
+     prompt region, SHIFTED RIGHT by the crop's pad_frames so the
+     baseline shares our timeline -- our crops begin with that much
+     silence and the baseline's representation cannot, so without the
+     shift every event sat a bar early and the tail ran a bar further
+     into the song. With it, frame 80 is the first generated frame for
+     every system. The eval harness scores frames prompt..total as
      usual. Layout: <out>/<songid>/co/sample_<i>.mid (duet_multi).
 
 The acc stage is skipped (out of scope). The frm model is loaded only
@@ -158,7 +163,12 @@ def main():
                     # than us, and never a bar we synthesised.
                     import math
                     pf = int(float(row.get('pad_frames') or 0))
-                    crops[row['id']] = (int(cb), math.ceil(pf / 16))
+                    # pf is kept alongside the bar count: the PROMPT is
+                    # shortened in whole bars, but the written midi is
+                    # shifted right by the exact frame count, so the
+                    # baseline shares our timeline and not merely our
+                    # musical content. See the write block.
+                    crops[row['id']] = (int(cb), math.ceil(pf / 16), pf)
         print(f'[crop] {len(crops)} songs with a crop point from '
               f'{args.crops_tsv}')
 
@@ -217,12 +227,13 @@ def main():
             # images is the honest way to do it: every level keeps its
             # own encoding, only the window moves.
             prompt_bars = args.prompt_bars
+            pad_frames = 0
             if crops:
                 if name not in crops:
                     raise ValueError(
                         f'no crop point for {name} in {args.crops_tsv} '
                         f'(dropped there, or not a held-out song)')
-                cb, pad = crops[name]
+                cb, pad, pad_frames = crops[name]
                 off_beats, off_16 = cb * nbpm, cb * nbpm * nspb
                 if off_beats >= L_beats or off_16 >= L_16:
                     raise ValueError(
@@ -333,12 +344,31 @@ def main():
 
             out_dir = os.path.join(args.out_dir, name, 'co')
             os.makedirs(out_dir, exist_ok=True)
+            # Our crops carry pad_frames of leading SILENCE so the
+            # melody's first downbeat lands at frame 32; the baseline's
+            # language images have no such bars, and shortening its
+            # prompt (above) matched the musical CONTENT without matching
+            # the TIMELINE -- every event then sat pad_frames early and
+            # the tail ran that much further into the song. Reproducing
+            # the same silence here is not synthesis: it is the silence
+            # we ourselves added, so frame 80 is the first generated
+            # frame for every system in the table.
+            # One row is unit=0.25 beat, so the shift in seconds follows
+            # the file's own tempo, which is what the scorer re-derives.
+            offset_sec = pad_frames * 0.25 * 60.0 / args.bpm
+            if pad_frames:
+                print(f'  shifting output +{pad_frames} frames '
+                      f'({offset_sec:.3f}s) to match our padded crop')
             for i, song in enumerate(lsh_songs):
                 pair = song[0:2, 0:L_16]
                 nmat_mel, nmat_chd = piano_roll_to_note_mat(
                     pair, True, seperate_chord=True)
                 notes_mel = note_mat_to_notes(nmat_mel, args.bpm, unit=0.25)
                 notes_chd = note_mat_to_notes(nmat_chd, args.bpm, unit=0.25)
+                if offset_sec:
+                    for nt in (*notes_mel, *notes_chd):
+                        nt.start += offset_sec
+                        nt.end += offset_sec
                 pm = pretty_midi.PrettyMIDI(initial_tempo=args.bpm)
                 mel = pretty_midi.Instrument(0, name='MELODY')
                 mel.notes = notes_mel
