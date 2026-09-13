@@ -42,11 +42,10 @@
 \label{sec:permod_moe}
 
 Every transformer block ends in a sparsely gated mixture-of-experts
-(MoE) feed-forward layer, which receives the attention sub-layer's
-output $\tilde{\mathbf{h}}_p$ at position $p$. Write $s_p \in \{x, y\}$
-for that position's \emph{stream label} (the streams alternate by
-frame; a query token inherits the label of the stream it predicts). The
-layer holds a pool of $E$ experts, each an ordinary two-layer network
+(MoE) feed-forward layer. It receives the attention sub-layer's output
+$\tilde{\mathbf{h}}_p$ at position $p$, together with that position's
+\emph{stream label} $s_p \in \{x, y\}$, and holds a pool of $E$
+experts, each an ordinary two-layer network
 $\mathrm{FFN}_i(\mathbf{h}) = \mathbf{W}^{(2)}_i
 \sigma(\mathbf{W}^{(1)}_i \mathbf{h})$ with GELU $\sigma$ and inner
 width $d_f$.
@@ -56,22 +55,24 @@ $\mathbf{G}^{(y)}$, both $E \times d$, each scoring only the positions
 of its own stream,
 \begin{equation}
   \boldsymbol{\pi}_p
-  = \operatorname{softmax}\bigl(\mathbf{G}^{(s_p)}\,\tilde{\mathbf{h}}_p\bigr)
+  = \operatorname{softmax}\bigl(\mathbf{G}^{(s_p)}\,
+      \tilde{\mathbf{h}}_p\bigr)
   = \operatorname{softmax}\bigl(
       \mathbf{G}^{(s_p)}\tilde{\mathbf{c}}_p
-    + \mathbf{G}^{(s_p)}\mathbf{s}_{s_p}\bigr),
+    + \mathbf{G}^{(s_p)}\mathbf{s}_{s_p}\bigr).
   \label{eq:permod_router}
 \end{equation}
-where the second form uses $\tilde{\mathbf{h}}_p =
-\tilde{\mathbf{c}}_p + \mathbf{s}_{s_p}$: the per-stream attention
-projections imprint the stream label into their output, so it carries a
-content component and a stream-conditional offset. Within the population a given router
-ever scores, that offset is a \emph{constant} logit shift. It can bias
-which experts a stream prefers overall, but cannot make two positions
-of the same stream route differently, so all routing \emph{variation}
-within a stream is content-driven by construction and no router
-capacity is spent re-deriving which stream a position belongs to --- a
-bit the input already carries.
+The second form splits $\tilde{\mathbf{h}}_p = \tilde{\mathbf{c}}_p +
+\mathbf{s}_{s_p}$ into a content component and a stream-conditional
+offset, which the per-stream attention projections imprint on
+everything they emit. Because $\mathbf{G}^{(x)}$ only ever scores
+stream-$x$ positions, the term $\mathbf{G}^{(x)}\mathbf{s}_{x}$ is
+identical for every input that router sees: a constant shift of its
+logits. It can bias which experts stream $x$ prefers overall, but it
+cannot make two stream-$x$ positions route differently. Routing
+\emph{variation} within a stream is therefore content-driven by
+construction, and no router capacity goes to re-deriving which stream a
+position belongs to --- a bit the input already carries.
 
 The pool itself stays shared and unassigned: both routers score the
 same $E$ experts, so which ones a stream recruits --- and whether any

@@ -213,10 +213,10 @@ predicts: under the shift, the one predicting $x_t$ holds $x_{t-1}$ and
 the one predicting $y_t$ holds $y_{t-1}$. Reading each other exposes
 frame $t{-}1$, never frame $t$.
 
-The three sets partition every position with prediction frame at most
-$t(p)$. Their masks are fixed functions of position parity and index;
-what is learned is how much of each readout $\mathbf{u}_{\bullet,p}$ to
-use:
+The three sets partition every position whose prediction frame is at
+most $t(p)$, and their masks are fixed functions of position parity and
+index. What is learned is how much of each readout to admit. With
+$\mathbf{h}_p$ the block's input at position $p$,
 \begin{equation}
   \mathbf{o}_p = \mathbf{W}^{O}_{s}\bigl(
     \mathbf{u}_{\text{intra},p}
@@ -224,12 +224,23 @@ use:
     + g^{f}_{s}(\mathbf{h}_p)\,\mathbf{u}_{\text{frame},p}\bigr),
   \label{eq:gates}
 \end{equation}
-with $g^{c}_{s}, g^{f}_{s} \in (0,1)$ per-stream scalar gates, sigmoids
-of linear maps of $\mathbf{h}_p$. Their biases are initialised large
-and negative, so both start near zero and Eq.~\eqref{eq:gates} reduces
-to the pretrained backbone run independently over each stream. The
-paired data is therefore spent learning \emph{when} the streams should
-read each other rather than how to generate them. The sub-layer closes
+where $g^{c}_{s}, g^{f}_{s} \in (0,1)$ are per-stream \emph{scalars} ---
+one value per position for each pathway, applied to every dimension of
+the readout, so a gate sets how much enters and never which part of it.
+
+Three details of Eq.~\eqref{eq:gates} carry the design. The gates are
+sigmoids of affine maps of $\mathbf{h}_p$, the block's \emph{input}, so
+a position decides how much of its partner to admit before any
+cross-stream information reaches it. The intra-stream readout is
+ungated: the pretrained pathway is never attenuated, and the other two
+are additions on top of it. And the three are summed \emph{inside}
+$\mathbf{W}^{O}_{s}$ rather than projected separately, so with both
+gates closed the block returns the pretrained attention output exactly
+rather than an approximation of it. The gate biases are initialised
+large and negative, so training starts from precisely that state --- the
+pretrained backbone run independently over each stream --- and the
+paired corpus is spent on \emph{when} the streams should read each
+other rather than on how to generate either. The sub-layer then closes
 as usual, $\tilde{\mathbf{h}}_p = \mathrm{LN}(\mathbf{h}_p +
 \mathbf{o}_p)$, and $\tilde{\mathbf{h}}_p$ is what the feed-forward
 layer of Sec.~\ref{sec:permod_moe} receives.
