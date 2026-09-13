@@ -10,11 +10,17 @@
 % post-LN residual, gate_c seeded from gate_m at warm start.
 % NO \paragraph HEADINGS (2026-09-12, by request).
 % NOTATION follows method.tex's terminology block: positions are
-% indexed by p, hidden state h_p, layer output z_p, router
-% probabilities pi_p. x and y are STREAM NAMES and must not double as
-% vectors. The routed unit is a POSITION -- equivalently one token,
-% content or query. "sub-token" is an atom of a NOTE and this layer
-% never sees one.
+% indexed by p, router probabilities pi_p. x and y are STREAM NAMES and
+% must not double as vectors. The routed unit is a POSITION --
+% equivalently one token, content or query. "sub-token" is an atom of a
+% NOTE and this layer never sees one.
+% THE ROUTED VECTOR IS h-TILDE, NOT h (fixed 2026-09-13). Both files
+% said h_p, but they are different vectors: method.tex's h_p is the
+% block INPUT, which the attention reads and the gates score, while
+% this layer receives LN(h_p + o_p) -- named h-tilde_p where
+% eq:gates is closed. The stamp argument here depends on the
+% distinction, since it is the ATTENTION OUTPUT that carries the
+% per-stream imprint.
 % Preamble requirements: \usepackage{amsmath} ONLY. No amssymb, so no
 % \mathbb and no \varnothing -- matrix shapes are stated as prose
 % ("a single E x d router G").
@@ -35,12 +41,12 @@
 % ---------------------------------------------------------------
 \label{sec:permod_moe}
 
-Let $\mathbf{h}_p$ be the $d$-dimensional hidden state at position $p$
-of the interleaved sequence and $s_p \in \{x, y\}$ its \emph{stream
-label} (the streams alternate by frame; a query token inherits the
-label of the stream it predicts). Every transformer block ends in a
-sparsely gated mixture-of-experts (MoE) feed-forward layer over a pool
-of $E$ experts, each an ordinary two-layer network
+Every transformer block ends in a sparsely gated mixture-of-experts
+(MoE) feed-forward layer, which receives the attention sub-layer's
+output $\tilde{\mathbf{h}}_p$ at position $p$. Write $s_p \in \{x, y\}$
+for that position's \emph{stream label} (the streams alternate by
+frame; a query token inherits the label of the stream it predicts). The
+layer holds a pool of $E$ experts, each an ordinary two-layer network
 $\mathrm{FFN}_i(\mathbf{h}) = \mathbf{W}^{(2)}_i
 \sigma(\mathbf{W}^{(1)}_i \mathbf{h})$ with GELU $\sigma$ and inner
 width $d_f$.
@@ -50,16 +56,16 @@ $\mathbf{G}^{(y)}$, both $E \times d$, each scoring only the positions
 of its own stream,
 \begin{equation}
   \boldsymbol{\pi}_p
-  = \operatorname{softmax}\bigl(\mathbf{G}^{(s_p)}\,\mathbf{h}_p\bigr)
+  = \operatorname{softmax}\bigl(\mathbf{G}^{(s_p)}\,\tilde{\mathbf{h}}_p\bigr)
   = \operatorname{softmax}\bigl(
-      \mathbf{G}^{(s_p)}\mathbf{c}_p
+      \mathbf{G}^{(s_p)}\tilde{\mathbf{c}}_p
     + \mathbf{G}^{(s_p)}\mathbf{s}_{s_p}\bigr),
   \label{eq:permod_router}
 \end{equation}
-where the second form uses $\mathbf{h}_p = \mathbf{c}_p +
-\mathbf{s}_{s_p}$: the per-stream attention projections imprint the
-stream label into the hidden state, so it carries a content component
-and a stream-conditional offset. Within the population a given router
+where the second form uses $\tilde{\mathbf{h}}_p =
+\tilde{\mathbf{c}}_p + \mathbf{s}_{s_p}$: the per-stream attention
+projections imprint the stream label into their output, so it carries a
+content component and a stream-conditional offset. Within the population a given router
 ever scores, that offset is a \emph{constant} logit shift. It can bias
 which experts a stream prefers overall, but cannot make two positions
 of the same stream route differently, so all routing \emph{variation}

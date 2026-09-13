@@ -229,7 +229,10 @@ of linear maps of $\mathbf{h}_p$. Their biases are initialised large
 and negative, so both start near zero and Eq.~\eqref{eq:gates} reduces
 to the pretrained backbone run independently over each stream. The
 paired data is therefore spent learning \emph{when} the streams should
-read each other rather than how to generate them.
+read each other rather than how to generate them. The sub-layer closes
+as usual, $\tilde{\mathbf{h}}_p = \mathrm{LN}(\mathbf{h}_p +
+\mathbf{o}_p)$, and $\tilde{\mathbf{h}}_p$ is what the feed-forward
+layer of Sec.~\ref{sec:permod_moe} receives.
 
 \subsection{Role specialization via per-stream expert routing}
 \input{method_per_part_moe}
