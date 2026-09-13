@@ -104,12 +104,14 @@ two-stream construction.
 
 \textbf{Cascade.} A single-stream specialist continues one stream
 alone and a conditional model generates the partner from it. The
-conditional stage adapts the same pretrained backbone with LoRA on its
-query and value projections and injects the conditioning stream's
-per-layer hidden states through low-rank cross-attention inserted every
-second layer~\cite{yinyang}; we finetune it on POP909 and report both
-directions. This is how two streams are obtained from one-stream
-machinery once the direction is fixed in advance.
+conditional stage is a function-alignment adapter~\cite{yinyang}: two
+copies of the pretrained backbone, one reading the conditioning stream
+and one generating the target, linked by gated cross-attention between
+their hidden layers. The published models are finetuned on Nottingham;
+we refit the adapter on POP909 so that the cascade is not handicapped
+by domain, and report both directions. This is how two streams are
+obtained from one-stream machinery once the direction is fixed in
+advance.
 
 \textbf{External.} Whole-Song-Gen~\cite{whole_song}, a hierarchical
 diffusion model that inpaints a whole lead sheet through form,
