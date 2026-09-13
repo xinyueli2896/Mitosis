@@ -18,12 +18,20 @@
 % Preamble requirements: \usepackage{amsmath} ONLY. No amssymb, so no
 % \mathbb and no \varnothing -- matrix shapes are stated as prose
 % ("a single E x d router G").
-% COMPRESSED 2026-09-13. Five displayed equations became two: the
-% shared and per-stream routers, which are what the contribution
-% replaces. The expert MLP, the top-k dispatch with its residual+LN,
-% and the hard-partition logit mask are standard and now prose; their
-% labels (eq:expert, eq:dispatch, eq:hardroute) are gone and were
-% referenced nowhere. The Switch balance formula is cited, not written.
+% COMPRESSED 2026-09-13. Five displayed equations became ONE, the
+% stream-specific router. The expert MLP, the top-k dispatch with its
+% residual+LN, and the hard-partition logit mask are standard and now
+% prose; the Switch balance term is cited, not written. Dropped labels
+% (eq:expert, eq:dispatch, eq:hardroute) were referenced nowhere.
+%
+% NO SHARED-ROUTER EXPOSITION (2026-09-13, by request). The section
+% states the design; it does not set up a single-router layer first and
+% then replace it. The stamp decomposition survives because it is what
+% makes the design sound -- the offset is CONSTANT within the
+% population one router scores -- not because it indicts an
+% alternative. The shared router remains an E6 ablation arm; it is
+% described there, not here. This also removed the only \ref{sec:routing}
+% in the file, which had no target.
 % ---------------------------------------------------------------
 \label{sec:permod_moe}
 
@@ -37,38 +45,27 @@ $\mathrm{FFN}_i(\mathbf{h}) = \mathbf{W}^{(2)}_i
 \sigma(\mathbf{W}^{(1)}_i \mathbf{h})$ with GELU $\sigma$ and inner
 width $d_f$.
 
-The conventional layer scores every position with a single $E \times d$
-router $\mathbf{G}$,
+We route with a \emph{stream-specific} router: $\mathbf{G}^{(x)}$ and
+$\mathbf{G}^{(y)}$, both $E \times d$, each scoring only the positions
+of its own stream,
 \begin{equation}
-  \boldsymbol{\pi}_p = \operatorname{softmax}\bigl(\mathbf{G}\,
-  \mathbf{h}_p\bigr) .
-  \label{eq:shared_router}
-\end{equation}
-Because the per-stream attention projections imprint the stream label
-into the hidden state, $\mathbf{h}_p = \mathbf{c}_p +
-\mathbf{s}_{s_p}$ splits into a content component and a
-stream-conditional offset (the ``stamp''), and the logits inherit an
-identity term $\mathbf{G}\,\mathbf{s}_{s_p}$ that separates the streams
-regardless of content. Our routing analysis
-(Sec.~\ref{sec:routing}) attributes most of the shared router's expert
-separation to this term: capacity spent re-deriving \emph{which stream
-a position belongs to}, a bit the input already carries, rather than
-\emph{what it contains}.
-
-We therefore give each stream its own router, $\mathbf{G}^{(x)}$ and
-$\mathbf{G}^{(y)}$, both $E \times d$, and score every position with
-the router of its own stream:
-\begin{equation}
-  \boldsymbol{\pi}_p = \operatorname{softmax}\bigl(
-  \mathbf{G}^{(s_p)}\mathbf{c}_p
-  + \mathbf{G}^{(s_p)}\mathbf{s}_{s_p}\bigr).
+  \boldsymbol{\pi}_p
+  = \operatorname{softmax}\bigl(\mathbf{G}^{(s_p)}\,\mathbf{h}_p\bigr)
+  = \operatorname{softmax}\bigl(
+      \mathbf{G}^{(s_p)}\mathbf{c}_p
+    + \mathbf{G}^{(s_p)}\mathbf{s}_{s_p}\bigr),
   \label{eq:permod_router}
 \end{equation}
-Within the population a given router ever scores, its stamp term is a
-\emph{constant} logit offset: it can bias which experts a stream
-prefers overall, but cannot make two positions of the same stream route
-differently. All routing \emph{variation} within a stream is therefore
-content-driven by construction.
+where the second form uses $\mathbf{h}_p = \mathbf{c}_p +
+\mathbf{s}_{s_p}$: the per-stream attention projections imprint the
+stream label into the hidden state, so it carries a content component
+and a stream-conditional offset. Within the population a given router
+ever scores, that offset is a \emph{constant} logit shift. It can bias
+which experts a stream prefers overall, but cannot make two positions
+of the same stream route differently, so all routing \emph{variation}
+within a stream is content-driven by construction and no router
+capacity is spent re-deriving which stream a position belongs to --- a
+bit the input already carries.
 
 The pool itself stays shared and unassigned: both routers score the
 same $E$ experts, so which ones a stream recruits --- and whether any
@@ -85,15 +82,13 @@ $0.01$, computed \emph{within each pool} in the hard-partition arm,
 where the all-expert form would demand a uniform load that the masked
 routing cannot produce.
 
-The change is cheap and exactly localised. Replacing
-Eq.~\eqref{eq:shared_router} with Eq.~\eqref{eq:permod_router} adds one
-bias-free $E \times d$ matrix per layer (${\approx}10^{-3}$ of it) and
-leaves the expert pool, the $k$ of $E$ activated per position, and
-every other computation unchanged, so the three arms compare at
-parameter and compute parity. The two routers are initialized as copies
-of the pretrained shared router, making the first optimization step
-identical to the shared-router model's; they diverge only as their
-streams' gradients differ. We use $E = 4$, $k = 2$, $d_f = 3d$.
+The routers are the layer's only addition: one bias-free $E \times d$
+matrix per stream (${\approx}10^{-3}$ of the layer), with the expert
+pool, the $k$ of $E$ activated per position and every other computation
+untouched, so our routing ablations differ in the routing rule alone,
+at parameter and compute parity. Both are initialized as copies of the
+pretrained model's router and diverge only as their streams' gradients
+differ. We use $E = 4$, $k = 2$, $d_f = 3d$.
 % ---------------------------------------------------------------
 % BibTeX entry expected by \cite{fedus2022switch}:
 % @article{fedus2022switch, title={Switch transformers: Scaling to
