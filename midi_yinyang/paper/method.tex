@@ -120,9 +120,8 @@ chord stream --- so a token is a \emph{melody token} or a \emph{chord
 token} --- and a frame is one sixteenth note long, holding one of each.
 The parts of a token are its stream's simultaneous notes at that frame,
 up to a fixed polyphony, each note written as a pair of
-\emph{sub-tokens}: its program id, and a single symbol jointly encoding
-its pitch and its duration, the latter quantised to one of a fixed set
-of lengths in frames. A note is
+\emph{sub-tokens}: its program id, and one symbol for its pitch and
+quantised duration. A note is
 therefore a musical unit but not a computational one --- no component
 of the model operates on it --- which is why it is the frame-level
 vector, and not the note, that we call a token. Which stream is which
