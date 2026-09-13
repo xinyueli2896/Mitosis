@@ -256,7 +256,11 @@ resolve this by appending to the sequence two \emph{query tokens}, one
 per stream, both assigned prediction frame $t$. Every token so far has
 been a \emph{content token}, carrying what its stream holds at a frame;
 a query token carries no content of its own and exists only to predict
-a frame. They are appended after every content token, but are given the
+a frame. Its prediction frame is therefore given rather than read off
+its index: the pair sits at the end of the sequence but acts at the
+frame being produced, and its mask rows and rotary phase follow from
+the value supplied. Training draws that frame uniformly; decoding sets
+it to the frame in hand. They are appended after every content token, but are given the
 rotary index $t{+}1$, the phase frame $t$ occupies in the shifted
 sequence, so each sits where the frame it predicts belongs rather than
 at the end. Each attends to the committed past of both streams and to
