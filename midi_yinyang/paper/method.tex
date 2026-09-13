@@ -208,9 +208,10 @@ frames, without requiring an additional sequential decoding step.
 same frame bidirectionally, supporting concurrent prediction of $x_t$
 and $y_t$. Although incompatible with index-based causal masking over
 Eq.~\eqref{eq:interleave}, this connection preserves autoregressive
-causality: the input shift leaves each position holding only its own
-stream's frame-$t{-}1$ token, so the two exchange context for frame $t$
-without either holding a token from it.
+causality, because neither of the two positions contains what it
+predicts: under the shift, the one predicting $x_t$ holds $x_{t-1}$ and
+the one predicting $y_t$ holds $y_{t-1}$. Reading each other exposes
+frame $t{-}1$, never frame $t$.
 
 The three sets partition all positions with prediction frame at most
 $t(p)$, corresponding under the shift to every token of either stream
