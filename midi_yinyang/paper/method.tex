@@ -83,14 +83,17 @@
 %            The outer transformer never sees these. Now has a parent
 %            to be "sub" of, which is half the reason for the change.
 %
-% PROVENANCE -- CHECK THE FRAMING. init_pretrained_into_duet_block_
-% diffusion.py duplicates ONE pretrained single-stream CP-transformer
-% into both streams' Q/K/V/O and replicates its dense FFN across the
-% experts. There are NOT two separately pretrained backbones in any run
-% so far. 3.2 now says so. 3.1 ("Transformers pretrained on each",
-% "the two pretrained backbones") and the introduction's framing of
-% merging two INDEPENDENTLY pretrained models still overstate it --
-% reconcile before submission.
+% PROVENANCE -- RECONCILED 2026-09-13 in the method.
+% init_pretrained_into_duet_block_diffusion.py duplicates ONE pretrained
+% single-stream CP-transformer into both streams' Q/K/V/O and replicates
+% its dense FFN across the experts. There are NOT two separately
+% pretrained backbones in any run so far. 3.1 now says LM_x = LM_y for
+% this testbed and why (melody and chord are one modality), and 3.3
+% states the initialisation without re-arguing it.
+% STILL OPEN: the INTRODUCTION's framing of merging two INDEPENDENTLY
+% pretrained models. The framework claim is fine -- the construction
+% does not assume one model -- but "independently" overstates what was
+% run, and the intro is where a reviewer forms the expectation.
 %
 % NO COMMITMENT LEVEL. The runs use K=1 with the masked state untrained,
 % which collapses the K+1-round schedule to draft-then-refine. The level
@@ -124,8 +127,8 @@ $\mathbf{h}^{x}_t$, and a local decoder reconstructs
 a token from one such vector, emitting its parts one at a time. Each
 $\mathrm{LM}$ therefore runs on a fixed-width sequence: one vector per
 token, whatever that token contains. Our goal is a single model of
-the joint process $p([x_t, y_t] \mid x_{<t}, y_{<t})$, built from the
-two pretrained backbones and fitted on a small paired corpus.
+the joint process $p([x_t, y_t] \mid x_{<t}, y_{<t})$, built from those
+pretrained backbones and fitted on a small paired corpus.
 
 In the instantiation we study, $x$ is the melody stream and $y$ the
 chord stream --- so a token is a \emph{melody token} or a \emph{chord
@@ -137,7 +140,13 @@ quantised duration. A note is
 therefore a musical unit but not a computational one --- no component
 of the model operates on it --- which is why it is the frame-level
 vector, and not the note, that we call a token. Which stream is which
-is arbitrary; no component below is specific to either role.
+is arbitrary; no component below is specific to either role. Melody and
+chord are two domains of one modality, so here
+$\mathrm{LM}_x = \mathrm{LM}_y$: both backbones are instantiated from a
+single pretrained symbolic-music model, which is already a competent
+generator of either stream. Nothing in the construction assumes this,
+and where the streams are genuinely distinct modalities each backbone
+is taken from its own pretrained model.
 
 \subsection{Interleaved Input Streams}
 \label{sec:interleave}
@@ -175,13 +184,10 @@ and neither is a block appended to the other.
 $\{\mathbf{W}^{Q}_{s}, \mathbf{W}^{K}_{s}, \mathbf{W}^{V}_{s},
 \mathbf{W}^{O}_{s}\}$, $s \in \{x, y\}$, applied to their respective
 positions. Both backbones, including their attention projections and
-feed-forward layers, are initialized from copies of the same pretrained
-single-stream Transformer; the feed-forward configuration is detailed
-in Sec.~\ref{sec:permod_moe}. Melody and chord are two domains of one
-modality, so a single symbolic-music model is already a competent
-generator of either and one backbone suffices; where the streams are
-genuinely distinct modalities the construction is unchanged except that
-each set is taken from its own pretrained model.
+feed-forward layers, are initialized from the pretrained model of their
+stream --- here, as Sec.~\ref{sec:setup} notes, one model copied twice.
+The feed-forward configuration is detailed in
+Sec.~\ref{sec:permod_moe}.
 
 We design the attention masks carefully since they define the
 dependencies within and between streams. Let $s(p)$ denote the stream
