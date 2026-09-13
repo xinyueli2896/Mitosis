@@ -8,6 +8,14 @@
 % TERMINOLOGY is method.tex's. stream, frame, position, token,
 % sub-token, content/query token. Do not introduce new words here.
 %
+% NOTHING ABOUT MEASUREMENT HERE (2026-09-13, by request). There is a
+% separate evaluation section; metrics, reference calibration, the
+% scored span and the listening test all live there. What stays is the
+% GENERATION protocol -- same crops, same length, three samples at
+% temperature 1 -- because it is a property of how the systems were
+% run, and it is what makes "compared" mean anything. Move it too if
+% the evaluation section would rather own it.
+%
 % NO ABLATIONS HERE (2026-09-13, by request). "Systems compared" lists
 % the OPPONENTS -- single-stream, cascade, external -- and nothing
 % else. The causal-attention arm, the shared-router arm and the
@@ -74,9 +82,10 @@ supervises one frame per step, drawn uniformly from the window.
 \subsection{Systems compared}
 \label{sec:systems}
 
-Every system is prompted with the same crops and generates the same
-span, so the comparison is over what the systems do rather than what
-they were given.
+Every system is prompted with the same five-bar crops, generates to
+the same length, and is sampled three times per song at temperature
+$1$, so the comparison is over what the systems do rather than over
+what they were given or how hard they were run.
 
 \textbf{Single-stream.} A CP Transformer over one merged token stream,
 where stream identity survives only in each note's program token. We
@@ -99,23 +108,3 @@ general-purpose model over arrival-time events, which co-generates both
 streams but was trained on a different corpus and tokenisation, so it
 is reported as an out-of-domain reference rather than a matched
 opponent.
-
-\subsection{Protocol and metrics}
-\label{sec:protocol}
-
-Each system receives a five-bar prompt (80 frames) and generates to 416
-frames, 21 bars of continuation, with three samples per song at
-temperature $1$. Metrics are computed on the generated span only and
-are calibrated against the ground-truth continuation of the same song,
-so a system is measured against what that song actually did rather than
-against a corpus average.
-
-We report three families. \emph{Coupling}: chord-tone coverage, the
-share of generated melody notes whose pitch class lies in the
-concurrent generated chord, reported as a delta against the same
-statistic on the reference pair. \emph{Distributional fit}: Jensen--
-Shannon divergences between generated and reference distributions of
-harmonic rhythm, pitch class, note density and duration.
-\emph{Survival}: the fraction of frames left empty, which catches the
-failure where one stream falls silent and the other continues alone.
-A listening test [X] covers what the objective metrics cannot.

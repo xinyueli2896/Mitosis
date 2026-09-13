@@ -1,0 +1,28 @@
+% ---------------------------------------------------------------
+% Evaluation. Holds everything about MEASUREMENT; the experimental
+% setup section holds data, training and the systems compared, and
+% deliberately says nothing here (2026-09-13, by request).
+%
+% Moved here from experiments.tex, unedited, as a starting point:
+% \subsection{Protocol and metrics}
+% \label{sec:protocol}
+%% Each system receives a five-bar prompt (80 frames) and generates to 416
+% frames, 21 bars of continuation, with three samples per song at
+% temperature $1$. Metrics are computed on the generated span only and
+% are calibrated against the ground-truth continuation of the same song,
+% so a system is measured against what that song actually did rather than
+% against a corpus average.
+%% We report three families. \emph{Coupling}: chord-tone coverage, the
+% share of generated melody notes whose pitch class lies in the
+% concurrent generated chord, reported as a delta against the same
+% statistic on the reference pair. \emph{Distributional fit}: Jensen--
+% Shannon divergences between generated and reference distributions of
+% harmonic rhythm, pitch class, note density and duration.
+% \emph{Survival}: the fraction of frames left empty, which catches the
+% failure where one stream falls silent and the other continues alone.
+% A listening test [X] covers what the objective metrics cannot.
+% ---------------------------------------------------------------
+\section{Evaluation}
+\label{sec:evaluation}
+
+% TODO
