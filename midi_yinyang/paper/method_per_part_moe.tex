@@ -8,6 +8,12 @@
 % Matches SimpleMoEFFN (cp_transformer_m2c_jointattn.py):
 % E=4 experts, top-k=2, routers bias-free, Switch aux at 0.01,
 % post-LN residual, gate_c seeded from gate_m at warm start.
+% d_f = 4d, NOT 3d (corrected 2026-09-13). The wrapper leaves
+% MOE_INTERMEDIATE_SIZE empty, so each expert falls back to the model's
+% intermediate_size = 3072 against hidden_size = 768
+% (cp_transformer_m2c_moe.py:276-278) -- the ordinary 4x expansion. The
+% E4c ablation is the one that sets MOE_INTERMEDIATE_SIZE, sizing it to
+% match the activated compute of this config at E=1, k=1.
 % NO \paragraph HEADINGS (2026-09-12, by request).
 % NOTATION follows method.tex's terminology block: positions are
 % indexed by p, router probabilities pi_p. x and y are STREAM NAMES and
@@ -104,7 +110,7 @@ stream may recruit any expert, and one expert may serve both.
 Each position is dispatched to its top-$k$ experts with renormalized
 weights, the mixture is added residually and layer-normalized, and load
 is balanced with the auxiliary term of~\cite{fedus2022switch} at weight
-$0.01$. We use $E = 4$, $k = 2$, $d_f = 3d$.
+$0.01$. We use $E = 4$, $k = 2$, $d_f = 4d$.
 % ---------------------------------------------------------------
 % BibTeX entry expected by \cite{fedus2022switch}:
 % @article{fedus2022switch, title={Switch transformers: Scaling to
