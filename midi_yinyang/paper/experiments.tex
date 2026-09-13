@@ -44,26 +44,35 @@
 \section{Experimental Setup}
 \label{sec:setup_exp}
 
-\subsection{Data}
+\subsection{Pretrained backbone}
+\label{sec:backbone}
+
+The model we start from is a CP Transformer~\cite{cp_transformer}, two
+levels over the frame grid of Sec.~\ref{sec:setup}: a three-layer
+encoder collapses a frame's sub-tokens into one vector, a twelve-layer
+stack of width $d = 768$ runs over those vectors, and a three-layer
+decoder emits the sub-tokens back. It was pretrained as a
+\emph{single-stream} model on a large scraped MIDI corpus of [X] songs,
+where melody and accompaniment arrive as one merged token stream and
+only each note's program token says them apart. This is the model
+\sys copies into both of its streams.
+
+\subsection{Training data}
 \label{sec:data}
 
-We evaluate on POP909~\cite{pop909}, 909 pop songs with a lead melody
+Training uses POP909~\cite{pop909}, 909 pop songs with a lead melody
 and human chord annotations. The melody track gives stream $x$; stream
 $y$ is rendered from the chord annotations as a bass note plus up to
-four upper tones. Both streams are quantised to a shared sixteenth-note
-grid at 120\,BPM, so a frame is one sixteenth and a bar is 16 frames,
-and both are tokenised at a polyphony cap of 8. The cap is not
-arbitrary: chord frames peak at five simultaneous onsets and melody
-frames at six across the whole corpus, so no frame is clipped.
-
-Songs whose sorted index is a multiple of ten are held out from every
-model we train, giving [X] evaluation songs unseen by both the
-two-stream training and the single-stream finetunes. Each held-out song
-is cropped to a common starting point: we find the first sounding
-melody note and keep the bar it falls in plus one before it, so every
-system is prompted from the melody's entry rather than from whatever
-introduction the song happens to have. Crops are written at a fixed
-120\,BPM, so the frame grid is identical across systems.
+four upper tones. Both are quantised to a shared sixteenth-note grid at
+120\,BPM, so a frame is one sixteenth and a bar is 16 frames, and both
+are tokenised at a polyphony cap of 8, which clips nothing: chord
+frames peak at five simultaneous onsets and melody frames at six across
+the corpus. Songs whose sorted index is a multiple of ten are held out,
+leaving [X] songs to train on. That gap is the premise of the whole
+construction: the backbone has already read [X] songs of unpaired MIDI,
+while the paired data available to teach it how two streams should
+listen to each other is under a thousand songs, far too little to learn
+a joint model from nothing.
 
 \subsection{Training}
 \label{sec:training}

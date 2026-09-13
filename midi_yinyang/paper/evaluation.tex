@@ -3,7 +3,30 @@
 % setup section holds data, training and the systems compared, and
 % deliberately says nothing here (2026-09-13, by request).
 %
-% Moved here from experiments.tex, unedited, as a starting point:
+% Moved here from experiments.tex, unedited, as a starting point.
+% The EVALUATION DATA went the same way (2026-09-13): the setup section
+% now covers training data only, so the held-out split and the prompt
+% crops belong here.
+%
+% \subsection{Data}
+% \label{sec:data}
+%% We evaluate on POP909~\cite{pop909}, 909 pop songs with a lead melody
+% and human chord annotations. The melody track gives stream $x$; stream
+% $y$ is rendered from the chord annotations as a bass note plus up to
+% four upper tones. Both streams are quantised to a shared sixteenth-note
+% grid at 120\,BPM, so a frame is one sixteenth and a bar is 16 frames,
+% and both are tokenised at a polyphony cap of 8. The cap is not
+% arbitrary: chord frames peak at five simultaneous onsets and melody
+% frames at six across the whole corpus, so no frame is clipped.
+%% Songs whose sorted index is a multiple of ten are held out from every
+% model we train, giving [X] evaluation songs unseen by both the
+% two-stream training and the single-stream finetunes. Each held-out song
+% is cropped to a common starting point: we find the first sounding
+% melody note and keep the bar it falls in plus one before it, so every
+% system is prompted from the melody's entry rather than from whatever
+% introduction the song happens to have. Crops are written at a fixed
+% 120\,BPM, so the frame grid is identical across systems.
+%
 % \subsection{Protocol and metrics}
 % \label{sec:protocol}
 %% Each system receives a five-bar prompt (80 frames) and generates to 416
