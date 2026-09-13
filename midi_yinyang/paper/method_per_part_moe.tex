@@ -14,6 +14,18 @@
 % must not double as vectors. The routed unit is a POSITION --
 % equivalently one token, content or query. "sub-token" is an atom of a
 % NOTE and this layer never sees one.
+% THE DECOMPOSITION IS A DEFINITION, NOT A DERIVATION (2026-09-13).
+% s_s is the stream's MEAN hidden state and c-tilde_p the deviation, so
+% h-tilde = c-tilde + s holds for any hidden state at all. The
+% architecture's contribution is that s_x and s_y are FAR APART (each
+% stream emitted by its own W^V, W^O) -- an empirical claim, the one E6
+% measured as the stamp share. The routing argument needs only that the
+% split exists, since any per-stream CONSTANT is a fixed logit shift
+% within the population one router scores. Do not restore phrasing that
+% makes the equation look like a consequence of the projections: that
+% invites "where does this come from", and the answer is that we chose
+% it.
+%
 % THE ROUTED VECTOR IS h-TILDE, NOT h (fixed 2026-09-13). Both files
 % said h_p, but they are different vectors: method.tex's h_p is the
 % block INPUT, which the attention reads and the gates score, while
@@ -62,17 +74,22 @@ of its own stream,
     + \mathbf{G}^{(s_p)}\mathbf{s}_{s_p}\bigr).
   \label{eq:permod_router}
 \end{equation}
-The second form splits $\tilde{\mathbf{h}}_p = \tilde{\mathbf{c}}_p +
-\mathbf{s}_{s_p}$ into a content component and a stream-conditional
-offset, which the per-stream attention projections imprint on
-everything they emit. Because $\mathbf{G}^{(x)}$ only ever scores
-stream-$x$ positions, the term $\mathbf{G}^{(x)}\mathbf{s}_{x}$ is
-identical for every input that router sees: a constant shift of its
-logits. It can bias which experts stream $x$ prefers overall, but it
-cannot make two stream-$x$ positions route differently. Routing
-\emph{variation} within a stream is therefore content-driven by
-construction, and no router capacity goes to re-deriving which stream a
-position belongs to --- a bit the input already carries.
+The second form writes $\mathbf{s}_{s}$ for the mean hidden state of
+stream $s$ and $\tilde{\mathbf{c}}_p$ for the deviation from it, so the
+split $\tilde{\mathbf{h}}_p = \tilde{\mathbf{c}}_p + \mathbf{s}_{s_p}$
+holds by construction; what the per-stream attention projections
+contribute is that $\mathbf{s}_x$ and $\mathbf{s}_y$ are far apart,
+since each stream's states are emitted by its own $\mathbf{W}^{V}_{s}$
+and $\mathbf{W}^{O}_{s}$. The argument needs only that the split
+exists. Because $\mathbf{G}^{(x)}$ scores stream-$x$ positions and
+nothing else, $\mathbf{G}^{(x)}\mathbf{s}_{x}$ is identical for every
+input that router ever sees: a fixed shift of its logits, and so a
+fixed preference after the softmax. It can bias which experts stream
+$x$ favours overall, but it cannot make two stream-$x$ positions route
+differently. Routing \emph{variation} within a stream is therefore
+content-driven by construction, and no router capacity goes to
+re-deriving which stream a position belongs to --- a bit the input
+already carries.
 
 The pool itself stays shared and unassigned: both routers score the
 same $E$ experts, so which ones a stream recruits --- and whether any
