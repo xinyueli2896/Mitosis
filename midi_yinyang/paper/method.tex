@@ -92,7 +92,12 @@
 % code still carries k_emb, indexed at 0 for the refine pass. If a
 % multi-level variant is ever reported, the schedule comes back here.
 %
-% Preamble: amsmath, amssymb.
+% Preamble: \usepackage{amsmath,amssymb}
+%   amsmath  -> align, cases, \text, \boldsymbol, \operatorname*
+%   amssymb  -> \varnothing, and \mathbb via amsfonts. AMSMATH ALONE
+%              DOES NOT DEFINE \mathbb -- that is the error to expect if
+%              only amsmath is loaded. Fallbacks without amssymb:
+%              \mathbb{R} -> \mathrm{R}, \varnothing -> \emptyset.
 % ---------------------------------------------------------------
 \section{Method}
 \label{sec:method}

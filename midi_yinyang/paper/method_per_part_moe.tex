@@ -14,8 +14,10 @@
 % probabilities pi_p. x and y are STREAM NAMES and must not double as
 % vectors, and the routed unit is a POSITION -- "sub-token" is reserved
 % for the atoms inside a frame, which this layer never sees.
-% Preamble requirements: amsmath, amssymb. (bbm no longer needed --
-% the indicator went with the balance equation.)
+% Preamble requirements: \usepackage{amsmath,amssymb}. amssymb is not
+% optional here -- \varnothing (hard-partition ablation) and \mathbb
+% come from it, not from amsmath. (bbm no longer needed -- the
+% indicator went with the balance equation.)
 % ---------------------------------------------------------------
 \label{sec:permod_moe}
 
