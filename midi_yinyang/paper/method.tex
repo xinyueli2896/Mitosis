@@ -133,7 +133,7 @@ of the model operates on it --- which is why it is the frame-level
 vector, and not the note, that we call a token. Which stream is which
 is arbitrary; no component below is specific to either role.
 
-\subsection{Interleaving the two streams}
+\subsection{Interleaved Input Streams}
 \label{sec:interleave}
 
 We place the two streams in one sequence, alternating by frame,
@@ -143,23 +143,21 @@ We place the two streams in one sequence, alternating by frame,
             \mathbf{h}^{x}_2,\ \mathbf{h}^{y}_2,\ \dots\,\bigr],
   \label{eq:interleave}
 \end{equation}
-indexed by $p = 1, \dots, 2T$. We call $p$ the \emph{position}: an
-absolute index into the $2T$ entries, not a time index. Each frame
-contributes two entries, frame $t$ at $2t{-}1$ and $2t$, with odd $p$
-carrying stream $x$ and even $p$ stream $y$.
+where the position $p = 1, \dots, 2T$ indexes the sequence. This
+\emph{position} is an absolute index into the $2T$ tokens, not a time
+index: each frame contributes two of them, odd $p$ carrying stream $x$
+and even $p$ stream $y$, and frame $t$ occupies positions $2t{-}1$ and
+$2t$.
 
 The model reads this sequence shifted one frame --- two positions ---
 to the right, in the usual autoregressive way. Position $p$ therefore
 \emph{holds} what position $p{-}2$ carries, which is its own stream one
 frame earlier, since shifting by two preserves parity; and it
-\emph{predicts} what position $p$ itself carries: its own stream at
-frame $\lceil p/2 \rceil$, which we call $p$'s \emph{prediction frame}.
-The rotary embedding is applied at that prediction frame rather than at
-$p$, so the two entries of a frame share one rotary phase: simultaneity
-is encoded as distance zero, and within-stream distance is the musical
-distance the pretrained backbone already knows. Rotating by $p$ instead
-would double every musical interval and place a $T$-frame excerpt at
-rotary $2T$, outside the range the backbone was trained on.
+\emph{predicts} what position $p$ itself carries, stream
+$s \in \{x, y\}$ at frame $\lceil p/2 \rceil$, which we call $p$'s
+\emph{prediction frame}. The rotary embedding is applied at that
+prediction frame rather than at $p$, so the two tokens of a frame share
+one rotary position: simultaneity is encoded as distance zero.
 Interleaving rather than concatenating is what makes $[x_t, y_t]$ a
 temporal unit: the two streams share one position axis and one clock,
 and neither is a block appended to the other.
@@ -180,8 +178,8 @@ positions of one stream a position of the other may read. The mask
 design below supplies that.
 
 What a position may read is stated in stream and frame rather than in
-$p$. Writing $s(p)$ for the stream of position $p$ and
-$t(p) = \lceil p/2 \rceil$ for its prediction frame, attention is
+$p$. Writing $s(p)$ and $t(p)$ for the stream and the prediction frame
+of position $p$, attention is
 factored into three passes over the same queries, keys and values,
 differing only in the set of keys $\mathcal{K}_{\bullet}(p)$ a query
 may read. Each pass is a full attention with its own softmax over its
