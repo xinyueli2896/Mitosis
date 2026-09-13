@@ -106,12 +106,11 @@ $\mathrm{LM}_x$ and $\mathrm{LM}_y$ be temporal Transformers pretrained
 on each. At frame $t$ stream $x$ carries $x_t$ and stream $y$ carries
 $y_t$; we call each of these a \emph{token} of its stream. A token is
 not a single symbol: it has internal structure and variable length. A
-local encoder therefore collapses $x_t$ into one vector
+local encoder collapses $x_t$ into one vector
 $\mathbf{h}^{x}_t \in \mathbb{R}^{d}$, and a local decoder reconstructs
-a token from one such vector, emitting its parts one at a time. What
-sits between them sees a fixed-width sequence --- one vector per token,
-whatever that token contains --- and it is that sequence this paper is
-about. Our goal is a single model of
+a token from one such vector, emitting its parts one at a time. Each
+$\mathrm{LM}$ therefore runs on a fixed-width sequence: one vector per
+token, whatever that token contains. Our goal is a single model of
 the joint process $p([x_t, y_t] \mid x_{<t}, y_{<t})$, built from the
 two pretrained backbones and fitted on a small paired corpus.
 
