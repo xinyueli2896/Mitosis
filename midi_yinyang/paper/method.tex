@@ -204,19 +204,19 @@ chords decided through $t{-}1$, and the chord position on the melody
 The third is \emph{within-frame},
 $\mathcal{K}_{\text{frame}}(p) = \{ q : s(q) \neq s(p),\, t(q) =
 t(p)\}$: the single position of the other stream that predicts the same
-frame. It is the one edge an autoregressive model over
+frame. It is the one connection an autoregressive model over
 Eq.~\eqref{eq:interleave} cannot have, and the only one that is not
 causal: the two positions predicting frame $t$ admit each other, in
 both directions, which is what lets $x_t$ and $y_t$ be settled together
 instead of one after the other. It is nonetheless sound, because of the
-shift --- a position with prediction frame $t$ holds its own stream at
-$t{-}1$, so the edge exchanges the two streams' \emph{context} for
-frame $t$ and not their values at it. Neither prediction observes the
-other's outcome.
+shift --- a position with prediction frame $t$ holds only its own
+stream's token for frame $t{-}1$, so the two streams exchange
+\emph{context} for frame $t$ and not their tokens at it. Neither
+prediction observes the other's outcome.
 
 The three sets are disjoint, and their union is every position with
-prediction frame at most $t(p)$ --- by the shift, all content strictly
-before frame $t(p)$ in both streams. They partition the context a
+prediction frame at most $t(p)$ --- by the shift, every token of either
+stream from before frame $t(p)$. They partition the context a
 position is entitled to rather than carving overlapping windows out of
 it, and none of them is learned: they are fixed functions of a
 position's parity and index. What is learned is how much of each to
