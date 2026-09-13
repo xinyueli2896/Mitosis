@@ -131,20 +131,21 @@ the joint process $p([x_t, y_t] \mid x_{<t}, y_{<t})$, built from those
 pretrained backbones and fitted on a small paired corpus.
 
 In the instantiation we study, $x$ is the melody stream and $y$ the
-chord stream --- so a token is a \emph{melody token} or a \emph{chord
-token} --- and a frame is one sixteenth note long, holding one of each.
+chord stream, so a token is a \emph{melody token} or a \emph{chord
+token}. A frame is one sixteenth note long and holds one of each.
 The parts of a token are its stream's simultaneous notes at that frame,
 up to a fixed polyphony, each note written as a pair of
 \emph{sub-tokens}: its program id, and one symbol for its pitch and
 quantised duration. A note is
-therefore a musical unit but not a computational one --- no component
-of the model operates on it --- which is why it is the frame-level
-vector, and not the note, that we call a token. Which stream is which
-is arbitrary; no component below is specific to either role. Melody and
+therefore a musical unit but not a computational one: no component of
+the model operates on it. That is why we give the name token to the
+frame-level vector and not to the note. Assigning melody to $x$ and
+chord to $y$ is arbitrary; no component below is specific to either
+role. Melody and
 chord are two domains of one modality, so here
 $\mathrm{LM}_x = \mathrm{LM}_y$: both backbones are instantiated from a
-single pretrained symbolic-music model, which is already a competent
-generator of either stream. Nothing in the construction assumes this,
+single pretrained symbolic-music model, already a competent generator
+of either stream. Nothing in the construction assumes this,
 and where the streams are genuinely distinct modalities each backbone
 is taken from its own pretrained model.
 
@@ -164,9 +165,9 @@ index: each frame contributes two of them, odd $p$ carrying stream $x$
 and even $p$ stream $y$, and frame $t$ occupies positions $2t{-}1$ and
 $2t$.
 
-The model reads this sequence shifted one frame --- two positions ---
-to the right, in the usual autoregressive way. Position $p$ therefore
-\emph{holds} what position $p{-}2$ carries, which is its own stream one
+The model reads this sequence shifted one frame (two positions) to
+the right, in the usual autoregressive way. Position $p$ therefore
+\emph{holds} what position $p{-}2$ carries, its own stream's token one
 frame earlier, since shifting by two preserves parity; and it
 \emph{predicts} what position $p$ itself carries, stream
 $s \in \{x, y\}$ at frame $\lceil p/2 \rceil$, which we call $p$'s
@@ -185,7 +186,8 @@ $\{\mathbf{W}^{Q}_{s}, \mathbf{W}^{K}_{s}, \mathbf{W}^{V}_{s},
 \mathbf{W}^{O}_{s}\}$, $s \in \{x, y\}$, applied to their respective
 positions. Both backbones, including their attention projections and
 feed-forward layers, are initialized from the pretrained model of their
-stream --- here, as Sec.~\ref{sec:setup} notes, one model copied twice.
+stream; here, as Sec.~\ref{sec:setup} notes, that is one model copied
+twice.
 The feed-forward configuration is detailed in
 Sec.~\ref{sec:permod_moe}.
 
@@ -230,9 +232,9 @@ $\mathbf{h}_p$ the block's input at position $p$,
     + g^{f}_{s}(\mathbf{h}_p)\,\mathbf{u}_{\text{frame},p}\bigr),
   \label{eq:gates}
 \end{equation}
-where $g^{c}_{s}, g^{f}_{s} \in (0,1)$ are per-stream \emph{scalars} ---
+where $g^{c}_{s}, g^{f}_{s} \in (0,1)$ are per-stream \emph{scalars}:
 one value per position for each pathway, applied to every dimension of
-the readout, so a gate sets how much enters and never which part of it.
+the readout, so a gate sets how much enters and never what part of it.
 
 Both gate biases are initialised large and negative, so at step zero
 the block is \emph{exactly} the pretrained attention, and the paired
@@ -249,7 +251,7 @@ $\tilde{\mathbf{h}}_p = \mathrm{LN}(\mathbf{h}_p + \mathbf{o}_p)$.
 Eq.~\eqref{eq:interleave} leaves one ordering problem. Within frame $t$
 the interleaved sequence still places $x_t$ before $y_t$, so an
 autoregressive decode would draw $x_t$, commit it, and condition $y_t$
-on the committed value --- the fixed direction we set out to remove. We
+on the committed value, the fixed direction we set out to remove. We
 resolve this by appending to the sequence two \emph{query tokens}, one
 per stream, both assigned prediction frame $t$. Every token so far has
 been a \emph{content token}, carrying what its stream holds at a frame;
@@ -290,9 +292,9 @@ writes Eq.~\eqref{eq:queryinput} into the query tokens and is
 supervised, with cross-entropy on both of them against the true frame
 $t$ alongside the ordinary autoregressive loss on the content tokens.
 The draft is not a corrupted ground truth but a sample from the model's
-own predictive distribution --- wrong in the way the model is wrong ---
-which is exactly the state the query tokens meet at inference and which
-no corruption process can manufacture. Both are drafted on every step,
+own predictive distribution, wrong in the way the model is wrong. That
+is exactly the state the query tokens meet at inference, and no
+corruption process can manufacture it. Both are drafted on every step,
 so training never visits a state in which one stream is resolved and
 the other is not.
 

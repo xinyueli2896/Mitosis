@@ -74,14 +74,13 @@ scoring only the positions of its own stream,
 
 Each stream therefore has a router of its own, scoring its own
 positions and nothing else, so a router's capacity goes to what a
-position contains rather than to which stream it is. A shared router
-would have to separate the two streams before it could specialise
-within either --- a distinction the per-stream projections have already
-marked in the hidden state --- and we quantify the difference against
-one in the routing ablation. Both
-routers score the same $E$ experts, so which a stream recruits --- and
-whether any serves both as an integrator --- is learned, not imposed as
-in hard-partitioned designs~\cite{moma}.
+position contains rather than to its stream identity. A shared router
+would first have to separate the two streams, a distinction the
+per-stream projections have already marked in the hidden state. We
+quantify the difference against one in the routing ablation. Both
+routers score the same $E$ experts, so expert assignment is learned
+rather than imposed as in hard-partitioned designs~\cite{moma}: a
+stream may recruit any expert, and one expert may serve both.
 
 Each position is dispatched to its top-$k$ experts with renormalized
 weights, the mixture is added residually and layer-normalized, and load
