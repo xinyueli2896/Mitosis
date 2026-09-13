@@ -104,24 +104,27 @@ Let $x = (x_1, \dots, x_T)$ and $y = (y_1, \dots, y_T)$ be two streams
 observed on a common clock, whose steps we call \emph{frames}, and let
 $\mathrm{LM}_x$ and $\mathrm{LM}_y$ be temporal Transformers pretrained
 on each. At frame $t$ stream $x$ carries $x_t$ and stream $y$ carries
-$y_t$; we call each of these a \emph{token} of its stream. A local
-encoder maps $x_t$ to one vector
-$\mathbf{h}^{x}_t \in \mathbb{R}^{d}$ and a local decoder predicts it
-back from that vector autoregressively, so the transformer between them
-advances one vector per frame per stream. Our goal is a single model of
+$y_t$; we call each of these a \emph{token} of its stream. A token is
+not a single symbol: it has internal structure and variable length. A
+local encoder therefore collapses $x_t$ into one vector
+$\mathbf{h}^{x}_t \in \mathbb{R}^{d}$, and a local decoder reconstructs
+a token from one such vector, emitting its parts one at a time. What
+sits between them sees a fixed-width sequence --- exactly one vector
+per stream per frame, whatever a token happens to contain --- and it is
+that sequence this paper is about. Our goal is a single model of
 the joint process $p([x_t, y_t] \mid x_{<t}, y_{<t})$, built from the
 two pretrained backbones and fitted on a small paired corpus.
 
 In the instantiation we study, $x$ is the melody stream and $y$ the
 chord stream --- so a token is a \emph{melody token} or a \emph{chord
 token} --- and a frame is one sixteenth note long, holding one of each.
-A token is all of its stream's simultaneous notes at that frame, up to
-a fixed polyphony, each note written as a pair of \emph{sub-tokens} ---
-a program id and a pitch--duration --- which the local decoder emits
-autoregressively. Only the token is visible to the
-transformer above, which is why it, and not the note, is what we call a
-token. Which stream is which is arbitrary --- no component below is
-specific to either role.
+The parts of a token are its stream's simultaneous notes at that frame,
+up to a fixed polyphony, each note written as a pair of
+\emph{sub-tokens}: a program id and a pitch--duration. A note is
+therefore a musical unit but not a computational one --- no component
+of the model operates on it --- which is why it is the frame-level
+vector, and not the note, that we call a token. Which stream is which
+is arbitrary; no component below is specific to either role.
 
 \subsection{Interleaving the two streams}
 \label{sec:interleave}
