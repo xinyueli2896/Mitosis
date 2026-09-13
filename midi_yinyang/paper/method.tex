@@ -55,8 +55,15 @@
 %            the code is 0-indexed and uses p//2. Do NOT also use
 %            "position" in the metrical sense (say a frame is "one
 %            sixteenth note long").
-%   clean    a position carrying a stream, as opposed to an appended
-%            query SLOT. Introduced where the slots are.
+%   stream position
+%            a position of Eq. 1 -- one that carries a stream -- as
+%            opposed to an appended query SLOT, which carries none.
+%            Introduced in 3.5, where the slots first appear; before
+%            that there is nothing to contrast with, so 3.3 says "a
+%            position of Eq. (1)" rather than reaching forward for the
+%            term. NOT "clean" (the code's clean_len) and NOT "row"
+%            (the mask matrix's) -- both were rejected 2026-09-13 as
+%            jargon the paper never earns.
 %   sub-token  an atom of what a stream carries at a frame: a program
 %            id or a pitch--duration. The outer transformer never sees
 %            these -- the local encoder has collapsed them to one
@@ -227,20 +234,20 @@ autoregressive decode would draw $x_t$, commit it, and condition $y_t$
 on the committed value --- the fixed direction we set out to remove. We
 resolve this by appending to the sequence two \emph{query slots}, one
 per stream, both assigned prediction frame $t$. They are appended
-after every clean position, but are given the rotary index $t{+}1$ ---
-the phase frame $t$'s content occupies in the shifted sequence --- so
-each slot sits where the frame it predicts belongs rather than at the
-end. Each attends to the committed past of both streams and to
-\emph{the other slot}, and to nothing else. The positions of
-Eq.~\eqref{eq:interleave}, which we call \emph{clean} to distinguish
-them from the slots, never attend to a
+after every position of Eq.~\eqref{eq:interleave} --- the \emph{stream
+positions}, so called because each carries a stream where a slot
+carries none --- but are given the rotary index $t{+}1$, the phase
+frame $t$'s content occupies in the shifted sequence, so each slot sits
+where the frame it predicts belongs rather than at the end. Each
+attends to the committed past of both streams and to \emph{the other
+slot}, and to nothing else. No stream position ever attends to a
 slot, so the slots stay outside the autoregressive pathway. The two
 slots are symmetric by construction: they see the same past and one
 another, and neither is downstream of the other.
 
 Frame $t$ is then produced in two passes. The first is a \emph{draft}:
 one forward yields $\tilde{x}_t, \tilde{y}_t$ from the autoregressive
-heads of the two clean positions whose prediction frame is $t$, already
+heads of the two stream positions whose prediction frame is $t$, already
 coupled through $\mathcal{M}_{\text{frame}}$ but with neither value
 observed by the other. The second is a \emph{refinement}: the drafts
 are encoded into the slots as
@@ -262,7 +269,7 @@ probe whose autoregressive heads produce the draft, sampled at
 temperature $1$ to match the commitment the decode makes. The second
 writes Eq.~\eqref{eq:slotinput} into the slots and is supervised, with
 cross-entropy on both slots against the true frame $t$ alongside the
-ordinary autoregressive loss on the clean positions. The draft is not a
+ordinary autoregressive loss on the stream positions. The draft is not a
 corrupted ground truth but a sample from the model's own predictive
 distribution --- wrong in the way the model is wrong --- which is
 exactly the state the slots meet at inference and which no corruption
