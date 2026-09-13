@@ -234,8 +234,14 @@ where $g^{c}_{s}, g^{f}_{s} \in (0,1)$ are per-stream \emph{scalars} ---
 one value per position for each pathway, applied to every dimension of
 the readout, so a gate sets how much enters and never which part of it.
 
-The sub-layer closes as $\tilde{\mathbf{h}}_p =
-\mathrm{LN}(\mathbf{h}_p + \mathbf{o}_p)$.
+Both gate biases are initialised large and negative, so at step zero
+the block returns the pretrained attention output \emph{exactly} rather
+than approximately --- the intra-stream readout is ungated, and the
+three are summed inside $\mathbf{W}^{O}_{s}$ rather than projected
+separately. The paired corpus is therefore spent on \emph{when} the
+streams should read each other, not on how to generate either. The
+sub-layer closes as $\tilde{\mathbf{h}}_p = \mathrm{LN}(\mathbf{h}_p +
+\mathbf{o}_p)$.
 
 \subsection{Role specialization via per-stream expert routing}
 \input{method_per_part_moe}
