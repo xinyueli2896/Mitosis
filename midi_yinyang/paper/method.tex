@@ -213,12 +213,10 @@ predicts: under the shift, the one predicting $x_t$ holds $x_{t-1}$ and
 the one predicting $y_t$ holds $y_{t-1}$. Reading each other exposes
 frame $t{-}1$, never frame $t$.
 
-The three sets partition all positions with prediction frame at most
-$t(p)$, corresponding under the shift to every token of either stream
-from before frame $t(p)$. Their masks are fixed functions of position
-parity and index; the contributions of the independently normalized
-readouts $\mathbf{u}_{\bullet,p}$ are learned and combined at each
-position as
+The three sets partition every position with prediction frame at most
+$t(p)$. Their masks are fixed functions of position parity and index;
+what is learned is how much of each readout $\mathbf{u}_{\bullet,p}$ to
+use:
 \begin{equation}
   \mathbf{o}_p = \mathbf{W}^{O}_{s}\bigl(
     \mathbf{u}_{\text{intra},p}
@@ -226,15 +224,12 @@ position as
     + g^{f}_{s}(\mathbf{h}_p)\,\mathbf{u}_{\text{frame},p}\bigr),
   \label{eq:gates}
 \end{equation}
-where $g^{c}_{s}, g^{f}_{s} \in (0,1)$ are per-stream scalar gates,
-each a sigmoid of a learned linear map of the position's hidden state.
-Both are initialised with a large negative bias, so at step zero
-$g^{c} \approx g^{f} \approx 0$ and Eq.~\eqref{eq:gates} reduces to the
-pretrained backbone run independently over the two streams, without
-interaction. The paired data is therefore spent learning \emph{when}
-the streams should read each other, starting from a model that already
-generates each stream well, rather than learning both streams and their
-coupling at once.
+with $g^{c}_{s}, g^{f}_{s} \in (0,1)$ per-stream scalar gates, sigmoids
+of linear maps of $\mathbf{h}_p$. Their biases are initialised large
+and negative, so both start near zero and Eq.~\eqref{eq:gates} reduces
+to the pretrained backbone run independently over each stream. The
+paired data is therefore spent learning \emph{when} the streams should
+read each other rather than how to generate them.
 
 \subsection{Role specialization via per-stream expert routing}
 \input{method_per_part_moe}
