@@ -29,16 +29,18 @@
 %   stream   melody or chord; x and y in the general setup. "modality"
 %            belongs to the general framework and the positioning
 %            clause only (EXPERIMENTS.md Decision 1, amended 2026-09-04).
-%   frame    ONE STEP OF THE SHARED CLOCK, carrying one entry of each
-%            stream. NOT a per-stream unit: the within-frame edge joins
-%            the two streams AT a frame, which is unsayable otherwise.
+%   frame    ONE STEP OF THE SHARED CLOCK, carrying one TOKEN of each
+%            stream. NOT a per-stream unit: the within-frame connection
+%            joins the two streams AT a frame, which is unsayable
+%            otherwise. ("edge" was retired 2026-09-13 -- the paper
+%            builds no graph vocabulary anywhere else.)
 %   position ABSOLUTE index into the interleaved sequence, p = 1..2T --
 %            two per frame, and NOT a time index. Frame t occupies
 %            positions 2t-1 and 2t IN EQ. 1 -- the CONTENT sequence.
 %            The model reads it SHIFTED, so position p then holds what
-%            p-2 carries -- its OWN STREAM one frame earlier, not a
-%            whole frame, which is two entries -- and predicts what p
-%            itself carries. Do not state the
+%            p-2 carries -- its OWN STREAM's token one frame earlier,
+%            not a whole frame, which is two tokens -- and predicts the
+%            token p itself carries. Do not state the
 %            unshifted map and the shifted one as if they were the
 %            same sequence.
 %            PARITY flips with the indexing base. Paper (1-indexed,
@@ -55,20 +57,22 @@
 %            the code is 0-indexed and uses p//2. Do NOT also use
 %            "position" in the metrical sense (say a frame is "one
 %            sixteenth note long").
-%   stream position
-%            a position of Eq. 1 -- one that carries a stream -- as
-%            opposed to an appended query SLOT, which carries none.
-%            Introduced in 3.5, where the slots first appear; before
-%            that there is nothing to contrast with, so 3.3 says "a
-%            position of Eq. (1)" rather than reaching forward for the
-%            term. NOT "clean" (the code's clean_len) and NOT "row"
-%            (the mask matrix's) -- both were rejected 2026-09-13 as
-%            jargon the paper never earns.
-%   sub-token  an atom of what a stream carries at a frame: a program
-%            id or a pitch--duration. The outer transformer never sees
-%            these -- the local encoder has collapsed them to one
-%            vector first. Never call these "tokens": a position is the
-%            unit the transformer handles.
+%   token    what ONE stream carries at ONE frame: all its simultaneous
+%            notes, collapsed by the local encoder to the single vector
+%            the outer transformer handles. In the testbed, a MELODY
+%            TOKEN or a CHORD TOKEN -- the two words the paper needs
+%            most, which is why they get the short name (decided
+%            2026-09-13). Defined at first use in 3.1 because in
+%            symbolic music "token" normally means the NOTE event; here
+%            the note is a sub-token and the token is the frame-level
+%            vector. The code disagrees: its `token` is our sub-token.
+%            A position carries a token or is a query SLOT, which
+%            carries none -- say "token position" only where that
+%            contrast is live. NOT "clean" (the code's clean_len) and
+%            NOT "row" (the mask matrix's); both rejected 2026-09-13.
+%   sub-token  an atom of a token: a program id or a pitch--duration.
+%            The outer transformer never sees these. Now has a parent
+%            to be "sub" of, which is half the reason for the change.
 %
 % PROVENANCE -- CHECK THE FRAMING. init_pretrained_into_duet_block_
 % diffusion.py duplicates ONE pretrained single-stream CP-transformer
@@ -97,7 +101,8 @@ Let $x = (x_1, \dots, x_T)$ and $y = (y_1, \dots, y_T)$ be two streams
 observed on a common clock, whose steps we call \emph{frames}, and let
 $\mathrm{LM}_x$ and $\mathrm{LM}_y$ be temporal Transformers pretrained
 on each. At frame $t$ stream $x$ carries $x_t$ and stream $y$ carries
-$y_t$. A local encoder maps $x_t$ to one vector
+$y_t$; we call each of these a \emph{token} of its stream. A local
+encoder maps $x_t$ to one vector
 $\mathbf{h}^{x}_t \in \mathbb{R}^{d}$ and a local decoder predicts it
 back from that vector autoregressively, so the transformer between them
 advances one vector per frame per stream. Our goal is a single model of
@@ -105,11 +110,15 @@ the joint process $p([x_t, y_t] \mid x_{<t}, y_{<t})$, built from the
 two pretrained backbones and fitted on a small paired corpus.
 
 In the instantiation we study, $x$ is the melody stream and $y$ the
-chord stream, and a frame is one sixteenth note long. At one frame a
-stream carries all of its simultaneous notes, up to a fixed polyphony,
-each made of a program-id sub-token and a pitch--duration sub-token.
-Which stream is which is arbitrary --- no component below is specific
-to either role.
+chord stream --- so a token is a \emph{melody token} or a \emph{chord
+token} --- and a frame is one sixteenth note long, holding one of each.
+A token is all of its stream's simultaneous notes at that frame, up to
+a fixed polyphony, each note written as a program-id and a
+pitch--duration \emph{sub-token}; the local decoder emits those
+sub-tokens autoregressively. Only the token is visible to the
+transformer above, which is why it, and not the note, is what we call a
+token. Which stream is which is arbitrary --- no component below is
+specific to either role.
 
 \subsection{Interleaving the two streams}
 \label{sec:interleave}
@@ -234,20 +243,20 @@ autoregressive decode would draw $x_t$, commit it, and condition $y_t$
 on the committed value --- the fixed direction we set out to remove. We
 resolve this by appending to the sequence two \emph{query slots}, one
 per stream, both assigned prediction frame $t$. They are appended
-after every position of Eq.~\eqref{eq:interleave} --- the \emph{stream
-positions}, so called because each carries a stream where a slot
-carries none --- but are given the rotary index $t{+}1$, the phase
-frame $t$'s content occupies in the shifted sequence, so each slot sits
-where the frame it predicts belongs rather than at the end. Each
-attends to the committed past of both streams and to \emph{the other
-slot}, and to nothing else. No stream position ever attends to a
-slot, so the slots stay outside the autoregressive pathway. The two
+after every position of Eq.~\eqref{eq:interleave}, but are given the
+rotary index $t{+}1$, the phase frame $t$'s content occupies in the
+shifted sequence, so each slot sits where the frame it predicts belongs
+rather than at the end. A slot carries no token; it is a placeholder
+for one. Each attends to the committed past of both streams and to
+\emph{the other slot}, and to nothing else. No token position ever
+attends to a slot, so the slots stay outside the autoregressive
+pathway. The two
 slots are symmetric by construction: they see the same past and one
 another, and neither is downstream of the other.
 
 Frame $t$ is then produced in two passes. The first is a \emph{draft}:
 one forward yields $\tilde{x}_t, \tilde{y}_t$ from the autoregressive
-heads of the two stream positions whose prediction frame is $t$, already
+heads of the two token positions whose prediction frame is $t$, already
 coupled through $\mathcal{M}_{\text{frame}}$ but with neither value
 observed by the other. The second is a \emph{refinement}: the drafts
 are encoded into the slots as
@@ -269,7 +278,7 @@ probe whose autoregressive heads produce the draft, sampled at
 temperature $1$ to match the commitment the decode makes. The second
 writes Eq.~\eqref{eq:slotinput} into the slots and is supervised, with
 cross-entropy on both slots against the true frame $t$ alongside the
-ordinary autoregressive loss on the stream positions. The draft is not a
+ordinary autoregressive loss on the token positions. The draft is not a
 corrupted ground truth but a sample from the model's own predictive
 distribution --- wrong in the way the model is wrong --- which is
 exactly the state the slots meet at inference and which no corruption
