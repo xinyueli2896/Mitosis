@@ -78,6 +78,13 @@ if [[ -z "$SONG_IDS" ]]; then
     fi
 fi
 OUT_DIR="${OUT_DIR:-$MY/temp/wholesong_prompted}"
+# OUR_MEL_DIR / OUR_CHORD_DIR: build the LEAD-SHEET prompt from our own
+# crops instead of from POP909, so the baseline is prompted with the
+# music every other E1 system gets -- our quantisation, our beat
+# alignment, our chord voicing. Unset keeps the published behaviour.
+# Both or neither; the driver refuses one.
+OUR_MEL_DIR="${OUR_MEL_DIR:-}"
+OUR_CHORD_DIR="${OUR_CHORD_DIR:-}"
 WS_FORM="${WS_FORM:-gt}"
 case "$WS_FORM" in
     gt|generated) ;;
@@ -89,6 +96,7 @@ echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "T3': whole-song PROMPTED continuation"
 echo "PROMPT_BARS=$PROMPT_BARS  N_SAMPLES=$N_SAMPLES"
 echo "CROPS_TSV=${CROPS_TSV:-<none: prompting from bar 0>}"
+echo "OUR_MEL_DIR=${OUR_MEL_DIR:-<none: lead sheet prompted from POP909>}"
 echo "SONG_IDS=$(echo $SONG_IDS | wc -w) songs"
 echo "WS_FORM=$WS_FORM$([[ "$WS_FORM" == gt ]] && echo '  (ORACLE form over the generated region)')"
 echo "OUT_DIR=$OUT_DIR"
@@ -125,6 +133,8 @@ python "$MY/wholesong_prompted.py" \
     --n-samples "$N_SAMPLES" --skip-existing \
     --form "$WS_FORM" \
     ${CROPS_TSV:+--crops-tsv "$CROPS_TSV"} \
+    ${OUR_MEL_DIR:+--our-melody-dir "$OUR_MEL_DIR"} \
+    ${OUR_CHORD_DIR:+--our-chord-dir "$OUR_CHORD_DIR"} \
     --out-dir "$OUT_DIR"
 
 echo "================================================================"

@@ -57,6 +57,8 @@ import sys
 import numpy as np
 import pretty_midi
 
+from wholesong_our_prompt import build_lsh_prompt
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -86,10 +88,38 @@ def main():
                          "generated = their own form stage prompted with "
                          "the GT form of the prompt bars only. Song "
                          "length stays oracle either way.")
+    ap.add_argument('--our-melody-dir', default=None,
+                    help='directory of OUR melody crops, <song>.mid. Set '
+                         'with --our-chord-dir to build the lead-sheet '
+                         'prompt from our files instead of from POP909, '
+                         'so the baseline is prompted with the same music '
+                         'every other E1 system gets: our quantisation, '
+                         'our beat alignment, our chord voicing. Given as '
+                         'two paths rather than one parent because E1 '
+                         'stages them as prompts/mel and prompts/chord. '
+                         'The counterpoint and form levels keep their '
+                         'analysis -- a midi carries no key and no '
+                         'phrase, and their reduced melody comes from a '
+                         'tonal reduction run phrase by phrase.')
+    ap.add_argument('--our-chord-dir', default=None,
+                    help='directory of OUR chord crops; see '
+                         '--our-melody-dir')
     ap.add_argument('--bpm', type=float, default=90.0,
                     help='their output convention; scoring re-derives '
                          'the grid from the file tempo either way')
     args = ap.parse_args()
+    if bool(args.our_melody_dir) != bool(args.our_chord_dir):
+        raise SystemExit(
+            '--our-melody-dir and --our-chord-dir go together: with one '
+            'of them the prompt would be half ours and half POP909, on '
+            'two different beat grids, which is worse than either alone.'
+        )
+    if args.our_melody_dir:
+        print(f'[prompt] LEAD SHEET FROM OUR CROPS: '
+              f'{args.our_melody_dir} + {args.our_chord_dir}')
+    else:
+        print('[prompt] lead sheet from POP909 (pass --our-melody-dir '
+              '/ --our-chord-dir to use our crops)')
 
     # their repo root must be the cwd (resource paths are relative)
     from data_utils.read_pop909_data import (analyze_pop909_dataset,
@@ -266,6 +296,28 @@ def main():
                                    n, axis=0)
             lsh_prompt = np.repeat(lsh_img[np.newaxis, 0:2, 0:p_16],
                                    n, axis=0)
+            if args.our_melody_dir:
+                # Replace the lead-sheet prompt with OUR crop. Everything
+                # above this level keeps their analysis; this is the only
+                # place the model receives notes.
+                # skip_steps=pad_frames: our midis open with that much
+                # silence so the melody's downbeat lands at frame 32,
+                # while ctp/frm are cropped at crop_bar with no pad. We
+                # take the prompt from the first REAL frame, which keeps
+                # all three levels on one origin; the pad is restored on
+                # write (see the offset in the write block).
+                our_mel = os.path.join(args.our_melody_dir, f'{name}.mid')
+                our_chd = os.path.join(args.our_chord_dir, f'{name}.mid')
+                for f in (our_mel, our_chd):
+                    if not os.path.exists(f):
+                        raise FileNotFoundError(
+                            f'--our-melody-dir is set but {f} is missing; '
+                            f'the baseline would otherwise fall back to '
+                            f"POP909's notes for this song without saying "
+                            f'so')
+                ours = build_lsh_prompt(our_mel, our_chd, p_16,
+                                        skip_steps=pad_frames, verbose=True)
+                lsh_prompt = np.repeat(ours[np.newaxis], n, axis=0)
             # ---- form background ----------------------------------
             # ctp channels [0:2] are reduced mel + reduced chd (what the
             # stage predicts); [2:10] are key + phrase, its background.

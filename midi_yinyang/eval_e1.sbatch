@@ -545,9 +545,19 @@ generate() {
         # every other system's and cannot go in the same table.
         local crops=""
         [[ -n "$CROPS_TSV" ]] && crops="$(readlink -f "$CROPS_TSV")"
+        # WS_OUR_PROMPT=1 (default): the lead-sheet prompt comes from the
+        # SAME staged crops every other system reads, so this arm is not
+        # the only one prompted with POP909's own notes on POP909's own
+        # beat grid. WS_OUR_PROMPT=0 restores the published behaviour.
+        local ourmel="" ourchd=""
+        if [[ "${WS_OUR_PROMPT:-1}" == "1" ]]; then
+            ourmel="$(readlink -f "$EVAL_MEL")"
+            ourchd="$(readlink -f "$EVAL_CHORD")"
+        fi
         OUT_DIR="$MY/$dir" SONG_IDS="$ids" N_SAMPLES="$N_SAMPLES" \
         PROMPT_BARS="$((PROMPT_LENGTH / 16))" WS_FORM="$ws_form" \
         CROPS_TSV="$crops" \
+        OUR_MEL_DIR="$ourmel" OUR_CHORD_DIR="$ourchd" \
             bash "$MY/infer_wholesong_prompted.sbatch" ;;
     *)  echo "ERROR: unknown system $name"; exit 1 ;;
     esac
