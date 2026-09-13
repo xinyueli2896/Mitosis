@@ -139,7 +139,7 @@ from cp_transformer_m2c_moe import (
 )
 from cp_transformer_m2c_duet_block import M2CDuetBlockAttn, normalize_T_query
 from cp_transformer_m2c_jointattn import _rope_freqs
-from tasks import get_task, TASKS
+from tasks import get_task, TASKS, MELCHORD_TAG
 
 
 class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
@@ -2062,8 +2062,16 @@ if __name__ == '__main__':
     scheme_version = ('v1.2' if args.time_rope_aligned
                       else 'v1.0' if args.legacy_slot_rope else 'v1.1')
     model_abbr = args.model_abbr or derive_model_abbr(args)
+    # MELCHORD_TAG must be in the name: it selects a DIFFERENT corpus
+    # (data/pop909_*_v2<tag>.pt) under the same task, and the sbatch
+    # wrapper's RUN_DIR carries it. Without it here, ckpt_dir =
+    # ckpt/<model_name> is not the directory the wrapper checks for
+    # last.ckpt, so a requeue after the time cap restarts at step 0
+    # instead of resuming -- and two corpora share one run directory.
+    # Appended unconditionally, exactly as the wrapper does -- the two
+    # spellings must not diverge on any path.
     default_name = (f"m2c_duet_block_diffusion_{scheme_version}_{args.model_size}_"
-                    f"gnl{gnl}_{model_abbr}_{task.name}{tag}_"
+                    f"gnl{gnl}_{model_abbr}_{task.name}{MELCHORD_TAG}{tag}_"
                     f"batch_{args.batch_size * n_gpus}_schedule")
     model_name = args.model_name if args.model_name is not None else default_name
 
