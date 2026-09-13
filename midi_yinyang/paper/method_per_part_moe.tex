@@ -57,51 +57,42 @@
 
 Every transformer block ends in a sparsely gated mixture-of-experts
 (MoE) feed-forward layer. It receives the attention sub-layer's output
-$\tilde{\mathbf{h}}_p$ at position $p$, together with that position's
+$\tilde{\mathbf{h}}_p$ at position $p$ together with that position's
 \emph{stream label} $s_p \in \{x, y\}$, and holds a pool of $E$
 experts, each an ordinary two-layer network
 $\mathrm{FFN}_i(\mathbf{h}) = \mathbf{W}^{(2)}_i
 \sigma(\mathbf{W}^{(1)}_i \mathbf{h})$ with GELU $\sigma$ and inner
-width $d_f$.
-
-We route with a \emph{stream-specific} router: $\mathbf{G}^{(x)}$ and
-$\mathbf{G}^{(y)}$, both $E \times d$, each scoring only the positions
-of its own stream,
+width $d_f$. We route with a \emph{stream-specific} router:
+$\mathbf{G}^{(x)}$ and $\mathbf{G}^{(y)}$, both $E \times d$, each
+scoring only the positions of its own stream,
 \begin{equation}
   \boldsymbol{\pi}_p
   = \operatorname{softmax}\bigl(\mathbf{G}^{(s_p)}\,
       \tilde{\mathbf{h}}_p\bigr).
   \label{eq:permod_router}
 \end{equation}
+
 A single shared router has to separate the two streams before it can
 specialise within either, and the per-stream projections have already
-marked which stream a position belongs to. A router that scores one
+marked which stream a position belongs to; a router that scores one
 stream and nothing else is spared that work, so its capacity goes to
 what a position contains rather than to which stream it is. We quantify
-the difference against a shared router in the routing ablation.
-
-The pool itself stays shared and unassigned: both routers score the
-same $E$ experts, so which ones a stream recruits --- and whether any
-serves both, acting as an integrator --- is learned rather than
-imposed. The designed contrast is with hard-partitioned
-designs~\cite{moma}, which we ablate by masking each stream's logits to
-a disjoint half of the pool: same parameters and activated compute, but
-an integrator is no longer representable.
+the difference against a shared router in the routing ablation. The
+pool itself stays shared and unassigned: both routers score the same
+$E$ experts, so which ones a stream recruits --- and whether any serves
+both, acting as an integrator --- is learned rather than imposed, the
+designed contrast being with hard-partitioned designs~\cite{moma}.
 
 Each position is dispatched to its top-$k$ experts with renormalized
-weights, and the mixture is added residually and layer-normalized. Load
+weights, the mixture is added residually and layer-normalized, and load
 is balanced with the auxiliary term of~\cite{fedus2022switch} at weight
-$0.01$, computed \emph{within each pool} in the hard-partition arm,
-where the all-expert form would demand a uniform load that the masked
-routing cannot produce.
-
-The routers are the layer's only addition: one bias-free $E \times d$
-matrix per stream (${\approx}10^{-3}$ of the layer), with the expert
-pool, the $k$ of $E$ activated per position and every other computation
-untouched, so our routing ablations differ in the routing rule alone,
-at parameter and compute parity. Both are initialized as copies of the
-pretrained model's router and diverge only as their streams' gradients
-differ. We use $E = 4$, $k = 2$, $d_f = 3d$.
+$0.01$. The routers are the layer's only addition: one bias-free
+$E \times d$ matrix per stream (${\approx}10^{-3}$ of the layer), with
+the expert pool, the $k$ of $E$ activated per position and every other
+computation untouched, so our routing ablations differ in the routing
+rule alone, at parameter and compute parity. Both are initialized as
+copies of the pretrained model's router and diverge only as their
+streams' gradients differ. We use $E = 4$, $k = 2$, $d_f = 3d$.
 % ---------------------------------------------------------------
 % BibTeX entry expected by \cite{fedus2022switch}:
 % @article{fedus2022switch, title={Switch transformers: Scaling to
