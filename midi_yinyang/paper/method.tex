@@ -92,12 +92,14 @@
 % code still carries k_emb, indexed at 0 for the refine pass. If a
 % multi-level variant is ever reported, the schedule comes back here.
 %
-% Preamble: \usepackage{amsmath,amssymb}
-%   amsmath  -> align, cases, \text, \boldsymbol, \operatorname*
-%   amssymb  -> \varnothing, and \mathbb via amsfonts. AMSMATH ALONE
-%              DOES NOT DEFINE \mathbb -- that is the error to expect if
-%              only amsmath is loaded. Fallbacks without amssymb:
-%              \mathbb{R} -> \mathrm{R}, \varnothing -> \emptyset.
+% Preamble: \usepackage{amsmath} and NOTHING ELSE (2026-09-13, by
+% request -- no extra packages). amsmath supplies align, cases, \text,
+% \boldsymbol, \operatorname*; everything else these files use is base
+% LaTeX.
+% DO NOT reintroduce \mathbb or \varnothing: both need amssymb, which
+% is not loaded. Set memberships are written as prose sizes instead
+% ("one d-dimensional vector", "a single E x d router"), which is
+% shorter anyway, and \emptyset replaces \varnothing.
 % ---------------------------------------------------------------
 \section{Method}
 \label{sec:method}
@@ -111,8 +113,8 @@ $\mathrm{LM}_x$ and $\mathrm{LM}_y$ be temporal Transformers pretrained
 on each. At frame $t$ stream $x$ carries $x_t$ and stream $y$ carries
 $y_t$; we call each of these a \emph{token} of its stream. A token is
 not a single symbol: it has internal structure and variable length. A
-local encoder collapses $x_t$ into one vector
-$\mathbf{h}^{x}_t \in \mathbb{R}^{d}$, and a local decoder reconstructs
+local encoder collapses $x_t$ into one $d$-dimensional vector
+$\mathbf{h}^{x}_t$, and a local decoder reconstructs
 a token from one such vector, emitting its parts one at a time. Each
 $\mathrm{LM}$ therefore runs on a fixed-width sequence: one vector per
 token, whatever that token contains. Our goal is a single model of

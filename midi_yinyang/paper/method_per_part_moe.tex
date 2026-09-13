@@ -14,14 +14,15 @@
 % probabilities pi_p. x and y are STREAM NAMES and must not double as
 % vectors, and the routed unit is a POSITION -- "sub-token" is reserved
 % for the atoms inside a frame, which this layer never sees.
-% Preamble requirements: \usepackage{amsmath,amssymb}. amssymb is not
-% optional here -- \varnothing (hard-partition ablation) and \mathbb
-% come from it, not from amsmath. (bbm no longer needed -- the
-% indicator went with the balance equation.)
+% Preamble requirements: \usepackage{amsmath} ONLY. No amssymb, so no
+% \mathbb and no \varnothing -- matrix shapes are stated as prose
+% ("$\mathbf{W}^{(1)}_i$ is $d_f \times d$") and the disjointness uses
+% \emptyset. (bbm no longer needed -- the indicator went with the
+% balance equation.)
 % ---------------------------------------------------------------
 \label{sec:permod_moe}
 
-Let $\mathbf{h}_p \in \mathbb{R}^{d}$ denote the hidden state at
+Let $\mathbf{h}_p$ denote the $d$-dimensional hidden state at
 position $p$ of the interleaved sequence, and let $s_p \in \{x, y\}$
 be the \emph{stream label} of that position (the two streams alternate
 by frame; the appended query slots inherit the label of the stream
@@ -35,12 +36,12 @@ mixture-of-experts (MoE) feed-forward layer with a pool of $E$ experts
   \qquad i = 1, \dots, E,
   \label{eq:expert}
 \end{equation}
-where $\mathbf{W}^{(1)}_i \in \mathbb{R}^{d_f \times d}$,
-$\mathbf{W}^{(2)}_i \in \mathbb{R}^{d \times d_f}$, and $\sigma$ is
+where $\mathbf{W}^{(1)}_i$ is $d_f \times d$,
+$\mathbf{W}^{(2)}_i$ is $d \times d_f$, and $\sigma$ is
 the GELU nonlinearity.
 
-The conventional layer scores every position with a single router
-$\mathbf{G} \in \mathbb{R}^{E \times d}$,
+The conventional layer scores every position with a single
+$E \times d$ router $\mathbf{G}$,
 \begin{equation}
   \boldsymbol{\pi}_p = \operatorname{softmax}\bigl(\mathbf{G}\,
   \mathbf{h}_p\bigr) .
@@ -59,7 +60,7 @@ a bit the input already carries --- rather than \emph{what that
 position contains}.
 
 We therefore give each stream its own router,
-$\mathbf{G}^{(x)}, \mathbf{G}^{(y)} \in \mathbb{R}^{E \times d}$, and
+$\mathbf{G}^{(x)}$ and $\mathbf{G}^{(y)}$, both $E \times d$, and
 score every position with the router of its own stream:
 \begin{equation}
   \boldsymbol{\pi}_p = \operatorname{softmax}\bigl(
@@ -92,7 +93,7 @@ masking each stream to a disjoint half of the pool,
   \end{cases}
   \label{eq:hardroute}
 \end{equation}
-with $\mathcal{P}(x) \cap \mathcal{P}(y) = \varnothing$: same
+with $\mathcal{P}(x) \cap \mathcal{P}(y) = \emptyset$: same
 parameters and activated compute, but an integrator is no longer
 representable.
 
