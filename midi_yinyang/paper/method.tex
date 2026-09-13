@@ -70,7 +70,10 @@
 %            carries none -- say "token position" only where that
 %            contrast is live. NOT "clean" (the code's clean_len) and
 %            NOT "row" (the mask matrix's); both rejected 2026-09-13.
-%   sub-token  an atom of a token: a program id or a pitch--duration.
+%   note     one of the simultaneous notes inside a token, up to the
+%            polyphony cap. Deliberately NOT given a coined name: the
+%            reader owns the word already. Two sub-tokens per note.
+%   sub-token  an atom of a note: its program id or its pitch--duration.
 %            The outer transformer never sees these. Now has a parent
 %            to be "sub" of, which is half the reason for the change.
 %
@@ -113,9 +116,9 @@ In the instantiation we study, $x$ is the melody stream and $y$ the
 chord stream --- so a token is a \emph{melody token} or a \emph{chord
 token} --- and a frame is one sixteenth note long, holding one of each.
 A token is all of its stream's simultaneous notes at that frame, up to
-a fixed polyphony, each note written as a program-id and a
-pitch--duration \emph{sub-token}; the local decoder emits those
-sub-tokens autoregressively. Only the token is visible to the
+a fixed polyphony, each note written as a pair of \emph{sub-tokens} ---
+a program id and a pitch--duration --- which the local decoder emits
+autoregressively. Only the token is visible to the
 transformer above, which is why it, and not the note, is what we call a
 token. Which stream is which is arbitrary --- no component below is
 specific to either role.
