@@ -252,22 +252,22 @@ Eq.~\eqref{eq:interleave} leaves one ordering problem. Within frame $t$
 the interleaved sequence still places $x_t$ before $y_t$, so an
 autoregressive decode would draw $x_t$, commit it, and condition $y_t$
 on the committed value, the fixed direction we set out to remove. We
-resolve this by appending to the sequence two \emph{query tokens}, one
-per stream, both assigned prediction frame $t$. Every token so far has
-been a \emph{content token}, carrying what its stream holds at a frame;
-a query token carries no content of its own and exists only to predict
-a frame. Its prediction frame is therefore given rather than read off
-its index: the pair sits at the end of the sequence but acts at the
-frame being produced, and its mask rows and rotary phase follow from
-the value supplied. Training draws that frame uniformly; decoding sets
-it to the frame in hand. They are appended after every content token, but are given the
-rotary index $t{+}1$, the phase frame $t$ occupies in the shifted
-sequence, so each sits where the frame it predicts belongs rather than
-at the end. Each attends to the committed past of both streams and to
-\emph{the other query token}, and to nothing else. No content token
-ever attends to a query token, so the query tokens stay outside the
-autoregressive pathway. The two are symmetric by construction: they see
-the same past and one another, and neither is downstream of the other.
+resolve this by appending two \emph{query tokens} to the sequence, one
+per stream. Every token so far has been a \emph{content token},
+carrying what its stream holds at a frame; these two carry nothing and
+exist only to predict frame $t$. Which frame that is cannot be read
+from where they sit, since both are appended after the whole sequence,
+so it is supplied: a frame drawn at random during training, the frame
+in progress when generating. That value fixes what they may attend to,
+and it places them at rotary phase $t{+}1$, where frame $t$ falls in
+the shifted sequence, so each sits at the frame it predicts rather than
+at the end.
+
+Each attends to the committed past of both streams and to its partner,
+and to nothing else. No content token ever attends to one, so they stay
+outside the autoregressive pathway. The two are symmetric by
+construction: they see the same past and one another, and neither is
+downstream of the other.
 
 Frame $t$ is then produced in two passes. The first is a \emph{draft}:
 one forward yields $\tilde{x}_t, \tilde{y}_t$ from the autoregressive
