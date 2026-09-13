@@ -38,6 +38,13 @@
 % "the routing ablation" in the body has no \ref yet -- add one when the
 % section exists, and do not leave a dangling \ref in the meantime.
 %
+% PARITY BELONGS TO THE ABLATION TOO (2026-09-13). The method used to
+% claim the arms compare "at parameter and compute parity" because the
+% expert pool, the k of E activated per position and the dispatch are
+% unchanged from a shared router. True, and the ablation needs it, but
+% it is a statement about an arm this section does not otherwise
+% discuss. State it where the arms are.
+%
 % Preamble requirements: \usepackage{amsmath} ONLY. No amssymb, so no
 % \mathbb and no \varnothing -- matrix shapes are stated as prose
 % ("a single E x d router G").
@@ -86,12 +93,10 @@ Each position is dispatched to its top-$k$ experts with renormalized
 weights, the mixture is added residually and layer-normalized, and load
 is balanced with the auxiliary term of~\cite{fedus2022switch} at weight
 $0.01$. The routers are the layer's only addition: one bias-free
-$E \times d$ matrix per stream (${\approx}10^{-3}$ of the layer), with
-the expert pool, the $k$ of $E$ activated per position and every other
-computation untouched, so our routing ablations differ in the routing
-rule alone, at parameter and compute parity. Both are initialized as
-copies of the pretrained model's router and diverge only as their
-streams' gradients differ. We use $E = 4$, $k = 2$, $d_f = 3d$.
+$E \times d$ matrix per stream, ${\approx}10^{-3}$ of its parameters.
+Both are initialized as copies of the pretrained model's router and
+diverge only as their streams' gradients differ. We use $E = 4$,
+$k = 2$, $d_f = 3d$.
 % ---------------------------------------------------------------
 % BibTeX entry expected by \cite{fedus2022switch}:
 % @article{fedus2022switch, title={Switch transformers: Scaling to
