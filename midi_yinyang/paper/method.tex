@@ -251,47 +251,51 @@ $\tilde{\mathbf{h}}_p = \mathrm{LN}(\mathbf{h}_p + \mathbf{o}_p)$.
 Eq.~\eqref{eq:interleave} leaves one ordering problem. Within frame $t$
 it still places $x_t$ before $y_t$, so an autoregressive decode would
 draw $x_t$, commit it, and condition $y_t$ on the committed value, the
-fixed direction we set out to remove. We append two \emph{query
-tokens}, one per stream: unlike the \emph{content tokens} of
-Eq.~\eqref{eq:interleave}, they carry nothing and exist only to predict
-frame $t$. Their position cannot identify that frame, so it is
-supplied, drawn at random in training and taken from the frame in
-progress when generating; that value fixes what they may attend to and
-places them at rotary phase $t{+}1$, where frame $t$ falls in the
-shifted sequence. Each reads the committed past of both streams and its
-partner, and nothing else. No content token reads either, so they stay
-outside the autoregressive pathway, and neither is downstream of the
-other.
+fixed direction we set out to remove. We remove it with two \emph{query
+tokens}, one per stream, appended to the sequence: unlike the
+\emph{content tokens} of Eq.~\eqref{eq:interleave} they carry nothing
+of their own and exist only to predict frame $t$.
 
-Frame $t$ is produced in two passes. A \emph{draft}: one forward yields
-$\tilde{x}_t, \tilde{y}_t$ from the autoregressive heads of the two
-content tokens predicting frame $t$, coupled through
-$\mathcal{K}_{\text{frame}}$ but with neither token observed by the
-other. Then a \emph{refinement}: the drafts are encoded into the query
-tokens as
+Two things make a query token, the frame it predicts and what is
+written into it. Position cannot supply the frame, since both are
+appended after the whole sequence, so it is given: drawn at random
+during training, and the frame in progress when decoding. What is
+written in is a draft of that frame,
 \begin{equation}
   \mathrm{query}_s \;\leftarrow\; \mathrm{enc}(\tilde{s}_t)
   + \mathbf{q}_s,
   \qquad s \in \{x, y\},
   \label{eq:queryinput}
 \end{equation}
-with $\mathbf{q}_s$ a learned per-stream embedding, and a second
-forward emits the committed $x_t, y_t$. Both are written and read out
-together, so neither stream observes the other's final token for frame
-$t$: the frame is negotiated rather than ordered. Further passes are
-available by re-encoding the committed estimates; we use one.
-
-Training must put in the query tokens what decoding will, so each step
-runs two forwards over one batch: a no-grad probe whose autoregressive
-heads produce the draft at temperature $1$, then a supervised pass that
-writes Eq.~\eqref{eq:queryinput} into the query tokens, with
-cross-entropy on both against the true frame $t$ alongside the ordinary
+with $\mathbf{q}_s$ a learned embedding marking the token as stream
+$s$'s. Training writes there exactly what decoding will, which is the
+point of the construction: each step runs a no-grad probe whose
+autoregressive heads produce $\tilde{x}_t, \tilde{y}_t$ at temperature
+$1$, then a supervised pass over the same batch, with cross-entropy on
+both query tokens against the true frame $t$ alongside the ordinary
 autoregressive loss. The draft is not corrupted ground truth but a
 sample from the model's own distribution, wrong in the way the model is
 wrong. No corruption process manufactures that state, and it is the one
-the query tokens meet at inference. Both are drafted every step, so
-training never visits a state with one stream resolved and the other
-not.
+a query token meets at inference.
+
+The supplied frame also fixes what a query token may read: the
+committed past of both streams, and its partner, and nothing else. It
+sits at rotary phase $t{+}1$, where frame $t$ falls in the shifted
+sequence, so it is placed at the frame it predicts rather than at the
+end. No content token ever reads a query token, so the pair stays
+outside the autoregressive pathway, and neither of the two is
+downstream of the other.
+
+Decoding frame $t$ therefore takes two passes. The first is a
+\emph{draft}: one forward yields $\tilde{x}_t, \tilde{y}_t$ from the
+autoregressive heads of the two content tokens predicting frame $t$,
+already coupled through $\mathcal{K}_{\text{frame}}$ but with neither
+token observed by the other. The second is a \emph{refinement}: those
+drafts are written in by Eq.~\eqref{eq:queryinput} and a second forward
+emits the committed $x_t, y_t$. Both are written and read out together,
+so neither stream observes the other's final token: the frame is
+negotiated rather than ordered. Further refinements are available by
+re-encoding the committed estimates; we use one.
 
 % ---------------------------------------------------------------
 % TO VERIFY before submission:
