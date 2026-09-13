@@ -255,11 +255,11 @@ on the committed value, the fixed direction we set out to remove. We
 resolve this by appending two \emph{query tokens} to the sequence, one
 per stream. Every token so far has been a \emph{content token},
 carrying what its stream holds at a frame; these two carry nothing and
-exist only to predict frame $t$. Which frame that is cannot be read
-from where they sit, since both are appended after the whole sequence,
-so it is supplied: a frame drawn at random during training, the frame
-in progress when generating. That value fixes what they may attend to,
-and it places them at rotary phase $t{+}1$, where frame $t$ falls in
+exist only to predict frame $t$. Both are appended after the whole
+sequence, so their position cannot identify that frame; it is supplied
+instead, drawn at random during training and taken from the frame in
+progress when generating. The supplied value fixes what they may attend
+to and places them at rotary phase $t{+}1$, where frame $t$ falls in
 the shifted sequence, so each sits at the frame it predicts rather than
 at the end.
 
