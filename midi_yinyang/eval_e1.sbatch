@@ -159,6 +159,13 @@
 
 set -euo pipefail
 source ~/.bashrc
+# ~/.bashrc may set noclobber, under which `> file` REFUSES an existing
+# file. That makes every RE-run of this job die at 0s on the per-system
+# genlog redirect -- the first run creates the files, the second cannot
+# overwrite them -- with the failure landing in the job's .err while the
+# stale genlog still shows the previous run's success. Turn it off for
+# this script; the redirects below are all meant to truncate.
+set +o noclobber
 
 CONDA_ENV=mitosis
 REPO_DIR=/home/xinyue.li/Mitosis
@@ -618,7 +625,9 @@ if [[ "$SKIP_INFER" != "1" && ${#TODO[@]} -gt 0 ]]; then
                 nm="${TODO[$idx]}"
                 t0=$(date +%s)
                 echo "[lane $lane / gpu $lane] $nm: start $(date +%T)"
-                if generate "$nm" > "$GENLOG/$nm.log" 2>&1; then
+                # >| forces the truncation even if noclobber is set again
+                # by anything sourced after the guard at the top.
+                if generate "$nm" >| "$GENLOG/$nm.log" 2>&1; then
                     echo "[lane $lane / gpu $lane] $nm: exit 0 after $(( $(date +%s) - t0 ))s"
                 else
                     echo "[lane $lane / gpu $lane] $nm: FAILED after $(( $(date +%s) - t0 ))s -- see $GENLOG/$nm.log"
