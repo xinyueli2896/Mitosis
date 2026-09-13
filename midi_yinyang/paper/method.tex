@@ -165,63 +165,53 @@ and neither is a block appended to the other.
 \subsection{Attention in a Two-backbone Model}
 \label{sec:attention}
 
-\sys runs two backbones side by side. Every attention block therefore
-carries two sets of query, key, value and output projections,
+\sys uses two parallel backbones with stream-specific projections
 $\{\mathbf{W}^{Q}_{s}, \mathbf{W}^{K}_{s}, \mathbf{W}^{V}_{s},
-\mathbf{W}^{O}_{s}\}$ for $s \in \{x, y\}$, each applied to the
-positions carrying its stream and both initialized from one pretrained
-single-stream Transformer: melody and chord are two domains of one
+\mathbf{W}^{O}_{s}\}$, $s \in \{x, y\}$, applied to their respective
+positions. Both backbones, including their attention projections and
+feed-forward layers, are initialized from copies of the same pretrained
+single-stream Transformer; the feed-forward configuration is detailed
+in Sec.~\ref{sec:permod_moe}. Melody and chord are two domains of one
 modality, so a single symbolic-music model is already a competent
-generator of either. What the block contains at this point is two
-independent copies sharing an index, with nothing deciding which
-positions of one stream a position of the other may read. The mask
-design below supplies that.
+generator of either and one backbone suffices; where the streams are
+genuinely distinct modalities the construction is unchanged except that
+each set is taken from its own pretrained model.
 
-What a position may read is stated in stream and frame rather than in
-$p$. Writing $s(p)$ and $t(p)$ for the stream and the prediction frame
-of position $p$, attention is
-factored into three passes over the same queries, keys and values,
-differing only in the set of keys $\mathcal{K}_{\bullet}(p)$ a query
-may read. Each pass is a full attention with its own softmax over its
-own set, and returns a readout $\mathbf{u}_{\bullet,p}$.
+We design the attention masks carefully since they define the
+dependencies within and between streams. Let $s(p)$ denote the stream
+at position $p$ and $t(p) = \lceil p/2 \rceil$ its prediction frame.
+Attention comprises three passes over shared queries, keys and values,
+each independently normalized over a distinct key set:
+\begin{align}
+  \mathcal{K}_{\text{intra}}(p)
+    &= \{\, q : s(q) = s(p),\ t(q) \le t(p) \,\},
+    \label{eq:kintra}\\
+  \mathcal{K}_{\text{cross}}(p)
+    &= \{\, q : s(q) \neq s(p),\ t(q) < t(p) \,\},
+    \label{eq:kcross}\\
+  \mathcal{K}_{\text{frame}}(p)
+    &= \{\, q : s(q) \neq s(p),\ t(q) = t(p) \,\}.
+    \label{eq:kframe}
+\end{align}
+\emph{Intra-stream attention} preserves the pretrained backbone's
+causal attention independently within each stream, corresponding to a
+stride of two in the interleaved sequence. \emph{Cross-stream
+attention} conditions each stream on the other at earlier prediction
+frames, without requiring an additional sequential decoding step.
+\emph{Within-frame attention} connects the two positions predicting the
+same frame bidirectionally, supporting concurrent prediction of $x_t$
+and $y_t$. Although incompatible with index-based causal masking over
+Eq.~\eqref{eq:interleave}, this connection preserves autoregressive
+causality: the input shift leaves each position holding only its own
+stream's frame-$t{-}1$ token, so the two exchange context for frame $t$
+without either holding a token from it.
 
-The first is \emph{intra-stream},
-$\mathcal{K}_{\text{intra}}(p) = \{ q : s(q) = s(p),\, t(q) \le
-t(p)\}$: a position sees its own stream, causally. On the interleaved
-sequence this is attention with a stride of two, and it is exactly what
-the pretrained backbone does --- run alone, the block is the
-single-stream model, once per stream, unchanged.
-
-The second is \emph{cross-stream},
-$\mathcal{K}_{\text{cross}}(p) = \{ q : s(q) \neq s(p),\, t(q) <
-t(p)\}$: a position sees the other stream at strictly earlier frames,
-the part of the partner that generation has already committed. This is
-the term that makes the model joint rather than two models sharing an
-index --- the melody position for frame $t$ is conditioned on the
-chords decided through $t{-}1$, and the chord position on the melody
---- and it is causal, so it costs a decode nothing.
-
-The third is \emph{within-frame},
-$\mathcal{K}_{\text{frame}}(p) = \{ q : s(q) \neq s(p),\, t(q) =
-t(p)\}$: the single position of the other stream that predicts the same
-frame. It is the one connection an autoregressive model over
-Eq.~\eqref{eq:interleave} cannot have, and the only one that is not
-causal: the two positions predicting frame $t$ admit each other, in
-both directions, which is what lets $x_t$ and $y_t$ be settled together
-instead of one after the other. It is nonetheless sound, because of the
-shift --- a position with prediction frame $t$ holds only its own
-stream's token for frame $t{-}1$, so the two streams exchange
-\emph{context} for frame $t$ and not their tokens at it. Neither
-prediction observes the other's outcome.
-
-The three sets are disjoint, and their union is every position with
-prediction frame at most $t(p)$ --- by the shift, every token of either
-stream from before frame $t(p)$. They partition the context a
-position is entitled to rather than carving overlapping windows out of
-it, and none of them is learned: they are fixed functions of a
-position's parity and index. What is learned is how much of each to
-use. Writing $\mathbf{u}_{\bullet}$ for the output of each pass, the
-three are recombined per position as
+The three sets partition all positions with prediction frame at most
+$t(p)$, corresponding under the shift to every token of either stream
+from before frame $t(p)$. Their masks are fixed functions of position
+parity and index; the contributions of the independently normalized
+readouts $\mathbf{u}_{\bullet,p}$ are learned and combined at each
+position as
 \begin{equation}
   \mathbf{o}_p = \mathbf{W}^{O}_{s}\bigl(
     \mathbf{u}_{\text{intra},p}
@@ -232,15 +222,12 @@ three are recombined per position as
 where $g^{c}_{s}, g^{f}_{s} \in (0,1)$ are per-stream scalar gates,
 each a sigmoid of a learned linear map of the position's hidden state.
 Both are initialised with a large negative bias, so at step zero
-$g^{c} \approx g^{f} \approx 0$ and Eq.~\eqref{eq:gates} collapses to
-$\mathbf{W}^{O}_{s}\mathbf{u}_{\text{intra},p}$: the pretrained
-attention, run in parallel over the two disjoint halves of the
-sequence, which \sys thus reproduces exactly rather than approximates
-at initialisation. The
-paired data is therefore spent learning \emph{when} the streams should
-read each other, starting from a model that already generates each
-stream well, rather than learning both streams and their coupling at
-once.
+$g^{c} \approx g^{f} \approx 0$ and Eq.~\eqref{eq:gates} reduces to the
+pretrained backbone run independently over the two streams, without
+interaction. The paired data is therefore spent learning \emph{when}
+the streams should read each other, starting from a model that already
+generates each stream well, rather than learning both streams and their
+coupling at once.
 
 \subsection{Role specialization via per-stream expert routing}
 \input{method_per_part_moe}
