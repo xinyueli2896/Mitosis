@@ -68,11 +68,10 @@ four upper tones. Both are quantised to a shared sixteenth-note grid at
 are tokenised at a polyphony cap of 8, which clips nothing: chord
 frames peak at five simultaneous onsets and melody frames at six across
 the corpus. Songs whose sorted index is a multiple of ten are held out,
-leaving [X] songs to train on. That gap is the premise of the whole
-construction: the backbone has already read [X] songs of unpaired MIDI,
-while the paired data available to teach it how two streams should
-listen to each other is under a thousand songs, far too little to learn
-a joint model from nothing.
+leaving [X] songs to train on. Paired melody--chord data is therefore
+far scarcer than the unpaired MIDI used for pretraining, which
+motivates adapting the pretrained model rather than training a joint
+model from scratch.
 
 \subsection{Training}
 \label{sec:training}
