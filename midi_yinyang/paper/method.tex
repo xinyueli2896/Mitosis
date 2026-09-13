@@ -228,22 +228,17 @@ where $g^{c}_{s}, g^{f}_{s} \in (0,1)$ are per-stream \emph{scalars} ---
 one value per position for each pathway, applied to every dimension of
 the readout, so a gate sets how much enters and never which part of it.
 
-Three details of Eq.~\eqref{eq:gates} carry the design. The gates are
-sigmoids of affine maps of $\mathbf{h}_p$, the block's \emph{input}, so
-a position decides how much of its partner to admit before any
+Each gate is a sigmoid of an affine map of the block's \emph{input}
+$\mathbf{h}_p$, so a position decides what to admit before any
 cross-stream information reaches it. The intra-stream readout is
-ungated: the pretrained pathway is never attenuated, and the other two
-are additions on top of it. And the three are summed \emph{inside}
-$\mathbf{W}^{O}_{s}$ rather than projected separately, so with both
-gates closed the block returns the pretrained attention output exactly
-rather than an approximation of it. The gate biases are initialised
-large and negative, so training starts from precisely that state --- the
-pretrained backbone run independently over each stream --- and the
-paired corpus is spent on \emph{when} the streams should read each
-other rather than on how to generate either. The sub-layer then closes
-as usual, $\tilde{\mathbf{h}}_p = \mathrm{LN}(\mathbf{h}_p +
-\mathbf{o}_p)$, and $\tilde{\mathbf{h}}_p$ is what the feed-forward
-layer of Sec.~\ref{sec:permod_moe} receives.
+ungated, and the three are summed \emph{inside} $\mathbf{W}^{O}_{s}$:
+with both gates closed the block returns the pretrained attention
+output exactly, not an approximation. Large negative gate biases start
+training there, so the paired corpus is spent on \emph{when} the
+streams should read each other rather than on how to generate either.
+The sub-layer closes as $\tilde{\mathbf{h}}_p =
+\mathrm{LN}(\mathbf{h}_p + \mathbf{o}_p)$, which the feed-forward layer
+of Sec.~\ref{sec:permod_moe} receives.
 
 \subsection{Role specialization via per-stream expert routing}
 \input{method_per_part_moe}
