@@ -248,6 +248,13 @@ def main():
                   f'{p_16} sixteenths')
 
             n = args.n_samples
+            # Slice the prompts out of the ground-truth images NOW, so
+            # that under --form generated the full-length images can be
+            # dropped before any stage runs (see the del below).
+            ctp_prompt = np.repeat(ctp_img[np.newaxis, 0:2, 0:p_beats],
+                                   n, axis=0)
+            lsh_prompt = np.repeat(lsh_img[np.newaxis, 0:2, 0:p_16],
+                                   n, axis=0)
             # ---- form background ----------------------------------
             # ctp channels [0:2] are reduced mel + reduced chd (what the
             # stage predicts); [2:10] are key + phrase, its background.
@@ -257,6 +264,14 @@ def main():
             if args.form == 'gt':
                 ctp_bg = np.repeat(ctp_img[np.newaxis, 2:], n, axis=0)
             else:
+                # WSf's entire claim is that nothing outside the prompt
+                # comes from ground truth. Make that STRUCTURAL rather
+                # than reviewed: the full-length GT images go out of
+                # scope here, so a later read raises NameError instead
+                # of leaking silently. Song LENGTH survives -- in
+                # L_beats, L_16 and n_bars -- and is the one admitted
+                # oracle; say so wherever WSf is reported.
+                del ctp_img, lsh_img
                 frm_ds = FormDataset(analyses, shift_high=0, shift_low=0,
                                      max_l=P_FRM['max_l'], h=P_FRM['h'],
                                      n_channels=P_FRM['n_channel'],
@@ -275,6 +290,10 @@ def main():
                                              tgt_lgth=frm_bars)
                 frm_prompt = np.repeat(
                     frm_img[np.newaxis, :, 0:prompt_bars], n, axis=0)
+                del frm_img          # prompt extracted; same rule
+                print(f'  [form] generated; the only ground truth outside '
+                      f'the {prompt_bars}-bar prompt is song length '
+                      f'({n_bars} bars)')
                 f_canvas, f_slices, f_max_l = frm_op.create_canvas(
                     n_sample=n, prompt=frm_prompt)
                 frm_raw = frm_op.generation(f_canvas, f_slices, f_max_l,
@@ -299,8 +318,6 @@ def main():
                     frm_use[:, :, take:] = frm_q[:, :, take - 1:take]
                 ctp_bg = ctp_op.expand_background(frm_use, nbpm)[:, :,
                                                                 0:L_beats]
-            ctp_prompt = np.repeat(ctp_img[np.newaxis, 0:2, 0:p_beats],
-                                   n, axis=0)
             canvas, slices, gen_max_l = ctp_op.create_canvas(
                 ctp_bg, n, nbpm, ctp_prompt)
             ctp_songs = ctp_op.generation(canvas, slices, gen_max_l,
@@ -310,8 +327,6 @@ def main():
             # ---- lead sheet: generated ctp as background (their own
             #      expand path), GT 6-bar prompt ----
             lsh_bg = lsh_op.expand_background(ctp_out, nspb)[:, :, 0:L_16]
-            lsh_prompt = np.repeat(lsh_img[np.newaxis, 0:2, 0:p_16],
-                                   n, axis=0)
             canvas, slices, gen_max_l = lsh_op.create_canvas(
                 lsh_bg, n, nbpm, nspb, lsh_prompt)
             lsh_songs = lsh_op.generation(canvas, slices, gen_max_l)
