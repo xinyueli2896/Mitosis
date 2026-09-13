@@ -72,12 +72,13 @@ scoring only the positions of its own stream,
   \label{eq:permod_router}
 \end{equation}
 
-A single shared router has to separate the two streams before it can
-specialise within either, and the per-stream projections have already
-marked which stream a position belongs to; a router that scores one
-stream and nothing else is spared that work, so its capacity goes to
-what a position contains rather than to which stream it is. We quantify
-the difference against a shared router in the routing ablation. The
+Each stream therefore has a router of its own, scoring its own
+positions and nothing else, so a router's capacity goes to what a
+position contains rather than to which stream it is. A shared router
+would have to separate the two streams before it could specialise
+within either --- a distinction the per-stream projections have already
+marked in the hidden state --- and we quantify the difference against
+one in the routing ablation. The
 pool itself stays shared and unassigned: both routers score the same
 $E$ experts, so which ones a stream recruits --- and whether any serves
 both, acting as an integrator --- is learned rather than imposed, the
