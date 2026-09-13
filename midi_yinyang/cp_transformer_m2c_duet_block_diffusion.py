@@ -128,6 +128,7 @@ from an A.2 ckpt behaves identically at k_m = k_c = K (fully masked).
 from __future__ import annotations
 
 import argparse
+import os
 
 import torch
 import torch.nn as nn
@@ -2211,11 +2212,10 @@ if __name__ == '__main__':
     # Written into <run>/best_ar/ so resolve_best_ckpt never finds two
     # monitored metrics in one directory; point CKPT_* at that subdir
     # to evaluate the AR-selected weights instead.
-    import os as _os_ckpt
     extra_callbacks.append(L.callbacks.ModelCheckpoint(
         monitor='val_ar_loss_content', save_top_k=1, save_last=False,
         enable_version_counter=False,
-        dirpath=_os_ckpt.path.join(ckpt_dir, 'best_ar'),
+        dirpath=os.path.join(ckpt_dir, 'best_ar'),
         filename=model_name + '.{epoch:02d}.{step}.{val_ar_loss_content:.5f}',
     ))
     if args.step_ckpt_every > 0:
