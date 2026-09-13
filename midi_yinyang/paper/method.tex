@@ -4,7 +4,7 @@
 %   3.2 interleaving: one sequence, one clock, rotary at the frame
 %   3.3 attention: three key sets, three passes, two gates
 %   3.4 per-stream expert routing  (\input method_per_part_moe.tex)
-%   3.5 order-free joint prediction: placeholder slots + refinement
+%   3.5 order-free joint prediction: query tokens + refinement
 % 3.3 was split out of 3.2 on 2026-09-12 by request. The backbone
 % material (two projection sets and where they come from) went WITH the
 % attention, so 3.2 is now about the input sequence alone.
@@ -17,8 +17,8 @@
 % <= t -- check any edit against that, since the "partition" claim and
 % the gate-to-zero identity both rest on it. The code's clean-clean
 % rows: intra = same_mod & causal_pos, cross = diff_mod & f_q < f_p,
-% frame = diff_mod & f_q == f_p. Query-slot rows differ (see 3.5) and
-% are deliberately NOT described here.
+% frame = diff_mod & f_q == f_p. Query-token rows differ (the code's
+% query slots; see 3.5) and are deliberately NOT described here.
 %
 % NO \paragraph HEADINGS (2026-09-12, by request). The transitions that
 % the headings used to carry now sit in the prose -- if a paragraph is
@@ -66,10 +66,16 @@
 %            symbolic music "token" normally means the NOTE event; here
 %            the note is a sub-token and the token is the frame-level
 %            vector. The code disagrees: its `token` is our sub-token.
-%            A position carries a token or is a query SLOT, which
-%            carries none -- say "token position" only where that
-%            contrast is live. NOT "clean" (the code's clean_len) and
-%            NOT "row" (the mask matrix's); both rejected 2026-09-13.
+%            EVERY position carries a token. Two kinds (2026-09-13):
+%            a CONTENT TOKEN carries what its stream holds at a frame
+%            (the code's "clean"); a QUERY TOKEN carries no content and
+%            exists to predict a frame (the code's "query slot"). Say
+%            "content token" only where the contrast is live. NOT
+%            "clean", NOT "slot", NOT "row" (the mask matrix's) --
+%            all rejected 2026-09-13. Note "query token" collides
+%            mildly with the Q of query/key/value; that is tolerable
+%            because a query token IS the row doing the reading, but do
+%            not write "the query of a query token".
 %   note     one of the simultaneous notes inside a token, up to the
 %            polyphony cap. Deliberately NOT given a coined name: the
 %            reader owns the word already. Two sub-tokens per note.
@@ -233,56 +239,57 @@ coupling at once.
 \input{method_per_part_moe}
 
 \subsection{Order-free joint prediction}
-\label{sec:slots}
+\label{sec:querytok}
 
 Eq.~\eqref{eq:interleave} leaves one ordering problem. Within frame $t$
 the interleaved sequence still places $x_t$ before $y_t$, so an
 autoregressive decode would draw $x_t$, commit it, and condition $y_t$
 on the committed value --- the fixed direction we set out to remove. We
-resolve this by appending to the sequence two \emph{query slots}, one
-per stream, both assigned prediction frame $t$. They are appended
-after every position of Eq.~\eqref{eq:interleave}, but are given the
-rotary index $t{+}1$, the phase frame $t$'s content occupies in the
-shifted sequence, so each slot sits where the frame it predicts belongs
-rather than at the end. A slot carries no token; it is a placeholder
-for one. Each attends to the committed past of both streams and to
-\emph{the other slot}, and to nothing else. No token position ever
-attends to a slot, so the slots stay outside the autoregressive
-pathway. The two
-slots are symmetric by construction: they see the same past and one
-another, and neither is downstream of the other.
+resolve this by appending to the sequence two \emph{query tokens}, one
+per stream, both assigned prediction frame $t$. Every token so far has
+been a \emph{content token}, carrying what its stream holds at a frame;
+a query token carries no content of its own and exists only to predict
+a frame. They are appended after every content token, but are given the
+rotary index $t{+}1$, the phase frame $t$ occupies in the shifted
+sequence, so each sits where the frame it predicts belongs rather than
+at the end. Each attends to the committed past of both streams and to
+\emph{the other query token}, and to nothing else. No content token
+ever attends to a query token, so the query tokens stay outside the
+autoregressive pathway. The two are symmetric by construction: they see
+the same past and one another, and neither is downstream of the other.
 
 Frame $t$ is then produced in two passes. The first is a \emph{draft}:
 one forward yields $\tilde{x}_t, \tilde{y}_t$ from the autoregressive
-heads of the two token positions whose prediction frame is $t$, already
-coupled through $\mathcal{M}_{\text{frame}}$ but with neither value
+heads of the two content tokens whose prediction frame is $t$, already
+coupled through $\mathcal{K}_{\text{frame}}$ but with neither token
 observed by the other. The second is a \emph{refinement}: the drafts
-are encoded into the slots as
+are encoded into the query tokens as
 \begin{equation}
-  \text{slot}_s \;\leftarrow\; \mathrm{enc}(\tilde{s}_t) + \mathbf{q}_s,
+  \mathrm{query}_s \;\leftarrow\; \mathrm{enc}(\tilde{s}_t)
+  + \mathbf{q}_s,
   \qquad s \in \{x, y\},
-  \label{eq:slotinput}
+  \label{eq:queryinput}
 \end{equation}
-with $\mathbf{q}_s$ a learned per-stream slot embedding, and a second
-forward emits the committed $x_t, y_t$ from the two slots. Both slots
+with $\mathbf{q}_s$ a learned per-stream query embedding, and a second
+forward emits the committed $x_t, y_t$ from the two query tokens. Both
 are written and read out together, so neither stream ever observes the
-other's final value for frame $t$: the frame is negotiated rather than
+other's final token for frame $t$: the frame is negotiated rather than
 ordered. The construction admits further passes by re-encoding the
 committed estimates; we use one throughout.
 
-Training must put in the slots the same content decoding will, so each
-step runs two forwards over the same batch. The first is a no-grad
-probe whose autoregressive heads produce the draft, sampled at
+Training must put in the query tokens the same content decoding will,
+so each step runs two forwards over the same batch. The first is a
+no-grad probe whose autoregressive heads produce the draft, sampled at
 temperature $1$ to match the commitment the decode makes. The second
-writes Eq.~\eqref{eq:slotinput} into the slots and is supervised, with
-cross-entropy on both slots against the true frame $t$ alongside the
-ordinary autoregressive loss on the token positions. The draft is not a
-corrupted ground truth but a sample from the model's own predictive
-distribution --- wrong in the way the model is wrong --- which is
-exactly the state the slots meet at inference and which no corruption
-process can manufacture. Both slots are drafted on every step, so
-training never visits a state in which one stream is resolved and the
-other is not.
+writes Eq.~\eqref{eq:queryinput} into the query tokens and is
+supervised, with cross-entropy on both of them against the true frame
+$t$ alongside the ordinary autoregressive loss on the content tokens.
+The draft is not a corrupted ground truth but a sample from the model's
+own predictive distribution --- wrong in the way the model is wrong ---
+which is exactly the state the query tokens meet at inference and which
+no corruption process can manufacture. Both are drafted on every step,
+so training never visits a state in which one stream is resolved and
+the other is not.
 
 % ---------------------------------------------------------------
 % TO VERIFY before submission:
