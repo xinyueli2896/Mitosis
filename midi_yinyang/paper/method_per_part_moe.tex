@@ -38,6 +38,18 @@
 % "the routing ablation" in the body has no \ref yet -- add one when the
 % section exists, and do not leave a dangling \ref in the meantime.
 %
+% THE ROUTERS ARE NOT PRETRAINED (checked 2026-09-13). A sentence
+% claiming "both are initialized as copies of the PRETRAINED model's
+% router" was cut, and it was also WRONG: the pretrained CP-transformer
+% is DENSE and has no router at all -- the warm start replicates its one
+% FFN across the experts. SimpleMoEFFN builds gate_m and gate_c fresh
+% and copies gate_c <- gate_m, and init_pretrained_into_duet_block_
+% diffusion.py lists the gate keys among those EXPECTED to remain at
+% fresh init. The true fact, if the ablation wants it: both routers
+% start as the SAME random matrix, so step 0 is identical to a
+% shared-router model with that weight and they diverge only as their
+% streams' gradients differ. Do not restore the pretrained phrasing.
+%
 % PARITY BELONGS TO THE ABLATION TOO (2026-09-13). The method used to
 % claim the arms compare "at parameter and compute parity" because the
 % expert pool, the k of E activated per position and the dispatch are
@@ -92,11 +104,7 @@ stream may recruit any expert, and one expert may serve both.
 Each position is dispatched to its top-$k$ experts with renormalized
 weights, the mixture is added residually and layer-normalized, and load
 is balanced with the auxiliary term of~\cite{fedus2022switch} at weight
-$0.01$. The routers are the layer's only addition: one bias-free
-$E \times d$ matrix per stream, ${\approx}10^{-3}$ of its parameters.
-Both are initialized as copies of the pretrained model's router and
-diverge only as their streams' gradients differ. We use $E = 4$,
-$k = 2$, $d_f = 3d$.
+$0.01$. We use $E = 4$, $k = 2$, $d_f = 3d$.
 % ---------------------------------------------------------------
 % BibTeX entry expected by \cite{fedus2022switch}:
 % @article{fedus2022switch, title={Switch transformers: Scaling to
