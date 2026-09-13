@@ -1,0 +1,118 @@
+% ---------------------------------------------------------------
+% Experimental setup. Four subsections: data, training, the systems
+% compared, and the protocol/metrics. BASELINES LIVE HERE, not in a
+% separate evaluation section (decided 2026-09-13): they are part of
+% what the setup fixes, and a reader meeting a table row should find
+% the system described in the same section as the data it ran on.
+%
+% TERMINOLOGY is method.tex's. stream, frame, position, token,
+% sub-token, content/query token. Do not introduce new words here.
+%
+% EVERY NUMBER IN THIS FILE IS FROM THE REPO, NOT REMEMBERED:
+%   909 songs, cp8, 16 frames/bar, 120 BPM   EXPERIMENTS.md sec.1
+%   polyphony certified (chord peaks at 5 onsets/frame, melody 6)
+%                                            cp_capacity_check.sbatch
+%   held-out split idx % 10 == 0             cp_transformer_m2c_moe.py
+%   prompt 80 frames / total 416 / n=3       eval_e1.sbatch defaults
+%                                            for the v5b runs
+%   12 global layers, d = 768                train_duet_block_diffusion
+%                                            .sbatch + cp_transformer_
+%                                            m2c_moe.py:276
+%   window 384 frames                        cp_transformer_m2c_moe.py:170
+%   E = 4, k = 2, d_f = 4d                   method_per_part_moe.tex
+%
+% PLACEHOLDERS marked [X] are NOT yet settled and must not be guessed:
+%   the A.12 melchord run's step count and wall-clock, and every
+%   result. EXPERIMENTS.md sec.1 still records the OLD 4-bar/384-frame
+%   protocol; the v5b runs use 5 bars/416, which is what this says.
+% ---------------------------------------------------------------
+\section{Experimental Setup}
+\label{sec:setup_exp}
+
+\subsection{Data}
+\label{sec:data}
+
+We evaluate on POP909~\cite{pop909}, 909 pop songs with a lead melody
+and human chord annotations. The melody track gives stream $x$; stream
+$y$ is rendered from the chord annotations as a bass note plus up to
+four upper tones. Both streams are quantised to a shared sixteenth-note
+grid at 120\,BPM, so a frame is one sixteenth and a bar is 16 frames,
+and both are tokenised at a polyphony cap of 8. The cap is not
+arbitrary: chord frames peak at five simultaneous onsets and melody
+frames at six across the whole corpus, so no frame is clipped.
+
+Songs whose sorted index is a multiple of ten are held out from every
+model we train, giving [X] evaluation songs unseen by both the
+two-stream training and the single-stream finetunes. Each held-out song
+is cropped to a common starting point: we find the first sounding
+melody note and keep the bar it falls in plus one before it, so every
+system is prompted from the melody's entry rather than from whatever
+introduction the song happens to have. Crops are written at a fixed
+120\,BPM, so the frame grid is identical across systems.
+
+\subsection{Training}
+\label{sec:training}
+
+\sys uses a 12-layer stack of the blocks of
+Sec.~\ref{sec:attention}--\ref{sec:permod_moe} at $d = 768$, with
+$E = 4$ experts, $k = 2$ active per position, and expert width
+$d_f = 4d$. Both backbones are initialised by copying one pretrained
+single-stream Transformer into each, as Sec.~\ref{sec:setup} describes;
+the cross-stream and within-frame gates start at bias $-10$, so
+training begins from that model run independently over the two streams.
+Training windows are 384 frames, and the query-token objective
+supervises one frame per step, drawn uniformly from the window.
+[X: optimiser, schedule, steps, hardware.]
+
+\subsection{Systems compared}
+\label{sec:systems}
+
+Every system is prompted with the same crops and generates the same
+span, so the comparison is over what the systems do rather than what
+they were given.
+
+\textbf{Single-stream.} A CP Transformer over one merged token stream,
+where stream identity survives only in each note's program token. We
+report it finetuned on POP909 from a large-scale pretrained
+checkpoint, and trained on POP909 from scratch. This is the closest
+matched opponent: the same tokenisation and budget, without the
+two-stream construction.
+
+\textbf{Cascade.} A single-stream specialist continues one stream
+alone, and a published conditional model~\cite{yinyang} generates the
+partner conditioned on it, in both directions. This is the standard way
+to obtain two streams from one-stream machinery, and it is what fixing
+a direction in advance costs.
+
+\textbf{External.} Whole-Song-Gen~\cite{whole_song}, a hierarchical
+diffusion model that inpaints a whole lead sheet through form,
+counterpoint and lead-sheet levels, prompted with the same crops; and
+the Anticipatory Music Transformer~\cite{anticipatory}, a
+general-purpose model over arrival-time events, which co-generates both
+streams but was trained on a different corpus and tokenisation, so it
+is reported as an out-of-domain reference rather than a matched
+opponent.
+
+\textbf{Ablation.} The same two-stream backbone with strict causal
+attention and no query tokens, which isolates what order-free
+prediction adds over sequential joint generation.
+
+\subsection{Protocol and metrics}
+\label{sec:protocol}
+
+Each system receives a five-bar prompt (80 frames) and generates to 416
+frames, 21 bars of continuation, with three samples per song at
+temperature $1$. Metrics are computed on the generated span only and
+are calibrated against the ground-truth continuation of the same song,
+so a system is measured against what that song actually did rather than
+against a corpus average.
+
+We report three families. \emph{Coupling}: chord-tone coverage, the
+share of generated melody notes whose pitch class lies in the
+concurrent generated chord, reported as a delta against the same
+statistic on the reference pair. \emph{Distributional fit}: Jensen--
+Shannon divergences between generated and reference distributions of
+harmonic rhythm, pitch class, note density and duration.
+\emph{Survival}: the fraction of frames left empty, which catches the
+failure where one stream falls silent and the other continues alone.
+A listening test [X] covers what the objective metrics cannot.
