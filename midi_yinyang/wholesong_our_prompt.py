@@ -159,6 +159,145 @@ def build_lsh_prompt(melody_path, chord_path, n_steps, skip_steps=0,
     return img
 
 
+def build_our_note_mat(melody_path, n_steps, skip_steps=0, offset_steps=0):
+    """Our melody as their note matrix: [onset_step, pitch, dur_steps].
+
+    offset_steps places the rows in the ORIGINAL song's coordinates --
+    key and phrase are indexed against the uncropped song, so notes
+    spliced in at cropped coordinates would sit against the wrong bars.
+    """
+    notes, bpm = _merged_notes(melody_path)
+    rows = _to_steps(notes, 60.0 / bpm / 4.0, skip_steps, n_steps)
+    return np.array([[on + offset_steps, p, d] for on, p, d in rows],
+                    dtype=np.int64).reshape(-1, 3)
+
+
+def build_our_chord_mat(chord_path, chord_txt_path, n_steps, nspb=4,
+                        skip_steps=0, offset_beats=0, verbose=False):
+    """Our chord as their chord matrix, one row per chord segment:
+
+        [start_beat, root, chroma x 12, bass_rel, dur_beat]
+
+    which is the layout chord_mat_to_chord_roll reads:
+        root = c[1];  chroma = c[2:14];  bass_rel = c[14];  dur = c[15]
+    and from which it derives the ABSOLUTE bass as (bass_rel + root) % 12.
+
+    The root cannot be read off a voicing, so it comes from the chord
+    SYMBOL. Our own renderer is the bridge: chord_to_midi_pitches maps a
+    parsed symbol to exactly the pitches our midi holds, so each of our
+    segments is matched to its symbol by rendered pitch set. The crop
+    drops a prefix of the symbols and the length cap a suffix, so the
+    match is a contiguous run -- found by offset, and asserted, rather
+    than assumed.
+    """
+    from build_pop909_chord_midi import chord_to_midi_pitches, parse_chord
+
+    notes, bpm = _merged_notes(chord_path)
+    rows = _to_steps(notes, 60.0 / bpm / 4.0, skip_steps, n_steps)
+    segs = {}
+    for on, pitch, dur in rows:
+        segs.setdefault(on, []).append((pitch, dur))
+    starts = sorted(segs)
+    ours = [frozenset(p for p, _ in segs[s]) for s in starts]
+
+    symbols = []
+    with open(chord_txt_path) as fh:
+        for line in fh:
+            parts = line.strip().split()
+            if len(parts) < 3:
+                continue
+            parsed = parse_chord(parts[2])
+            if parsed is None:            # 'N' renders no notes
+                continue
+            root, intervals, bass_iv = parsed
+            symbols.append((root, intervals, bass_iv,
+                            frozenset(chord_to_midi_pitches(
+                                root, intervals, bass_iv))))
+
+    offset = None
+    for k in range(len(symbols) - len(ours) + 1):
+        if all(symbols[k + i][3] == ours[i] for i in range(len(ours))):
+            offset = k
+            break
+    if offset is None:
+        raise ValueError(
+            f'{chord_path}: could not line up {len(ours)} chord segment(s) '
+            f'with any contiguous run of the {len(symbols)} chord(s) in '
+            f'{chord_txt_path}. Without the symbol there is no root, and '
+            f'without the root their chord matrix cannot be built.'
+        )
+    if verbose:
+        print(f'  [our-prompt] {len(ours)} chord segments matched at '
+              f'symbol offset {offset} of {len(symbols)}')
+
+    out = []
+    for i, start in enumerate(starts):
+        root, intervals, bass_iv, _ = symbols[offset + i]
+        end = min(start + max(d for _, d in segs[start]),
+                  starts[i + 1] if i + 1 < len(starts) else n_steps)
+        chroma = np.zeros(12, dtype=np.int64)
+        for iv in intervals:                 # ABSOLUTE pitch classes
+            chroma[(root + iv) % 12] = 1
+        out.append([start // nspb + offset_beats, root, *chroma.tolist(),
+                    bass_iv % 12, max((end - start) // nspb, 1)])
+    return np.array(out, dtype=np.int64).reshape(-1, 16)
+
+
+def splice_into_song(song, melody_path, chord_path, chord_txt_path,
+                     crop_bar, prompt_steps, nbpm=4, nspb=4, skip_steps=0,
+                     verbose=False):
+    """Replace the PROMPT REGION of song.melody / song.chord with ours.
+
+    Everything downstream -- mel_roll, chd_roll and the reductions
+    red_mel (tr_algo) and red_chd (get_chord_reduction) -- is then their
+    code running on our notes, which is the only honest way to get a
+    reduced prompt that is ours: their reduction is a tonal analysis, not
+    something to reimplement.
+
+    Only the prompt region is replaced. The rest of the song keeps
+    POP909's notes: it is never read as prompt, and leaving it in place
+    keeps every index aligned with the key and phrase annotations, which
+    are the song's and cannot be cropped independently.
+    """
+    off_step = crop_bar * nbpm * nspb
+    off_beat = crop_bar * nbpm
+
+    mel = np.asarray(song.melody)
+    chd = np.asarray(song.chord)
+    if mel.ndim != 2 or mel.shape[1] < 3:
+        raise ValueError(f'song.melody has shape {mel.shape}; expected '
+                         f'(N, 3+) rows of [onset, pitch, duration]')
+    if chd.ndim != 2 or chd.shape[1] != 16:
+        raise ValueError(f'song.chord has shape {chd.shape}; expected '
+                         f'(N, 16) rows of [start, root, chroma x12, '
+                         f'bass, dur]')
+
+    ours_mel = build_our_note_mat(melody_path, prompt_steps,
+                                  skip_steps=skip_steps,
+                                  offset_steps=off_step)
+    ours_chd = build_our_chord_mat(chord_path, chord_txt_path, prompt_steps,
+                                   nspb=nspb, skip_steps=skip_steps,
+                                   offset_beats=off_beat, verbose=verbose)
+
+    hi_step = off_step + prompt_steps
+    hi_beat = off_beat + prompt_steps // nspb
+    keep_mel = mel[(mel[:, 0] < off_step) | (mel[:, 0] >= hi_step)]
+    keep_chd = chd[(chd[:, 0] < off_beat) | (chd[:, 0] >= hi_beat)]
+
+    song.melody = np.concatenate([keep_mel[:, :3], ours_mel])[
+        np.argsort(np.concatenate([keep_mel[:, 0], ours_mel[:, 0]]),
+                   kind='stable')]
+    song.chord = np.concatenate([keep_chd, ours_chd])[
+        np.argsort(np.concatenate([keep_chd[:, 0], ours_chd[:, 0]]),
+                   kind='stable')]
+    if verbose:
+        print(f'  [our-prompt] spliced {len(ours_mel)} melody note(s) and '
+              f'{len(ours_chd)} chord(s) over steps '
+              f'{off_step}..{hi_step - 1} (bar {crop_bar}+); '
+              f'{len(mel) - len(keep_mel)} and {len(chd) - len(keep_chd)} '
+              f"of POP909's replaced")
+
+
 def _selftest(a):
     """Round-trip: build the image, decode it, compare to the source."""
     notes, bpm = _merged_notes(a.melody)

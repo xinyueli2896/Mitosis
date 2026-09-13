@@ -57,7 +57,7 @@ import sys
 import numpy as np
 import pretty_midi
 
-from wholesong_our_prompt import build_lsh_prompt
+from wholesong_our_prompt import build_lsh_prompt, splice_into_song
 
 
 def main():
@@ -104,6 +104,22 @@ def main():
     ap.add_argument('--our-chord-dir', default=None,
                     help='directory of OUR chord crops; see '
                          '--our-melody-dir')
+    ap.add_argument('--our-prompt-level', choices=('lsh', 'all'),
+                    default='all',
+                    help="how deep our notes go. 'lsh' replaces only the "
+                         'lead-sheet prompt, the notes that get written '
+                         "out. 'all' (default) splices them into the song "
+                         'BEFORE their analysis runs, so the counterpoint '
+                         'prompt -- their tonal reduction and chord '
+                         'reduction -- is computed from our notes by '
+                         'their own code. Needs --pop909-dir for the '
+                         'chord symbols, since a voicing carries no root.')
+    ap.add_argument('--pop909-dir', default=None,
+                    help='POP909 root, holding <sid>/chord_midi.txt. '
+                         "Required by --our-prompt-level all: their chord "
+                         'matrix stores a root, which cannot be read off '
+                         'our rendered voicing but is in the symbol our '
+                         'own parser already reads.')
     ap.add_argument('--bpm', type=float, default=90.0,
                     help='their output convention; scoring re-derives '
                          'the grid from the file tempo either way')
@@ -114,8 +130,16 @@ def main():
             'of them the prompt would be half ours and half POP909, on '
             'two different beat grids, which is worse than either alone.'
         )
+    if args.our_melody_dir and args.our_prompt_level == 'all' \
+            and not args.pop909_dir:
+        raise SystemExit(
+            '--our-prompt-level all needs --pop909-dir: the counterpoint '
+            "reduction runs on their chord MATRIX, which stores a root, "
+            'and a rendered voicing does not carry one. Either pass the '
+            'POP909 root or use --our-prompt-level lsh.'
+        )
     if args.our_melody_dir:
-        print(f'[prompt] LEAD SHEET FROM OUR CROPS: '
+        print(f'[prompt] OUR CROPS at level {args.our_prompt_level}: '
               f'{args.our_melody_dir} + {args.our_chord_dir}')
     else:
         print('[prompt] lead sheet from POP909 (pass --our-melody-dir '
@@ -219,6 +243,23 @@ def main():
             continue
         try:
             dataset = read_pop909_dataset(song_ids=[sid])
+            if args.our_melody_dir and args.our_prompt_level == 'all':
+                # Splice BEFORE the analysis, so their reductions --
+                # tr_algo for the melody, get_chord_reduction for the
+                # chord -- run on our notes. That is the only honest way
+                # to get a counterpoint prompt that is ours: the
+                # reduction is a tonal analysis, not something to
+                # reimplement and attribute to them.
+                cb = crops[name][0] if crops and name in crops else 0
+                pf = crops[name][2] if crops and name in crops else 0
+                splice_into_song(
+                    dataset[0],
+                    os.path.join(args.our_melody_dir, f'{name}.mid'),
+                    os.path.join(args.our_chord_dir, f'{name}.mid'),
+                    os.path.join(args.pop909_dir, name, 'chord_midi.txt'),
+                    crop_bar=cb,
+                    prompt_steps=args.prompt_bars * 16,
+                    skip_steps=pf, verbose=True)
             analyses = analyze_pop909_dataset(dataset)
             nbpm, nspb = 4, 4
 
@@ -296,7 +337,7 @@ def main():
                                    n, axis=0)
             lsh_prompt = np.repeat(lsh_img[np.newaxis, 0:2, 0:p_16],
                                    n, axis=0)
-            if args.our_melody_dir:
+            if args.our_melody_dir and args.our_prompt_level == 'lsh':
                 # Replace the lead-sheet prompt with OUR crop. Everything
                 # above this level keeps their analysis; this is the only
                 # place the model receives notes.

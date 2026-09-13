@@ -85,6 +85,13 @@ OUT_DIR="${OUT_DIR:-$MY/temp/wholesong_prompted}"
 # Both or neither; the driver refuses one.
 OUR_MEL_DIR="${OUR_MEL_DIR:-}"
 OUR_CHORD_DIR="${OUR_CHORD_DIR:-}"
+# OUR_PROMPT_LEVEL: 'all' (default) splices our notes into the song
+# before their analysis, so the COUNTERPOINT prompt is their tonal
+# reduction of our notes; 'lsh' replaces only the lead-sheet prompt.
+# 'all' needs POP909_DIR for the chord symbols -- their chord matrix
+# stores a root, and a rendered voicing does not carry one.
+OUR_PROMPT_LEVEL="${OUR_PROMPT_LEVEL:-all}"
+POP909_DIR="${POP909_DIR:-$MY/input/POP909}"
 WS_FORM="${WS_FORM:-gt}"
 case "$WS_FORM" in
     gt|generated) ;;
@@ -135,6 +142,8 @@ python "$MY/wholesong_prompted.py" \
     ${CROPS_TSV:+--crops-tsv "$CROPS_TSV"} \
     ${OUR_MEL_DIR:+--our-melody-dir "$OUR_MEL_DIR"} \
     ${OUR_CHORD_DIR:+--our-chord-dir "$OUR_CHORD_DIR"} \
+    ${OUR_MEL_DIR:+--our-prompt-level "$OUR_PROMPT_LEVEL"} \
+    ${OUR_MEL_DIR:+--pop909-dir "$POP909_DIR"} \
     --out-dir "$OUT_DIR"
 
 echo "================================================================"
