@@ -47,15 +47,16 @@
 \subsection{Pretrained backbone}
 \label{sec:backbone}
 
-The model we start from is a CP Transformer~\cite{cp_transformer}, two
-levels over the frame grid of Sec.~\ref{sec:setup}: a three-layer
-encoder collapses a frame's sub-tokens into one vector, a twelve-layer
-stack of width $d = 768$ runs over those vectors, and a three-layer
-decoder emits the sub-tokens back. It was pretrained as a
-\emph{single-stream} model on a large scraped MIDI corpus of [X] songs,
-where melody and accompaniment arrive as one merged token stream and
-only each note's program token says them apart. This is the model
-\sys copies into both of its streams.
+We start from the pretrained foundation model
+of~\cite{yinyang}, a RoFormer with the two-level
+structure of Sec.~\ref{sec:setup}: a three-layer local encoder collapses a frame's
+sub-tokens into one vector, a twelve-layer global decoder of width
+$d = 768$ runs over those vectors, and a three-layer local decoder
+emits the sub-tokens back. It was pretrained as a \emph{single-stream}
+model on 357{,}279 filtered files of the Los Angeles MIDI
+dataset~\cite{lamd}, where melody and accompaniment arrive as one
+merged token stream and only each note's instrument token separates
+them. \sys copies this model into both of its streams.
 
 \subsection{Training data}
 \label{sec:data}
@@ -68,10 +69,10 @@ four upper tones. Both are quantised to a shared sixteenth-note grid at
 are tokenised at a polyphony cap of 8, which clips nothing: chord
 frames peak at five simultaneous onsets and melody frames at six across
 the corpus. Songs whose sorted index is a multiple of ten are held out,
-leaving [X] songs to train on. Paired melody--chord data is therefore
-far scarcer than the unpaired MIDI used for pretraining, which
-motivates adapting the pretrained model rather than training a joint
-model from scratch.
+leaving [X] songs to train on. The paired corpus is therefore
+smaller than the backbone's pretraining corpus by more than two orders
+of magnitude, which motivates adapting the pretrained model rather than
+training a joint model from scratch.
 
 \subsection{Training}
 \label{sec:training}
