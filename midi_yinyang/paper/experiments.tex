@@ -8,6 +8,13 @@
 % TERMINOLOGY is method.tex's. stream, frame, position, token,
 % sub-token, content/query token. Do not introduce new words here.
 %
+% NO ABLATIONS HERE (2026-09-13, by request). "Systems compared" lists
+% the OPPONENTS -- single-stream, cascade, external -- and nothing
+% else. The causal-attention arm, the shared-router arm and the
+% hard-partition arm all belong to the ablation section, along with the
+% parity argument and the stamp-share measurement the method defers to
+% it.
+%
 % EVERY NUMBER IN THIS FILE IS FROM THE REPO, NOT REMEMBERED:
 %   909 songs, cp8, 16 frames/bar, 120 BPM   EXPERIMENTS.md sec.1
 %   polyphony certified (chord peaks at 5 onsets/frame, melody 6)
@@ -92,10 +99,6 @@ general-purpose model over arrival-time events, which co-generates both
 streams but was trained on a different corpus and tokenisation, so it
 is reported as an out-of-domain reference rather than a matched
 opponent.
-
-\textbf{Ablation.} The same two-stream backbone with strict causal
-attention and no query tokens, which isolates what order-free
-prediction adds over sequential joint generation.
 
 \subsection{Protocol and metrics}
 \label{sec:protocol}
