@@ -77,16 +77,17 @@ training a joint model from scratch.
 \subsection{Training}
 \label{sec:training}
 
-\sys uses a 12-layer stack of the blocks of
+Each copy keeps the backbone's twelve layers and width, so \sys is a
+12-layer stack of the blocks of
 Sec.~\ref{sec:attention}--\ref{sec:permod_moe} at $d = 768$, with
 $E = 4$ experts, $k = 2$ active per position, and expert width
-$d_f = 4d$. Both backbones are initialised by copying one pretrained
-single-stream Transformer into each, as Sec.~\ref{sec:setup} describes;
-the cross-stream and within-frame gates start at bias $-10$, so
-training begins from that model run independently over the two streams.
-Training windows are 384 frames, and the query-token objective
-supervises one frame per step, drawn uniformly from the window.
-[X: optimiser, schedule, steps, hardware.]
+$d_f = 4d$: the pretrained feed-forward layer is replicated across the
+experts, and the cross-stream and within-frame gates start at bias
+$-10$, so training begins from the backbone run independently over the
+two streams. We train on windows of 384 frames with AdamW and a
+one-cycle schedule peaking at [X], the query-token objective
+supervising one frame per window, drawn uniformly. [X: steps,
+batch size, hardware.]
 
 \subsection{Systems compared}
 \label{sec:systems}
