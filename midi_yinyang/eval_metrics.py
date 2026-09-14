@@ -6,12 +6,12 @@ The summary prints blocks in the order H3 > H2 > P > S > R, and each
 has ONE designated primary endpoint (marked *), the rest being
 supporting diagnostics.
 
-H1 IS COMPUTED AND WRITTEN TO THE CSV BUT NO LONGER PRINTED (2026-09-14,
-by request): P took its place in the table. Read the H1 columns of the
-CSV before quoting P on any system, because survival_* and empty_rate_*
-are what say the stream is there at all -- a continuation that fell
-silent adheres to nothing, and its P statistics are meaningless rather
-than bad.
+H1 IS COMPUTED BUT NEITHER PRINTED NOR WRITTEN (2026-09-14, by
+request): P took its place. See CSV_GROUPS for the one line that brings
+it back. While it is out, nothing in the output says whether a stream
+is there at all, so a P row near 0 wants a listen before it is quoted:
+a continuation that fell silent adheres to nothing, and its P
+statistics are meaningless rather than bad.
 
   H3 (stream-appropriate grammar)   [highest priority]
     * harmonic_rhythm_jsd   chord-change interval distribution vs ref
@@ -904,14 +904,20 @@ H_GROUPS = {
 # because neither copying the prompt nor ignoring it is right.
 GROUP_ORDER = ('H3', 'H2', 'P', 'S', 'R')
 
-# The CSV keeps every computed metric, H1 included. Dropping a block
-# from the TABLE is a reporting decision; dropping it from the CSV would
-# mean rescoring the corpus to get it back. H1 also holds the collapse
-# detectors (survival_*, empty_rate_*), and those are what make a
-# prompt-adherence number readable at all: a stream that fell silent
-# adheres to nothing, and every P statistic on it is either NaN or
-# meaningless rather than bad. Check them in the CSV before quoting P.
-CSV_GROUPS = GROUP_ORDER + ('H1',)
+# H1 is out of the CSV as well (2026-09-14, by request), so scoring
+# writes exactly what the table shows. h1_metrics still RUNS and
+# H_GROUPS['H1'] still lists its keys, so restoring it is this one line:
+#
+#     CSV_GROUPS = GROUP_ORDER + ('H1',)
+#
+# and adding 'H1' to GROUP_ORDER puts it back in the table. Until then,
+# note that the corpus has to be rescored to recover a survival number,
+# and that P is being read without its collapse detector: a stream that
+# fell silent adheres to nothing, so reuse comes out NaN but
+# density_vs_prompt comes out 0.0, which reads like a measurement
+# rather than an absence. A P row at 0 is worth a listen before it is
+# worth a sentence.
+CSV_GROUPS = GROUP_ORDER
 
 
 # ---------------------------------------------------------------------------
