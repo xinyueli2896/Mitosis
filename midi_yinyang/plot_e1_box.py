@@ -307,7 +307,8 @@ def read_pooled(path):
             out[row['metric']][row['system']] = (
                 num('jsd'), num('ci_lo'), num('ci_hi'),
                 int(float(row.get('n_songs') or 0)),
-                int(float(row.get('n_obs') or 0)))
+                int(float(row.get('n_obs') or 0)),
+                int(float(row.get('boot_levels') or 1)))
     return out
 
 
@@ -324,7 +325,7 @@ def draw_panel_pooled(ax, metric, pooled, order, present, title_chars=0):
         if rec is None or math.isnan(rec[0]):
             missing.append(i)
             continue
-        v, lo, hi, _ns, _no = rec
+        v, lo, hi, _ns, _no, _bl = rec
         if not math.isnan(lo):
             ax.plot([i, i], [lo, hi], color=INK_2, lw=1.2,
                     solid_capstyle='butt', zorder=4)
@@ -605,6 +606,12 @@ def main():
                 'Rescore, or pass --per-song to plot the per-song values '
                 'instead -- but do not describe those as unbiased.')
         pooled = read_pooled(pc)
+        # 1 = songs resampled, each song's decodes held fixed; 2 = the
+        # decodes are resampled too. Two figures that differ only in
+        # whisker length are otherwise indistinguishable, so the legend
+        # has to say which.
+        boot_levels = max((r[5] for v in pooled.values() for r in v.values()),
+                          default=1)
         unknown = [m for m in metrics if m not in pooled]
         if unknown:
             print(f'[warn] not in the pooled CSV, drawn as pending: '
@@ -710,6 +717,7 @@ def main():
                     annotation_clip=False)
 
     word = 'pooled JSD' if pooled_mode else 'mean'
+    boot_levels = boot_levels if pooled_mode else 1
     handles = [
         Line2D([0], [0], color=INK, lw=1.2, ls=(0, (4, 3)),
                label='reference level (matches ground truth)'),
@@ -723,7 +731,9 @@ def main():
                    markeredgewidth=1.0,
                    label='corpus-pooled JSD (one histogram per system)'),
             Line2D([0], [0], color=INK_2, lw=1.2,
-                   label='95% bootstrap CI over songs'),
+                   label='95% bootstrap CI over ' + (
+                       'songs and samples' if boot_levels == 2
+                       else 'songs')),
         ]
     else:
         handles += [
@@ -767,7 +777,7 @@ def main():
                 if rec is None or math.isnan(rec[0]):
                     print(f'    {sysname:11s} --')
                     continue
-                v, lo, hi, ns, no = rec
+                v, lo, hi, ns, no, _bl = rec
                 mark = '' if ranked else '   (not ranked)'
                 print(f'    {sysname:11s} {v:.4f} [{lo:.4f},{hi:.4f}]'
                       f'  n={ns} songs / {no} obs{mark}')

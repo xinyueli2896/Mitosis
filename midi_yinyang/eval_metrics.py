@@ -1118,8 +1118,9 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False):
           '=================')
     print('one histogram per system over all songs -- a single value, so '
           'it has no std;')
-    print('the uncertainty is a [2.5, 97.5] percentile bootstrap over '
-          'SONGS (boot_se in the CSV)')
+    _lvl = ('SONGS and, within each, its SAMPLES' if two_level else 'SONGS')
+    print(f'the uncertainty is a [2.5, 97.5] percentile bootstrap over '
+          f'{_lvl} (boot_se in the CSV)')
     print(f'({n_boot} replicates; pooling removes the per-song '
           'small-sample bias but also removes')
     print(' per-song calibration -- a system can match the corpus '
@@ -1141,7 +1142,8 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False):
             rec = dict(metric=k, system=sysname, jsd=float('nan'),
                        ci_lo=float('nan'), ci_hi=float('nan'),
                        boot_se=float('nan'),
-                       n_songs=len(songs), n_obs=n_obs, n_boot=n_boot)
+                       n_songs=len(songs), n_obs=n_obs, n_boot=n_boot,
+                       boot_levels=2 if two_level else 1)
             recs.append(rec)
             if not songs:
                 line += '--'.ljust(width)
@@ -1173,7 +1175,8 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False):
         with open(out_csv, 'w', newline='') as f:
             w = csv.DictWriter(f, fieldnames=['metric', 'system', 'jsd',
                                               'ci_lo', 'ci_hi', 'boot_se',
-                                              'n_songs', 'n_obs', 'n_boot'])
+                                              'n_songs', 'n_obs', 'n_boot',
+                                              'boot_levels'])
             w.writeheader()
             w.writerows(recs)
         print(f'\nwrote {len(recs)} pooled rows -> {out_csv}')
