@@ -283,6 +283,11 @@ def read_per_song(path, metrics):
             for m, bysys in acc.items()}
 
 
+def system_mean(metric, sysname, per_song):
+    vals = list(per_song.get(metric, {}).get(sysname, {}).values())
+    return float(np.mean(vals)) if len(vals) >= 3 else None
+
+
 def best_ranked(metric, per_song, order, present):
     """(system, display, family, mean) closest to the reference level.
 
@@ -333,6 +338,18 @@ def draw_panel(ax, metric, per_song, order, present, title_chars=0):
     # width so the unranked column can be read against it. Coloured by
     # the winner's family -- the line IS that system's value -- and
     # named in ink, because a line colour alone would not say which.
+    # The unranked system's mean, as its own line. It is the column a
+    # reader most wants to hold everything against, and reading a level
+    # off one box in the far-right corner is exactly what a line spares
+    # them. Drawn even where there is no reference level, since its mean
+    # is a comparison whether or not a target exists.
+    for sysname, _disp, _short, family, ranked in order:
+        if ranked or sysname not in present:
+            continue
+        m = system_mean(metric, sysname, per_song)
+        if m is not None:
+            ax.axhline(m, color=FAMILY_COLOR[family], lw=1.4, zorder=2)
+
     best = best_ranked(metric, per_song, order, present)
     if best is not None:
         _bs, bdisp, bfamily, bmean = best
@@ -569,13 +586,19 @@ def main():
         Line2D([0], [0], color=INK, lw=1.2, ls=(0, (4, 3)),
                label='reference level (matches ground truth)'),
         Line2D([0], [0], color=INK_2, lw=1.4,
-               label='mean of the best ranked system (named per panel)'),
+               label='mean of the best ranked system '
+                     '(its family colour; named per panel)'),
         Line2D([0], [0], color=INK_2, lw=6, alpha=0.35,
                label='box: quartiles over songs (line: median)'),
         Line2D([0], [0], color=INK, lw=1.6, marker='o', markersize=3.2,
                markerfacecolor=SURFACE, markeredgecolor=INK,
                markeredgewidth=1.0, label='mean and its 95% CI'),
     ]
+    unranked = [d.replace('\n', ' ') for _s, d, _sh, _g, r in order if not r]
+    if unranked:
+        handles.insert(2, Line2D(
+            [0], [0], color=FAMILY_COLOR['Not ranked'], lw=1.4,
+            label='mean of ' + ', '.join(unranked)))
     if compact:
         handles += [Line2D([0], [0], color=FAMILY_COLOR[f], lw=6,
                            alpha=0.78, label=f) for f, _l, _r in edges]
