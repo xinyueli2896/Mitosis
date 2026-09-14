@@ -974,28 +974,25 @@ def s_metrics(gen_a, gen_b, ref_a, ref_b, task):
 # choosing the winner afterwards is not a finding. H3, H2 and H1 were
 # registered in EXPERIMENTS.md before scoring; their stars are honest.
 #
-# P's is NOT: the block was added late and its endpoint chosen with the
-# numbers in hand. Its endpoint is joint_cov3_a_delta -- melody motif
-# AND rhythm restated together at motif scale, above a shuffled-prompt
-# control, against the real continuation's rate -- and it is printed
-# with '+' rather than '*' so the table itself says which kind it is.
+# P has NO endpoint yet (2026-09-14, by request): the block was added
+# late and the choice is deferred until the results have been looked
+# at. When one is picked it goes in EXPLORATORY's block and prints with
+# '+' rather than '*', because an endpoint chosen after seeing the
+# numbers is a different kind of claim from one fixed before, and the
+# table should say which it is.
 EXPLORATORY = {'P'}
 
 PRIMARY = {
     'melchord': {'H3': ['harmonic_rhythm_jsd'],
                  'H2': ['chord_tone_cov_delta'],
                  'H1': ['survival_min'],
-                 'P': ['joint_cov3_a_delta'],   # exploratory, see above
+                 'P': [],       # undecided until the results are in
                  'S': [], 'R': [], 'P0': []},
     'drumnondrum': {'H3': ['onset_grid_jsd_b'],
                     'H2': ['onset_sync_delta'],
                     'H1': ['survival_min'],
-                    # NOT pre-registered: P was added after the first
-                 # scoring pass and this endpoint was chosen with the
-                 # results in hand. Report it as exploratory, and see
-                 # the note under PRIMARY below.
-                 'P': ['reuse_vs_prompt_a_delta'],
-                    'S': [], 'R': []},
+                    'P': [],       # undecided until the results are in
+                    'S': [], 'R': [], 'P0': []},
 }
 
 H_GROUPS = {
