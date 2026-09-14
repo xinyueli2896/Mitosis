@@ -968,16 +968,35 @@ def s_metrics(gen_a, gen_b, ref_a, ref_b, task):
     return out
 
 
+# A "primary endpoint" is the ONE metric per hypothesis that the claim
+# rests on, fixed BEFORE the results were seen. With ~100 columns and
+# seven systems, several comparisons reach p < 0.05 by chance alone, so
+# choosing the winner afterwards is not a finding. H3, H2 and H1 were
+# registered in EXPERIMENTS.md before scoring; their stars are honest.
+#
+# P's star is NOT: the block was added late and its endpoint picked with
+# the numbers in hand. Either label it exploratory in the paper, or
+# apply a multiplicity correction across the P columns and say so. The
+# summary's footer calls every star pre-registered, which is true of
+# three blocks out of four.
 PRIMARY = {
     'melchord': {'H3': ['harmonic_rhythm_jsd'],
                  'H2': ['chord_tone_cov_delta'],
                  'H1': ['survival_min'],
+                 # NOT pre-registered: P was added after the first
+                 # scoring pass and this endpoint was chosen with the
+                 # results in hand. Report it as exploratory, and see
+                 # the note under PRIMARY below.
                  'P': ['reuse_vs_prompt_a_delta'],
                  'S': [], 'R': []},
     'drumnondrum': {'H3': ['onset_grid_jsd_b'],
                     'H2': ['onset_sync_delta'],
                     'H1': ['survival_min'],
-                    'P': ['reuse_vs_prompt_a_delta'],
+                    # NOT pre-registered: P was added after the first
+                 # scoring pass and this endpoint was chosen with the
+                 # results in hand. Report it as exploratory, and see
+                 # the note under PRIMARY below.
+                 'P': ['reuse_vs_prompt_a_delta'],
                     'S': [], 'R': []},
 }
 

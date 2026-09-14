@@ -134,6 +134,7 @@ DEFAULT_METRICS = [
 # Axis labels. Keyed by metric; anything unlisted falls back to the raw
 # name, so an unfamiliar metric still plots.
 LABELS = {
+    'fmd':                     'Frechet Music Distance (CLaMP 2)',
     'harmonic_rhythm_jsd':     'Harmonic rhythm JSD',
     'onset_grid_jsd_a':        'Onset grid JSD (melody)',
     'onset_grid_jsd_b':        'Onset grid JSD (chord)',
@@ -217,11 +218,12 @@ def presets():
         # There is no distribution left to box -- one histogram per
         # system is one number -- so the mark is a point and its
         # interval.
-        'quality': (['harmonic_rhythm_jsd',
+        'quality': (['fmd',
+                     'harmonic_rhythm_jsd',
                      'onset_grid_jsd_a', 'onset_grid_jsd_b',
                      'duration_jsd_a', 'duration_jsd_b'],
-                    1, 'General quality: corpus-pooled divergence '
-                       'from the reference', True),
+                    2, 'General quality: corpus-level distance from the '
+                       'reference', True),
         'fit': (_block('H2'), 2, 'Melody-chord fit', False),
         'repetition': (_block('R'), 2, 'Repetition and structuredness', False),
         # Chance is already subtracted inside these, so 0 is a
@@ -632,6 +634,20 @@ def main():
                 'Rescore, or pass --per-song to plot the per-song values '
                 'instead -- but do not describe those as unbiased.')
         pooled = read_pooled(pc)
+        # FMD lives in its own CSV because it needs a separate venv and a
+        # GPU; it has the same schema and the same shape of result -- one
+        # value per system with a song bootstrap -- so it merges in as
+        # another pooled metric rather than needing its own plot path.
+        fc = re.sub(r'_pooled\.csv$', '_fmd.csv', pc)
+        if os.path.exists(fc):
+            for k, v in read_pooled(fc).items():
+                pooled[k] = {s_: r for s_, r in v.items()
+                             if not s_.startswith('_')}
+            print(f'[fmd] merged {fc}')
+        elif 'fmd' in metrics:
+            print('[warn] fmd requested but no ' + fc
+                  + ' -- run eval_fmd.sbatch; drawn as pending',
+                  file=sys.stderr)
         # 1 = songs resampled, each song's decodes held fixed; 2 = the
         # decodes are resampled too. Two figures that differ only in
         # whisker length are otherwise indistinguishable, so the legend
