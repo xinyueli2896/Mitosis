@@ -1040,7 +1040,8 @@ def _norm_songs(M):
     return np.where(t > 0, M / np.where(t > 0, t, 1.0), 0.0)
 
 
-def _pooled_ci(G, R, n_boot=2000, seed=0, per_sample=None, by_song=True):
+def _pooled_ci(G, R, n_boot=2000, seed=0, per_sample=None, by_song=True,
+               mode='songs'):
     """Percentile CI for the pooled JSD, resampling SONGS.
 
     G, R are (n_songs, n_bins) count matrices. The song is the unit of
@@ -1057,10 +1058,31 @@ def _pooled_ci(G, R, n_boot=2000, seed=0, per_sample=None, by_song=True):
     """
     n = G.shape[0]
     if n < 2 or n_boot <= 0:
-        return float('nan'), float('nan'), float('nan')
+        return float('nan'), float('nan'), float('nan'), None
     rng = np.random.default_rng(seed)
     w = rng.multinomial(n, np.full(n, 1.0 / n), size=n_boot).astype(float)
-    if per_sample is None:
+    if mode == 'one-per-song':
+        # Songs are NOT resampled: all n are present in every replicate,
+        # and what varies is only WHICH of a song's decodes is used. So
+        # this measures decode variability and says nothing about how
+        # the result would travel to other songs -- its spread is much
+        # narrower than a song bootstrap's, and is not an interval for a
+        # claim about the corpus. Each replicate is one generation run.
+        Rw = _norm_songs(R) if by_song else R
+        rbase = Rw.sum(axis=0)
+        Gb = np.empty((n_boot, G.shape[1]))
+        for b in range(n_boot):
+            acc = np.zeros(G.shape[1])
+            for v in per_sample:
+                song = np.asarray(v[rng.integers(0, len(v))], float)
+                if by_song:
+                    t = song.sum()
+                    if t > 0:
+                        song = song / t
+                acc += song
+            Gb[b] = acc
+        vals = _jsd_rows(Gb, np.repeat(rbase[None, :], n_boot, axis=0))
+    elif per_sample is None:
         vals = _jsd_rows(w @ G, w @ R)
     else:
         # Two-level (cluster) bootstrap: resample SONGS, then resample
@@ -1086,19 +1108,27 @@ def _pooled_ci(G, R, n_boot=2000, seed=0, per_sample=None, by_song=True):
                         song = song / t
                 acc += song
             Gb[b] = acc
-        Rw = _norm_songs(R) if by_song else R
-        Rb = np.stack([Rw[idx[b]].sum(axis=0) for b in range(n_boot)])
+        Rw2 = _norm_songs(R) if by_song else R
+        Rb = np.stack([Rw2[idx[b]].sum(axis=0) for b in range(n_boot)])
         vals = _jsd_rows(Gb, Rb)
     lo, hi = np.percentile(vals, [2.5, 97.5])
+    if mode == 'one-per-song':
+        # The plotted point must describe the same thing as the spread.
+        # A replicate here is a single run over all songs, so the
+        # expected single-run JSD is the replicate mean -- not the
+        # all-samples value, which pools three times the notes and
+        # therefore sits lower.
+        return (float(lo), float(hi), float(vals.std(ddof=1)),
+                float(vals.mean()))
     # The bootstrap SE is the spread of the replicates. It is reported
     # for a table that wants a +- column, but the percentile interval is
     # the better summary: JSD is bounded at 0 and skewed near the floor,
     # so value +- SE can reach below 0, where the metric cannot go.
-    return float(lo), float(hi), float(vals.std(ddof=1))
+    return float(lo), float(hi), float(vals.std(ddof=1)), None
 
 
-def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False,
-                   weight='song'):
+def pooled_summary(rows, task, n_boot=2000, out_csv=None,
+                   boot_mode='songs', weight='song'):
     """One histogram per system over the whole corpus, with a song
     bootstrap. Samples of a song are summed into that song's counts."""
     keys = [k for k in POOLED_BINS
@@ -1132,7 +1162,12 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False,
     print(f'one histogram per system over all songs, weighted per '
           f'{weight.upper()} -- a single value,')
     print('so it has no std;')
-    _lvl = ('SONGS and, within each, its SAMPLES' if two_level else 'SONGS')
+    _lvl = {'songs': 'SONGS',
+            'songs+samples': 'SONGS and, within each, its SAMPLES',
+            'one-per-song': 'SAMPLES only -- one decode per song, every '
+                            'song always present, so this is decode '
+                            'variability and NOT an interval for other '
+                            'songs'}[boot_mode]
     print(f'the uncertainty is a [2.5, 97.5] percentile bootstrap over '
           f'{_lvl} (boot_se in the CSV)')
     print(f'({n_boot} replicates; pooling removes the per-song '
@@ -1157,7 +1192,7 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False,
                        ci_lo=float('nan'), ci_hi=float('nan'),
                        boot_se=float('nan'),
                        n_songs=len(songs), n_obs=n_obs, n_boot=n_boot,
-                       boot_levels=2 if two_level else 1, weight=weight)
+                       boot_mode=boot_mode, weight=weight)
             recs.append(rec)
             if not songs:
                 line += '--'.ljust(width)
@@ -1175,9 +1210,12 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False,
             Gw = _norm_songs(G) if by_song_w else G
             Rw = _norm_songs(R) if by_song_w else R
             rec['jsd'] = jsd(Gw.sum(axis=0), Rw.sum(axis=0))
-            rec['ci_lo'], rec['ci_hi'], rec['boot_se'] = _pooled_ci(
-                Gw, Rw, n_boot=n_boot,
-                per_sample=Gs if two_level else None, by_song=by_song_w)
+            lo, hi, se, recentre = _pooled_ci(
+                Gw, Rw, n_boot=n_boot, by_song=by_song_w, mode=boot_mode,
+                per_sample=Gs if boot_mode != 'songs' else None)
+            rec['ci_lo'], rec['ci_hi'], rec['boot_se'] = lo, hi, se
+            if recentre is not None:
+                rec['jsd'] = recentre
             cell = f'{rec["jsd"]:.3f}' if math.isnan(rec['ci_lo']) \
                 else f'{rec["jsd"]:.3f} [{rec["ci_lo"]:.3f},{rec["ci_hi"]:.3f}]'
             line += cell.ljust(width)
@@ -1200,7 +1238,7 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False,
             w = csv.DictWriter(f, fieldnames=['metric', 'system', 'jsd',
                                               'ci_lo', 'ci_hi', 'boot_se',
                                               'n_songs', 'n_obs', 'n_boot',
-                                              'boot_levels', 'weight'])
+                                              'boot_mode', 'weight'])
             w.writeheader()
             w.writerows(recs)
         print(f'\nwrote {len(recs)} pooled rows -> {out_csv}')
@@ -1342,13 +1380,20 @@ def main():
                         'long songs can decide the result. song matches '
                         'the unit the per-song table, the paired test and '
                         'the bootstrap all use.')
-    p.add_argument('--pooled-two-level', action='store_true',
-                   help='bootstrap the SAMPLES within each drawn song as '
-                        'well as the songs. The default one-level version '
-                        'holds a song\'s decodes fixed, so its interval '
-                        'covers other songs but not another decode; this '
-                        'covers both and is wider. Slower: it cannot be '
-                        'done as one matrix product.')
+    p.add_argument('--pooled-boot-mode',
+                   choices=['songs', 'songs+samples', 'one-per-song'],
+                   default='songs',
+                   help="what the interval covers. 'songs' (default) "
+                        'resamples songs with a song\'s decodes summed: '
+                        'generalisation to other songs. \'songs+samples\' '
+                        'also redraws the decodes of each drawn song: '
+                        'other songs AND another decode, wider. '
+                        "'one-per-song' keeps every song and picks ONE "
+                        'decode each: decode variability alone, much '
+                        'narrower, and NOT an interval for a claim about '
+                        'other songs. The last also recentres the point '
+                        'estimate on the replicate mean, since each '
+                        'replicate is a single generation run.')
     p.add_argument('--pooled-boot', type=int, default=2000,
                    help='bootstrap replicates for the corpus-pooled JSD '
                         'table, resampling SONGS. 0 prints the pooled '
@@ -1401,7 +1446,7 @@ def main():
 
     summarize(rows, args.task, baseline=args.baseline)
     pooled_summary(rows, args.task, n_boot=args.pooled_boot,
-                   out_csv=args.pooled_out, two_level=args.pooled_two_level,
+                   out_csv=args.pooled_out, boot_mode=args.pooled_boot_mode,
                    weight=args.pooled_weight)
 
 

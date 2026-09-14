@@ -308,7 +308,7 @@ def read_pooled(path):
                 num('jsd'), num('ci_lo'), num('ci_hi'),
                 int(float(row.get('n_songs') or 0)),
                 int(float(row.get('n_obs') or 0)),
-                int(float(row.get('boot_levels') or 1)),
+                row.get('boot_mode') or 'songs',
                 row.get('weight') or 'note')
     return out
 
@@ -611,8 +611,8 @@ def main():
         # decodes are resampled too. Two figures that differ only in
         # whisker length are otherwise indistinguishable, so the legend
         # has to say which.
-        boot_levels = max((r[5] for v in pooled.values() for r in v.values()),
-                          default=1)
+        modes = {r[5] for v in pooled.values() for r in v.values()}
+        boot_mode = modes.pop() if len(modes) == 1 else 'mixed'
         weights = {r[6] for v in pooled.values() for r in v.values()}
         pooled_weight = weights.pop() if len(weights) == 1 else 'mixed'
         unknown = [m for m in metrics if m not in pooled]
@@ -720,7 +720,7 @@ def main():
                     annotation_clip=False)
 
     word = 'pooled JSD' if pooled_mode else 'mean'
-    boot_levels = boot_levels if pooled_mode else 1
+
     handles = [
         Line2D([0], [0], color=INK, lw=1.2, ls=(0, (4, 3)),
                label='reference level (matches ground truth)'),
@@ -735,9 +735,11 @@ def main():
                    label=f'corpus-pooled JSD, weighted per '
                          f'{pooled_weight}'),
             Line2D([0], [0], color=INK_2, lw=1.2,
-                   label='95% bootstrap CI over ' + (
-                       'songs and samples' if boot_levels == 2
-                       else 'songs')),
+                   label='95% bootstrap CI over ' + {
+                       'songs': 'songs',
+                       'songs+samples': 'songs and samples',
+                       'one-per-song': 'decodes only (NOT over songs)',
+                   }.get(boot_mode, boot_mode)),
         ]
     else:
         handles += [

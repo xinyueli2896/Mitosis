@@ -114,12 +114,20 @@
 #                  every song counts once; 'note' sums raw counts, so a
 #                  long song counts for more than a short one. song is
 #                  the unit the rest of the evaluation uses.
-#   POOLED_TWO_LEVEL=1  bootstrap the SAMPLES within each drawn song as
-#                  well as the songs, for the corpus-pooled JSD. The
-#                  default resamples songs only, so the interval covers
-#                  "would this hold on other songs" but not "would this
-#                  hold on another decode". Two-level covers both and is
-#                  wider; the point estimate is identical either way.
+#   POOLED_BOOT_MODE  songs (default) | songs+samples | one-per-song.
+#                  What the pooled JSD's interval covers.
+#                    songs          resample songs, a song's decodes
+#                                   summed -- generalisation to other
+#                                   songs, which is the paper claim
+#                    songs+samples  also redraw each drawn song's
+#                                   decodes: other songs AND another
+#                                   decode. Slightly wider, slower
+#                    one-per-song   every song present, one decode each:
+#                                   decode variability ALONE. Much
+#                                   narrower -- it excludes the
+#                                   song-to-song spread, which dominates
+#                                   -- so it is not an interval for a
+#                                   claim about other songs
 #   RESULT_TAG     extra suffix on the result files
 #   SKIP_INFER=1   score only, generate nothing (no GPU needed: submit
 #                  through score_e1.sbatch, a CPU wrapper that forces it)
@@ -729,7 +737,7 @@ python eval_metrics.py --task melchord \
     --ref-a-dir "$EVAL_MEL" --ref-b-dir "$EVAL_CHORD" \
     --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
     --out "$METRICS" --pooled-out "$POOLED" \
-    $([[ "${POOLED_TWO_LEVEL:-0}" == "1" ]] && echo --pooled-two-level) \
+    --pooled-boot-mode "${POOLED_BOOT_MODE:-songs}" \
     --pooled-weight "${POOLED_WEIGHT:-song}"
 
 if [[ " ${SCORED[*]} " != *" $BASELINE "* ]]; then
