@@ -146,6 +146,19 @@ LABELS = {
     'coupling_delta':          'Melody-chord coupling $-$ ref.',
     'mel_interval_jsd':        'Melodic interval JSD',
     'voicing_jsd':             'Chord voicing JSD',
+    # pattern coverage, above a shuffled-prompt control
+    'motif_cov3_a':  'Motif coverage, 3-gram, melody',
+    'motif_cov5_a':  'Motif coverage, 5-gram, melody',
+    'rhythm_cov3_a': 'Rhythm coverage, 3-gram, melody',
+    'rhythm_cov5_a': 'Rhythm coverage, 5-gram, melody',
+    'joint_cov3_a':  'Motif+rhythm coverage, 3-gram, melody',
+    'joint_cov5_a':  'Motif+rhythm coverage, 5-gram, melody',
+    'motif_cov3_b':  'Bass-motion coverage, 3-gram, chord',
+    'motif_cov5_b':  'Bass-motion coverage, 5-gram, chord',
+    'rhythm_cov3_b': 'Rhythm coverage, 3-gram, chord',
+    'rhythm_cov5_b': 'Rhythm coverage, 5-gram, chord',
+    'joint_cov3_b':  'Bass+rhythm coverage, 3-gram, chord',
+    'joint_cov5_b':  'Bass+rhythm coverage, 5-gram, chord',
     # The prompt-adherence and unique-beat-ratio families are labelled by
     # label_for() from the metric name, so that 48 panels do not depend
     # on 48 hand-kept entries staying consistent with one another.
@@ -211,7 +224,16 @@ def presets():
                        'from the reference', True),
         'fit': (_block('H2'), 2, 'Melody-chord fit', False),
         'repetition': (_block('R'), 2, 'Repetition and structuredness', False),
-        'prompt': (_block('P'), 4, 'Prompt adherence', False),
+        # Chance is already subtracted inside these, so 0 is a
+        # meaningful zero and the raw value is the readable one -- the
+        # delta against the ground-truth continuation is in the CSV for
+        # anyone who wants it. The full P block, JSDs and reuse
+        # included, is --block P.
+        'prompt': ([f'{k}_cov{n}_{st}'
+                    for st in ('a', 'b') for n in (3, 5)
+                    for k in ('motif', 'rhythm', 'joint')],
+                   2, 'Prompt adherence: does the continuation restate '
+                      'the prompt\'s figures?', False),
     }
 
 
@@ -236,6 +258,9 @@ def label_for(metric):
     base, delta = metric, ''
     if base.endswith('_delta'):
         base, delta = base[:-6], ' $-$ ref.'
+    # a hand-written entry for the plain metric also labels its _delta
+    if base in LABELS:
+        return LABELS[base] + delta
     m = re.match(r'ubr(\d)_(onset|state)_([ab])$', base)
     if m:
         n, mode, st = m.groups()

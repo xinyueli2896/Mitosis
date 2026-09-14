@@ -718,6 +718,106 @@ def _prompt_stats(prompt, cont, phase=0):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Prompt PATTERN coverage: does the continuation restate the prompt's
+# figures, allowing for transposition and for entering off the beat?
+#
+# reuse/rhythm_reuse ask whether a BEAT of the continuation is byte-equal
+# to a beat of the prompt. That misses the most ordinary developmental
+# device there is: the same motif a tone higher scores the same as
+# unrelated notes on the same rhythm -- 0.33 for both in a check where
+# the only matches were silent beats. Three changes fix it:
+#
+#   intervals   pitch as differences, so a transposed restatement matches
+#   n-grams     match a run of n intervals ANYWHERE, not a beat window,
+#               so a motif re-entering half a beat late still counts
+#   shuffled    coverage against the prompt MINUS coverage against the
+#   control     same prompt with its sequence shuffled. The shuffle keeps
+#               the prompt's interval and IOI distributions and destroys
+#               only their ORDER, so the difference isolates sequential
+#               structure and cancels what the marginals alone explain.
+#               That control is what makes these immune to the bias, the
+#               density dependence and the silence inflation that the
+#               prompt JSDs and reuse carry: all three move both terms
+#               together.
+#
+# Reported at n = 3 (a motif) and n = 5 (a phrase), for pitch, rhythm,
+# and the two jointly -- so "same figure, different rhythm" separates
+# from "same rhythm, different figure".
+# ---------------------------------------------------------------------------
+
+NGRAM_NS = (3, 5)
+_SHUFFLES = 8
+
+
+def _line(s, low=False):
+    """(frame, pitch) per onset frame: top note, or bottom for chords."""
+    pick = min if low else max
+    return [(f, pick(ps)) for f, ps in enumerate(s.onsets) if ps]
+
+
+def _pattern_seqs(s, low=False):
+    """(interval, ioi, joint) sequences of one stream's line."""
+    line = _line(s, low)
+    iv = [b[1] - a[1] for a, b in zip(line, line[1:])]
+    io = [b[0] - a[0] for a, b in zip(line, line[1:])]
+    return iv, io, list(zip(iv, io))
+
+
+def _ngram_cov(cont, prompt, n):
+    """Fraction of the continuation's n-grams occurring in the prompt."""
+    if len(cont) < n or len(prompt) < n:
+        return float('nan')
+    have = {tuple(prompt[i:i + n]) for i in range(len(prompt) - n + 1)}
+    grams = [tuple(cont[i:i + n]) for i in range(len(cont) - n + 1)]
+    return sum(1 for g in grams if g in have) / len(grams)
+
+
+def _cov_vs_chance(cont, prompt, n, rng):
+    """n-gram coverage minus the coverage a shuffled prompt would give.
+
+    Chance is measured, not assumed. A continuation that merely reuses
+    the prompt's interval VOCABULARY scores ~0; only recurring ORDER
+    scores above it. The value can go slightly negative, which is noise
+    around a true zero and is not clipped -- clipping would bias the
+    mean of a system that genuinely shares no structure.
+    """
+    obs = _ngram_cov(cont, prompt, n)
+    if math.isnan(obs):
+        return float('nan')
+    null = []
+    for _ in range(_SHUFFLES):
+        sh = list(prompt)
+        rng.shuffle(sh)
+        null.append(_ngram_cov(cont, sh, n))
+    return obs - float(np.mean(null))
+
+
+def prompt_pattern_metrics(prompt_a, prompt_b, gen_a, gen_b, ref_a, ref_b):
+    """Transposition-invariant motif/rhythm coverage, vs the reference."""
+    out = {}
+    for label, pr, g, r in (('a', prompt_a, gen_a, ref_a),
+                            ('b', prompt_b, gen_b, ref_b)):
+        low = (label == 'b')          # chords: follow the bass, not the top
+        p_iv, p_io, p_jt = _pattern_seqs(pr, low)
+        g_iv, g_io, g_jt = _pattern_seqs(g, low)
+        r_iv, r_io, r_jt = _pattern_seqs(r, low)
+        for n in NGRAM_NS:
+            for kind, pseq, gseq, rseq in (
+                    ('motif', p_iv, g_iv, r_iv),
+                    ('rhythm', p_io, g_io, r_io),
+                    ('joint', p_jt, g_jt, r_jt)):
+                key = f'{kind}_cov{n}_{label}'
+                # one rng per statistic, seeded the same for generated
+                # and reference, so the two share their shuffle draws
+                # and the delta is not moved by shuffle noise
+                gv = _cov_vs_chance(gseq, pseq, n, np.random.default_rng(n))
+                rv = _cov_vs_chance(rseq, pseq, n, np.random.default_rng(n))
+                out[key] = float(gv)
+                out[f'{key}_delta'] = float(gv - rv)
+    return out
+
+
 def prompt_match_metrics(prompt_a, prompt_b, gen_a, gen_b, ref_a, ref_b,
                          phase=0):
     """Prompt-to-continuation coherence, per stream, vs the reference."""
@@ -910,7 +1010,12 @@ H_GROUPS = {
           for s in ('a', 'b')
           for k in ('reuse', 'pc_jsd', 'density', 'register',
                     'rhythm_reuse', 'grid_jsd', 'ioi_jsd', 'dur_jsd')
-          for d in ('', '_delta')] + ['prompt_onsets_a', 'prompt_onsets_b'],
+          for d in ('', '_delta')]
+         + [f'{k}_cov{n}_{s_}{d}'
+            for s_ in ('a', 'b') for n in NGRAM_NS
+            for k in ('motif', 'rhythm', 'joint')
+            for d in ('', '_delta')]
+         + ['prompt_onsets_a', 'prompt_onsets_b'],
 }
 
 # Print/CSV order. H3 > H2 > H1 is the pre-registered priority; S, R and
@@ -1291,9 +1396,10 @@ def score_pair(gen_paths, ref_paths, args):
     row.update(h2_metrics(ga, gb, ra, rb, args.task))
     row.update(h1_metrics(ga, gb, ra, rb, args.task))
     row.update(repetition_metrics(ga, gb, ra, rb))
-    row.update(prompt_match_metrics(gen_a.slice(0, lo), gen_b.slice(0, lo),
-                                    ga, gb, ra, rb,
+    pa, pb = gen_a.slice(0, lo), gen_b.slice(0, lo)
+    row.update(prompt_match_metrics(pa, pb, ga, gb, ra, rb,
                                     phase=lo % FRAMES_PER_BAR))
+    row.update(prompt_pattern_metrics(pa, pb, ga, gb, ra, rb))
     row.update(s_metrics(ga, gb, ra, rb, args.task))
     # count vectors for the corpus-pooled JSD. Underscored and never a
     # CSV column: the writer is extrasaction='ignore', so this rides
