@@ -47,6 +47,14 @@
 #             into the legend, which is the only way nine of them fit.
 #   WIDTH     figure width in inches (default 7.0, a two-column page)
 #   TITLE     optional figure title
+#   UBR_CURVES=1 (default) also draw the unique-beat-ratio curves --
+#             the BEAT paper's figure: ratio against phrase length, one
+#             curve per system, ground truth dashed, SE bands over songs.
+#             Needs the midis, not the CSV, so it reads:
+#   MANIFEST  default CSV with _metrics.csv -> _manifest.tsv
+#   EVAL_MEL / EVAL_CHORD   reference dirs, default
+#             $OUT_ROOT/prompts/{mel,chord} with OUT_ROOT temp/E1_v5b
+#   PROMPT_LENGTH 96   GEN_LENGTH 416
 #
 # Examples:
 #   sbatch --export=ALL,CSV=results/E1_p96_v5b93_metrics.csv \
@@ -92,6 +100,13 @@ PER_SONG="${PER_SONG:-0}"
 POOLED_CSV="${POOLED_CSV:-}"
 WIDTH="${WIDTH:-7.0}"
 TITLE="${TITLE:-}"
+UBR_CURVES="${UBR_CURVES:-1}"
+OUT_ROOT="${OUT_ROOT:-temp/E1_v5b}"
+MANIFEST="${MANIFEST:-${CSV%_metrics.csv}_manifest.tsv}"
+EVAL_MEL="${EVAL_MEL:-$OUT_ROOT/prompts/mel}"
+EVAL_CHORD="${EVAL_CHORD:-$OUT_ROOT/prompts/chord}"
+PROMPT_LENGTH="${PROMPT_LENGTH:-96}"
+GEN_LENGTH="${GEN_LENGTH:-416}"
 
 python -c 'import matplotlib' 2>/dev/null || {
     echo "ERROR: matplotlib is not in the $CONDA_ENV env."
@@ -120,6 +135,19 @@ else
     python plot_e1_box.py --csv "$CSV" --out "$OUT" --width "$WIDTH" \
         ${NCOLS:+--ncols "$NCOLS"} ${METRICS:+--metrics "$METRICS"} \
         ${TITLE:+--title "$TITLE"}
+fi
+
+if [[ "$UBR_CURVES" == "1" ]]; then
+    if [[ -f "$MANIFEST" && -d "$EVAL_MEL" && -d "$EVAL_CHORD" ]]; then
+        echo "--- unique beat ratio curves ---"
+        python plot_ubr_curves.py --manifest "$MANIFEST" \
+            --ref-a-dir "$EVAL_MEL" --ref-b-dir "$EVAL_CHORD" \
+            --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
+            --width "$WIDTH" --out "${OUT}_ubr_curves"
+    else
+        echo "[ubr] skipped: need MANIFEST=$MANIFEST and the reference dirs"
+        echo "      $EVAL_MEL / $EVAL_CHORD (UBR_CURVES=0 silences this)"
+    fi
 fi
 
 echo "================================================================"
