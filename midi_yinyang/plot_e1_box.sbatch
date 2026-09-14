@@ -16,7 +16,9 @@
 #             (default: the CSV path with _metrics.csv -> _box)
 #   BLOCKS    what to draw, one figure each, suffixed _<block> on OUT.
 #             Default is the four paper sheets:
-#               quality     harmonic-rhythm, onset-grid and duration JSD
+#               quality     harmonic-rhythm, onset-grid and duration JSD,
+#                           CORPUS-POOLED with a bootstrap over songs
+#                           (needs the _pooled.csv that score_e1 writes)
 #               fit         every melody-chord fit metric (H2)
 #               repetition  unique beat ratio, i.e. structuredness (R)
 #               prompt      every prompt-adherence metric (P)
@@ -29,6 +31,11 @@
 #   METRICS   comma-separated metric names, used only when BLOCKS is
 #             empty; default the pre-registered primary endpoints plus
 #             coupling_delta
+#   PER_SONG=1  force the per-song distribution on a sheet that
+#             defaults to pooled. The per-song JSD is biased up by ~0.06
+#             at these sample sizes, so do not describe it as unbiased.
+#   POOLED_CSV  pooled CSV path; default is CSV with _metrics.csv
+#             swapped for _pooled.csv
 #   DELTAS_ONLY=1  keep only the _delta panels of each block. P and R
 #             carry a raw value and a delta per statistic and only the
 #             delta has a reference level, so a P sheet goes from 32
@@ -81,6 +88,8 @@ BLOCKS="${BLOCKS-quality fit repetition prompt}"
 METRICS="${METRICS:-}"
 NCOLS="${NCOLS:-}"
 DELTAS_ONLY="${DELTAS_ONLY:-0}"
+PER_SONG="${PER_SONG:-0}"
+POOLED_CSV="${POOLED_CSV:-}"
 WIDTH="${WIDTH:-7.0}"
 TITLE="${TITLE:-}"
 
@@ -103,6 +112,8 @@ if [[ -n "${BLOCKS// /}" ]]; then
         python plot_e1_box.py --csv "$CSV" --out "${OUT}_${b}" \
             --block "$b" ${NCOLS:+--ncols "$NCOLS"} --width "$WIDTH" \
             $([[ "$DELTAS_ONLY" == "1" ]] && echo --deltas-only) \
+            $([[ "$PER_SONG" == "1" ]] && echo --per-song) \
+            ${POOLED_CSV:+--pooled-csv "$POOLED_CSV"} \
             ${TITLE:+--title "$TITLE"}
     done
 else
@@ -113,7 +124,10 @@ fi
 
 echo "================================================================"
 echo "Done. The .pdf files are the ones to \\includegraphics."
-echo "Boxes are quartiles over SONGS. The dark stick is the mean and its"
+echo "The quality sheet is CORPUS-POOLED: one histogram per system over"
+echo "every song, so each mark is a single value with a bootstrap CI over"
+echo "songs, and there is no std to quote. The other sheets are per-song."
+echo "Boxes there are quartiles over SONGS. The dark stick is the mean and its"
 echo "95% CI: two systems whose sticks miss each other differ at about"
 echo "the 95% level. The dashed line is the reference -- the value a"
 echo "system scores when it matches the ground-truth continuation -- and"

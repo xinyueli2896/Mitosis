@@ -196,16 +196,22 @@ def _block(name, drop_ref=True):
 
 def presets():
     return {
+        # POOLED. Every metric here is a divergence from the reference
+        # distribution, and at ~100 onsets a per-song JSD carries an
+        # upward bias of ~0.06 that swamps the differences between
+        # systems. Pooled over the corpus the bias drops below 0.001, so
+        # this sheet reads the pooled value with a bootstrap over songs.
+        # There is no distribution left to box -- one histogram per
+        # system is one number -- so the mark is a point and its
+        # interval.
         'quality': (['harmonic_rhythm_jsd',
                      'onset_grid_jsd_a', 'onset_grid_jsd_b',
                      'duration_jsd_a', 'duration_jsd_b'],
-                    # One column: five panels in two leaves a hole in the
-                    # grid, and the column above it ends early, so its
-                    # system names land halfway up the figure.
-                    1, 'General quality: distribution match to the reference'),
-        'fit': (_block('H2'), 2, 'Melody-chord fit'),
-        'repetition': (_block('R'), 2, 'Repetition and structuredness'),
-        'prompt': (_block('P'), 4, 'Prompt adherence'),
+                    1, 'General quality: corpus-pooled divergence '
+                       'from the reference', True),
+        'fit': (_block('H2'), 2, 'Melody-chord fit', False),
+        'repetition': (_block('R'), 2, 'Repetition and structuredness', False),
+        'prompt': (_block('P'), 4, 'Prompt adherence', False),
     }
 
 
@@ -286,6 +292,90 @@ def read_per_song(path, metrics):
 def system_mean(metric, sysname, per_song):
     vals = list(per_song.get(metric, {}).get(sysname, {}).values())
     return float(np.mean(vals)) if len(vals) >= 3 else None
+
+
+def read_pooled(path):
+    """{metric: {system: (jsd, ci_lo, ci_hi, n_songs, n_obs)}}."""
+    out = defaultdict(dict)
+    with open(path, newline='') as f:
+        for row in csv.DictReader(f):
+            def num(k):
+                try:
+                    return float(row[k])
+                except (KeyError, TypeError, ValueError):
+                    return float('nan')
+            out[row['metric']][row['system']] = (
+                num('jsd'), num('ci_lo'), num('ci_hi'),
+                int(float(row.get('n_songs') or 0)),
+                int(float(row.get('n_obs') or 0)))
+    return out
+
+
+def draw_panel_pooled(ax, metric, pooled, order, present, title_chars=0):
+    """One point per system: the corpus-pooled JSD and its bootstrap CI."""
+    vals = pooled.get(metric, {})
+    labels, missing = [], []
+    ax.axhline(0.0, color=INK, lw=1.1, ls=(0, (4, 3)), zorder=1)
+
+    ranked_best, unranked_lines = None, []
+    for i, (sysname, disp, short, family, ranked) in enumerate(order):
+        labels.append((disp, short))
+        rec = vals.get(sysname)
+        if rec is None or math.isnan(rec[0]):
+            missing.append(i)
+            continue
+        v, lo, hi, _ns, _no = rec
+        if not math.isnan(lo):
+            ax.plot([i, i], [lo, hi], color=INK_2, lw=1.2,
+                    solid_capstyle='butt', zorder=4)
+        ax.plot([i], [v], marker='o', markersize=5.5,
+                markerfacecolor=FAMILY_COLOR[family], markeredgecolor=SURFACE,
+                markeredgewidth=1.0, zorder=5)
+        if ranked and (ranked_best is None or v < ranked_best[0]):
+            ranked_best = (v, disp, family)
+        if not ranked:
+            unranked_lines.append((v, family))
+
+    # JSD is bounded below by 0 and 0 IS the reference, so best is simply
+    # the smallest -- no absolute-distance rule needed here.
+    for v, family in unranked_lines:
+        ax.axhline(v, color=FAMILY_COLOR[family], lw=1.4, zorder=2)
+    if ranked_best is not None:
+        ax.axhline(ranked_best[0], color=FAMILY_COLOR[ranked_best[2]],
+                   lw=1.4, zorder=2)
+
+    lo_y, hi_y = ax.get_ylim()
+    hi_y = hi_y + 0.17 * (hi_y - lo_y)
+    lo_y = min(lo_y, -0.02 * (hi_y - lo_y))
+    ax.set_ylim(lo_y, hi_y)
+    if ranked_best is not None:
+        ax.annotate('best ranked: ' + ranked_best[1].replace('\n', ' '),
+                    xy=(0.012, 0.965), xycoords='axes fraction',
+                    ha='left', va='top', fontsize=6.4, color=INK)
+    for i in missing:
+        ax.add_patch(Rectangle((i - 0.31, lo_y), 0.62, hi_y - lo_y,
+                               facecolor='none', edgecolor=MUTED,
+                               hatch='///', lw=0.8, alpha=0.55, zorder=2))
+        ax.text(i, lo_y + 0.5 * (hi_y - lo_y), 'pending', rotation=90,
+                ha='center', va='center', fontsize=6.5, color=MUTED)
+
+    if title_chars:
+        ax.set_title('\n'.join(textwrap.wrap(label_for(metric), title_chars)),
+                     fontsize=6.4, color=INK, pad=3)
+    else:
+        ax.set_ylabel(label_for(metric), fontsize=7.0, color=INK)
+    ax.set_xlim(-0.7, len(order) - 0.3)
+    ax.tick_params(axis='y', labelsize=6.5, colors=INK_2, length=2)
+    ax.tick_params(axis='x', length=0)
+    for side in ('top', 'right'):
+        ax.spines[side].set_visible(False)
+    for side in ('left', 'bottom'):
+        ax.spines[side].set_color(MUTED)
+        ax.spines[side].set_linewidth(0.8)
+    ax.set_facecolor(SURFACE)
+    ax.grid(axis='y', color=MUTED, alpha=0.22, lw=0.6, zorder=0)
+    ax.set_axisbelow(True)
+    return labels
 
 
 def best_ranked(metric, per_song, order, present):
@@ -451,6 +541,18 @@ def main():
     p.add_argument('--ncols', type=int, default=None,
                    help='panels per row; default is the '
                         "preset's, else 2")
+    p.add_argument('--pooled', action='store_true',
+                   help='plot the CORPUS-POOLED value with its bootstrap '
+                        'CI instead of the per-song distribution. One '
+                        'histogram per system over every song, so there '
+                        'is nothing to box: the mark is a point and an '
+                        'interval. Only defined for the pooled metrics.')
+    p.add_argument('--per-song', action='store_true',
+                   help='force the per-song distribution even for a preset '
+                        'that defaults to pooled.')
+    p.add_argument('--pooled-csv', default=None,
+                   help='pooled CSV; default is --csv with _metrics.csv '
+                        'swapped for _pooled.csv')
     p.add_argument('--deltas-only', action='store_true',
                    help='keep only the _delta panels of a block. P and R '
                         'carry a raw value and a delta for every '
@@ -462,12 +564,12 @@ def main():
     p.add_argument('--title', default='')
     args = p.parse_args()
 
-    auto_ncols, auto_title = None, ''
+    auto_ncols, auto_title, pooled_mode = None, '', False
     if args.block:
         from eval_metrics import H_GROUPS
         pre = presets()
         if args.block in pre:
-            metrics, auto_ncols, auto_title = pre[args.block]
+            metrics, auto_ncols, auto_title, pooled_mode = pre[args.block]
         elif args.block in H_GROUPS:
             # raw hypothesis block. `_ref` columns hold the reference
             # pair's own statistic, copied into every system's row:
@@ -487,12 +589,33 @@ def main():
         args.ncols = auto_ncols or 2
     if not args.title and auto_title:
         args.title = auto_title
+    if args.per_song:
+        pooled_mode = False
+    if args.pooled:
+        pooled_mode = True
 
-    per_song = read_per_song(args.csv, metrics)
+    pooled = {}
+    if pooled_mode:
+        pc = args.pooled_csv or re.sub(r'_metrics\.csv$', '_pooled.csv',
+                                       args.csv)
+        if not os.path.exists(pc):
+            raise SystemExit(
+                f'ERROR: pooled mode needs {pc}, which eval_metrics writes '
+                'with --pooled-out (score_e1/eval_e1 do this by default). '
+                'Rescore, or pass --per-song to plot the per-song values '
+                'instead -- but do not describe those as unbiased.')
+        pooled = read_pooled(pc)
+        unknown = [m for m in metrics if m not in pooled]
+        if unknown:
+            print(f'[warn] not in the pooled CSV, drawn as pending: '
+                  f'{" ".join(unknown)}', file=sys.stderr)
+
+    per_song = {} if pooled_mode else read_per_song(args.csv, metrics)
 
     present = set()
+    src = pooled if pooled_mode else per_song
     for m in metrics:
-        present |= set(per_song.get(m, {}))
+        present |= set(src.get(m, {}))
     order = [(s, d, sh, g, ranked)
              for g, ranked, members in GROUPS for s, d, sh in members]
     known = {s for s, _, _, _, _ in order}
@@ -520,7 +643,11 @@ def main():
     used = []
     for idx, m in enumerate(metrics):
         ax = axgrid[idx // ncols][idx % ncols]
-        labels = draw_panel(ax, m, per_song, order, present, title_chars)
+        if pooled_mode:
+            labels = draw_panel_pooled(ax, m, pooled, order, present,
+                                       title_chars)
+        else:
+            labels = draw_panel(ax, m, per_song, order, present, title_chars)
         used.append((idx // ncols, idx % ncols, ax))
     for r in range(nrows):
         for c in range(ncols):
@@ -582,28 +709,38 @@ def main():
                     va='top', fontsize=6.8, color=INK, weight='bold',
                     annotation_clip=False)
 
+    word = 'pooled JSD' if pooled_mode else 'mean'
     handles = [
         Line2D([0], [0], color=INK, lw=1.2, ls=(0, (4, 3)),
                label='reference level (matches ground truth)'),
         Line2D([0], [0], color=INK_2, lw=1.4,
-               label='mean of the best ranked system '
-                     '(its family colour; named per panel)'),
-        Line2D([0], [0], color=INK_2, lw=6, alpha=0.35,
-               label='box: quartiles over songs (line: median)'),
-        Line2D([0], [0], color=INK, lw=1.6, marker='o', markersize=3.2,
-               markerfacecolor=SURFACE, markeredgecolor=INK,
-               markeredgewidth=1.0, label='mean and its 95% CI'),
+               label=f'{word} of the best ranked system (named per panel)'),
     ]
+    if pooled_mode:
+        handles += [
+            Line2D([0], [0], color='none', marker='o', markersize=5.5,
+                   markerfacecolor=MUTED, markeredgecolor=SURFACE,
+                   markeredgewidth=1.0,
+                   label='corpus-pooled JSD (one histogram per system)'),
+            Line2D([0], [0], color=INK_2, lw=1.2,
+                   label='95% bootstrap CI over songs'),
+        ]
+    else:
+        handles += [
+            Line2D([0], [0], color=INK_2, lw=6, alpha=0.35,
+                   label='box: quartiles over songs (line: median)'),
+            Line2D([0], [0], color=INK, lw=1.6, marker='o', markersize=3.2,
+                   markerfacecolor=SURFACE, markeredgecolor=INK,
+                   markeredgewidth=1.0, label='mean and its 95% CI'),
+        ]
     unranked = [d.replace('\n', ' ') for _s, d, _sh, _g, r in order if not r]
     if unranked:
         handles.insert(2, Line2D(
             [0], [0], color=FAMILY_COLOR['Not ranked'], lw=1.4,
-            label='mean of ' + ', '.join(unranked)))
+            label=f'{word} of ' + ', '.join(unranked)))
     if compact:
         handles += [Line2D([0], [0], color=FAMILY_COLOR[f], lw=6,
                            alpha=0.78, label=f) for f, _l, _r in edges]
-    # 3 columns, not 4: at four the widest row ran past the canvas and
-    # clipped the last family name.
     fig.legend(handles=handles, loc='lower center',
                ncol=3 if compact else 2, frameon=False,
                fontsize=6.4, labelcolor=INK_2,
@@ -618,24 +755,40 @@ def main():
         print(f'wrote {path}')
 
     # The numbers behind the picture, so a reader of the log can check a
-    # box without opening the figure.
-    print(f'\nper-song n and median, reference level in brackets')
-    for m in metrics:
-        b = best_ranked(m, per_song, order, present)
-        won = f'  best(ranked): {b[0]} mean {b[3]:+.4f}' if b else ''
-        r = ref_level(m)
-        rtxt = 'no reference level' if r is None else f'ref {r:.0f}'
-        print(f'  {m}  [{rtxt}]{won}')
-        for sysname, disp, _short, _, _ in order:
-            vals = list(per_song.get(m, {}).get(sysname, {}).values())
-            if not vals:
-                print(f'    {sysname:11s} --')
-                continue
-            v = np.asarray(vals)
-            q1, med, q3 = np.percentile(v, [25, 50, 75])
-            ci = 1.58 * (q3 - q1) / math.sqrt(len(v))
-            print(f'    {sysname:11s} n={len(v):3d}  median {med:+.4f}'
-                  f'  IQR [{q1:+.4f},{q3:+.4f}]  CI +-{ci:.4f}')
+    # mark without opening the figure.
+    if pooled_mode:
+        print('\ncorpus-pooled JSD [2.5, 97.5] bootstrap over songs')
+        print('(a single value per system, so there is no std; boot_se is '
+              'the spread of the replicates)')
+        for m in metrics:
+            print(f'  {m}')
+            for sysname, disp, _sh, _g, ranked in order:
+                rec = pooled.get(m, {}).get(sysname)
+                if rec is None or math.isnan(rec[0]):
+                    print(f'    {sysname:11s} --')
+                    continue
+                v, lo, hi, ns, no = rec
+                mark = '' if ranked else '   (not ranked)'
+                print(f'    {sysname:11s} {v:.4f} [{lo:.4f},{hi:.4f}]'
+                      f'  n={ns} songs / {no} obs{mark}')
+    else:
+        print('\nper-song n and median, reference level in brackets')
+        for m in metrics:
+            b = best_ranked(m, per_song, order, present)
+            won = f'  best(ranked): {b[0]} mean {b[3]:+.4f}' if b else ''
+            r = ref_level(m)
+            rtxt = 'no reference level' if r is None else f'ref {r:.0f}'
+            print(f'  {m}  [{rtxt}]{won}')
+            for sysname, disp, _short, _, _ in order:
+                vals = list(per_song.get(m, {}).get(sysname, {}).values())
+                if not vals:
+                    print(f'    {sysname:11s} --')
+                    continue
+                v = np.asarray(vals)
+                q1, med, q3 = np.percentile(v, [25, 50, 75])
+                ci = 1.58 * (q3 - q1) / math.sqrt(len(v))
+                print(f'    {sysname:11s} n={len(v):3d}  median {med:+.4f}'
+                      f'  IQR [{q1:+.4f},{q3:+.4f}]  CI +-{ci:.4f}')
 
 
 if __name__ == '__main__':

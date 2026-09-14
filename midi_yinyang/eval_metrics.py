@@ -1051,12 +1051,16 @@ def _pooled_ci(G, R, n_boot=2000, seed=0):
     """
     n = G.shape[0]
     if n < 2 or n_boot <= 0:
-        return float('nan'), float('nan')
+        return float('nan'), float('nan'), float('nan')
     rng = np.random.default_rng(seed)
     w = rng.multinomial(n, np.full(n, 1.0 / n), size=n_boot).astype(float)
     vals = _jsd_rows(w @ G, w @ R)
     lo, hi = np.percentile(vals, [2.5, 97.5])
-    return float(lo), float(hi)
+    # The bootstrap SE is the spread of the replicates. It is reported
+    # for a table that wants a +- column, but the percentile interval is
+    # the better summary: JSD is bounded at 0 and skewed near the floor,
+    # so value +- SE can reach below 0, where the metric cannot go.
+    return float(lo), float(hi), float(vals.std(ddof=1))
 
 
 def pooled_summary(rows, task, n_boot=2000, out_csv=None):
@@ -1086,8 +1090,10 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None):
     width = 26
     print('\n================= CORPUS-POOLED JSD '
           '=================')
-    print('one histogram per system over all songs; [2.5, 97.5] percentile '
-          'bootstrap over SONGS')
+    print('one histogram per system over all songs -- a single value, so '
+          'it has no std;')
+    print('the uncertainty is a [2.5, 97.5] percentile bootstrap over '
+          'SONGS (boot_se in the CSV)')
     print(f'({n_boot} replicates; pooling removes the per-song '
           'small-sample bias but also removes')
     print(' per-song calibration -- a system can match the corpus '
@@ -1108,6 +1114,7 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None):
             n_obs = int(sum(by_song[s][0].sum() for s in songs))
             rec = dict(metric=k, system=sysname, jsd=float('nan'),
                        ci_lo=float('nan'), ci_hi=float('nan'),
+                       boot_se=float('nan'),
                        n_songs=len(songs), n_obs=n_obs, n_boot=n_boot)
             recs.append(rec)
             if not songs:
@@ -1116,7 +1123,8 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None):
             G = np.stack([by_song[s][0] for s in songs])
             R = np.stack([by_song[s][1] for s in songs])
             rec['jsd'] = jsd(G.sum(axis=0), R.sum(axis=0))
-            rec['ci_lo'], rec['ci_hi'] = _pooled_ci(G, R, n_boot=n_boot)
+            rec['ci_lo'], rec['ci_hi'], rec['boot_se'] = _pooled_ci(
+                G, R, n_boot=n_boot)
             cell = f'{rec["jsd"]:.3f}' if math.isnan(rec['ci_lo']) \
                 else f'{rec["jsd"]:.3f} [{rec["ci_lo"]:.3f},{rec["ci_hi"]:.3f}]'
             line += cell.ljust(width)
@@ -1137,8 +1145,8 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None):
     if out_csv:
         with open(out_csv, 'w', newline='') as f:
             w = csv.DictWriter(f, fieldnames=['metric', 'system', 'jsd',
-                                              'ci_lo', 'ci_hi', 'n_songs',
-                                              'n_obs', 'n_boot'])
+                                              'ci_lo', 'ci_hi', 'boot_se',
+                                              'n_songs', 'n_obs', 'n_boot'])
             w.writeheader()
             w.writerows(recs)
         print(f'\nwrote {len(recs)} pooled rows -> {out_csv}')
