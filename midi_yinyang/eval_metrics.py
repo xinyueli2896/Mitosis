@@ -1,12 +1,17 @@
 """Quantitative evaluation metrics for E1 co-generation (EXPERIMENTS.md).
 
-Covers hypotheses H1-H3 plus the S block (stream expertise & role
-separation, non-pre-registered, added for E6); H4 is the listening
-test and is out of scope.
-Reporting follows the pre-registered priority ordering H3 > H2 > H1:
-the summary prints hypothesis blocks in that order and each hypothesis
-has ONE designated primary endpoint (marked *), the rest are
+Covers hypotheses H1-H3 plus the S, R and P blocks (non-pre-registered,
+added later); H4 is the listening test and is out of scope.
+The summary prints blocks in the order H3 > H2 > P > S > R, and each
+has ONE designated primary endpoint (marked *), the rest being
 supporting diagnostics.
+
+H1 IS COMPUTED AND WRITTEN TO THE CSV BUT NO LONGER PRINTED (2026-09-14,
+by request): P took its place in the table. Read the H1 columns of the
+CSV before quoting P on any system, because survival_* and empty_rate_*
+are what say the stream is there at all -- a continuation that fell
+silent adheres to nothing, and its P statistics are meaningless rather
+than bad.
 
   H3 (stream-appropriate grammar)   [highest priority]
     * harmonic_rhythm_jsd   chord-change interval distribution vs ref
@@ -33,26 +38,14 @@ supporting diagnostics.
                             Reported vs the reference pair's coupling.
       (drumnondrum: * onset_sync_delta -- nondrum onsets within +-1
        frame of a drum onset, minus reference rate)
-  H1 (per-stream role & texture integrity)
-    * survival_min          min over streams of active-bar fraction
-      mel_poly_rate         melody frames with >=2 simultaneous onsets
-      density_ratio_<s>     mean notes/bar over ref's mean
-      density_drift_<s>     per-bar density slope (normalized)
-      empty_rate_<s>        silent-frame fraction (collapse detector)
-      register_overlap_delta  stream register overlap minus ref overlap
-
-Three diagnostic blocks follow the pre-registered three, in this order:
-  S (stream expertise & role separation, added for E6)
-  R (repetition/diversity)
-      ubr<n>_<mode>_<s>     unique beat ratio over n-beat intervals,
-                            'onset' or full 'state', with _delta vs ref.
-                            Neither extreme is good, so read the delta.
   P (prompt adherence, per stream, each _delta against the ground-truth
      continuation of the SAME prompt)
-      reuse                 beats restating prompt material exactly
+    * reuse_vs_prompt_a_delta  beats of the continuation restating
+                            prompt material exactly (same pitches, same
+                            frames), minus the reference's rate
       pc_jsd                pitch-class distribution vs the prompt's
       density               onset rate over the prompt's
-      register             mean onset pitch minus the prompt's
+      register              mean onset pitch minus the prompt's
       rhythm_reuse          beats restating a prompt RHYTHM, pitch
                             discarded -- reuse without the pitch
                             requirement, so always at least as large
@@ -61,6 +54,19 @@ Three diagnostic blocks follow the pre-registered three, in this order:
                             mod the bar
       ioi_jsd               inter-onset-interval distribution vs prompt
       dur_jsd               note-duration distribution vs prompt
+  S (stream expertise & role separation, added for E6)
+  R (repetition/diversity)
+      ubr<n>_<mode>_<s>     unique beat ratio over n-beat intervals,
+                            'onset' or full 'state', with _delta vs ref.
+                            Neither extreme is good, so read the delta.
+
+  H1 (per-stream role & texture integrity)  CSV ONLY, not printed
+    * survival_min          min over streams of active-bar fraction
+      mel_poly_rate         melody frames with >=2 simultaneous onsets
+      density_ratio_<s>     mean notes/bar over ref's mean
+      density_drift_<s>     per-bar density slope (normalized)
+      empty_rate_<s>        silent-frame fraction (collapse detector)
+      register_overlap_delta  stream register overlap minus ref overlap
 
 All metrics are computed on the CONTINUATION only (frames
 --prompt-frames .. --total-frames, default 64..384) on a 16th-note
@@ -846,11 +852,13 @@ PRIMARY = {
     'melchord': {'H3': ['harmonic_rhythm_jsd'],
                  'H2': ['chord_tone_cov_delta'],
                  'H1': ['survival_min'],
-                 'S': [], 'R': [], 'P': []},
+                 'P': ['reuse_vs_prompt_a_delta'],
+                 'S': [], 'R': []},
     'drumnondrum': {'H3': ['onset_grid_jsd_b'],
                     'H2': ['onset_sync_delta'],
                     'H1': ['survival_min'],
-                    'S': [], 'R': [], 'P': []},
+                    'P': ['reuse_vs_prompt_a_delta'],
+                    'S': [], 'R': []},
 }
 
 H_GROUPS = {
@@ -887,7 +895,23 @@ H_GROUPS = {
 
 # Print/CSV order. H3 > H2 > H1 is the pre-registered priority; S, R and
 # P are diagnostic blocks added later and follow it.
-GROUP_ORDER = ('H3', 'H2', 'H1', 'S', 'R', 'P')
+# Printed/aggregated blocks, in priority order. P took H1's slot
+# (2026-09-14, by request): the table asks whether a continuation
+# follows on from its prompt, not whether the streams stayed alive. Its
+# primary endpoint is reuse_vs_prompt_a_delta -- the broadest single
+# sense of "follows on", a beat counting as reused only when the same
+# pitches start on the same frames -- read against the reference,
+# because neither copying the prompt nor ignoring it is right.
+GROUP_ORDER = ('H3', 'H2', 'P', 'S', 'R')
+
+# The CSV keeps every computed metric, H1 included. Dropping a block
+# from the TABLE is a reporting decision; dropping it from the CSV would
+# mean rescoring the corpus to get it back. H1 also holds the collapse
+# detectors (survival_*, empty_rate_*), and those are what make a
+# prompt-adherence number readable at all: a stream that fell silent
+# adheres to nothing, and every P statistic on it is either NaN or
+# meaningless rather than bad. Check them in the CSV before quoting P.
+CSV_GROUPS = GROUP_ORDER + ('H1',)
 
 
 # ---------------------------------------------------------------------------
@@ -1170,9 +1194,9 @@ def summarize(rows, task, baseline=None):
     if baseline not in by_system:
         baseline = None
     # widest metric name in any block, plus the * column and a gap
-    NAMEW = max(len(k) for g in H_GROUPS.values() for k in g) + 3
-    print('\n================= SUMMARY (priority order: H3 > H2 > H1, then '
-          'S/R/P) =================')
+    NAMEW = max(len(k) for h in GROUP_ORDER for k in H_GROUPS[h]) + 3
+    print('\n================= SUMMARY (priority order: '
+          + ' > '.join(GROUP_ORDER) + ') =================')
     print('mean +- std over SONGS (samples averaged within song first); '
           'n = songs')
     if baseline:
@@ -1292,7 +1316,7 @@ def main():
 
     if args.out:
         keys = ['system', 'mode', 'song', 'sample'] + [
-            k for h in GROUP_ORDER for k in H_GROUPS[h]]
+            k for h in CSV_GROUPS for k in H_GROUPS[h]]
         with open(args.out, 'w', newline='') as f:
             w = csv.DictWriter(f, fieldnames=keys, extrasaction='ignore')
             w.writeheader()
