@@ -131,7 +131,7 @@ def report(label, path):
               f'and a hybrid built from it loses the track entirely.')
 
 
-if SONGS == ['all']:
+if len(SONGS) == 1 and SONGS[0].lower() == 'all':
     # Sweep: the per-song detail would be 95 x 4 lines, so print only
     # the songs that are degenerate, then the census. A prompt window
     # empty in one stream is not a model failure -- it is a task no
@@ -173,6 +173,20 @@ if SONGS == ['all']:
           '\ncomparison matched; the exclusion is a property of the'
           '\nprompt, decided without looking at any result.')
 else:
+    # A named song with neither file is a bad request, not a finding:
+    # a typo, or a checkout too old to know the name (this is what a
+    # stale SONG_IDS=all looked like -- "all" reported as a missing
+    # file). Say so and fail, rather than print a report about nothing.
+    absent = [s for s in
+              (f'{int(s):03d}' if s.isdigit() else s for s in SONGS)
+              if find(MEL_DIR, s) is None and find(CHORD_DIR, s) is None]
+    if absent:
+        raise SystemExit(
+            f'ERROR: no prompt files for {" ".join(absent)}.\n'
+            f'  looked in {MEL_DIR} and {CHORD_DIR}.\n'
+            '  SONG_IDS=all sweeps every staged song; if you passed that\n'
+            '  and are reading this, the checkout predates sweep support\n'
+            '  -- git pull and resubmit.')
     for song in SONGS:
         song = f'{int(song):03d}' if song.isdigit() else song
         print(f'--- {song} ---')
