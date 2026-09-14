@@ -45,6 +45,9 @@
 #             horizontal and two-line with family brackets under the
 #             axis; above 1 they turn vertical and the families move
 #             into the legend, which is the only way nine of them fit.
+#   EXCLUDE_SYSTEMS  comma-separated internal names to leave off every
+#             figure -- no column, no placeholder. EXCLUDE_SYSTEMS=A3
+#             drops Duet (refine) and keeps Duet (alt. commit).
 #   WIDTH     figure width in inches (default 7.0, a two-column page)
 #   TITLE     optional figure title
 #   UBR_CURVES=1 (default) also draw the unique-beat-ratio curves --
@@ -100,6 +103,7 @@ PER_SONG="${PER_SONG:-0}"
 POOLED_CSV="${POOLED_CSV:-}"
 WIDTH="${WIDTH:-7.0}"
 TITLE="${TITLE:-}"
+EXCLUDE_SYSTEMS="${EXCLUDE_SYSTEMS:-}"
 UBR_CURVES="${UBR_CURVES:-1}"
 OUT_ROOT="${OUT_ROOT:-temp/E1_v5b}"
 MANIFEST="${MANIFEST:-${CSV%_metrics.csv}_manifest.tsv}"
@@ -129,11 +133,13 @@ if [[ -n "${BLOCKS// /}" ]]; then
             $([[ "$DELTAS_ONLY" == "1" ]] && echo --deltas-only) \
             $([[ "$PER_SONG" == "1" ]] && echo --per-song) \
             ${POOLED_CSV:+--pooled-csv "$POOLED_CSV"} \
+            ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"} \
             ${TITLE:+--title "$TITLE"}
     done
 else
     python plot_e1_box.py --csv "$CSV" --out "$OUT" --width "$WIDTH" \
         ${NCOLS:+--ncols "$NCOLS"} ${METRICS:+--metrics "$METRICS"} \
+        ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"} \
         ${TITLE:+--title "$TITLE"}
 fi
 
@@ -143,7 +149,8 @@ if [[ "$UBR_CURVES" == "1" ]]; then
         python plot_ubr_curves.py --manifest "$MANIFEST" \
             --ref-a-dir "$EVAL_MEL" --ref-b-dir "$EVAL_CHORD" \
             --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
-            --width "$WIDTH" --out "${OUT}_ubr_curves"
+            --width "$WIDTH" --out "${OUT}_ubr_curves" \
+            ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"}
     else
         echo "[ubr] skipped: need MANIFEST=$MANIFEST and the reference dirs"
         echo "      $EVAL_MEL / $EVAL_CHORD (UBR_CURVES=0 silences this)"

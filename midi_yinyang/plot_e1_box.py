@@ -636,6 +636,10 @@ def main():
     p.add_argument('--pooled-csv', default=None,
                    help='pooled CSV; default is --csv with _metrics.csv '
                         'swapped for _pooled.csv')
+    p.add_argument('--exclude', default='',
+                   help='comma-separated internal system names to leave '
+                        'off the figure entirely (no column, no '
+                        'placeholder), e.g. A3')
     p.add_argument('--deltas-only', action='store_true',
                    help='keep only the _delta panels of a block. P and R '
                         'carry a raw value and a delta for every '
@@ -736,9 +740,14 @@ def main():
     src = pooled if pooled_mode else per_song
     for m in metrics:
         present |= set(src.get(m, {}))
+    excluded = {x.strip() for x in args.exclude.split(',') if x.strip()}
     order = [(s, d, sh, g, ranked)
-             for g, ranked, members in GROUPS for s, d, sh in members]
-    known = {s for s, _, _, _, _ in order}
+             for g, ranked, members in GROUPS for s, d, sh in members
+             if s not in excluded]
+    if excluded:
+        print(f'[exclude] left off the figure: {" ".join(sorted(excluded))}',
+              file=sys.stderr)
+    known = {s for s, _, _, _, _ in order} | excluded
     extra = sorted(present - known)
     if extra:
         print(f'[warn] in the CSV but not in the figure: {" ".join(extra)}',
@@ -808,10 +817,14 @@ def main():
             bottom.set_xticklabels([lg for lg, _sh in labels],
                                    fontsize=6.2, color=INK)
 
-    edges, start = [], 0
-    for family, _ranked, members in GROUPS:
-        edges.append((family, start, start + len(members) - 1))
-        start += len(members)
+    # family spans over the filtered order, so an excluded member does
+    # not leave its family's bracket one column too wide
+    edges = []
+    for i, (_s, _d, _sh, family, _r) in enumerate(order):
+        if edges and edges[-1][0] == family:
+            edges[-1] = (family, edges[-1][1], i)
+        else:
+            edges.append((family, i, i))
     # Family brackets under the axis only in the single-column figure.
     # Under vertical names they would sit an inch and a half down, and
     # the family names themselves would overlap at half width -- so in

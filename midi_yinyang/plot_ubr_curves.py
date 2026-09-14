@@ -126,14 +126,17 @@ def main():
     p.add_argument('--chord-programs', default='48')
     p.add_argument('--width', type=float, default=7.0)
     p.add_argument('--no-bands', action='store_true')
+    p.add_argument('--exclude', default='',
+                   help='comma-separated system names to leave off')
     args = p.parse_args()
     args.mel_programs = {int(x) for x in args.mel_programs.split(',')}
     args.chord_programs = {int(x) for x in args.chord_programs.split(',')}
 
     gen, ref = collect(args)
+    excluded = {x.strip() for x in args.exclude.split(',') if x.strip()}
     order = [(s, d, g, i)
              for g, _r, members in GROUPS
-             for i, (s, d, _sh) in enumerate(members)]
+             for i, (s, d, _sh) in enumerate(members) if s not in excluded]
     present = {s for v in gen.values() for s in v}
     absent = [s for s, _, _, _ in order if s not in present]
     if absent:
