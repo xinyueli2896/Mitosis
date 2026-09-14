@@ -41,6 +41,27 @@ supporting diagnostics.
       empty_rate_<s>        silent-frame fraction (collapse detector)
       register_overlap_delta  stream register overlap minus ref overlap
 
+Three diagnostic blocks follow the pre-registered three, in this order:
+  S (stream expertise & role separation, added for E6)
+  R (repetition/diversity)
+      ubr<n>_<mode>_<s>     unique beat ratio over n-beat intervals,
+                            'onset' or full 'state', with _delta vs ref.
+                            Neither extreme is good, so read the delta.
+  P (prompt adherence, per stream, each _delta against the ground-truth
+     continuation of the SAME prompt)
+      reuse                 beats restating prompt material exactly
+      pc_jsd                pitch-class distribution vs the prompt's
+      density               onset rate over the prompt's
+      register             mean onset pitch minus the prompt's
+      rhythm_reuse          beats restating a prompt RHYTHM, pitch
+                            discarded -- reuse without the pitch
+                            requirement, so always at least as large
+      grid_jsd              metrical-position histogram vs the prompt's:
+                            pc_jsd is pitch mod the octave, this is time
+                            mod the bar
+      ioi_jsd               inter-onset-interval distribution vs prompt
+      dur_jsd               note-duration distribution vs prompt
+
 All metrics are computed on the CONTINUATION only (frames
 --prompt-frames .. --total-frames, default 64..384) on a 16th-note
 grid derived from the file's tempo (beat_div=4, 16 frames/bar).
@@ -137,6 +158,11 @@ class Stream:
         # pitches, so both are kept.
         self.sounding_abs = [set() for _ in range(n_frames)]
         self.durations = []                              # in frames
+        # durations indexed by ONSET frame, so slice() can restrict them
+        # to a window. Without this a sliced stream carries the whole
+        # file's durations and any duration statistic silently scores
+        # the prompt along with the continuation.
+        self.dur_at = [[] for _ in range(n_frames)]
         to_frame = step if callable(step) else (lambda t: t / step)
         for note in notes:
             f0 = int(round(to_frame(note.start)))
@@ -145,6 +171,7 @@ class Stream:
                 continue
             self.onsets[f0].append(note.pitch)
             self.durations.append(min(f1, n_frames) - f0)
+            self.dur_at[f0].append(min(f1, n_frames) - f0)
             for f in range(f0, min(f1, n_frames)):
                 self.sounding[f].add(note.pitch % 12)
                 self.sounding_abs[f].add(note.pitch)
@@ -154,7 +181,14 @@ class Stream:
         out.onsets = self.onsets[lo:hi]
         out.sounding = self.sounding[lo:hi]
         out.sounding_abs = self.sounding_abs[lo:hi]
-        out.durations = self.durations   # durations kept whole-file; fine for dists
+        # Durations of the notes that START in the window. These used to
+        # be the whole file's, which put the PROMPT into every duration
+        # statistic: the prompt is byte-identical between a system and
+        # the reference, so it pulled duration_jsd toward 0 by the
+        # prompt's share of the notes, equally for every system, and it
+        # made any duration-vs-prompt comparison identically 0.
+        out.dur_at = self.dur_at[lo:hi]
+        out.durations = [d for ds in out.dur_at for d in ds]
         return out
 
     def onset_frames(self):
@@ -493,8 +527,18 @@ FRAMES_PER_BEAT = FRAMES_PER_BAR // 4
 
 
 def _beat_sigs(s, beats=1, mode='onset'):
-    """One hashable signature per beat interval of a stream."""
+    """One hashable signature per beat interval of a stream.
+
+    mode 'onset' = pitches that start in each frame, 'state' = pitches
+    sounding in each frame, 'rhythm' = whether anything starts in each
+    frame, pitch discarded. The last one turns a beat into its rhythmic
+    figure alone, so two beats carrying the same pattern on different
+    notes count as the same signature.
+    """
     w = beats * FRAMES_PER_BEAT
+    if mode == 'rhythm':
+        return [tuple(bool(s.onsets[f]) for f in range(i * w, i * w + w))
+                for i in range(s.n_frames // w)]
     field = s.onsets if mode == 'onset' else s.sounding_abs
     return [tuple(tuple(sorted(field[f])) for f in range(i * w, i * w + w))
             for i in range(s.n_frames // w)]
@@ -558,15 +602,34 @@ def _rate(s):
     return s.n_onsets() / s.n_frames if s.n_frames else float('nan')
 
 
-def _prompt_stats(prompt, cont):
+def _iois(s):
+    """Frames between successive onset frames."""
+    fs = s.onset_frames()
+    return [b - a for a, b in zip(fs, fs[1:])]
+
+
+def _grid_hist(s, phase=0):
+    """Metrical-position histogram: where in the bar the onsets fall.
+
+    phase is the sliced stream's offset from the bar line, so a prompt
+    and a continuation taken from different windows are compared on the
+    same bar positions. It is 0 whenever the split is on a bar line,
+    which every configured PROMPT_LENGTH is.
+    """
+    return hist([(f + phase) % FRAMES_PER_BAR for f in s.onset_frames()],
+                FRAMES_PER_BAR)
+
+
+def _prompt_stats(prompt, cont, phase=0):
     """How much a continuation follows on from its prompt.
 
-    Four statistics, each a different sense of "follows on":
+    Four pitch-side statistics, each a different sense of "follows on":
 
       reuse       fraction of the continuation's beat intervals whose
                   content already appears in the prompt. Literal
                   restatement of prompt material, using the signatures
-                  of unique_beat_ratio.
+                  of unique_beat_ratio. Joint: a beat matches only if
+                  the same pitches start on the same frames.
       pc_jsd      divergence between prompt and continuation pitch-class
                   distributions. Rises when the continuation leaves the
                   prompt's key.
@@ -575,7 +638,29 @@ def _prompt_stats(prompt, cont):
       register    mean onset pitch of the continuation minus the
                   prompt's, in semitones.
 
-    All four are reported against the GROUND-TRUTH continuation of the
+    and four rhythm-side ones, since a continuation can hold the
+    prompt's key and register while abandoning its rhythm entirely, and
+    density alone only counts onsets, never their placement:
+
+      rhythm_reuse  reuse over the prompt's rhythmic FIGURES: the same
+                    beat signatures with pitch discarded, so a beat
+                    matches when the pattern of attacks recurs on other
+                    notes. reuse is a lower bound on this by
+                    construction.
+      grid_jsd      metrical-position histogram vs the prompt's. The
+                    rhythmic counterpart of pc_jsd -- that one is pitch
+                    modulo the octave, this is time modulo the bar --
+                    and it is what moves when a continuation drifts off
+                    the prompt's beat or starts syncopating.
+      ioi_jsd       inter-onset-interval distribution vs the prompt's:
+                    pacing, independent of where in the bar the onsets
+                    land.
+      dur_jsd       note-duration distribution vs the prompt's. For a
+                    legato monophonic line this tracks ioi_jsd; for the
+                    chord stream, whose rhythm is mostly sustain, the
+                    two part company.
+
+    All eight are reported against the GROUND-TRUTH continuation of the
     same prompt, because none has a good absolute value: a real
     continuation neither copies its prompt nor ignores it, and only the
     reference says where between those the song actually sat.
@@ -589,10 +674,26 @@ def _prompt_stats(prompt, cont):
     rp, rc = _rate(prompt), _rate(cont)
     out['density'] = float(rc / rp) if rp else float('nan')
     out['register'] = _mean_pitch(cont) - _mean_pitch(prompt)
+
+    rsig_p = set(_beat_sigs(prompt, 1, 'rhythm'))
+    rsig_c = _beat_sigs(cont, 1, 'rhythm')
+    out['rhythm_reuse'] = (sum(1 for g in rsig_c if g in rsig_p) / len(rsig_c)
+                           if rsig_c else float('nan'))
+    # Same binning as the h3 counterparts (POOLED_BINS), so a
+    # prompt-adherence divergence is on the same scale as the
+    # reference-divergence of the same quantity.
+    out['grid_jsd'] = jsd(_grid_hist(cont, phase), _grid_hist(prompt))
+    i_c, i_p = _iois(cont), _iois(prompt)
+    out['ioi_jsd'] = (jsd(hist(i_c, 33, cap=32), hist(i_p, 33, cap=32))
+                      if i_c and i_p else float('nan'))
+    out['dur_jsd'] = (jsd(_ph('duration_jsd_a', cont.durations),
+                          _ph('duration_jsd_a', prompt.durations))
+                      if cont.durations and prompt.durations else float('nan'))
     return out
 
 
-def prompt_match_metrics(prompt_a, prompt_b, gen_a, gen_b, ref_a, ref_b):
+def prompt_match_metrics(prompt_a, prompt_b, gen_a, gen_b, ref_a, ref_b,
+                         phase=0):
     """Prompt-to-continuation coherence, per stream, vs the reference."""
     out = {}
     for label, pr, g, r in (('a', prompt_a, gen_a, ref_a),
@@ -601,7 +702,8 @@ def prompt_match_metrics(prompt_a, prompt_b, gen_a, gen_b, ref_a, ref_b):
         # prompt here and silently score as following nothing; surface
         # the count so that reads as a bug rather than a result.
         out[f'prompt_onsets_{label}'] = pr.n_onsets()
-        gs, rs = _prompt_stats(pr, g), _prompt_stats(pr, r)
+        gs = _prompt_stats(pr, g, phase)
+        rs = _prompt_stats(pr, r, phase)
         for k in gs:
             out[f'{k}_vs_prompt_{label}'] = float(gs[k])
             out[f'{k}_vs_prompt_{label}_delta'] = float(gs[k] - rs[k])
@@ -744,11 +846,11 @@ PRIMARY = {
     'melchord': {'H3': ['harmonic_rhythm_jsd'],
                  'H2': ['chord_tone_cov_delta'],
                  'H1': ['survival_min'],
-                 'S': []},
+                 'S': [], 'R': [], 'P': []},
     'drumnondrum': {'H3': ['onset_grid_jsd_b'],
                     'H2': ['onset_sync_delta'],
                     'H1': ['survival_min'],
-                    'S': []},
+                    'S': [], 'R': [], 'P': []},
 }
 
 H_GROUPS = {
@@ -767,7 +869,25 @@ H_GROUPS = {
            'empty_rate_a', 'empty_rate_b', 'register_overlap_delta'],
     'S': ['mel_interval_jsd', 'voicing_jsd',
            'dur_contrast_delta', 'density_contrast_delta'],
+    # R -- repetition/diversity (unique beat ratio). Neither extreme is
+    # good, so only the _delta columns carry a direction; the raw value
+    # is kept beside them to show which side of the reference it fell.
+    'R': [f'ubr{b}_{m}_{s}{d}'
+          for s in ('a', 'b') for b in (1, 2) for m in ('onset', 'state')
+          for d in ('', '_delta')],
+    # P -- prompt adherence. Four pitch-side statistics then four
+    # rhythm-side ones, per stream, each against the reference
+    # continuation of the same prompt.
+    'P': [f'{k}_vs_prompt_{s}{d}'
+          for s in ('a', 'b')
+          for k in ('reuse', 'pc_jsd', 'density', 'register',
+                    'rhythm_reuse', 'grid_jsd', 'ioi_jsd', 'dur_jsd')
+          for d in ('', '_delta')] + ['prompt_onsets_a', 'prompt_onsets_b'],
 }
+
+# Print/CSV order. H3 > H2 > H1 is the pre-registered priority; S, R and
+# P are diagnostic blocks added later and follow it.
+GROUP_ORDER = ('H3', 'H2', 'H1', 'S', 'R', 'P')
 
 
 # ---------------------------------------------------------------------------
@@ -809,6 +929,16 @@ STREAM_OF = {
     'mel_interval_jsd': 'a', 'voicing_jsd': 'b',
     'dur_contrast_delta': None, 'density_contrast_delta': None,
 }
+# R and P are per-stream by construction: every key carries its stream
+# in the suffix, and both families read one stream only. Registering
+# them keeps E3 from presenting the GIVEN stream's copied ground truth
+# as if it discriminated systems.
+for _h in ('R', 'P'):
+    for _k in H_GROUPS[_h]:
+        _parts = _k.split('_')
+        _s = _parts[-1] if _parts[-1] in ('a', 'b') else _parts[-2]
+        assert _s in ('a', 'b'), f'no stream suffix on {_k}'
+        STREAM_OF[_k] = _s
 
 # Which stream is GIVEN in each conditional mode. 'co' (E1) gives neither.
 # drum2nondrum is B.1/C.1/C.2's own label for the mel2chord direction.
@@ -1006,7 +1136,8 @@ def score_pair(gen_paths, ref_paths, args):
     row.update(h1_metrics(ga, gb, ra, rb, args.task))
     row.update(repetition_metrics(ga, gb, ra, rb))
     row.update(prompt_match_metrics(gen_a.slice(0, lo), gen_b.slice(0, lo),
-                                    ga, gb, ra, rb))
+                                    ga, gb, ra, rb,
+                                    phase=lo % FRAMES_PER_BAR))
     row.update(s_metrics(ga, gb, ra, rb, args.task))
     # count vectors for the corpus-pooled JSD. Underscored and never a
     # CSV column: the writer is extrasaction='ignore', so this rides
@@ -1038,23 +1169,25 @@ def summarize(rows, task, baseline=None):
     systems = sorted(by_system)
     if baseline not in by_system:
         baseline = None
-    print('\n================= SUMMARY (priority order: H3 > H2 > H1 > S) '
-          '=================')
+    # widest metric name in any block, plus the * column and a gap
+    NAMEW = max(len(k) for g in H_GROUPS.values() for k in g) + 3
+    print('\n================= SUMMARY (priority order: H3 > H2 > H1, then '
+          'S/R/P) =================')
     print('mean +- std over SONGS (samples averaged within song first); '
           'n = songs')
     if baseline:
         print(f'p: Wilcoxon signed-rank on per-song differences vs '
               f'{baseline}, paired by song')
-    for h in ('H3', 'H2', 'H1', 'S'):
+    for h in GROUP_ORDER:
         print(f'\n--- {h} ---')
         keys = [k for k in H_GROUPS[h]
                 if any(k in r and not _is_nan(r[k]) for r in rows)]
         width = 22 if baseline else 17
-        header = 'metric'.ljust(26) + ''.join(s.ljust(width) for s in systems)
+        header = 'metric'.ljust(NAMEW) + ''.join(s.ljust(width) for s in systems)
         print(header)
         for k in keys:
             star = '*' if k in PRIMARY[task][h] else ' '
-            line = (star + k).ljust(26)
+            line = (star + k).ljust(NAMEW)
             base = _per_song(by_system[baseline], k) if baseline else {}
             for sysname in systems:
                 song_vals = _per_song(by_system[sysname], k)
@@ -1076,7 +1209,7 @@ def summarize(rows, task, baseline=None):
             print(line)
         if keys:
             ns = {s: len(_per_song(by_system[s], keys[0])) for s in systems}
-            print('  n songs'.ljust(26)
+            print('  n songs'.ljust(NAMEW)
                   + ''.join(str(ns[s]).ljust(width) for s in systems))
     print('\n(* = pre-registered primary endpoint; deltas/JSD: closer to 0 '
           'is better; ratios: closer to 1 is better)')
@@ -1159,7 +1292,7 @@ def main():
 
     if args.out:
         keys = ['system', 'mode', 'song', 'sample'] + [
-            k for h in ('H3', 'H2', 'H1', 'S') for k in H_GROUPS[h]]
+            k for h in GROUP_ORDER for k in H_GROUPS[h]]
         with open(args.out, 'w', newline='') as f:
             w = csv.DictWriter(f, fieldnames=keys, extrasaction='ignore')
             w.writeheader()

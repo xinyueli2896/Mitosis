@@ -30,7 +30,8 @@ import csv
 import math
 from collections import defaultdict
 
-from eval_metrics import (GIVEN_STREAM_BY_MODE, H_GROUPS, PRIMARY, STREAM_OF)
+from eval_metrics import (GIVEN_STREAM_BY_MODE, GROUP_ORDER, H_GROUPS,
+                          PRIMARY, STREAM_OF)
 
 
 def _try_float(v):
@@ -261,7 +262,7 @@ def main():
         md_lines.append('| metric | ' + ' | '.join(cols) + ' |')
         md_lines.append('|' + '---|' * (len(cols) + 1))
 
-        for h in ('H3', 'H2', 'H1', 'S'):
+        for h in GROUP_ORDER:
             print(f'--- {h} ---')
             md_lines.append(f'| **{h}** | ' + ' | '.join('' for _ in cols) + ' |')
             for metric in H_GROUPS[h]:
