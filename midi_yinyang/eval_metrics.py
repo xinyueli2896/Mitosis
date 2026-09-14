@@ -18,8 +18,9 @@ statistics are meaningless rather than bad.
       mel_stepwise_delta    melody stepwise-motion rate minus ref
       onset_grid_jsd_<s>    within-bar onset-position histogram vs ref
       duration_jsd_<s>      note-duration distribution vs ref
-  H2 (inter-stream fit)   [primary undecided; chord_tone_cov_delta,
-                           the registered one, moved to H2x -- CSV only]
+  H2 (inter-stream fit)
+    * chord_tone_cov_delta  melody-note chord-tone coverage minus the
+                            SAME statistic on the reference pair
       ctnctr_delta          chord-tone/non-chord-tone ratio with the
                             proper-passing-tone allowance (Yeh et al.
                             2021), vs ref
@@ -983,24 +984,23 @@ EXPLORATORY = {'P'}
 
 PRIMARY = {
     'melchord': {'H3': ['harmonic_rhythm_jsd'],
-                 # H2's registered primary was chord_tone_cov_delta, now
-                 # in H2x; undecided until the results are in
-                 'H2': [],
+                 'H2': ['chord_tone_cov_delta'],
                  'H1': ['survival_min'],
                  'P': [],       # undecided until the results are in
-                 'S': [], 'R': [], 'P0': [], 'H2x': []},
+                 'S': [], 'R': [], 'P0': []},
     'drumnondrum': {'H3': ['onset_grid_jsd_b'],
                     'H2': ['onset_sync_delta'],
                     'H1': ['survival_min'],
                     'P': [],       # undecided until the results are in
-                    'S': [], 'R': [], 'P0': [], 'H2x': []},
+                    'S': [], 'R': [], 'P0': []},
 }
 
 H_GROUPS = {
     'H3': ['harmonic_rhythm_jsd', 'mel_stepwise_delta',
            'onset_grid_jsd_a', 'onset_grid_jsd_b',
            'duration_jsd_a', 'duration_jsd_b'],
-    'H2': ['ctnctr', 'ctnctr_ref', 'ctnctr_delta',
+    'H2': ['chord_tone_cov', 'chord_tone_cov_ref', 'chord_tone_cov_delta',
+           'ctnctr', 'ctnctr_ref', 'ctnctr_delta',
            'pcs', 'pcs_ref', 'pcs_delta',
            'mctd', 'mctd_ref', 'mctd_delta',
            'coupling', 'coupling_ref', 'coupling_delta',
@@ -1030,14 +1030,6 @@ H_GROUPS = {
             for s_ in ('a', 'b') for k in ('density', 'register')
             for d in ('', '_delta')]
          + ['prompt_onsets_a', 'prompt_onsets_b'],
-    # H2x -- plain chord-tone coverage, CSV only (2026-09-14, by
-    # request). It is CTnCTR without the passing-tone allowance, so it
-    # duplicated a metric already reported, and on this run the two
-    # order the systems the same way. NOTE it was the pre-registered H2
-    # primary and was dropped after its numbers were seen; the paper
-    # must say the endpoint changed and why. The coverage FUNCTION stays
-    # -- coupling is built on it.
-    'H2x': ['chord_tone_cov', 'chord_tone_cov_ref', 'chord_tone_cov_delta'],
     # P0 -- the prompt-adherence measures P replaced. CSV only. reuse
     # and rhythm_reuse need a beat to be byte-equal, so a transposed
     # restatement scores like unrelated notes and silent beats count as
@@ -1067,7 +1059,7 @@ GROUP_ORDER = ('H3', 'H2', 'P', 'S', 'R')
 # place. So the CSV is the superset -- everything computed is recorded
 # -- and the table is the reading order. Add 'H1' to GROUP_ORDER to put
 # it back in the table too.
-CSV_GROUPS = GROUP_ORDER + ('H1', 'P0', 'H2x')
+CSV_GROUPS = GROUP_ORDER + ('H1', 'P0')
 
 
 # ---------------------------------------------------------------------------
