@@ -359,6 +359,12 @@ def main():
                    help='hypothesis block (H1/H2/H3/P/S/R): plots every '
                         'metric in it, overriding --metrics')
     p.add_argument('--ncols', type=int, default=2)
+    p.add_argument('--deltas-only', action='store_true',
+                   help='keep only the _delta panels of a block. P and R '
+                        'carry a raw value and a delta for every '
+                        'statistic, and only the delta has a reference '
+                        'level, so this halves a 32-panel sheet without '
+                        'losing a comparison that can be read.')
     p.add_argument('--width', type=float, default=7.0, help='inches')
     p.add_argument('--panel-height', type=float, default=1.45, help='inches')
     p.add_argument('--title', default='')
@@ -374,8 +380,14 @@ def main():
         # construction, so a box plot of one is the same box drawn nine
         # times. The paired `_delta` carries the same information
         # against the reference, which is what the panels show.
+        # prompt_onsets_* goes too: it is a guard on the INPUT -- it
+        # says whether a system was given a prompt at all -- not a
+        # score, and it is near-identical across systems by design.
         metrics = [m for m in H_GROUPS[args.block]
-                   if not m.endswith('_ref')]
+                   if not m.endswith('_ref')
+                   and not m.startswith('prompt_onsets')]
+        if args.deltas_only:
+            metrics = [m for m in metrics if m.endswith('_delta')]
     else:
         metrics = [m.strip() for m in args.metrics.split(',') if m.strip()]
     per_song = read_per_song(args.csv, metrics)

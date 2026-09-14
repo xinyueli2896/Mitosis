@@ -1,12 +1,13 @@
 #!/bin/bash
 # SLURM (CPU): box plots of an E1 metrics CSV, grouped by system family.
 #
-# Draws one panel per metric: a notched box per system over the PER-SONG
-# values (samples averaged within a song first), systems ordered and
-# coloured by family, with the reference level marked as a dashed line
-# and the 95% CI of each median as the box notch. Systems not present in
-# the CSV are drawn as hatched "pending" slots rather than dropped, so a
-# reader can see what is still missing.
+# Draws one panel per metric: a box per system over the PER-SONG values
+# (samples averaged within a song first), systems ordered and coloured
+# by family. The reference level is a dashed line, the mean and its 95%
+# CI a dark stick over each box, and the best ranked system's mean a
+# solid line across the panel. Systems not present in the CSV are drawn
+# as hatched "pending" slots rather than dropped, so a reader can see
+# what is still missing.
 #
 # Env knobs (--export=ALL,KEY=val):
 #   CSV       metrics CSV from eval_metrics/score_e1
@@ -23,6 +24,10 @@
 #   METRICS   comma-separated metric names, used only when BLOCKS is
 #             empty; default the pre-registered primary endpoints plus
 #             coupling_delta
+#   DELTAS_ONLY=1  keep only the _delta panels of each block. P and R
+#             carry a raw value and a delta per statistic and only the
+#             delta has a reference level, so a P sheet goes from 32
+#             panels to 16 without losing a readable comparison.
 #   NCOLS     panels per row (default 2). At 1 the system names are
 #             horizontal and two-line with family brackets under the
 #             axis; above 1 they turn vertical and the families move
@@ -37,6 +42,10 @@
 #   sbatch --export=ALL,CSV=results/E1_p96_v5b93_metrics.csv,\
 # METRICS=onset_grid_jsd_b,duration_jsd_b,voicing_jsd,OUT=results/E1_chord_box \
 #       midi_yinyang/plot_e1_box.sbatch
+#
+#   # prompt adherence (P), deltas only -- 16 panels instead of 32:
+#   sbatch --export=ALL,CSV=results/E1_p96_v5b93_metrics.csv,\
+# BLOCKS=P,DELTAS_ONLY=1 midi_yinyang/plot_e1_box.sbatch
 
 #SBATCH --job-name=plot_e1_box
 #SBATCH --output=/home/xinyue.li/logs/%x_%j.out
@@ -65,6 +74,7 @@ OUT="${OUT:-${CSV%_metrics.csv}_box}"
 BLOCKS="${BLOCKS-H3 H2 H1}"
 METRICS="${METRICS:-}"
 NCOLS="${NCOLS:-2}"
+DELTAS_ONLY="${DELTAS_ONLY:-0}"
 WIDTH="${WIDTH:-7.0}"
 TITLE="${TITLE:-}"
 
@@ -78,7 +88,7 @@ echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "CSV   : $CSV"
 echo "OUT   : $OUT[_<block>].{pdf,png}"
 echo "BLOCKS: ${BLOCKS:-<none: single figure from METRICS>}"
-echo "NCOLS : $NCOLS"
+echo "NCOLS : $NCOLS   DELTAS_ONLY=$DELTAS_ONLY"
 echo "================================================================"
 
 if [[ -n "${BLOCKS// /}" ]]; then
@@ -86,6 +96,7 @@ if [[ -n "${BLOCKS// /}" ]]; then
         echo "--- $b ---"
         python plot_e1_box.py --csv "$CSV" --out "${OUT}_${b}" \
             --block "$b" --ncols "$NCOLS" --width "$WIDTH" \
+            $([[ "$DELTAS_ONLY" == "1" ]] && echo --deltas-only) \
             ${TITLE:+--title "$TITLE"}
     done
 else
@@ -96,8 +107,9 @@ fi
 
 echo "================================================================"
 echo "Done. The .pdf files are the ones to \\includegraphics."
-echo "Boxes are quartiles over SONGS; the notch is the 95% CI of the"
-echo "median, so two boxes whose notches do not overlap differ at about"
-echo "the 95% level. The dashed line is the reference: the value a"
-echo "system scores when it matches the ground-truth continuation."
+echo "Boxes are quartiles over SONGS. The dark stick is the mean and its"
+echo "95% CI: two systems whose sticks miss each other differ at about"
+echo "the 95% level. The dashed line is the reference -- the value a"
+echo "system scores when it matches the ground-truth continuation -- and"
+echo "the solid line is the best ranked system's mean."
 echo "================================================================"
