@@ -28,6 +28,10 @@
 #               Pass the value the generating job used.
 #   SYSTEMS     restrict to these system names; default every directory
 #               in the tree apart from prompts/ and genlogs/.
+#   EXCLUDE     drop these system names from whatever SYSTEMS resolved
+#               to. For asking "is everything else done" while a slow
+#               arm is still running -- EXCLUDE="WS WSf" is the usual
+#               one, the whole-song baseline being the long pole.
 #   VERBOSE=1   list every short song with its count, not just the first
 #               few. Long output on a tree that barely started.
 #
@@ -65,6 +69,7 @@ REPO_DIR=/home/xinyue.li/Mitosis
 OUT_ROOT="${OUT_ROOT:-temp/E1}"
 N_SAMPLES="${N_SAMPLES:-3}"
 SYSTEMS="${SYSTEMS:-}"
+EXCLUDE="${EXCLUDE:-}"
 VERBOSE="${VERBOSE:-0}"
 
 conda activate "$CONDA_ENV"
@@ -94,6 +99,19 @@ if [[ -z "$SYSTEMS" ]]; then
               | sort | tr '\n' ' ')
 fi
 
+if [[ -n "${EXCLUDE// /}" ]]; then
+    kept=""
+    for name in $SYSTEMS; do
+        skip=0
+        for x in $EXCLUDE; do [[ "$name" == "$x" ]] && skip=1; done
+        [[ "$skip" == "0" ]] && kept="$kept $name"
+    done
+    # Name what was dropped: a coverage report that quietly omits a
+    # system reads as "everything is done" to anyone who did not run it.
+    echo "[exclude] not checking:$(for x in $EXCLUDE; do printf ' %s' "$x"; done)"
+    SYSTEMS="${kept# }"
+fi
+
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "OUT_ROOT=$OUT_ROOT   N_SAMPLES=$N_SAMPLES"
@@ -103,7 +121,11 @@ echo "systems: ${SYSTEMS:-<none found>}"
 echo "================================================================"
 
 [[ -n "${SYSTEMS// /}" ]] || {
-    echo "Nothing generated: $OUT_ROOT holds prompts and no system folder."
+    if [[ -n "${EXCLUDE// /}" ]]; then
+        echo "Nothing left to check: EXCLUDE removed every system."
+    else
+        echo "Nothing generated: $OUT_ROOT holds prompts and no system folder."
+    fi
     exit 0; }
 
 sys_root()   { case "$1" in P-mc|P-cm) echo "$OUT_ROOT/$1/4_final" ;;
@@ -159,7 +181,12 @@ done
 
 echo "================================================================"
 if [[ -z "${incomplete// /}" ]]; then
-    echo "All systems complete for all $N_EVAL songs."
+    if [[ -n "${EXCLUDE// /}" ]]; then
+        echo "Complete for all $N_EVAL songs -- EXCEPT$(for x in $EXCLUDE; do printf ' %s' "$x"; done),"
+        echo "which this run did not look at and may be unfinished."
+    else
+        echo "All systems complete for all $N_EVAL songs."
+    fi
     echo "Score without regenerating:"
     echo "  sbatch --export=ALL,OUT_ROOT=$OUT_ROOT,SYSTEMS=all \\"
     echo "      midi_yinyang/score_e1.sbatch"
