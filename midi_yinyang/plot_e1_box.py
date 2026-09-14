@@ -117,6 +117,10 @@ NO_REFERENCE = {
     'survival_min', 'survival_a', 'survival_b', 'mel_poly_rate',
     'empty_rate_a', 'empty_rate_b', 'density_drift_a', 'density_drift_b',
     'chord_tone_cov', 'ctnctr', 'pcs', 'mctd', 'coupling', 'onset_sync',
+    # exact repetition of the prompt scores 0 / 1 here, so neither is a
+    # target; the delta carries the reference
+    'pc_jsd_prompt_a', 'pc_jsd_prompt_b',
+    'onset_sim_prompt_a', 'onset_sim_prompt_b',
 }
 
 SURFACE = '#fcfcfb'
@@ -147,7 +151,12 @@ LABELS = {
     'coupling_delta':          'Melody-chord coupling $-$ ref.',
     'mel_interval_jsd':        'Melodic interval JSD',
     'voicing_jsd':             'Chord voicing JSD',
-    # pattern coverage, above a shuffled-prompt control
+    # prompt adherence, the reported pair
+    'pc_jsd_prompt_a':    'Pitch-class JSD vs prompt, melody',
+    'pc_jsd_prompt_b':    'Pitch-class JSD vs prompt, chord',
+    'onset_sim_prompt_a': 'Onset-pattern similarity vs prompt, melody',
+    'onset_sim_prompt_b': 'Onset-pattern similarity vs prompt, chord',
+    # pattern coverage, above a shuffled-prompt control (P1, CSV only)
     'motif_cov3_a':  'Motif coverage, 3-gram, melody',
     'motif_cov5_a':  'Motif coverage, 5-gram, melody',
     'rhythm_cov3_a': 'Rhythm coverage, 3-gram, melody',
@@ -231,16 +240,15 @@ def presets():
         'fit': ([m for m in _block('H2') if not m.startswith('chord_tone_cov')],
                 2, 'Melody-chord fit', False),
         'repetition': (_block('R'), 2, 'Repetition and structuredness', False),
-        # Chance is already subtracted inside these, so 0 is a
-        # meaningful zero and the raw value is the readable one -- the
-        # delta against the ground-truth continuation is in the CSV for
-        # anyone who wants it. The full P block, JSDs and reuse
-        # included, is --block P.
-        'prompt': ([f'{k}_cov{n}_{st}'
-                    for st in ('a', 'b') for n in (3, 5)
-                    for k in ('motif', 'rhythm', 'joint')],
-                   2, 'Prompt adherence: does the continuation restate '
-                      'the prompt\'s figures?', False),
+        # Raw value beside its delta. Both measures reward exact
+        # repetition, so the raw value has no target line -- the delta
+        # against the ground-truth continuation is where 0 means
+        # "varies from the prompt as much as the real song did".
+        'prompt': ([f'{k}_prompt_{st}{d}'
+                    for st in ('a', 'b') for k in ('pc_jsd', 'onset_sim')
+                    for d in ('', '_delta')],
+                   2, 'Prompt adherence: tonal and rhythmic consistency '
+                      'with the prompt', False),
     }
 
 

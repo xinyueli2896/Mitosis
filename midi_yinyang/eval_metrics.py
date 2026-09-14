@@ -39,21 +39,17 @@ statistics are meaningless rather than bad.
       (drumnondrum: * onset_sync_delta -- nondrum onsets within +-1
        frame of a drum onset, minus reference rate)
   P (prompt adherence, per stream, each _delta against the ground-truth
-     continuation of the SAME prompt)
-    * reuse_vs_prompt_a_delta  beats of the continuation restating
-                            prompt material exactly (same pitches, same
-                            frames), minus the reference's rate
-      pc_jsd                pitch-class distribution vs the prompt's
-      density               onset rate over the prompt's
-      register              mean onset pitch minus the prompt's
-      rhythm_reuse          beats restating a prompt RHYTHM, pitch
-                            discarded -- reuse without the pitch
-                            requirement, so always at least as large
-      grid_jsd              metrical-position histogram vs the prompt's:
-                            pc_jsd is pitch mod the octave, this is time
-                            mod the bar
-      ioi_jsd               inter-onset-interval distribution vs prompt
-      dur_jsd               note-duration distribution vs prompt
+     continuation of the SAME prompt; primary undecided)
+      pc_jsd_prompt         duration-weighted pitch-class histogram of
+                            the continuation vs the prompt's, JSD base 2
+                            -- tonal consistency; lower = closer
+      onset_sim_prompt      cosine between the prompt's and the
+                            continuation's mean per-bar binary onset
+                            vectors -- rhythmic placement; higher = closer
+      Both reward exact repetition, so read the _delta: 0 means the
+      system varies from its prompt as much as the real song did.
+      The n-gram coverage family (P1) and the earlier reuse/JSD family
+      (P0) stay in the CSV, unprinted.
   S (stream expertise & role separation, added for E6)
   R (repetition/diversity)
       ubr<n>_<mode>_<s>     unique beat ratio over n-beat intervals,
@@ -818,6 +814,90 @@ def prompt_pattern_metrics(prompt_a, prompt_b, gen_a, gen_b, ref_a, ref_b):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Prompt adherence, the reported pair (2026-09-14, by request):
+#
+#   pc_jsd_prompt     duration-weighted 12-bin pitch-class histogram of
+#                     the prompt against the continuation's, JSD base 2.
+#                     Tonal consistency: register and melodic order do
+#                     not enter. Lower = more consistent.
+#   onset_sim_prompt  each bar as a 16-position binary onset vector,
+#                     averaged over the prompt's bars and over the
+#                     continuation's bars to two onset PROFILES, then
+#                     their cosine. Rhythmic placement within the bar.
+#                     Higher = more consistent. The binary-onset
+#                     representation of groove consistency, applied
+#                     prompt-vs-continuation rather than bar-vs-next-bar.
+#
+# Per stream, each generation against ITS OWN prompt with the copied
+# prompt excluded, samples averaged within song, then over songs.
+#
+# Both reward exact repetition, so neither has a good absolute target:
+# the readable number is the _delta against the ground-truth
+# continuation of the same prompt, which says whether a system varies
+# from its prompt as much as the real song did. For pc_jsd this matters
+# doubly: at ~24 prompt notes the JSD estimator sits near 0.12 even for
+# a perfect system, and the delta is what cancels that floor.
+# ---------------------------------------------------------------------------
+
+def _pc_profile_dw(s):
+    """Duration-weighted pitch-class histogram; durations clipped to the
+    excerpt, since what sounds past its end is not part of it."""
+    h = np.zeros(12)
+    for f, (ps, ds) in enumerate(zip(s.onsets, s.dur_at)):
+        for p, d in zip(ps, ds):
+            h[p % 12] += min(d, s.n_frames - f)
+    return h
+
+
+def _onset_profile(s, phase=0):
+    """Mean over whole bars of the bar's binary onset vector."""
+    n_bars = (s.n_frames + phase) // FRAMES_PER_BAR
+    if n_bars == 0:
+        return None
+    # binary per bar: a position counts once per bar however many notes
+    # attack there, so the profile is the FRACTION of bars with an onset
+    # at each position
+    per_bar = np.zeros(FRAMES_PER_BAR)
+    hit = set()
+    for f in s.onset_frames():
+        g = f + phase
+        b, pos = divmod(g, FRAMES_PER_BAR)
+        if b < n_bars:
+            hit.add((b, pos))
+    for _b, pos in hit:
+        per_bar[pos] += 1
+    return per_bar / n_bars
+
+
+def _cosine(u, v):
+    nu, nv = np.linalg.norm(u), np.linalg.norm(v)
+    return float(u @ v / (nu * nv)) if nu > 0 and nv > 0 else float('nan')
+
+
+def prompt_adherence_metrics(prompt_a, prompt_b, gen_a, gen_b, ref_a, ref_b,
+                             phase=0):
+    out = {}
+    for label, pr, g, r in (('a', prompt_a, gen_a, ref_a),
+                            ('b', prompt_b, gen_b, ref_b)):
+        hp = _pc_profile_dw(pr)
+        rp = _onset_profile(pr, 0)
+        for who, s_ in (('gen', g), ('ref', r)):
+            hc = _pc_profile_dw(s_)
+            out[f'_{who}_pc'] = (jsd(hp, hc) if hp.sum() > 0 and hc.sum() > 0
+                                 else float('nan'))
+            rc = _onset_profile(s_, phase)
+            out[f'_{who}_on'] = (_cosine(rp, rc)
+                                 if rp is not None and rc is not None
+                                 else float('nan'))
+        for stat, key in (('pc', f'pc_jsd_prompt_{label}'),
+                          ('on', f'onset_sim_prompt_{label}')):
+            gv, rv = out.pop(f'_gen_{stat}'), out.pop(f'_ref_{stat}')
+            out[key] = float(gv)
+            out[f'{key}_delta'] = float(gv - rv)
+    return out
+
+
 def prompt_match_metrics(prompt_a, prompt_b, gen_a, gen_b, ref_a, ref_b,
                          phase=0):
     """Prompt-to-continuation coherence, per stream, vs the reference."""
@@ -987,12 +1067,12 @@ PRIMARY = {
                  'H2': ['chord_tone_cov_delta'],
                  'H1': ['survival_min'],
                  'P': [],       # undecided until the results are in
-                 'S': [], 'R': [], 'P0': []},
+                 'S': [], 'R': [], 'P0': [], 'P1': []},
     'drumnondrum': {'H3': ['onset_grid_jsd_b'],
                     'H2': ['onset_sync_delta'],
                     'H1': ['survival_min'],
                     'P': [],       # undecided until the results are in
-                    'S': [], 'R': [], 'P0': []},
+                    'S': [], 'R': [], 'P0': [], 'P1': []},
 }
 
 H_GROUPS = {
@@ -1017,19 +1097,23 @@ H_GROUPS = {
     'R': [f'ubr{b}_{m}_{s}{d}'
           for s in ('a', 'b') for b in (1, 2) for m in ('onset', 'state')
           for d in ('', '_delta')],
-    # P -- prompt adherence. Pattern coverage above a shuffled-prompt
-    # control (motif / rhythm / joint, n = 3 and 5, per stream), plus
-    # the two plain statistics that carry no estimator bias: onset rate
-    # over the prompt's and register shift. Each with a _delta against
-    # the ground-truth continuation of the same prompt.
-    'P': [f'{k}_cov{n}_{s_}{d}'
-          for s_ in ('a', 'b') for n in NGRAM_NS
-          for k in ('motif', 'rhythm', 'joint')
+    # P -- prompt adherence: the two reported measures, per stream, each
+    # with its _delta against the ground-truth continuation.
+    'P': [f'{k}_prompt_{s_}{d}'
+          for s_ in ('a', 'b') for k in ('pc_jsd', 'onset_sim')
           for d in ('', '_delta')]
-         + [f'{k}_vs_prompt_{s_}{d}'
-            for s_ in ('a', 'b') for k in ('density', 'register')
-            for d in ('', '_delta')]
          + ['prompt_onsets_a', 'prompt_onsets_b'],
+    # P1 -- n-gram pattern coverage above a shuffled-prompt control,
+    # plus onset rate and register shift. CSV only. Superseded in the
+    # report by P, kept because they answer a different question --
+    # motif restatement, transposition-invariant -- that P does not.
+    'P1': [f'{k}_cov{n}_{s_}{d}'
+           for s_ in ('a', 'b') for n in NGRAM_NS
+           for k in ('motif', 'rhythm', 'joint')
+           for d in ('', '_delta')]
+          + [f'{k}_vs_prompt_{s_}{d}'
+             for s_ in ('a', 'b') for k in ('density', 'register')
+             for d in ('', '_delta')],
     # P0 -- the prompt-adherence measures P replaced. CSV only. reuse
     # and rhythm_reuse need a beat to be byte-equal, so a transposed
     # restatement scores like unrelated notes and silent beats count as
@@ -1059,7 +1143,7 @@ GROUP_ORDER = ('H3', 'H2', 'P', 'S', 'R')
 # place. So the CSV is the superset -- everything computed is recorded
 # -- and the table is the reading order. Add 'H1' to GROUP_ORDER to put
 # it back in the table too.
-CSV_GROUPS = GROUP_ORDER + ('H1', 'P0')
+CSV_GROUPS = GROUP_ORDER + ('H1', 'P0', 'P1')
 
 
 # ---------------------------------------------------------------------------
@@ -1105,7 +1189,7 @@ STREAM_OF = {
 # in the suffix, and both families read one stream only. Registering
 # them keeps E3 from presenting the GIVEN stream's copied ground truth
 # as if it discriminated systems.
-for _h in ('R', 'P', 'P0'):
+for _h in ('R', 'P', 'P0', 'P1'):
     for _k in H_GROUPS[_h]:
         _parts = _k.split('_')
         _s = _parts[-1] if _parts[-1] in ('a', 'b') else _parts[-2]
@@ -1425,6 +1509,8 @@ def score_pair(gen_paths, ref_paths, args):
     row.update(prompt_match_metrics(pa, pb, ga, gb, ra, rb,
                                     phase=lo % FRAMES_PER_BAR))
     row.update(prompt_pattern_metrics(pa, pb, ga, gb, ra, rb))
+    row.update(prompt_adherence_metrics(pa, pb, ga, gb, ra, rb,
+                                        phase=lo % FRAMES_PER_BAR))
     row.update(s_metrics(ga, gb, ra, rb, args.task))
     # count vectors for the corpus-pooled JSD. Underscored and never a
     # CSV column: the writer is extrasaction='ignore', so this rides
