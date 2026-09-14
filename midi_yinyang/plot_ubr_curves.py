@@ -200,19 +200,38 @@ def main():
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print(f'wrote {args.out}.{ext}')
 
-    # endpoints, so the log carries the numbers behind the curves
-    print('\nunique beat ratio at the last beat (mean over songs)')
+    # The numbers a write-up quotes: each system's ratio at the last
+    # beat, its deviation from ground truth there, and the range of that
+    # deviation across the eight panels -- the BEAT paper's "within x-y%
+    # of ground truth" framing, read off the log rather than the figure.
+    print('\nunique beat ratio at the last beat: ratio (deviation from '
+          'ground truth, % of ground truth)')
+    span = {}
     for st, sname in STREAMS:
         for beats, mode, title in PANELS:
             key = (st, beats, mode)
-            m, _, n = mean_se(ref[key])
-            line = f'  {sname:6s} {title:15s} ref {m[-1]:.3f}' if m is not None else ''
+            gm, _, n = mean_se(ref[key])
+            if gm is None:
+                continue
+            gt = gm[-1]
+            line = f'  {sname:6s} {title:15s} GT {gt:.3f} |'
             for sysname, _, _, _ in order:
-                if sysname in gen[key]:
-                    mm, _, _ = mean_se(gen[key][sysname])
-                    if mm is not None:
-                        line += f'  {sysname} {mm[-1]:.3f}'
+                if sysname not in gen[key]:
+                    continue
+                mm, _, _ = mean_se(gen[key][sysname])
+                if mm is None:
+                    continue
+                d = mm[-1] - gt
+                rel = 100 * d / gt if gt else float('nan')
+                line += f' {sysname} {mm[-1]:.3f} ({d:+.3f}, {rel:+.0f}%)'
+                span.setdefault(sysname, []).append(rel)
             print(line)
+    print('\nrange of relative deviation across all panels (min .. max, %):')
+    for sysname, _, _, _ in order:
+        if sysname in span:
+            v = span[sysname]
+            print(f'  {sysname:11s} {min(v):+6.1f} .. {max(v):+6.1f}'
+                  f'   (|max| {max(abs(x) for x in v):.1f}%)')
 
 
 if __name__ == '__main__':
