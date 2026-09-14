@@ -786,30 +786,74 @@ def score_pair(gen_paths, ref_paths, args):
     return row
 
 
-def summarize(rows, task):
+def _per_song(rows, key):
+    """One value per SONG, averaging its samples first.
+
+    The unit of analysis is the song, not the sample. Samples of one
+    song share a prompt and a reference, so pooling 3 x N samples as
+    3N independent observations understates the spread by about
+    sqrt(3). EXPERIMENTS.md sec 5.3 registers this: average the samples
+    within a song, then summarise over songs.
+    """
+    by_song = {}
+    for r in rows:
+        if key in r and not _is_nan(r[key]):
+            by_song.setdefault(r.get('song', '?'), []).append(r[key])
+    return {k: float(np.mean(v)) for k, v in by_song.items()}
+
+
+def summarize(rows, task, baseline=None):
     by_system = {}
     for r in rows:
         by_system.setdefault(r.get('system', '?'), []).append(r)
+    systems = sorted(by_system)
+    if baseline not in by_system:
+        baseline = None
     print('\n================= SUMMARY (priority order: H3 > H2 > H1 > S) '
           '=================')
+    print('mean +- std over SONGS (samples averaged within song first); '
+          'n = songs')
+    if baseline:
+        print(f'p: Wilcoxon signed-rank on per-song differences vs '
+              f'{baseline}, paired by song')
     for h in ('H3', 'H2', 'H1', 'S'):
         print(f'\n--- {h} ---')
         keys = [k for k in H_GROUPS[h]
                 if any(k in r and not _is_nan(r[k]) for r in rows)]
-        header = 'metric'.ljust(26) + ''.join(
-            s.ljust(14) for s in sorted(by_system))
+        width = 22 if baseline else 17
+        header = 'metric'.ljust(26) + ''.join(s.ljust(width) for s in systems)
         print(header)
         for k in keys:
             star = '*' if k in PRIMARY[task][h] else ' '
             line = (star + k).ljust(26)
-            for s in sorted(by_system):
-                vals = [r[k] for r in by_system[s]
-                        if k in r and not _is_nan(r[k])]
-                line += (f'{np.mean(vals):+.3f}'.ljust(14)
-                         if vals else '--'.ljust(14))
+            base = _per_song(by_system[baseline], k) if baseline else {}
+            for sysname in systems:
+                song_vals = _per_song(by_system[sysname], k)
+                if not song_vals:
+                    line += '--'.ljust(width)
+                    continue
+                v = np.fromiter(song_vals.values(), float)
+                cell = f'{v.mean():+.3f}+-{v.std(ddof=1):.3f}' if len(v) > 1 \
+                    else f'{v.mean():+.3f}'
+                if baseline and sysname != baseline:
+                    shared = sorted(set(song_vals) & set(base))
+                    if len(shared) > 1:
+                        d = np.array([song_vals[c] - base[c] for c in shared])
+                        if np.any(d != 0):
+                            from scipy.stats import wilcoxon
+                            pv = wilcoxon(d).pvalue
+                            cell += f' p={pv:.3f}' if pv >= 1e-3 else ' p<.001'
+                line += cell.ljust(width)
             print(line)
+        if keys:
+            ns = {s: len(_per_song(by_system[s], keys[0])) for s in systems}
+            print('  n songs'.ljust(26)
+                  + ''.join(str(ns[s]).ljust(width) for s in systems))
     print('\n(* = pre-registered primary endpoint; deltas/JSD: closer to 0 '
           'is better; ratios: closer to 1 is better)')
+    print('NOTE std is over songs and JSD is bounded on [0,1] and skewed, so '
+          'mean +- std can leave the range;\n     quote a percentile '
+          'bootstrap over songs if an interval has to be defended.')
 
 
 def _is_nan(v):
@@ -830,6 +874,13 @@ def main():
     p.add_argument('--ref-a-dir', help='dir of <song>.mid stream-a refs')
     p.add_argument('--ref-b-dir', help='dir of <song>.mid stream-b refs')
     p.add_argument('--out', default=None, help='CSV output path')
+    p.add_argument('--baseline', default=None,
+                   help='system name to pair against: each other system '
+                        'gets a Wilcoxon signed-rank p over PER-SONG '
+                        'differences. Pairing by song removes the song '
+                        'effect, which is far larger than the system '
+                        'effect, so it is much more powerful than '
+                        'comparing the two marginal means.')
     p.add_argument('--prompt-frames', type=int, default=64)
     p.add_argument('--total-frames', type=int, default=384)
     p.add_argument('--mel-programs', default='0,24',
@@ -876,7 +927,7 @@ def main():
             w.writerows(rows)
         print(f'wrote {len(rows)} rows -> {args.out}')
 
-    summarize(rows, args.task)
+    summarize(rows, args.task, baseline=args.baseline)
 
 
 if __name__ == '__main__':
