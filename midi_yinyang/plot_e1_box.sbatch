@@ -52,7 +52,12 @@
 #   TITLE     optional figure title
 #   UBR_CURVES=1 (default) also draw the unique-beat-ratio curves --
 #             the BEAT paper's figure: ratio against phrase length, one
-#             curve per system, ground truth dashed, SE bands over songs.
+#             curve per system, SE bands over songs. Two files:
+#               _ubr_curves        system MINUS ground truth, paired per
+#                                  song -- the target is the zero line and
+#                                  the deviation is what the eye measures
+#               _ubr_curves_ratio  the ratio itself, ground truth dashed,
+#                                  each row's axis tight to its data
 #             Needs the midis, not the CSV, so it reads:
 #   MANIFEST  default CSV with _metrics.csv -> _manifest.tsv
 #   EVAL_MEL / EVAL_CHORD   reference dirs, default
@@ -146,11 +151,14 @@ fi
 if [[ "$UBR_CURVES" == "1" ]]; then
     if [[ -f "$MANIFEST" && -d "$EVAL_MEL" && -d "$EVAL_CHORD" ]]; then
         echo "--- unique beat ratio curves ---"
-        python plot_ubr_curves.py --manifest "$MANIFEST" \
-            --ref-a-dir "$EVAL_MEL" --ref-b-dir "$EVAL_CHORD" \
-            --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
-            --width "$WIDTH" --out "${OUT}_ubr_curves" \
-            ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"}
+        for y in delta ratio; do
+            suffix=""; [[ "$y" == ratio ]] && suffix="_ratio"
+            python plot_ubr_curves.py --manifest "$MANIFEST" \
+                --ref-a-dir "$EVAL_MEL" --ref-b-dir "$EVAL_CHORD" \
+                --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
+                --width "$WIDTH" --y "$y" --out "${OUT}_ubr_curves$suffix" \
+                ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"}
+        done
     else
         echo "[ubr] skipped: need MANIFEST=$MANIFEST and the reference dirs"
         echo "      $EVAL_MEL / $EVAL_CHORD (UBR_CURVES=0 silences this)"

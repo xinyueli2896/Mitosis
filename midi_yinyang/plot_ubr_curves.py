@@ -97,6 +97,31 @@ def collect(args):
     return gen, ref
 
 
+def mean_se_delta(gen_per_song, ref_per_song):
+    """Mean and SE over songs of (system - ground truth), PAIRED per song.
+
+    Differencing within a song before averaging removes the song's own
+    level from the comparison, so the band is the uncertainty of the
+    deviation itself -- much tighter than differencing two marginal
+    means, and the right quantity when the question is "how far from
+    real music" rather than "how high".
+    """
+    rows = []
+    for song, curves in gen_per_song.items():
+        if song not in ref_per_song:
+            continue
+        r = ref_per_song[song]
+        n = min(min(len(c) for c in curves), len(r))
+        if n == 0:
+            continue
+        rows.append(np.mean([c[:n] - r[:n] for c in curves], axis=0))
+    if not rows:
+        return None, None, 0
+    n = min(len(x) for x in rows)
+    M = np.stack([x[:n] for x in rows])
+    return M.mean(axis=0), M.std(axis=0, ddof=1) / np.sqrt(len(M)), len(M)
+
+
 def mean_se(per_song):
     """Mean and SE over songs of per-song curves (samples averaged)."""
     rows = []
@@ -128,6 +153,13 @@ def main():
     p.add_argument('--no-bands', action='store_true')
     p.add_argument('--exclude', default='',
                    help='comma-separated system names to leave off')
+    p.add_argument('--y', choices=['ratio', 'delta'], default='delta',
+                   help="'ratio': the unique beat ratio itself, ground "
+                        "truth as a dashed curve. 'delta' (default): system "
+                        "minus ground truth, paired per song, so the target "
+                        "is the zero line and the deviation is what the "
+                        "eye measures -- on a 0..1 axis the whole finding "
+                        "sat in the last 0.05.")
     args = p.parse_args()
     args.mel_programs = {int(x) for x in args.mel_programs.split(',')}
     args.chord_programs = {int(x) for x in args.chord_programs.split(',')}
@@ -145,46 +177,76 @@ def main():
 
     fig, axes = plt.subplots(len(STREAMS), len(PANELS), squeeze=False,
                              figsize=(args.width, 1.55 * len(STREAMS) + 1.2),
-                             sharey=True)
+                             sharey='row')
+    row_lims = {r: (np.inf, -np.inf) for r in range(len(STREAMS))}
     fig.patch.set_facecolor(SURFACE)
     handles = {}
     for r, (st, sname) in enumerate(STREAMS):
         for c, (beats, mode, title) in enumerate(PANELS):
             ax = axes[r][c]
             key = (st, beats, mode)
-            # reference first, underneath
-            m, se, n = mean_se(ref[key])
-            if m is not None:
-                x = np.arange(1, len(m) + 1) * beats
-                ax.plot(x, m, color=INK, lw=1.6, ls=(0, (4, 2)), zorder=4)
-                handles['_ref'] = Line2D([0], [0], color=INK, lw=1.6,
-                                         ls=(0, (4, 2)),
-                                         label=f'ground truth (n={n} songs)')
+            ymin, ymax = np.inf, -np.inf
+            if args.y == 'ratio':
+                # reference first, underneath
+                m, se, n = mean_se(ref[key])
+                if m is not None:
+                    x = np.arange(1, len(m) + 1) * beats
+                    ax.plot(x, m, color=INK, lw=1.6, ls=(0, (4, 2)), zorder=4)
+                    ymin, ymax = min(ymin, m.min()), max(ymax, m.max())
+                    handles['_ref'] = Line2D(
+                        [0], [0], color=INK, lw=1.6, ls=(0, (4, 2)),
+                        label=f'ground truth (n={n} songs)')
+            else:
+                # the target IS the zero line
+                ax.axhline(0, color=INK, lw=1.2, ls=(0, (4, 2)), zorder=4)
+                n_ref = len(ref[key])
+                handles['_ref'] = Line2D(
+                    [0], [0], color=INK, lw=1.2, ls=(0, (4, 2)),
+                    label=f'ground truth (n={n_ref} songs)')
             for sysname, disp, family, i in order:
                 if sysname not in gen[key]:
                     continue
-                m, se, n = mean_se(gen[key][sysname])
+                if args.y == 'ratio':
+                    m, se, n = mean_se(gen[key][sysname])
+                else:
+                    m, se, n = mean_se_delta(gen[key][sysname], ref[key])
                 if m is None:
                     continue
                 x = np.arange(1, len(m) + 1) * beats
                 col = FAMILY_COLOR[family]
                 ls = MEMBER_DASH[i % len(MEMBER_DASH)]
-                ax.plot(x, m, color=col, lw=1.4, ls=ls, zorder=3)
+                ax.plot(x, m, color=col, lw=1.5, ls=ls, zorder=3)
+                lo_b, hi_b = m - 1.96 * se, m + 1.96 * se
                 if not args.no_bands:
-                    ax.fill_between(x, m - 1.96 * se, m + 1.96 * se,
-                                    color=col, alpha=0.10, lw=0, zorder=2)
+                    ax.fill_between(x, lo_b, hi_b, color=col, alpha=0.12,
+                                    lw=0, zorder=2)
+                # the first few beats swing wildly (1/1, 1/2, 2/3 ...)
+                # and would set the scale for the whole panel; scale to
+                # the settled part
+                k = max(4, len(m) // 10)
+                ymin = min(ymin, lo_b[k:].min())
+                ymax = max(ymax, hi_b[k:].max())
                 handles[sysname] = Line2D(
-                    [0], [0], color=col, lw=1.4, ls=ls,
+                    [0], [0], color=col, lw=1.5, ls=ls,
                     label=disp.replace('\n', ' '))
+            if np.isfinite(ymin) and np.isfinite(ymax):
+                pad = 0.08 * (ymax - ymin) or 0.01
+                lo_y, hi_y = ymin - pad, ymax + pad
+                if args.y == 'delta':
+                    lo_y, hi_y = min(lo_y, -pad), max(hi_y, pad)
+                row_lims[r] = (min(row_lims[r][0], lo_y),
+                               max(row_lims[r][1], hi_y))
             if r == 0:
                 ax.set_title(title, fontsize=7.5, color=INK, pad=4)
             if c == 0:
-                ax.set_ylabel(f'{sname}\nunique beat ratio', fontsize=7,
-                              color=INK)
+                ax.set_ylabel(f'{sname}\n' + ('UBR $-$ ground truth'
+                                               if args.y == 'delta'
+                                               else 'unique beat ratio'),
+                              fontsize=7, color=INK)
             if r == len(STREAMS) - 1:
                 ax.set_xlabel('phrase length (beats)', fontsize=7,
                               color=INK_2)
-            ax.set_ylim(0, 1.02)
+
             ax.tick_params(labelsize=6.3, colors=INK_2, length=2)
             for side in ('top', 'right'):
                 ax.spines[side].set_visible(False)
@@ -195,13 +257,21 @@ def main():
             ax.grid(color=MUTED, alpha=0.2, lw=0.6)
             ax.set_axisbelow(True)
 
+    # one y-range per row, tight to the data: melody and chord live on
+    # different scales and a shared 0..1 axis hid the differences
+    for r in range(len(STREAMS)):
+        lo_y, hi_y = row_lims[r]
+        if np.isfinite(lo_y) and np.isfinite(hi_y):
+            axes[r][0].set_ylim(lo_y, hi_y)
     ordered = [handles[s] for s, _, _, _ in order if s in handles]
     if '_ref' in handles:
         ordered.append(handles['_ref'])
     fig.legend(handles=ordered, loc='lower center', ncol=5, frameon=False,
                fontsize=6.4, labelcolor=INK_2, bbox_to_anchor=(0.5, 0.0))
+    what = ('system minus ground truth, paired per song' if args.y == 'delta'
+            else 'mean over songs, samples averaged within song')
     fig.text(0.5, 0.115 if not args.no_bands else 0.10,
-             'lines: mean over songs, samples averaged within song'
+             'lines: ' + what
              + ('; bands: $\\pm$1.96 SE over songs' if not args.no_bands
                 else ''),
              ha='center', fontsize=6.0, color=INK_2)
