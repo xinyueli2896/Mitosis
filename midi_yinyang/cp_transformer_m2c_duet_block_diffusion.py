@@ -2203,8 +2203,16 @@ if __name__ == '__main__':
     if n_gpus > 1:
         import pytorch_lightning.strategies as strategies
         import datetime
+        # 20 minutes, not 2 hours. This timeout is how long a rank
+        # waits for its partners on a collective, so it is also how long
+        # the job burns when one rank DIES rather than lags: job 238154
+        # lost five hours with rank 0 already dead of a CUDA error while
+        # rank 1 sat in a BROADCAST. Nothing here legitimately blocks
+        # for twenty minutes -- the longest real wait is the first
+        # validation -- so a shorter value costs nothing and turns a
+        # wasted allocation into a fast failure.
         strategy = strategies.DDPStrategy(
-            timeout=datetime.timedelta(hours=2),
+            timeout=datetime.timedelta(minutes=20),
             find_unused_parameters=True,
         )
     else:

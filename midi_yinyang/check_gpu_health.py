@@ -56,8 +56,21 @@ def main():
             name = torch.cuda.get_device_name(i)
             cap = torch.cuda.get_device_capability(i)
             free, total = torch.cuda.mem_get_info(i)
+            # METADATA IS NOT ENOUGH. get_device_name/mem_get_info can
+            # all succeed on a node whose driver then fails the first
+            # real allocation with "CUDA error: unknown error" inside
+            # Lightning's model_to_device -- observed on job 238154,
+            # which then cost five hours because the surviving rank sat
+            # in a BROADCAST until the two-hour NCCL timeout. Do what
+            # training does: put a tensor on the device, run a kernel,
+            # and synchronise.
+            t = torch.randn(256, 256, device=f'cuda:{i}')
+            torch.mm(t, t)
+            torch.cuda.synchronize(i)
+            del t
             print(f'[gpu-check]   cuda:{i} {name} sm_{cap[0]}{cap[1]} '
-                  f'{free / 2**30:.1f}/{total / 2**30:.1f} GiB free')
+                  f'{free / 2**30:.1f}/{total / 2**30:.1f} GiB free, '
+                  f'alloc+matmul OK')
         except Exception as e:
             bad.append(i)
             print(f'[gpu-check]   cuda:{i} UNUSABLE: {type(e).__name__}: {e}')
