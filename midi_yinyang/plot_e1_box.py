@@ -493,7 +493,7 @@ def draw_panel_pooled(ax, metric, pooled, order, present, title_chars=0,
         # indistinguishable from perfect, and gaps below it are not gaps
         ax.axhline(null, color=MUTED, lw=1.0, ls=(0, (1, 1.5)), zorder=1)
 
-    ranked_best, unranked_lines = None, []
+    ranked_best = None
     for i, (sysname, disp, short, family, ranked) in enumerate(order):
         labels.append((disp, short))
         rec = vals.get(sysname)
@@ -516,13 +516,11 @@ def draw_panel_pooled(ax, metric, pooled, order, present, title_chars=0,
                 markeredgewidth=1.0, zorder=5)
         if ranked and (ranked_best is None or v < ranked_best[0]):
             ranked_best = (v, disp, col)
-        if not ranked:
-            unranked_lines.append((v, col))
 
     # JSD is bounded below by 0 and 0 IS the reference, so best is simply
     # the smallest -- no absolute-distance rule needed here.
-    for v, col in unranked_lines:
-        ax.axhline(v, color=col, lw=1.4, zorder=2)
+    # The unranked column gets no line of its own, by request: it is
+    # read against the best-ranked line like any other column.
     if ranked_best is not None:
         ax.axhline(ranked_best[0], color=ranked_best[2], lw=1.4, zorder=2)
 
@@ -589,19 +587,9 @@ def draw_panel(ax, metric, per_song, order, present, title_chars=0,
     # width so the unranked column can be read against it. Coloured by
     # the winner's family -- the line IS that system's value -- and
     # named in ink, because a line colour alone would not say which.
-    # The unranked system's mean, as its own line. It is the column a
-    # reader most wants to hold everything against, and reading a level
-    # off one box in the far-right corner is exactly what a line spares
-    # them. Drawn even where there is no reference level, since its mean
-    # is a comparison whether or not a target exists.
+    # No line for the unranked column's mean, by request; its stick
+    # carries the mean, and it is read against the best-ranked line.
     levels = [] if ref is None else [ref]
-    for sysname, _disp, _short, family, ranked in order:
-        if ranked or sysname not in present:
-            continue
-        m = system_mean(metric, sysname, per_song)
-        if m is not None:
-            ax.axhline(m, color=color_of(sysname, family), lw=1.4, zorder=2)
-            levels.append(m)
 
     best = best_ranked(metric, per_song, order, present)
     if best is not None:
@@ -944,11 +932,6 @@ def main():
                    markerfacecolor=SURFACE, markeredgecolor=INK,
                    markeredgewidth=1.0, label='mean and its 95% CI'),
         ]
-    unranked = [d.replace('\n', ' ') for _s, d, _sh, _g, r in order if not r]
-    if unranked:
-        handles.insert(2, Line2D(
-            [0], [0], color=FAMILY_COLOR['Not ranked'], lw=1.4,
-            label=f'{word} of ' + ', '.join(unranked)))
     labels_ = [h.get_label() for h in handles]
     if compact:
         # one legend entry per family. If members carry their own
