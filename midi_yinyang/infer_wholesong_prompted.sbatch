@@ -67,16 +67,34 @@ mkdir -p /home/xinyue.li/logs
 PROMPT_BARS="${PROMPT_BARS:-6}"
 N_SAMPLES="${N_SAMPLES:-3}"
 CROPS_TSV="${CROPS_TSV:-}"
+# SONG_IDS: space-separated POP909 integer ids (1 2 3 ...), zero-padded
+# to three digits internally. There is no MAX_SONGS knob here -- to
+# smoke-test one song, name it: SONG_IDS=1
 SONG_IDS="${SONG_IDS:-}"
 if [[ -z "$SONG_IDS" ]]; then
     if [[ -n "$CROPS_TSV" && -f "$CROPS_TSV" ]]; then
         # kept rows only: a dropped row has a non-empty `dropped` column
-        SONG_IDS=$(awk -F'\t' 'NR>1 && $NF=="" {print $1+0}' "$CROPS_TSV" | tr '\n' ' ')
+        # tr -d '\r' first: build_prompt_crops writes the tsv with
+        # csv.DictWriter, whose default lineterminator is CRLF, so a
+        # KEPT row's last field is "\r" rather than "" and the test
+        # below matches nothing. E1 passes SONG_IDS explicitly and
+        # never reaches this path, so the bug only bites a standalone
+        # run -- which then fails at argparse with "--song-ids:
+        # expected at least one argument".
+        SONG_IDS=$(tr -d '\r' < "$CROPS_TSV" \
+            | awk -F'\t' 'NR>1 && $NF=="" {print $1+0}' | tr '\n' ' ')
         echo "[ids] taken from $CROPS_TSV"
     else
         SONG_IDS="1 2 3 4 5"
     fi
 fi
+[[ -n "${SONG_IDS// /}" ]] || {
+    echo "ERROR: no song ids to run."
+    echo "  CROPS_TSV=${CROPS_TSV:-<unset>} yielded none. Every row is"
+    echo "  either dropped or the file's shape is not what the filter"
+    echo "  expects (id first column, dropped last, kept rows empty)."
+    echo "  Name them directly instead, e.g. SONG_IDS=\"1 2 3\"."
+    exit 1; }
 OUT_DIR="${OUT_DIR:-$MY/temp/wholesong_prompted}"
 # OUR_MEL_DIR / OUR_CHORD_DIR: build the LEAD-SHEET prompt from our own
 # crops instead of from POP909, so the baseline is prompted with the
