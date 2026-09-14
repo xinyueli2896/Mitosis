@@ -390,8 +390,14 @@ def draw_panel_pooled(ax, metric, pooled, order, present, title_chars=0,
             continue
         v, lo, hi, _ns, _no, _bl, _w = rec
         if not math.isnan(lo):
+            # a bare vertical line has no visible end: where the
+            # interval stops was a guess. Caps make the endpoints marks.
+            cap = 0.16
             ax.plot([i, i], [lo, hi], color=INK_2, lw=1.2,
                     solid_capstyle='butt', zorder=4)
+            for y in (lo, hi):
+                ax.plot([i - cap, i + cap], [y, y], color=INK_2, lw=1.2,
+                        zorder=4)
         ax.plot([i], [v], marker='o', markersize=5.5,
                 markerfacecolor=FAMILY_COLOR[family], markeredgecolor=SURFACE,
                 markeredgewidth=1.0, zorder=5)
@@ -852,7 +858,8 @@ def main():
                          f'{pooled_weight}'),
             Line2D([0], [0], color=MUTED, lw=1.0, ls=(0, (1, 1.5)),
                    label='noise floor: reference split-half null'),
-            Line2D([0], [0], color=INK_2, lw=1.2,
+            Line2D([0], [0], color=INK_2, lw=1.2, marker='_', markersize=7,
+                   markeredgewidth=1.2,
                    label='95% bootstrap CI over ' + {
                        'songs': 'songs',
                        'songs+samples': 'songs and samples',
