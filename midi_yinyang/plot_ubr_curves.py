@@ -41,7 +41,7 @@ from matplotlib.lines import Line2D
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import eval_metrics as em                      # noqa: E402
 from plot_e1_box import (GROUPS, FAMILY_COLOR, SURFACE, INK, INK_2,  # noqa
-                         MUTED, style_axis, panel_letter)
+                         MUTED)
 
 PANELS = [(1, 'state', '1-beat (Full)'), (2, 'state', '2-beat (Full)'),
           (1, 'onset', '1-beat (Onset)'), (2, 'onset', '2-beat (Onset)')]
@@ -172,7 +172,7 @@ def main():
                 ax.plot(x, m, color=col, lw=1.4, ls=ls, zorder=3)
                 if not args.no_bands:
                     ax.fill_between(x, m - 1.96 * se, m + 1.96 * se,
-                                    color=col, alpha=0.13, lw=0, zorder=2)
+                                    color=col, alpha=0.10, lw=0, zorder=2)
                 handles[sysname] = Line2D(
                     [0], [0], color=col, lw=1.4, ls=ls,
                     label=disp.replace('\n', ' '))
@@ -185,8 +185,15 @@ def main():
                 ax.set_xlabel('phrase length (beats)', fontsize=7,
                               color=INK_2)
             ax.set_ylim(0, 1.02)
-            style_axis(ax)
-            panel_letter(ax, r * len(PANELS) + c)
+            ax.tick_params(labelsize=6.3, colors=INK_2, length=2)
+            for side in ('top', 'right'):
+                ax.spines[side].set_visible(False)
+            for side in ('left', 'bottom'):
+                ax.spines[side].set_color(MUTED)
+                ax.spines[side].set_linewidth(0.8)
+            ax.set_facecolor(SURFACE)
+            ax.grid(color=MUTED, alpha=0.2, lw=0.6)
+            ax.set_axisbelow(True)
 
     ordered = [handles[s] for s, _, _, _ in order if s in handles]
     if '_ref' in handles:

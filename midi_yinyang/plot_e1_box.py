@@ -124,52 +124,10 @@ NO_REFERENCE = {
     'gc_a', 'gc_b', 'sc_a', 'sc_b',
 }
 
-# Nature-style ground: pure white, no grid, two thin spines, ticks out,
-# bold panel letters. Fills are the validated hues at low alpha so
-# they read as the soft translucent clouds of an atlas figure while the
-# edges, points and lines keep the full hue for identity.
-SURFACE = '#ffffff'
+SURFACE = '#fcfcfb'
 INK = '#0b0b0b'
 INK_2 = '#52514e'
 MUTED = '#8a8a85'
-FILL_ALPHA = 0.42
-CAP_W = 0.16          # half-width of the caps on an interval, x units
-matplotlib.rcParams.update({
-    'font.family': 'sans-serif',
-    'font.sans-serif': ['Helvetica', 'Arial', 'Liberation Sans',
-                        'DejaVu Sans'],
-    'axes.linewidth': 0.8,
-    'xtick.direction': 'out', 'ytick.direction': 'out',
-    'xtick.major.size': 3, 'ytick.major.size': 3,
-    'xtick.major.width': 0.8, 'ytick.major.width': 0.8,
-})
-
-
-def style_axis(ax):
-    """The shared frame: white, no grid, left and bottom spines only."""
-    ax.set_facecolor(SURFACE)
-    ax.grid(False)
-    for side in ('top', 'right'):
-        ax.spines[side].set_visible(False)
-    for side in ('left', 'bottom'):
-        ax.spines[side].set_color(INK_2)
-        ax.spines[side].set_linewidth(0.8)
-    ax.tick_params(axis='both', colors=INK_2, labelsize=6.5, length=3,
-                   width=0.8, direction='out')
-
-
-def panel_letter(ax, i):
-    """Bold lowercase letter at the panel's top-left, outside the axes."""
-    ax.text(-0.02, 1.02, chr(ord('a') + i), transform=ax.transAxes,
-            ha='right', va='bottom', fontsize=9, weight='bold', color=INK)
-
-
-def interval(ax, x, lo, hi, color, lw=1.2, cap=CAP_W, z=4):
-    """A vertical interval with CAPPED ends, so where it stops is clear."""
-    ax.plot([x, x], [lo, hi], color=color, lw=lw, solid_capstyle='butt',
-            zorder=z)
-    for y in (lo, hi):
-        ax.plot([x - cap, x + cap], [y, y], color=color, lw=lw, zorder=z)
 
 DEFAULT_METRICS = [
     'harmonic_rhythm_jsd',
@@ -426,7 +384,8 @@ def draw_panel_pooled(ax, metric, pooled, order, present, title_chars=0,
             continue
         v, lo, hi, _ns, _no, _bl, _w = rec
         if not math.isnan(lo):
-            interval(ax, i, lo, hi, INK_2)
+            ax.plot([i, i], [lo, hi], color=INK_2, lw=1.2,
+                    solid_capstyle='butt', zorder=4)
         ax.plot([i], [v], marker='o', markersize=5.5,
                 markerfacecolor=FAMILY_COLOR[family], markeredgecolor=SURFACE,
                 markeredgewidth=1.0, zorder=5)
@@ -464,8 +423,16 @@ def draw_panel_pooled(ax, metric, pooled, order, present, title_chars=0,
     else:
         ax.set_ylabel(label_for(metric), fontsize=7.0, color=INK)
     ax.set_xlim(-0.7, len(order) - 0.3)
-    style_axis(ax)
+    ax.tick_params(axis='y', labelsize=6.5, colors=INK_2, length=2)
     ax.tick_params(axis='x', length=0)
+    for side in ('top', 'right'):
+        ax.spines[side].set_visible(False)
+    for side in ('left', 'bottom'):
+        ax.spines[side].set_color(MUTED)
+        ax.spines[side].set_linewidth(0.8)
+    ax.set_facecolor(SURFACE)
+    ax.grid(axis='y', color=MUTED, alpha=0.22, lw=0.6, zorder=0)
+    ax.set_axisbelow(True)
     return labels
 
 
@@ -546,14 +513,14 @@ def draw_panel(ax, metric, per_song, order, present, title_chars=0):
             data, positions=positions, widths=0.52,
             notch=False, showfliers=False, showcaps=False,
             patch_artist=True, zorder=3,
-            medianprops=dict(color=INK, lw=1.0),
-            whiskerprops=dict(color=INK_2, lw=0.8, alpha=0.6),
+            medianprops=dict(color=SURFACE, lw=1.4),
+            whiskerprops=dict(color=INK_2, lw=0.8, alpha=0.7),
         )
         for patch, c in zip(bp['boxes'], colors):
-            # soft translucent fill, full-hue edge: the atlas look
-            patch.set_facecolor(matplotlib.colors.to_rgba(c, FILL_ALPHA))
-            patch.set_edgecolor(c)
-            patch.set_linewidth(0.9)
+            patch.set_facecolor(c)
+            patch.set_edgecolor(SURFACE)
+            patch.set_alpha(0.78)
+            patch.set_linewidth(0.8)
 
         # The mean and its 95% interval, as one mark: a dark stick
         # spanning the CI with the mean at its centre. The best-of line
@@ -564,8 +531,8 @@ def draw_panel(ax, metric, per_song, order, present, title_chars=0):
             v = np.asarray(vals, float)
             m = v.mean()
             half = 1.96 * v.std(ddof=1) / math.sqrt(len(v))
-            interval(ax, pos, m - half, m + half, INK, lw=1.3, cap=0.13,
-                     z=5)
+            ax.plot([pos, pos], [m - half, m + half], color=INK, lw=1.6,
+                    solid_capstyle='butt', zorder=5)
             ax.plot([pos], [m], marker='o', markersize=3.2,
                     markerfacecolor=SURFACE, markeredgecolor=INK,
                     markeredgewidth=1.0, zorder=6)
@@ -607,8 +574,16 @@ def draw_panel(ax, metric, per_song, order, present, title_chars=0):
     else:
         ax.set_ylabel(label_for(metric), fontsize=7.0, color=INK)
     ax.set_xlim(-0.7, len(order) - 0.3)
-    style_axis(ax)
+    ax.tick_params(axis='y', labelsize=6.5, colors=INK_2, length=2)
     ax.tick_params(axis='x', length=0)
+    for side in ('top', 'right'):
+        ax.spines[side].set_visible(False)
+    for side in ('left', 'bottom'):
+        ax.spines[side].set_color(MUTED)
+        ax.spines[side].set_linewidth(0.8)
+    ax.set_facecolor(SURFACE)
+    ax.grid(axis='y', color=MUTED, alpha=0.22, lw=0.6, zorder=0)
+    ax.set_axisbelow(True)
     return labels
 
 
@@ -781,7 +756,6 @@ def main():
                                        title_chars, null=null_level.get(m))
         else:
             labels = draw_panel(ax, m, per_song, order, present, title_chars)
-        panel_letter(ax, idx)
         used.append((idx // ncols, idx % ncols, ax))
     for r in range(nrows):
         for c in range(ncols):
@@ -873,9 +847,8 @@ def main():
         ]
     else:
         handles += [
-            Rectangle((0, 0), 1, 1, facecolor=matplotlib.colors.to_rgba(MUTED, FILL_ALPHA),
-                  edgecolor=MUTED, lw=0.9,
-                  label='box: quartiles over songs (line: median)'),
+            Line2D([0], [0], color=INK_2, lw=6, alpha=0.35,
+                   label='box: quartiles over songs (line: median)'),
             Line2D([0], [0], color=INK, lw=1.6, marker='o', markersize=3.2,
                    markerfacecolor=SURFACE, markeredgecolor=INK,
                    markeredgewidth=1.0, label='mean and its 95% CI'),
@@ -886,11 +859,8 @@ def main():
             [0], [0], color=FAMILY_COLOR['Not ranked'], lw=1.4,
             label=f'{word} of ' + ', '.join(unranked)))
     if compact:
-        handles += [Rectangle((0, 0), 1, 1,
-                              facecolor=matplotlib.colors.to_rgba(
-                                  FAMILY_COLOR[f], FILL_ALPHA),
-                              edgecolor=FAMILY_COLOR[f], lw=0.9, label=f)
-                    for f, _l, _r in edges]
+        handles += [Line2D([0], [0], color=FAMILY_COLOR[f], lw=6,
+                           alpha=0.78, label=f) for f, _l, _r in edges]
     fig.legend(handles=handles, loc='lower center',
                ncol=3 if compact else 2, frameon=False,
                fontsize=6.4, labelcolor=INK_2,
