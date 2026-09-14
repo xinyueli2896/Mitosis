@@ -119,6 +119,11 @@ class Stream:
         self.n_frames = n_frames
         self.onsets = [[] for _ in range(n_frames)]     # pitches starting here
         self.sounding = [set() for _ in range(n_frames)]  # pitch classes held
+        # Absolute pitches held. `sounding` is deliberately pitch-CLASS
+        # (the chord-tone metrics want that); the unique-beat-ratio's
+        # "full state" criterion is a piano-roll state and needs real
+        # pitches, so both are kept.
+        self.sounding_abs = [set() for _ in range(n_frames)]
         self.durations = []                              # in frames
         to_frame = step if callable(step) else (lambda t: t / step)
         for note in notes:
@@ -130,11 +135,13 @@ class Stream:
             self.durations.append(min(f1, n_frames) - f0)
             for f in range(f0, min(f1, n_frames)):
                 self.sounding[f].add(note.pitch % 12)
+                self.sounding_abs[f].add(note.pitch)
 
     def slice(self, lo, hi):
         out = Stream([], 1.0, hi - lo)
         out.onsets = self.onsets[lo:hi]
         out.sounding = self.sounding[lo:hi]
+        out.sounding_abs = self.sounding_abs[lo:hi]
         out.durations = self.durations   # durations kept whole-file; fine for dists
         return out
 
@@ -438,6 +445,57 @@ def h2_metrics(gen_a, gen_b, ref_a, ref_b, task):
 # H1 -- per-stream role & texture integrity
 # ---------------------------------------------------------------------------
 
+FRAMES_PER_BEAT = FRAMES_PER_BAR // 4
+
+
+def unique_beat_ratio(s, beats=1, mode='onset'):
+    """Fraction of beat intervals whose content is seen for the FIRST time.
+
+    From BEAT (Qian et al.), sec. 4.5: segment the piano roll into
+    beat-wise intervals, call an interval unique if it has not appeared
+    before, and divide the cumulative unique count by the number of
+    intervals. Near 1.0 is high diversity, lower is more repetition.
+    Neither extreme is good, which is why we report it against the
+    reference rather than alone: real music sits in the middle, and a
+    model can miss by being too repetitive OR too scattered.
+
+    beats: interval width (1 or 2). mode: 'onset' compares only what
+    STARTS in each frame, 'state' compares everything SOUNDING, so a
+    held note makes two intervals differ that onset-only calls equal.
+
+    An empty interval is a signature like any other, so a stream that
+    falls silent scores as highly repetitive. That is not wrong -- it is
+    repetitive -- but read it beside survival_*, which says whether the
+    stream is there at all.
+    """
+    w = beats * FRAMES_PER_BEAT
+    n = s.n_frames // w
+    if n == 0:
+        return float('nan')
+    field = s.onsets if mode == 'onset' else s.sounding_abs
+    seen, uniq = set(), 0
+    for i in range(n):
+        sig = tuple(tuple(sorted(field[f])) for f in range(i * w, i * w + w))
+        if sig not in seen:
+            seen.add(sig)
+            uniq += 1
+    return uniq / n
+
+
+def repetition_metrics(gen_a, gen_b, ref_a, ref_b):
+    """Unique beat ratio per stream, with the reference delta."""
+    out = {}
+    for label, g, r in (('a', gen_a, ref_a), ('b', gen_b, ref_b)):
+        for beats in (1, 2):
+            for mode in ('onset', 'state'):
+                key = f'ubr{beats}_{mode}_{label}'
+                gv = unique_beat_ratio(g, beats, mode)
+                rv = unique_beat_ratio(r, beats, mode)
+                out[key] = float(gv)
+                out[f'{key}_delta'] = float(gv - rv)
+    return out
+
+
 def h1_metrics(gen_a, gen_b, ref_a, ref_b, task):
     out = {}
     n_bars = gen_a.n_frames // FRAMES_PER_BAR
@@ -653,6 +711,7 @@ def score_pair(gen_paths, ref_paths, args):
     row.update(h3_metrics(ga, gb, ra, rb, args.task))
     row.update(h2_metrics(ga, gb, ra, rb, args.task))
     row.update(h1_metrics(ga, gb, ra, rb, args.task))
+    row.update(repetition_metrics(ga, gb, ra, rb))
     row.update(s_metrics(ga, gb, ra, rb, args.task))
     return row
 

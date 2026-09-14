@@ -49,3 +49,20 @@
 \label{sec:evaluation}
 
 % TODO
+%
+% REPETITION: unique beat ratio, added 2026-09-14 (eval_metrics.py,
+% unique_beat_ratio / repetition_metrics). From BEAT~\cite{beat} sec 4.5:
+% segment into beat intervals, count those whose content is seen for the
+% first time, divide by the number of intervals. Near 1.0 is diverse,
+% lower is repetitive, and NEITHER END IS GOOD -- so report it against
+% the reference continuation, like every other metric here. Emitted at
+% two widths (1 and 2 beats) and two criteria (onset-only, full sounding
+% state), per stream, as ubr{1,2}_{onset,state}_{a,b} plus _delta.
+%
+% Two things to say when it appears in a table:
+%   * an empty interval is a signature like any other, so a stream that
+%     falls silent scores as highly repetitive -- read it beside
+%     survival_*, which says whether the stream is there at all;
+%   * BEAT reports curves over 120 beats. Our scored span is 336 frames
+%     = 84 beats, so ours is the endpoint of a shorter curve, not the
+%     same number.
