@@ -46,26 +46,36 @@ from matplotlib.patches import Rectangle
 
 
 # ---------------------------------------------------------------------------
-# System registry: internal name -> (display name, family)
-#
-# The display names are the paper's, not the repo's. A3 is deliberately
-# absent: it is a decode variant of the same checkpoint as A3ctcaT, kept
-# in the table as the scoring baseline but not a system the paper claims.
+# System registry. Display names are the paper's, not the repo's.
 # ---------------------------------------------------------------------------
+# Each entry is (family, ranked, members). `ranked` says whether the
+# family takes part in the best-model comparison drawn on each panel.
+#
+# A3 and A3ctcaT are the SAME checkpoint under two decodes -- A3 is the
+# default refinement schedule (K=4, T=0.9, top-p 0.95), A3ctcaT is
+# ctc_alt with the follower sampled at T=1 and no nucleus cut -- so the
+# labels name the decode, not two models.
 GROUPS = [
-    ('Ours', [
+    ('Ours', True, [
         ('A1',        'Duet\nw/o query'),
-        ('A3ctcaT',   'Duet'),
+        ('A3',        'Duet\n(refine)'),
+        ('A3ctcaT',   'Duet\n(alt. commit)'),
     ]),
-    ('Internal baselines', [
+    ('Internal baselines', True, [
         ('S-scratch', 'Single-stream\n(scratch)'),
-        ('S1',        'Single-stream\n(finetuned)'),
         ('P-mc',      'Cascade\n(mel→chd)'),
         ('P-cm',      'Cascade\n(chd→mel)'),
     ]),
-    ('External baselines', [
+    ('External baselines', True, [
         ('WSf',       'Whole-Song\nGen'),
         ('AMT',       'Anticipatory\nMusic Transf.'),
+    ]),
+    # Held out of the ranking and placed last, by request. It is still
+    # plotted, and the best-of-the-rest line runs the full width, so a
+    # reader can see exactly where it lands relative to the field --
+    # which is the only reason to separate it rather than drop it.
+    ('Not ranked', False, [
+        ('S1',        'Single-stream\n(finetuned)'),
     ]),
 ]
 
@@ -77,6 +87,11 @@ FAMILY_COLOR = {
     'Ours':                '#2a78d6',
     'Internal baselines':  '#eb6834',
     'External baselines':  '#1baf7a',
+    # Not a fourth categorical hue: the unranked slot is deliberately
+    # achromatic so it reads as set apart rather than as a fourth family
+    # competing on the same footing. Slot 4 would also put yellow beside
+    # orange, which fails the all-pairs floors.
+    'Not ranked':          '#8a8a85',
 }
 
 SURFACE = '#fcfcfb'
@@ -151,11 +166,34 @@ def read_per_song(path, metrics):
             for m, bysys in acc.items()}
 
 
+def best_ranked(metric, per_song, order, present):
+    """(system, display, family, mean) closest to the reference level.
+
+    Only RANKED families compete. "Best" is least absolute distance from
+    the reference on this metric, which is what these two-sided measures
+    mean -- overshooting the target is as wrong as falling short, so a
+    plain min or max would crown the wrong system on half of them.
+    """
+    ref = ref_level(metric)
+    cands = []
+    for sysname, disp, family, ranked in order:
+        if not ranked or sysname not in present:
+            continue
+        vals = list(per_song.get(metric, {}).get(sysname, {}).values())
+        if len(vals) >= 3:
+            m = float(np.mean(vals))
+            cands.append((abs(m - ref), sysname, disp, family, m))
+    if not cands:
+        return None
+    _, sysname, disp, family, m = min(cands)
+    return sysname, disp, family, m
+
+
 def draw_panel(ax, metric, per_song, order, present):
     ref = ref_level(metric)
     positions, data, colors, labels = [], [], [], []
     missing = []
-    for i, (sysname, disp, family) in enumerate(order):
+    for i, (sysname, disp, family, _ranked) in enumerate(order):
         labels.append(disp)
         if sysname in present:
             vals = list(per_song.get(metric, {}).get(sysname, {}).values())
@@ -171,11 +209,28 @@ def draw_panel(ax, metric, per_song, order, present):
     # Reference line first, so boxes sit on top of it.
     ax.axhline(ref, color=INK, lw=1.2, ls=(0, (4, 3)), zorder=1)
 
+    # Best of the ranked systems, drawn at its MEAN and running the full
+    # width so the unranked column can be read against it. Coloured by
+    # the winner's family -- the line IS that system's value -- and
+    # named in ink, because a line colour alone would not say which.
+    best = best_ranked(metric, per_song, order, present)
+    if best is not None:
+        _bs, bdisp, bfamily, bmean = best
+        ax.axhline(bmean, color=FAMILY_COLOR[bfamily], lw=1.4, zorder=2)
+
     if data:
         bp = ax.boxplot(
             data, positions=positions, widths=0.62,
             notch=True, bootstrap=None, showfliers=False,
             patch_artist=True, zorder=3,
+            # The best-of line is a MEAN, so every box carries its own
+            # mean marker: comparing a mean line against a median bar
+            # would mislead on these skewed distributions, where the
+            # mean sits above the median.
+            showmeans=True,
+            meanprops=dict(marker='D', markersize=3.0,
+                           markerfacecolor=SURFACE, markeredgecolor=INK,
+                           markeredgewidth=0.8),
             medianprops=dict(color=SURFACE, lw=1.6),
             whiskerprops=dict(color=INK_2, lw=1.0),
             capprops=dict(color=INK_2, lw=1.0),
@@ -187,11 +242,27 @@ def draw_panel(ax, metric, per_song, order, present):
             # 2px surface ring so adjacent boxes never touch
             patch.set_linewidth(1.0)
 
+    # Headroom for the caption below, claimed before anything is placed
+    # against the limits: the placeholders span the full height, so they
+    # have to be drawn against the FINAL ylim or they stop short.
+    lo, hi = ax.get_ylim()
+    hi = hi + 0.17 * (hi - lo)
+    ax.set_ylim(lo, hi)
+
+    if best is not None:
+        # Named in the corner rather than on the line. On the line it
+        # collided with whichever box sat at that height -- and the
+        # unranked column, the one a reader most wants to compare
+        # against this line, is exactly where the label landed.
+        ax.annotate(
+            'best ranked: ' + bdisp.replace('\n', ' '),
+            xy=(0.012, 0.965), xycoords='axes fraction',
+            ha='left', va='top', fontsize=6.4, color=INK)
+
     # Placeholder slots for systems not yet run: an empty hatched frame
     # is honest about the gap in a way a missing tick is not -- a reader
     # scanning the axis would otherwise not know the column was meant to
     # be there.
-    lo, hi = ax.get_ylim()
     for i in missing:
         ax.add_patch(Rectangle((i - 0.31, lo), 0.62, hi - lo,
                                facecolor='none', edgecolor=MUTED,
@@ -230,13 +301,14 @@ def main():
     present = set()
     for m in metrics:
         present |= set(per_song.get(m, {}))
-    order = [(s, d, g) for g, members in GROUPS for s, d in members]
-    known = {s for s, _, _ in order}
+    order = [(s, d, g, ranked)
+             for g, ranked, members in GROUPS for s, d in members]
+    known = {s for s, _, _, _ in order}
     extra = sorted(present - known)
     if extra:
         print(f'[warn] in the CSV but not in the figure: {" ".join(extra)}',
               file=sys.stderr)
-    absent = [s for s, _, _ in order if s not in present]
+    absent = [s for s, _, _, _ in order if s not in present]
     if absent:
         print(f'[warn] drawn as pending placeholders: {" ".join(absent)}',
               file=sys.stderr)
@@ -259,7 +331,7 @@ def main():
     # Family separators and family labels, drawn across the whole stack
     # so the grouping reads as structure rather than as a legend entry.
     edges, start = [], 0
-    for family, members in GROUPS:
+    for family, _ranked, members in GROUPS:
         edges.append((family, start, start + len(members) - 1))
         start += len(members)
     for _, _, right in edges[:-1]:
@@ -287,10 +359,15 @@ def main():
     handles = [
         Line2D([0], [0], color=INK, lw=1.2, ls=(0, (4, 3)),
                label='reference level (matches ground truth)'),
+        Line2D([0], [0], color=INK_2, lw=1.4,
+               label='mean of the best ranked system (named per panel)'),
         Line2D([0], [0], color=INK_2, lw=6, alpha=0.35,
                label='box: quartiles over songs   notch: 95% CI of median'),
+        Line2D([0], [0], color='none', marker='D', markersize=3.0,
+               markerfacecolor=SURFACE, markeredgecolor=INK,
+               markeredgewidth=0.8, label='mean'),
     ]
-    fig.legend(handles=handles, loc='lower center', ncol=1, frameon=False,
+    fig.legend(handles=handles, loc='lower center', ncol=2, frameon=False,
                fontsize=6.8, labelcolor=INK_2,
                bbox_to_anchor=(0.5, 0.004))
     if args.title:
@@ -306,8 +383,10 @@ def main():
     # box without opening the figure.
     print(f'\nper-song n and median, reference level in brackets')
     for m in metrics:
-        print(f'  {m}  [ref {ref_level(m):.0f}]')
-        for sysname, disp, _ in order:
+        b = best_ranked(m, per_song, order, present)
+        won = f'  best(ranked): {b[0]} mean {b[3]:+.4f}' if b else ''
+        print(f'  {m}  [ref {ref_level(m):.0f}]{won}')
+        for sysname, disp, _, _ in order:
             vals = list(per_song.get(m, {}).get(sysname, {}).values())
             if not vals:
                 print(f'    {sysname:11s} --')
