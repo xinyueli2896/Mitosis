@@ -1034,7 +1034,13 @@ def _jsd_rows(P, Q):
     return 0.5 * (kp + kq)
 
 
-def _pooled_ci(G, R, n_boot=2000, seed=0, per_sample=None):
+def _norm_songs(M):
+    """Row-normalise: each song contributes one unit of probability."""
+    t = M.sum(axis=1, keepdims=True)
+    return np.where(t > 0, M / np.where(t > 0, t, 1.0), 0.0)
+
+
+def _pooled_ci(G, R, n_boot=2000, seed=0, per_sample=None, by_song=True):
     """Percentile CI for the pooled JSD, resampling SONGS.
 
     G, R are (n_songs, n_bins) count matrices. The song is the unit of
@@ -1073,9 +1079,15 @@ def _pooled_ci(G, R, n_boot=2000, seed=0, per_sample=None):
                 v = per_sample[i]
                 k = len(v)
                 pick = rng.integers(0, k, size=k)
-                acc += np.sum([v[j] for j in pick], axis=0)
+                song = np.sum([v[j] for j in pick], axis=0)
+                if by_song:
+                    t = song.sum()
+                    if t > 0:
+                        song = song / t
+                acc += song
             Gb[b] = acc
-        Rb = np.stack([R[idx[b]].sum(axis=0) for b in range(n_boot)])
+        Rw = _norm_songs(R) if by_song else R
+        Rb = np.stack([Rw[idx[b]].sum(axis=0) for b in range(n_boot)])
         vals = _jsd_rows(Gb, Rb)
     lo, hi = np.percentile(vals, [2.5, 97.5])
     # The bootstrap SE is the spread of the replicates. It is reported
@@ -1085,7 +1097,8 @@ def _pooled_ci(G, R, n_boot=2000, seed=0, per_sample=None):
     return float(lo), float(hi), float(vals.std(ddof=1))
 
 
-def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False):
+def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False,
+                   weight='song'):
     """One histogram per system over the whole corpus, with a song
     bootstrap. Samples of a song are summed into that song's counts."""
     keys = [k for k in POOLED_BINS
@@ -1116,8 +1129,9 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False):
     width = 26
     print('\n================= CORPUS-POOLED JSD '
           '=================')
-    print('one histogram per system over all songs -- a single value, so '
-          'it has no std;')
+    print(f'one histogram per system over all songs, weighted per '
+          f'{weight.upper()} -- a single value,')
+    print('so it has no std;')
     _lvl = ('SONGS and, within each, its SAMPLES' if two_level else 'SONGS')
     print(f'the uncertainty is a [2.5, 97.5] percentile bootstrap over '
           f'{_lvl} (boot_se in the CSV)')
@@ -1143,7 +1157,7 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False):
                        ci_lo=float('nan'), ci_hi=float('nan'),
                        boot_se=float('nan'),
                        n_songs=len(songs), n_obs=n_obs, n_boot=n_boot,
-                       boot_levels=2 if two_level else 1)
+                       boot_levels=2 if two_level else 1, weight=weight)
             recs.append(rec)
             if not songs:
                 line += '--'.ljust(width)
@@ -1151,9 +1165,19 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False):
             Gs = [by_song[s][0] for s in songs]
             G = np.stack([np.sum(v, axis=0) for v in Gs])
             R = np.stack([by_song[s][1] for s in songs])
-            rec['jsd'] = jsd(G.sum(axis=0), R.sum(axis=0))
+            # weight='song': each song contributes one unit of
+            # probability, whatever its note count. Summing raw counts
+            # instead weights a song by how many notes it has, which
+            # lets a handful of long songs decide the corpus histogram
+            # -- and contradicts the song-as-unit rule the per-song
+            # table, the paired test and this bootstrap all follow.
+            by_song_w = (weight == 'song')
+            Gw = _norm_songs(G) if by_song_w else G
+            Rw = _norm_songs(R) if by_song_w else R
+            rec['jsd'] = jsd(Gw.sum(axis=0), Rw.sum(axis=0))
             rec['ci_lo'], rec['ci_hi'], rec['boot_se'] = _pooled_ci(
-                G, R, n_boot=n_boot, per_sample=Gs if two_level else None)
+                Gw, Rw, n_boot=n_boot,
+                per_sample=Gs if two_level else None, by_song=by_song_w)
             cell = f'{rec["jsd"]:.3f}' if math.isnan(rec['ci_lo']) \
                 else f'{rec["jsd"]:.3f} [{rec["ci_lo"]:.3f},{rec["ci_hi"]:.3f}]'
             line += cell.ljust(width)
@@ -1176,7 +1200,7 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False):
             w = csv.DictWriter(f, fieldnames=['metric', 'system', 'jsd',
                                               'ci_lo', 'ci_hi', 'boot_se',
                                               'n_songs', 'n_obs', 'n_boot',
-                                              'boot_levels'])
+                                              'boot_levels', 'weight'])
             w.writeheader()
             w.writerows(recs)
         print(f'\nwrote {len(recs)} pooled rows -> {out_csv}')
@@ -1309,6 +1333,15 @@ def main():
                    help='CSV for the corpus-pooled JSD table: one row per '
                         '(metric, system) with the pooled value, its '
                         'bootstrap interval, and the counts behind it.')
+    p.add_argument('--pooled-weight', choices=['song', 'note'],
+                   default='song',
+                   help="how the corpus histogram weights a song. 'song' "
+                        '(default) normalises each song first, so every '
+                        "song counts once; 'note' sums raw counts, so a "
+                        'song counts in proportion to its notes and a few '
+                        'long songs can decide the result. song matches '
+                        'the unit the per-song table, the paired test and '
+                        'the bootstrap all use.')
     p.add_argument('--pooled-two-level', action='store_true',
                    help='bootstrap the SAMPLES within each drawn song as '
                         'well as the songs. The default one-level version '
@@ -1368,7 +1401,8 @@ def main():
 
     summarize(rows, args.task, baseline=args.baseline)
     pooled_summary(rows, args.task, n_boot=args.pooled_boot,
-                   out_csv=args.pooled_out, two_level=args.pooled_two_level)
+                   out_csv=args.pooled_out, two_level=args.pooled_two_level,
+                   weight=args.pooled_weight)
 
 
 if __name__ == '__main__':

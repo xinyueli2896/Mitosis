@@ -109,6 +109,11 @@
 #   BASELINE       system the paired table tests against (default A3)
 #   MEL_FOLDER / CHORD_FOLDER   default input/pop909_split/{melody,chord}
 #   OUT_ROOT       default temp/E1
+#   POOLED_WEIGHT  song (default) | note. How the corpus histogram
+#                  weights a song: 'song' normalises each song first so
+#                  every song counts once; 'note' sums raw counts, so a
+#                  long song counts for more than a short one. song is
+#                  the unit the rest of the evaluation uses.
 #   POOLED_TWO_LEVEL=1  bootstrap the SAMPLES within each drawn song as
 #                  well as the songs, for the corpus-pooled JSD. The
 #                  default resamples songs only, so the interval covers
@@ -724,7 +729,8 @@ python eval_metrics.py --task melchord \
     --ref-a-dir "$EVAL_MEL" --ref-b-dir "$EVAL_CHORD" \
     --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
     --out "$METRICS" --pooled-out "$POOLED" \
-    $([[ "${POOLED_TWO_LEVEL:-0}" == "1" ]] && echo --pooled-two-level)
+    $([[ "${POOLED_TWO_LEVEL:-0}" == "1" ]] && echo --pooled-two-level) \
+    --pooled-weight "${POOLED_WEIGHT:-song}"
 
 if [[ " ${SCORED[*]} " != *" $BASELINE "* ]]; then
     echo "WARNING: BASELINE=$BASELINE was not scored; using ${SCORED[0]} for the paired table"
