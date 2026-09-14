@@ -1,32 +1,41 @@
 """Box plots of E1 per-song scores, grouped by system family.
 
 Reads the per-sample metrics CSV that eval_metrics writes and draws one
-panel per metric: a notched box per system, systems ordered and coloured
-by family (ours / internal baselines / external baselines).
+panel per metric: one box per system, systems ordered and coloured by
+family (ours / internal baselines / external baselines).
 
 WHAT THE MARKS MEAN, because a box plot of a distance metric is easy to
 misread:
 
-  box      quartiles of the PER-SONG values. Samples of a song are
-           averaged first -- three samples of one song share a prompt
-           and a reference, so treating them as three observations
-           understates the spread by about sqrt(3).
-  notch    95% confidence interval of the MEDIAN, 1.58*IQR/sqrt(n).
-           Two systems whose notches do not overlap differ at roughly
-           the 95% level; this is the "significance interval" a reader
-           should compare across boxes.
+  box      quartiles of the PER-SONG values, with the median as a pale
+           line. Samples of a song are averaged first -- three samples
+           of one song share a prompt and a reference, so treating them
+           as three observations understates the spread by sqrt(3).
+  stick    the MEAN and its 95% confidence interval, drawn dark over the
+           box. This is the significance interval: two systems whose
+           sticks do not overlap differ at about the 95% level. It sits
+           on the mean rather than the median so that it is like for
+           like with the best-of line, which is also a mean.
   dashed   the REFERENCE LEVEL: the value a system scores when it
   line     matches the ground-truth continuation. 0 for a divergence or
            a delta, 1 for a ratio. It is a target, not a maximum --
            these metrics are two-sided, and a system can miss by
            exceeding it.
+  solid    the mean of the best RANKED system on that panel, named in
+  line     the corner, running the full width so the unranked column
+           can be read against it.
+
+No notches: a notch deforms the box into an hourglass and folds inside
+out when the CI exceeds the quartiles, which happens on the noisier
+metrics here and reads as a broken box. The interval gets its own mark
+instead, where it cannot distort the distribution it describes.
 
 Nothing here is a "higher is better" axis, so no direction arrows: each
 panel says in its own label which way the reference lies.
 
 Usage (via plot_e1_box.sbatch):
   python plot_e1_box.py --csv results/E1_p96_v5b93_metrics.csv \
-      --out results/E1_p96_v5b93_box --metrics harmonic_rhythm_jsd,...
+      --out results/E1_p96_v5b93_box_H3 --block H3
 """
 
 import argparse
@@ -55,27 +64,32 @@ from matplotlib.patches import Rectangle
 # default refinement schedule (K=4, T=0.9, top-p 0.95), A3ctcaT is
 # ctc_alt with the follower sampled at T=1 and no nucleus cut -- so the
 # labels name the decode, not two models.
+#
+# Each member is (internal name, long label, short label). The short
+# label is used as soon as the figure has more than one column, where
+# nine two-line names would overlap into illegibility; the key below
+# then goes in the figure footnote, so nothing is left to guess.
 GROUPS = [
     ('Ours', True, [
-        ('A1',        'Duet\nw/o query'),
-        ('A3',        'Duet\n(refine)'),
-        ('A3ctcaT',   'Duet\n(alt. commit)'),
+        ('A1',        'Duet\nw/o query',            'Duet–noQ'),
+        ('A3',        'Duet\n(refine)',             'Duet–R'),
+        ('A3ctcaT',   'Duet\n(alt. commit)',        'Duet–AC'),
     ]),
     ('Internal baselines', True, [
-        ('S-scratch', 'Single-stream\n(scratch)'),
-        ('P-mc',      'Cascade\n(mel→chd)'),
-        ('P-cm',      'Cascade\n(chd→mel)'),
+        ('S-scratch', 'Single-stream\n(scratch)',   'SS–scr'),
+        ('P-mc',      'Cascade\n(mel→chd)',    'Casc–mc'),
+        ('P-cm',      'Cascade\n(chd→mel)',    'Casc–cm'),
     ]),
     ('External baselines', True, [
-        ('WSf',       'Whole-Song\nGen'),
-        ('AMT',       'Anticipatory\nMusic Transf.'),
+        ('WSf',       'Whole-Song\nGen',            'WSG'),
+        ('AMT',       'Anticipatory\nMusic Transf.', 'AMT'),
     ]),
     # Held out of the ranking and placed last, by request. It is still
     # plotted, and the best-of-the-rest line runs the full width, so a
     # reader can see exactly where it lands relative to the field --
     # which is the only reason to separate it rather than drop it.
     ('Not ranked', False, [
-        ('S1',        'Single-stream\n(finetuned)'),
+        ('S1',        'Single-stream\n(finetuned)', 'SS–ft'),
     ]),
 ]
 
@@ -92,6 +106,15 @@ FAMILY_COLOR = {
     # competing on the same footing. Slot 4 would also put yellow beside
     # orange, which fails the all-pairs floors.
     'Not ranked':          '#8a8a85',
+}
+
+# Metrics with no reference level: raw per-stream rates whose row holds
+# no matching ground-truth statistic. Their _delta or _ratio siblings do
+# have one, and those are the panels to read for "how close to real".
+NO_REFERENCE = {
+    'survival_min', 'survival_a', 'survival_b', 'mel_poly_rate',
+    'empty_rate_a', 'empty_rate_b', 'density_drift_a', 'density_drift_b',
+    'chord_tone_cov', 'ctnctr', 'pcs', 'mctd', 'coupling', 'onset_sync',
 }
 
 SURFACE = '#fcfcfb'
@@ -126,6 +149,29 @@ LABELS = {
     'mel_interval_jsd':        'Melodic interval JSD',
     'voicing_jsd':             'Chord voicing JSD',
     'ubr2_onset_b_delta':      'Unique beat ratio, chord $-$ ref.',
+    # H1 -- per-stream role and texture integrity
+    'survival_min':            'Active-bar fraction (min of streams)',
+    'survival_a':              'Active-bar fraction, melody',
+    'survival_b':              'Active-bar fraction, chord',
+    'mel_poly_rate':           'Melody frames with $\\geq$2 onsets',
+    'density_ratio_a':         'Notes/bar over ref., melody',
+    'density_ratio_b':         'Notes/bar over ref., chord',
+    'density_drift_a':         'Per-bar density slope, melody',
+    'density_drift_b':         'Per-bar density slope, chord',
+    'empty_rate_a':            'Silent-frame fraction, melody',
+    'empty_rate_b':            'Silent-frame fraction, chord',
+    'register_overlap_delta':  'Register overlap $-$ ref.',
+    # H2 -- raw forms, shown beside their deltas
+    'chord_tone_cov':          'Chord-tone coverage',
+    'ctnctr':                  'CTnCTR',
+    'pcs':                     'PCS',
+    'mctd':                    'MCTD',
+    'coupling':                'Melody-chord coupling',
+    'onset_sync':              'Onset synchrony',
+    'onset_sync_delta':        'Onset synchrony $-$ ref.',
+    'mel_stepwise_delta':      'Melody stepwise rate $-$ ref.',
+    'dur_contrast_delta':      'Duration contrast $-$ ref.',
+    'density_contrast_delta':  'Density contrast $-$ ref.',
 }
 
 
@@ -141,6 +187,12 @@ def ref_level(metric):
         return 1.0
     if metric.startswith('density_ratio'):
         return 1.0
+    # These are raw rates with no reference counterpart in the row: there
+    # is no value that means "matches the ground truth", so no target
+    # line is drawn. Returning 0 would put a dashed rule at the bottom of
+    # the axis and invite it to be read as the target.
+    if metric in NO_REFERENCE:
+        return None
     return 0.0
 
 
@@ -175,8 +227,10 @@ def best_ranked(metric, per_song, order, present):
     plain min or max would crown the wrong system on half of them.
     """
     ref = ref_level(metric)
+    if ref is None:
+        return None      # no target, so no "best"
     cands = []
-    for sysname, disp, family, ranked in order:
+    for sysname, disp, _short, family, ranked in order:
         if not ranked or sysname not in present:
             continue
         vals = list(per_song.get(metric, {}).get(sysname, {}).values())
@@ -193,8 +247,8 @@ def draw_panel(ax, metric, per_song, order, present):
     ref = ref_level(metric)
     positions, data, colors, labels = [], [], [], []
     missing = []
-    for i, (sysname, disp, family, _ranked) in enumerate(order):
-        labels.append(disp)
+    for i, (sysname, disp, short, family, _ranked) in enumerate(order):
+        labels.append((disp, short))
         if sysname in present:
             vals = list(per_song.get(metric, {}).get(sysname, {}).values())
         else:
@@ -207,7 +261,8 @@ def draw_panel(ax, metric, per_song, order, present):
             missing.append(i)
 
     # Reference line first, so boxes sit on top of it.
-    ax.axhline(ref, color=INK, lw=1.2, ls=(0, (4, 3)), zorder=1)
+    if ref is not None:
+        ax.axhline(ref, color=INK, lw=1.1, ls=(0, (4, 3)), zorder=1)
 
     # Best of the ranked systems, drawn at its MEAN and running the full
     # width so the unranked column can be read against it. Coloured by
@@ -219,28 +274,38 @@ def draw_panel(ax, metric, per_song, order, present):
         ax.axhline(bmean, color=FAMILY_COLOR[bfamily], lw=1.4, zorder=2)
 
     if data:
+        # NO NOTCHES. A notch deforms the box into an hourglass, and
+        # when the CI is wider than the quartiles -- which happens on
+        # the noisier metrics here -- matplotlib folds it inside out and
+        # the box reads as broken. The interval is drawn instead as its
+        # own mark, which cannot distort the distribution it sits on.
         bp = ax.boxplot(
-            data, positions=positions, widths=0.62,
-            notch=True, bootstrap=None, showfliers=False,
+            data, positions=positions, widths=0.52,
+            notch=False, showfliers=False, showcaps=False,
             patch_artist=True, zorder=3,
-            # The best-of line is a MEAN, so every box carries its own
-            # mean marker: comparing a mean line against a median bar
-            # would mislead on these skewed distributions, where the
-            # mean sits above the median.
-            showmeans=True,
-            meanprops=dict(marker='D', markersize=3.0,
-                           markerfacecolor=SURFACE, markeredgecolor=INK,
-                           markeredgewidth=0.8),
-            medianprops=dict(color=SURFACE, lw=1.6),
-            whiskerprops=dict(color=INK_2, lw=1.0),
-            capprops=dict(color=INK_2, lw=1.0),
+            medianprops=dict(color=SURFACE, lw=1.4),
+            whiskerprops=dict(color=INK_2, lw=0.8, alpha=0.7),
         )
         for patch, c in zip(bp['boxes'], colors):
             patch.set_facecolor(c)
-            patch.set_edgecolor(c)
-            patch.set_alpha(0.9)
-            # 2px surface ring so adjacent boxes never touch
-            patch.set_linewidth(1.0)
+            patch.set_edgecolor(SURFACE)
+            patch.set_alpha(0.78)
+            patch.set_linewidth(0.8)
+
+        # The mean and its 95% interval, as one mark: a dark stick
+        # spanning the CI with the mean at its centre. The best-of line
+        # is a mean, so this is what a reader compares against it --
+        # putting the interval on the mean rather than on the median
+        # keeps the two like for like.
+        for pos, vals in zip(positions, data):
+            v = np.asarray(vals, float)
+            m = v.mean()
+            half = 1.96 * v.std(ddof=1) / math.sqrt(len(v))
+            ax.plot([pos, pos], [m - half, m + half], color=INK, lw=1.6,
+                    solid_capstyle='butt', zorder=5)
+            ax.plot([pos], [m], marker='o', markersize=3.2,
+                    markerfacecolor=SURFACE, markeredgecolor=INK,
+                    markeredgewidth=1.0, zorder=6)
 
     # Headroom for the caption below, claimed before anything is placed
     # against the limits: the placeholders span the full height, so they
@@ -290,71 +355,120 @@ def main():
     p.add_argument('--csv', required=True, help='eval_metrics --out CSV')
     p.add_argument('--out', required=True, help='output path WITHOUT extension')
     p.add_argument('--metrics', default=','.join(DEFAULT_METRICS))
+    p.add_argument('--block', default='',
+                   help='hypothesis block (H1/H2/H3/P/S/R): plots every '
+                        'metric in it, overriding --metrics')
+    p.add_argument('--ncols', type=int, default=2)
     p.add_argument('--width', type=float, default=7.0, help='inches')
-    p.add_argument('--panel-height', type=float, default=1.55, help='inches')
+    p.add_argument('--panel-height', type=float, default=1.45, help='inches')
     p.add_argument('--title', default='')
     args = p.parse_args()
 
-    metrics = [m.strip() for m in args.metrics.split(',') if m.strip()]
+    if args.block:
+        from eval_metrics import H_GROUPS
+        if args.block not in H_GROUPS:
+            raise SystemExit(f'unknown block {args.block}; '
+                             f'have {" ".join(H_GROUPS)}')
+        # `_ref` columns are the reference pair's own statistic, copied
+        # into every system's row: identical across columns by
+        # construction, so a box plot of one is the same box drawn nine
+        # times. The paired `_delta` carries the same information
+        # against the reference, which is what the panels show.
+        metrics = [m for m in H_GROUPS[args.block]
+                   if not m.endswith('_ref')]
+    else:
+        metrics = [m.strip() for m in args.metrics.split(',') if m.strip()]
     per_song = read_per_song(args.csv, metrics)
 
     present = set()
     for m in metrics:
         present |= set(per_song.get(m, {}))
-    order = [(s, d, g, ranked)
-             for g, ranked, members in GROUPS for s, d in members]
-    known = {s for s, _, _, _ in order}
+    order = [(s, d, sh, g, ranked)
+             for g, ranked, members in GROUPS for s, d, sh in members]
+    known = {s for s, _, _, _, _ in order}
     extra = sorted(present - known)
     if extra:
         print(f'[warn] in the CSV but not in the figure: {" ".join(extra)}',
               file=sys.stderr)
-    absent = [s for s, _, _, _ in order if s not in present]
+    absent = [s for s, _, _, _, _ in order if s not in present]
     if absent:
         print(f'[warn] drawn as pending placeholders: {" ".join(absent)}',
               file=sys.stderr)
 
     n = len(metrics)
-    fig, axes = plt.subplots(
-        n, 1, figsize=(args.width, args.panel_height * n + 1.5),
-        sharex=True)
-    axes = np.atleast_1d(axes)
+    ncols = max(1, min(args.ncols, n))
+    nrows = math.ceil(n / ncols)
+    fig, axgrid = plt.subplots(
+        nrows, ncols, squeeze=False,
+        figsize=(args.width, args.panel_height * nrows
+                 + (2.9 if ncols > 1 else 1.6)))
     fig.patch.set_facecolor(SURFACE)
 
     labels = None
-    for ax, m in zip(axes, metrics):
+    used = []
+    for idx, m in enumerate(metrics):
+        ax = axgrid[idx // ncols][idx % ncols]
         labels = draw_panel(ax, m, per_song, order, present)
+        used.append((idx // ncols, idx % ncols, ax))
+    for r in range(nrows):
+        for c in range(ncols):
+            if r * ncols + c >= n:
+                axgrid[r][c].set_visible(False)
 
-    bottom = axes[-1]
-    bottom.set_xticks(range(len(order)))
-    bottom.set_xticklabels(labels, fontsize=6.5, color=INK)
+    # x labels on the LAST USED panel of each column, not on every one:
+    # repeating nine two-line system names down a grid is most of what
+    # made the earlier figure feel busy.
+    axes = [a for _, _, a in used]
+    bottoms = []
+    for c in range(ncols):
+        col = [a for r, cc, a in used if cc == c]
+        if col:
+            bottoms.append(col[-1])
+    for ax in axes:
+        ax.set_xticks(range(len(order)))
+        ax.set_xticklabels([])
+    # Nine systems will not fit horizontally in a half-width panel at any
+    # legible size -- short codes did not fix it, they only made the
+    # overlap cryptic as well as unreadable. So a multi-column figure
+    # turns the names vertical, where they cost height once per column
+    # instead of width nine times, and keeps the FULL names: a key of
+    # invented abbreviations is a second thing for a reader to hold.
+    compact = ncols > 1
+    if compact:
+        shown = [lg.replace('\n', ' ') for lg, _sh in labels]
+        for bottom in bottoms:
+            bottom.set_xticklabels(shown, fontsize=6.0, color=INK,
+                                   rotation=90, ha='center', va='top')
+    else:
+        for bottom in bottoms:
+            bottom.set_xticklabels([lg for lg, _sh in labels],
+                                   fontsize=6.2, color=INK)
 
-    # Family separators and family labels, drawn across the whole stack
-    # so the grouping reads as structure rather than as a legend entry.
     edges, start = [], 0
     for family, _ranked, members in GROUPS:
         edges.append((family, start, start + len(members) - 1))
         start += len(members)
-    for _, _, right in edges[:-1]:
-        for ax in axes:
-            ax.axvline(right + 0.5, color=MUTED, lw=0.8, ls=':', alpha=0.8)
-    for family, left, right in edges:
-        # A coloured BRACKET carries the family; the name beside it stays
-        # in ink. Painting the label itself in the series colour would
-        # put 7.5pt text at the aqua slot's 2.7:1 against the surface,
-        # and would make identity colour-alone for a reader who cannot
-        # separate the hues.
-        bottom.annotate(
-            '', xy=(left - 0.34, -0.30), xytext=(right + 0.34, -0.30),
-            xycoords=('data', 'axes fraction'),
-            textcoords=('data', 'axes fraction'),
-            arrowprops=dict(arrowstyle='-', color=FAMILY_COLOR[family],
-                            lw=2.6, shrinkA=0, shrinkB=0),
-            annotation_clip=False)
-        bottom.annotate(
-            family, xy=((left + right) / 2, -0.36),
-            xycoords=('data', 'axes fraction'), ha='center', va='top',
-            fontsize=7.5, color=INK, weight='bold',
-            annotation_clip=False)
+    # Family brackets under the axis only in the single-column figure.
+    # Under vertical names they would sit an inch and a half down, and
+    # the family names themselves would overlap at half width -- so in
+    # compact mode the families move into the legend instead, where the
+    # swatch carries the colour and the text stays in ink.
+    if not compact:
+        for bottom in bottoms:
+            for family, left, right in edges:
+                bottom.annotate(
+                    '', xy=(left - 0.34, -0.42), xytext=(right + 0.34, -0.42),
+                    xycoords=('data', 'axes fraction'),
+                    textcoords=('data', 'axes fraction'),
+                    arrowprops=dict(arrowstyle='-',
+                                    color=FAMILY_COLOR[family],
+                                    lw=2.4, shrinkA=0, shrinkB=0),
+                    annotation_clip=False)
+                bottom.annotate(
+                    family, xy=((left + right) / 2, -0.48),
+                    xycoords=('data', 'axes fraction'), ha='center',
+                    va='top', fontsize=6.8, color=INK, weight='bold',
+                    annotation_clip=False)
 
     handles = [
         Line2D([0], [0], color=INK, lw=1.2, ls=(0, (4, 3)),
@@ -362,18 +476,24 @@ def main():
         Line2D([0], [0], color=INK_2, lw=1.4,
                label='mean of the best ranked system (named per panel)'),
         Line2D([0], [0], color=INK_2, lw=6, alpha=0.35,
-               label='box: quartiles over songs   notch: 95% CI of median'),
-        Line2D([0], [0], color='none', marker='D', markersize=3.0,
+               label='box: quartiles over songs (line: median)'),
+        Line2D([0], [0], color=INK, lw=1.6, marker='o', markersize=3.2,
                markerfacecolor=SURFACE, markeredgecolor=INK,
-               markeredgewidth=0.8, label='mean'),
+               markeredgewidth=1.0, label='mean and its 95% CI'),
     ]
-    fig.legend(handles=handles, loc='lower center', ncol=2, frameon=False,
-               fontsize=6.8, labelcolor=INK_2,
+    if compact:
+        handles += [Line2D([0], [0], color=FAMILY_COLOR[f], lw=6,
+                           alpha=0.78, label=f) for f, _l, _r in edges]
+    # 3 columns, not 4: at four the widest row ran past the canvas and
+    # clipped the last family name.
+    fig.legend(handles=handles, loc='lower center',
+               ncol=3 if compact else 2, frameon=False,
+               fontsize=6.4, labelcolor=INK_2,
                bbox_to_anchor=(0.5, 0.004))
     if args.title:
         fig.suptitle(args.title, fontsize=9, color=INK, y=0.995)
 
-    fig.tight_layout(rect=(0, 0.075, 1, 0.985))
+    fig.tight_layout(rect=(0, 0.075 if ncols == 1 else 0.10, 1, 0.985))
     for ext in ('pdf', 'png'):
         path = f'{args.out}.{ext}'
         fig.savefig(path, dpi=300, facecolor=SURFACE)
@@ -385,8 +505,10 @@ def main():
     for m in metrics:
         b = best_ranked(m, per_song, order, present)
         won = f'  best(ranked): {b[0]} mean {b[3]:+.4f}' if b else ''
-        print(f'  {m}  [ref {ref_level(m):.0f}]{won}')
-        for sysname, disp, _, _ in order:
+        r = ref_level(m)
+        rtxt = 'no reference level' if r is None else f'ref {r:.0f}'
+        print(f'  {m}  [{rtxt}]{won}')
+        for sysname, disp, _short, _, _ in order:
             vals = list(per_song.get(m, {}).get(sysname, {}).values())
             if not vals:
                 print(f'    {sysname:11s} --')

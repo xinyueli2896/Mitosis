@@ -13,8 +13,20 @@
 #             (default results/E1_p96_v5b93_metrics.csv)
 #   OUT       output path WITHOUT extension; writes .pdf and .png
 #             (default: the CSV path with _metrics.csv -> _box)
-#   METRICS   comma-separated metric names; default the three
-#             pre-registered primary endpoints plus coupling_delta
+#   BLOCKS    hypothesis blocks to draw, one figure each, suffixed
+#             _<block> on OUT. Default "H3 H2 H1". Empty falls back to
+#             METRICS in a single figure.
+#             H1 IS ONLY IN THE CSV IF THE RUN WAS SCORED AFTER H1 WENT
+#             BACK INTO CSV_GROUPS -- an older CSV has no survival or
+#             empty_rate columns and the H1 figure comes out all
+#             placeholders. Rescore with score_e1.sbatch if so.
+#   METRICS   comma-separated metric names, used only when BLOCKS is
+#             empty; default the pre-registered primary endpoints plus
+#             coupling_delta
+#   NCOLS     panels per row (default 2). At 1 the system names are
+#             horizontal and two-line with family brackets under the
+#             axis; above 1 they turn vertical and the families move
+#             into the legend, which is the only way nine of them fit.
 #   WIDTH     figure width in inches (default 7.0, a two-column page)
 #   TITLE     optional figure title
 #
@@ -50,7 +62,9 @@ mkdir -p /home/xinyue.li/logs
 CSV="${CSV:-results/E1_p96_v5b93_metrics.csv}"
 [[ -f "$CSV" ]] || { echo "ERROR: no $CSV -- run score_e1.sbatch first"; exit 1; }
 OUT="${OUT:-${CSV%_metrics.csv}_box}"
+BLOCKS="${BLOCKS-H3 H2 H1}"
 METRICS="${METRICS:-}"
+NCOLS="${NCOLS:-2}"
 WIDTH="${WIDTH:-7.0}"
 TITLE="${TITLE:-}"
 
@@ -62,16 +76,26 @@ python -c 'import matplotlib' 2>/dev/null || {
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "CSV   : $CSV"
-echo "OUT   : $OUT.{pdf,png}"
-echo "METRIC: ${METRICS:-<defaults>}"
+echo "OUT   : $OUT[_<block>].{pdf,png}"
+echo "BLOCKS: ${BLOCKS:-<none: single figure from METRICS>}"
+echo "NCOLS : $NCOLS"
 echo "================================================================"
 
-python plot_e1_box.py --csv "$CSV" --out "$OUT" --width "$WIDTH" \
-    ${METRICS:+--metrics "$METRICS"} \
-    ${TITLE:+--title "$TITLE"}
+if [[ -n "${BLOCKS// /}" ]]; then
+    for b in $BLOCKS; do
+        echo "--- $b ---"
+        python plot_e1_box.py --csv "$CSV" --out "${OUT}_${b}" \
+            --block "$b" --ncols "$NCOLS" --width "$WIDTH" \
+            ${TITLE:+--title "$TITLE"}
+    done
+else
+    python plot_e1_box.py --csv "$CSV" --out "$OUT" --width "$WIDTH" \
+        --ncols "$NCOLS" ${METRICS:+--metrics "$METRICS"} \
+        ${TITLE:+--title "$TITLE"}
+fi
 
 echo "================================================================"
-echo "Done. $OUT.pdf is the one to \\includegraphics."
+echo "Done. The .pdf files are the ones to \\includegraphics."
 echo "Boxes are quartiles over SONGS; the notch is the 95% CI of the"
 echo "median, so two boxes whose notches do not overlap differ at about"
 echo "the 95% level. The dashed line is the reference: the value a"

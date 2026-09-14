@@ -6,11 +6,11 @@ The summary prints blocks in the order H3 > H2 > P > S > R, and each
 has ONE designated primary endpoint (marked *), the rest being
 supporting diagnostics.
 
-H1 IS COMPUTED BUT NEITHER PRINTED NOR WRITTEN (2026-09-14, by
-request): P took its place. See CSV_GROUPS for the one line that brings
-it back. While it is out, nothing in the output says whether a stream
-is there at all, so a P row near 0 wants a listen before it is quoted:
-a continuation that fell silent adheres to nothing, and its P
+H1 IS WRITTEN TO THE CSV BUT NOT PRINTED (2026-09-14): P took its place
+in the table. The CSV is the superset of everything computed; the table
+is the reading order. Check the H1 columns before quoting P on any
+system -- survival_* and empty_rate_* are what say a stream is there at
+all, and a continuation that fell silent adheres to nothing, so its P
 statistics are meaningless rather than bad.
 
   H3 (stream-appropriate grammar)   [highest priority]
@@ -904,20 +904,12 @@ H_GROUPS = {
 # because neither copying the prompt nor ignoring it is right.
 GROUP_ORDER = ('H3', 'H2', 'P', 'S', 'R')
 
-# H1 is out of the CSV as well (2026-09-14, by request), so scoring
-# writes exactly what the table shows. h1_metrics still RUNS and
-# H_GROUPS['H1'] still lists its keys, so restoring it is this one line:
-#
-#     CSV_GROUPS = GROUP_ORDER + ('H1',)
-#
-# and adding 'H1' to GROUP_ORDER puts it back in the table. Until then,
-# note that the corpus has to be rescored to recover a survival number,
-# and that P is being read without its collapse detector: a stream that
-# fell silent adheres to nothing, so reuse comes out NaN but
-# density_vs_prompt comes out 0.0, which reads like a measurement
-# rather than an absence. A P row at 0 is worth a listen before it is
-# worth a sentence.
-CSV_GROUPS = GROUP_ORDER
+# H1 is back in the CSV (2026-09-14, by request: the H1 metrics are
+# being plotted), but stays out of the printed table, where P holds its
+# place. So the CSV is the superset -- everything computed is recorded
+# -- and the table is the reading order. Add 'H1' to GROUP_ORDER to put
+# it back in the table too.
+CSV_GROUPS = GROUP_ORDER + ('H1',)
 
 
 # ---------------------------------------------------------------------------
