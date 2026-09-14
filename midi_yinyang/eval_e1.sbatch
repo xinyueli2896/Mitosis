@@ -662,6 +662,7 @@ RSUF="p${PROMPT_LENGTH}${RESULT_TAG:+_${RESULT_TAG}}"
 MANIFEST="results/E1_${RSUF}_manifest.tsv"
 METRICS="results/E1_${RSUF}_metrics.csv"
 TABLE="results/E1_${RSUF}_table.md"
+POOLED="results/E1_${RSUF}_pooled.csv"
 
 SRC_ARGS=()
 for name in "${SCORED[@]}"; do
@@ -677,7 +678,7 @@ python eval_metrics.py --task melchord \
     --manifest "$MANIFEST" \
     --ref-a-dir "$EVAL_MEL" --ref-b-dir "$EVAL_CHORD" \
     --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
-    --out "$METRICS"
+    --out "$METRICS" --pooled-out "$POOLED"
 
 if [[ " ${SCORED[*]} " != *" $BASELINE "* ]]; then
     echo "WARNING: BASELINE=$BASELINE was not scored; using ${SCORED[0]} for the paired table"
@@ -697,6 +698,7 @@ echo "  outputs : $OUT_ROOT/<system>/"
 echo "  table   : $TABLE   (one-sided, complete cases, vs $BASELINE)"
 echo "  2-sided : ${TABLE%.md}_twosided.md"
 echo "  metrics : $METRICS"
+echo "  pooled  : $POOLED   (corpus-pooled JSD, bootstrap over songs)"
 echo "================================================================"
 echo "RESULT TABLE:"
 cat "$TABLE"

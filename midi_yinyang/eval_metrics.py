@@ -45,6 +45,18 @@ All metrics are computed on the CONTINUATION only (frames
 --prompt-frames .. --total-frames, default 64..384) on a 16th-note
 grid derived from the file's tempo (beat_div=4, 16 frames/bar).
 
+Every JSD is reported twice. The per-song table averages a song's
+samples, then takes mean +- std over songs; the CORPUS-POOLED table
+(--pooled-out, --pooled-boot) sums the per-song histograms into one
+histogram per system and brackets it with a percentile bootstrap over
+songs. The two differ substantially and on purpose: a per-song
+histogram holds ~100 onsets, where the JSD estimator carries an upward
+bias of ~0.06 at 16 bins even between identical distributions, and the
+bias grows as a stream thins, so a sparse stream is charged for being
+sparse. Pooling ~10,000 onsets drops that bias below 0.001 but forfeits
+per-song calibration: a system can match the corpus histogram while
+missing every individual song. Quote both.
+
 Stream extraction from a midi file, in order of preference:
   1. track/instrument names MELODY / CHORD (combined files, duet outputs)
   2. --task drumnondrum: is_drum flag vs the rest
@@ -226,6 +238,33 @@ def hist(values, n_bins, cap=None):
 
 
 # ---------------------------------------------------------------------------
+# Binning for every histogram-divergence metric, in ONE place.
+#
+# Both the per-song JSD and the corpus-pooled JSD read their bins from
+# here, so the two cannot drift apart: a pooled number is then the same
+# measurement as the per-song one, taken over a bigger sample, and not a
+# second metric that happens to share a name.
+#
+#   metric -> (n_bins, cap)
+# ---------------------------------------------------------------------------
+POOLED_BINS = {
+    'harmonic_rhythm_jsd': (33, 32),        # frames between chord changes
+    'onset_grid_jsd_a': (FRAMES_PER_BAR, None),
+    'onset_grid_jsd_b': (FRAMES_PER_BAR, None),
+    'duration_jsd_a': (33, 32),
+    'duration_jsd_b': (33, 32),
+    'mel_interval_jsd': (25, None),         # melodic interval + 12, |i| <= 12
+    'voicing_jsd': (8, None),               # chord size - 1, capped at 8
+}
+
+
+def _ph(metric, values):
+    """Histogram of `values` under `metric`'s registered binning."""
+    n_bins, cap = POOLED_BINS[metric]
+    return hist(values, n_bins, cap=cap)
+
+
+# ---------------------------------------------------------------------------
 # H3 -- stream-appropriate grammar (PRIMARY hypothesis block)
 # ---------------------------------------------------------------------------
 
@@ -248,13 +287,19 @@ def melody_line(mel):
     return [(f, max(ps)) for f, ps in enumerate(mel.onsets) if ps]
 
 
+def _grid_values(s):
+    """Within-bar position of every onset."""
+    return [f % FRAMES_PER_BAR for f in s.onset_frames()]
+
+
 def h3_metrics(gen_a, gen_b, ref_a, ref_b, task):
     out = {}
     if task == 'melchord':
         g_int = chord_change_intervals(gen_b)
         r_int = chord_change_intervals(ref_b)
         out['harmonic_rhythm_jsd'] = (
-            jsd(hist(g_int, 33, cap=32), hist(r_int, 33, cap=32))
+            jsd(_ph('harmonic_rhythm_jsd', g_int),
+                _ph('harmonic_rhythm_jsd', r_int))
             if g_int and r_int else float('nan'))
 
         def stepwise_rate(mel):
@@ -268,14 +313,13 @@ def h3_metrics(gen_a, gen_b, ref_a, ref_b, task):
         out['mel_stepwise_delta'] = g_sw - r_sw
 
     for label, g, r in (('a', gen_a, ref_a), ('b', gen_b, ref_b)):
-        g_pos = [f % FRAMES_PER_BAR for f in g.onset_frames()]
-        r_pos = [f % FRAMES_PER_BAR for f in r.onset_frames()]
-        out[f'onset_grid_jsd_{label}'] = (
-            jsd(hist(g_pos, FRAMES_PER_BAR), hist(r_pos, FRAMES_PER_BAR))
-            if g_pos and r_pos else float('nan'))
-        out[f'duration_jsd_{label}'] = (
-            jsd(hist(g.durations, 33, cap=32), hist(r.durations, 33, cap=32))
-            if g.durations and r.durations else float('nan'))
+        k_pos, k_dur = f'onset_grid_jsd_{label}', f'duration_jsd_{label}'
+        g_pos = _grid_values(g)
+        r_pos = _grid_values(r)
+        out[k_pos] = (jsd(_ph(k_pos, g_pos), _ph(k_pos, r_pos))
+                      if g_pos and r_pos else float('nan'))
+        out[k_dur] = (jsd(_ph(k_dur, g.durations), _ph(k_dur, r.durations))
+                      if g.durations and r.durations else float('nan'))
     return out
 
 
@@ -645,15 +689,23 @@ def h1_metrics(gen_a, gen_b, ref_a, ref_b, task):
 # such.
 # ---------------------------------------------------------------------------
 
-def _interval_hist(mel, span=12):
+def _interval_values(mel, span=12):
+    """Melodic intervals, clipped to +-span and shifted to bin indices."""
     seq = [p for _, p in _melody_seq(mel)]
-    ivs = [max(-span, min(span, b - a)) for a, b in zip(seq, seq[1:])]
-    return hist([i + span for i in ivs], 2 * span + 1)
+    return [max(-span, min(span, b - a)) + span for a, b in zip(seq, seq[1:])]
+
+
+def _voicing_values(chord, cap=8):
+    """Sounding chord sizes, capped, as bin indices."""
+    return [min(len(s), cap) - 1 for s in chord.sounding if s]
+
+
+def _interval_hist(mel, span=12):
+    return _ph('mel_interval_jsd', _interval_values(mel, span))
 
 
 def _voicing_hist(chord, cap=8):
-    sizes = [min(len(s), cap) for s in chord.sounding if s]
-    return hist([v - 1 for v in sizes], cap)
+    return _ph('voicing_jsd', _voicing_values(chord, cap))
 
 
 def _log2_contrast(num, den):
@@ -767,6 +819,179 @@ GIVEN_STREAM_BY_MODE = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Corpus-pooled JSD
+#
+# A per-song JSD compares two histograms built from one song's ~100
+# onsets. At that sample size the estimator is badly biased upward --
+# about 0.058 at 16 bins even when both sides are drawn from the SAME
+# distribution -- and the bias grows as the stream gets sparser, so a
+# sparse stream is penalised for being sparse. Pooling the corpus into
+# one histogram per system (~10,000 onsets) drops the bias to ~0.0005.
+#
+# The cost is that pooling discards per-song calibration entirely: a
+# system can match the corpus histogram while getting every individual
+# song wrong. The two numbers answer different questions and are
+# reported side by side, neither replacing the other.
+#
+# Pooling is a SUM of per-song count vectors, so we store those rather
+# than raw values: the bootstrap over songs is then a matrix product
+# instead of a re-tabulation.
+# ---------------------------------------------------------------------------
+
+def _pooled_hists(gen_a, gen_b, ref_a, ref_b, task):
+    """Per-song count vectors for every pooled metric: {k: (gen, ref)}.
+
+    Same extractors and same bins as the per-song JSDs above -- the
+    only difference is that these are summed across songs before the
+    divergence is taken, not after.
+
+    prompt-match pc_jsd is deliberately absent: it measures a
+    continuation against ITS OWN prompt, so pooling it would compare a
+    corpus of continuations against a corpus of prompts, which is a
+    different quantity and not a lower-variance estimate of this one.
+    """
+    out = {}
+    if task == 'melchord':
+        out['harmonic_rhythm_jsd'] = (
+            _ph('harmonic_rhythm_jsd', chord_change_intervals(gen_b)),
+            _ph('harmonic_rhythm_jsd', chord_change_intervals(ref_b)))
+    for label, g, r in (('a', gen_a, ref_a), ('b', gen_b, ref_b)):
+        k_pos, k_dur = f'onset_grid_jsd_{label}', f'duration_jsd_{label}'
+        out[k_pos] = (_ph(k_pos, _grid_values(g)), _ph(k_pos, _grid_values(r)))
+        out[k_dur] = (_ph(k_dur, g.durations), _ph(k_dur, r.durations))
+    out['mel_interval_jsd'] = (_ph('mel_interval_jsd', _interval_values(gen_a)),
+                               _ph('mel_interval_jsd', _interval_values(ref_a)))
+    out['voicing_jsd'] = (_ph('voicing_jsd', _voicing_values(gen_b)),
+                          _ph('voicing_jsd', _voicing_values(ref_b)))
+    return out
+
+
+def _norm_rows(H):
+    s = H.sum(axis=1, keepdims=True)
+    return np.where(s > 0, H / np.where(s > 0, s, 1.0), 1.0 / H.shape[1])
+
+
+def _jsd_rows(P, Q):
+    """jsd() applied row-wise to two stacks of histograms."""
+    P, Q = _norm_rows(np.asarray(P, float)), _norm_rows(np.asarray(Q, float))
+    M = 0.5 * (P + Q)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        kp = np.where(P > 0, P * np.log2(P / M), 0.0).sum(axis=1)
+        kq = np.where(Q > 0, Q * np.log2(Q / M), 0.0).sum(axis=1)
+    return 0.5 * (kp + kq)
+
+
+def _pooled_ci(G, R, n_boot=2000, seed=0):
+    """Percentile CI for the pooled JSD, resampling SONGS.
+
+    G, R are (n_songs, n_bins) count matrices. The song is the unit of
+    resampling, not the onset: onsets within a song are not independent,
+    and an onset-level bootstrap would report an interval several times
+    too narrow. Drawing multinomial weights over songs is the same
+    thing as drawing songs with replacement, and lets every replicate
+    be one matrix product.
+
+    Near JSD 0 the interval is one-sided: every resample perturbs the
+    two pooled histograms apart, and the divergence can only rise. It
+    is a boundary effect and is negligible at the divergences these
+    metrics actually take.
+    """
+    n = G.shape[0]
+    if n < 2 or n_boot <= 0:
+        return float('nan'), float('nan')
+    rng = np.random.default_rng(seed)
+    w = rng.multinomial(n, np.full(n, 1.0 / n), size=n_boot).astype(float)
+    vals = _jsd_rows(w @ G, w @ R)
+    lo, hi = np.percentile(vals, [2.5, 97.5])
+    return float(lo), float(hi)
+
+
+def pooled_summary(rows, task, n_boot=2000, out_csv=None):
+    """One histogram per system over the whole corpus, with a song
+    bootstrap. Samples of a song are summed into that song's counts."""
+    keys = [k for k in POOLED_BINS
+            if task == 'melchord' or k != 'harmonic_rhythm_jsd']
+    # system -> key -> song -> [gen counts, ref counts]
+    acc = {}
+    for r in rows:
+        pooled = r.get('_pooled')
+        if not pooled:
+            continue
+        sysname, song = r.get('system', '?'), r.get('song', '?')
+        per_sys = acc.setdefault(sysname, {})
+        for k, (g, ref) in pooled.items():
+            by_song = per_sys.setdefault(k, {})
+            if song not in by_song:
+                # the reference is the same file for every sample of a
+                # song, so it is taken once; only the generated side
+                # accumulates across samples.
+                by_song[song] = [np.zeros_like(g), np.asarray(ref, float)]
+            by_song[song][0] += g
+    if not acc:
+        return
+    systems = sorted(acc)
+    width = 26
+    print('\n================= CORPUS-POOLED JSD '
+          '=================')
+    print('one histogram per system over all songs; [2.5, 97.5] percentile '
+          'bootstrap over SONGS')
+    print(f'({n_boot} replicates; pooling removes the per-song '
+          'small-sample bias but also removes')
+    print(' per-song calibration -- a system can match the corpus '
+          'histogram and still get')
+    print(' every song wrong, so read this beside the per-song table, '
+          'not instead of it.')
+    print(' A value at or below its own interval means the divergence '
+          'is at the floor: JSD')
+    print(' cannot go below 0, so resampling can only push it up.)')
+    print('metric'.ljust(26) + ''.join(s.ljust(width) for s in systems))
+    recs = []
+    for k in keys:
+        line = k.ljust(26)
+        for sysname in systems:
+            by_song = acc[sysname].get(k, {})
+            songs = [s for s, (g, r) in by_song.items()
+                     if g.sum() > 0 and r.sum() > 0]
+            n_obs = int(sum(by_song[s][0].sum() for s in songs))
+            rec = dict(metric=k, system=sysname, jsd=float('nan'),
+                       ci_lo=float('nan'), ci_hi=float('nan'),
+                       n_songs=len(songs), n_obs=n_obs, n_boot=n_boot)
+            recs.append(rec)
+            if not songs:
+                line += '--'.ljust(width)
+                continue
+            G = np.stack([by_song[s][0] for s in songs])
+            R = np.stack([by_song[s][1] for s in songs])
+            rec['jsd'] = jsd(G.sum(axis=0), R.sum(axis=0))
+            rec['ci_lo'], rec['ci_hi'] = _pooled_ci(G, R, n_boot=n_boot)
+            cell = f'{rec["jsd"]:.3f}' if math.isnan(rec['ci_lo']) \
+                else f'{rec["jsd"]:.3f} [{rec["ci_lo"]:.3f},{rec["ci_hi"]:.3f}]'
+            line += cell.ljust(width)
+        print(line)
+    # What each pooled histogram rests on, per metric: the whole case
+    # for pooling is a claim about these counts, and they differ by
+    # metric -- a melody with few onsets contributes few intervals
+    # however many chord changes the same song has.
+    print('\nsongs / generated observations pooled')
+    print('metric'.ljust(26) + ''.join(s.ljust(width) for s in systems))
+    by_key = {(r['metric'], r['system']): r for r in recs}
+    for k in keys:
+        line = k.ljust(26)
+        for sysname in systems:
+            r = by_key[(k, sysname)]
+            line += f'{r["n_songs"]} / {r["n_obs"]}'.ljust(width)
+        print(line)
+    if out_csv:
+        with open(out_csv, 'w', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=['metric', 'system', 'jsd',
+                                              'ci_lo', 'ci_hi', 'n_songs',
+                                              'n_obs', 'n_boot'])
+            w.writeheader()
+            w.writerows(recs)
+        print(f'\nwrote {len(recs)} pooled rows -> {out_csv}')
+
+
 def score_pair(gen_paths, ref_paths, args):
     lo, hi = args.prompt_frames, args.total_frames
     gen_a, gen_b = load_streams(gen_paths, args.task,
@@ -783,6 +1008,10 @@ def score_pair(gen_paths, ref_paths, args):
     row.update(prompt_match_metrics(gen_a.slice(0, lo), gen_b.slice(0, lo),
                                     ga, gb, ra, rb))
     row.update(s_metrics(ga, gb, ra, rb, args.task))
+    # count vectors for the corpus-pooled JSD. Underscored and never a
+    # CSV column: the writer is extrasaction='ignore', so this rides
+    # along in memory and is dropped on the way out.
+    row['_pooled'] = _pooled_hists(ga, gb, ra, rb, args.task)
     return row
 
 
@@ -852,8 +1081,10 @@ def summarize(rows, task, baseline=None):
     print('\n(* = pre-registered primary endpoint; deltas/JSD: closer to 0 '
           'is better; ratios: closer to 1 is better)')
     print('NOTE std is over songs and JSD is bounded on [0,1] and skewed, so '
-          'mean +- std can leave the range;\n     quote a percentile '
-          'bootstrap over songs if an interval has to be defended.')
+          'mean +- std can leave the range.\n     Each JSD here is also a '
+          'small-sample estimate off ~100 onsets, biased up by ~0.06 and '
+          'more\n     for a sparse stream; the corpus-pooled table below '
+          'has the unbiased counterpart.')
 
 
 def _is_nan(v):
@@ -881,6 +1112,14 @@ def main():
                         'effect, which is far larger than the system '
                         'effect, so it is much more powerful than '
                         'comparing the two marginal means.')
+    p.add_argument('--pooled-out', default=None,
+                   help='CSV for the corpus-pooled JSD table: one row per '
+                        '(metric, system) with the pooled value, its '
+                        'bootstrap interval, and the counts behind it.')
+    p.add_argument('--pooled-boot', type=int, default=2000,
+                   help='bootstrap replicates for the corpus-pooled JSD '
+                        'table, resampling SONGS. 0 prints the pooled '
+                        'point estimates without intervals.')
     p.add_argument('--prompt-frames', type=int, default=64)
     p.add_argument('--total-frames', type=int, default=384)
     p.add_argument('--mel-programs', default='0,24',
@@ -928,6 +1167,8 @@ def main():
         print(f'wrote {len(rows)} rows -> {args.out}')
 
     summarize(rows, args.task, baseline=args.baseline)
+    pooled_summary(rows, args.task, n_boot=args.pooled_boot,
+                   out_csv=args.pooled_out)
 
 
 if __name__ == '__main__':
