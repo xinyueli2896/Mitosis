@@ -639,19 +639,27 @@ def main():
         # value per system with a song bootstrap -- so it merges in as
         # another pooled metric rather than needing its own plot path.
         fc = re.sub(r'_pooled\.csv$', '_fmd.csv', pc)
-        if os.path.exists(fc):
+        if fc != pc and os.path.exists(fc):
             for k, v in read_pooled(fc).items():
                 pooled[k] = {s_: r for s_, r in v.items()
                              if not s_.startswith('_')}
             print(f'[fmd] merged {fc}')
-        elif 'fmd' in metrics:
-            print('[warn] fmd requested but no ' + fc
-                  + ' -- run eval_fmd.sbatch; drawn as pending',
-                  file=sys.stderr)
-        # 1 = songs resampled, each song's decodes held fixed; 2 = the
-        # decodes are resampled too. Two figures that differ only in
-        # whisker length are otherwise indistinguishable, so the legend
-        # has to say which.
+        if 'fmd' in metrics and 'fmd' not in pooled:
+            # Not scored yet. Drop the panel rather than draw a row of
+            # placeholders: the sheet is complete without it, and a
+            # whole row of hatching reads as a failure, not "not yet".
+            print(f'[warn] FMD not scored yet (no {fc}; eval_fmd.sbatch) '
+                  '-- quality sheet drawn without it', file=sys.stderr)
+            metrics = [m for m in metrics if m != 'fmd']
+            if args.ncols in (None, auto_ncols) and auto_ncols \
+                    and len(metrics) % auto_ncols:
+                # 5 panels in 2 columns leaves a hole and strands one
+                # column's names mid-figure; one column is clean.
+                args.ncols = 1
+        # 1 = songs resampled, decodes held fixed; 2 = decodes resampled
+        # too; one-per-song = decodes only. Two figures that differ only
+        # in whisker length are otherwise indistinguishable, so the
+        # legend has to say which; likewise the song/note weighting.
         modes = {r[5] for v in pooled.values() for r in v.values()}
         boot_mode = modes.pop() if len(modes) == 1 else 'mixed'
         weights = {r[6] for v in pooled.values() for r in v.values()}
