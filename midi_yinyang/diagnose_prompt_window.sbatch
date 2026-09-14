@@ -20,7 +20,11 @@
 #                        via E1_ROOT.
 #   E1_ROOT              default temp/E1_v5b; only used to default the
 #                        two folders above.
-#   SONG_IDS             required, space separated: "506 786"
+#   SONG_IDS             required, space separated: "506 786".
+#                        "all" sweeps every staged song and prints only
+#                        the degenerate windows plus a census -- use it
+#                        before scoring, to find the prompts no system
+#                        was given the material to answer.
 #   PROMPT_FRAMES        window end, default 96 (6 bars at 16/bar)
 #
 # Example:
@@ -85,6 +89,20 @@ def find(folder, song):
     return None
 
 
+def stats(path):
+    """(notes in file, notes whose onset is in the window, onset frames)."""
+    if path is None:
+        return None
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        pm = pretty_midi.PrettyMIDI(path)
+    tpf = pm.resolution / 4.0
+    notes = [n for inst in pm.instruments if not inst.is_drum
+             for n in inst.notes]
+    frames = sorted(pm.time_to_tick(n.start) / tpf for n in notes)
+    return len(notes), len([f for f in frames if f < WIN]), frames
+
+
 def report(label, path):
     if path is None:
         print(f'  {label:6s} FILE MISSING')
@@ -113,11 +131,53 @@ def report(label, path):
               f'and a hybrid built from it loses the track entirely.')
 
 
-for song in SONGS:
-    song = f'{int(song):03d}' if song.isdigit() else song
-    print(f'--- {song} ---')
-    report('mel', find(MEL_DIR, song))
-    report('chord', find(CHORD_DIR, song))
+if SONGS == ['all']:
+    # Sweep: the per-song detail would be 95 x 4 lines, so print only
+    # the songs that are degenerate, then the census. A prompt window
+    # empty in one stream is not a model failure -- it is a task no
+    # system was given the material for -- so it has to be found before
+    # the numbers are read, not after.
+    SONGS = sorted(os.path.splitext(f)[0] for f in os.listdir(MEL_DIR)
+                   if f.lower().endswith('.mid'))
+    print(f'sweeping {len(SONGS)} songs; listing only degenerate windows\n')
+    empty = {'mel': [], 'chord': []}
+    thin = {'mel': [], 'chord': []}
+    for song in SONGS:
+        for label, folder in (('mel', MEL_DIR), ('chord', CHORD_DIR)):
+            s = stats(find(folder, song))
+            if s is None:
+                print(f'{song}: {label} FILE MISSING')
+                continue
+            n_all, n_win, frames = s
+            if n_win == 0:
+                empty[label].append(song)
+                first = f'{frames[0]:.0f}' if frames else 'none'
+                print(f'{song}: {label} EMPTY in window -- {n_all} notes in '
+                      f'the file, first onset frame {first}')
+            elif n_win < 4:
+                thin[label].append(song)
+                print(f'{song}: {label} thin -- only {n_win} onset(s) in '
+                      f'the window')
+    print(f'\n{"-" * 60}')
+    for label in ('mel', 'chord'):
+        e, t = empty[label], thin[label]
+        print(f'{label:6s} empty window: {len(e)}'
+              + (f'  -> {" ".join(e)}' if e else ''))
+        print(f'{label:6s} thin  (<4)  : {len(t)}'
+              + (f'  -> {" ".join(t)}' if t else ''))
+    both = sorted(set(empty['mel']) | set(empty['chord']))
+    print(f'\nsongs with an empty window in EITHER stream: {len(both)}'
+          + (f'  -> {" ".join(both)}' if both else ''))
+    print('These are prompts no system could work from in that stream.'
+          '\nScoring every system on the same reduced set keeps the'
+          '\ncomparison matched; the exclusion is a property of the'
+          '\nprompt, decided without looking at any result.')
+else:
+    for song in SONGS:
+        song = f'{int(song):03d}' if song.isdigit() else song
+        print(f'--- {song} ---')
+        report('mel', find(MEL_DIR, song))
+        report('chord', find(CHORD_DIR, song))
 EOF
 
 echo "================================================================"
