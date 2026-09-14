@@ -325,8 +325,13 @@ def presets():
         # sits on the estimator's noise floor; the delta against the
         # ground-truth continuation is the number with a meaningful
         # zero. The raw columns stay in the table and the CSV.
+        # chord_tone_cov stays in the table and CSV but is off the sheet
+        # by request; onset_sync is the drum-task coupling statistic and
+        # is never scored on melchord, so it would only ever be a row of
+        # placeholders here.
         'fit': ([m for m in _block('H2')
-                 if m.endswith('_delta') and not m.startswith('chord_tone_cov')],
+                 if m.endswith('_delta')
+                 and not m.startswith(('chord_tone_cov', 'onset_sync'))],
                 2, 'Melody-chord fit, relative to the reference', False),
         'repetition': ([m for m in _block('R') if m.endswith('_delta')],
                        2, 'Repetition and structuredness, relative to the '
