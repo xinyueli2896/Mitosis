@@ -109,7 +109,11 @@ OUR_CHORD_DIR="${OUR_CHORD_DIR:-}"
 # 'all' needs POP909_DIR for the chord symbols -- their chord matrix
 # stores a root, and a rendered voicing does not carry one.
 OUR_PROMPT_LEVEL="${OUR_PROMPT_LEVEL:-all}"
-POP909_DIR="${POP909_DIR:-$MY/input/POP909}"
+# POP909_DIR: the RAW POP909 release, holding <sid>/chord_midi.txt.
+# It lives outside the repo; check_downbeat_phase.sbatch uses the same
+# root. Only the chord SYMBOLS are read from it, for their root, which
+# a rendered voicing cannot carry.
+POP909_DIR="${POP909_DIR:-/home/xinyue.li/POP909-Dataset/POP909-git/POP909}"
 WS_FORM="${WS_FORM:-gt}"
 case "$WS_FORM" in
     gt|generated) ;;
@@ -128,6 +132,16 @@ echo "OUT_DIR=$OUT_DIR"
 echo "================================================================"
 
 [[ -d "$WS/.venv" ]] || { echo "ERROR: run setup_wholesong.sbatch first"; exit 1; }
+if [[ -n "$OUR_MEL_DIR" && "$OUR_PROMPT_LEVEL" == "all" ]]; then
+    _probe=$(echo $SONG_IDS | awk '{printf "%03d", $1}')
+    [[ -f "$POP909_DIR/$_probe/chord_midi.txt" ]] || {
+        echo "ERROR: no $POP909_DIR/$_probe/chord_midi.txt"
+        echo "  --our-prompt-level all reads the chord SYMBOLS from the"
+        echo "  raw POP909 release, for their root; a rendered voicing"
+        echo "  does not carry one. Point POP909_DIR at the release, or"
+        echo "  use OUR_PROMPT_LEVEL=lsh, which needs no symbols."
+        exit 1; }
+fi
 # shellcheck disable=SC1091
 source "$WS/.venv/bin/activate"
 
