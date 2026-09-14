@@ -66,3 +66,22 @@
 %   * BEAT reports curves over 120 beats. Our scored span is 336 frames
 %     = 84 beats, so ours is the endpoint of a shorter curve, not the
 %     same number.
+%
+% PROMPT MATCH, added 2026-09-14 (eval_metrics.py, prompt_match_metrics).
+% Nothing measured whether a continuation follows on from ITS PROMPT;
+% every other metric compares the generated span with the reference
+% span. Four statistics per stream, each against the ground-truth
+% continuation of the same prompt:
+%   reuse     fraction of continuation beat intervals whose content
+%             already appears in the prompt. LITERAL restatement only.
+%   pc_jsd    prompt vs continuation pitch-class divergence: key drift.
+%   density   continuation onsets/frame over the prompt's.
+%   register  mean onset pitch, continuation minus prompt, semitones.
+% Reuse alone cannot tell "developed the prompt" from "ignored it" -- a
+% restatement transposed up an octave scores 0. Read the four together:
+% in the synthetic check, +13 semitones gave reuse 0.00 with register
+% +13.0 and pc_jsd 0.75, while unrelated material gave reuse 0.06 with
+% register +2.3.
+% prompt_onsets_{a,b} is a guard, not a result: a system that writes
+% only its continuation would present an EMPTY prompt and score as
+% following nothing. Zero there means the file layout is wrong.

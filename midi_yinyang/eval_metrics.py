@@ -448,6 +448,14 @@ def h2_metrics(gen_a, gen_b, ref_a, ref_b, task):
 FRAMES_PER_BEAT = FRAMES_PER_BAR // 4
 
 
+def _beat_sigs(s, beats=1, mode='onset'):
+    """One hashable signature per beat interval of a stream."""
+    w = beats * FRAMES_PER_BEAT
+    field = s.onsets if mode == 'onset' else s.sounding_abs
+    return [tuple(tuple(sorted(field[f])) for f in range(i * w, i * w + w))
+            for i in range(s.n_frames // w)]
+
+
 def unique_beat_ratio(s, beats=1, mode='onset'):
     """Fraction of beat intervals whose content is seen for the FIRST time.
 
@@ -468,18 +476,15 @@ def unique_beat_ratio(s, beats=1, mode='onset'):
     repetitive -- but read it beside survival_*, which says whether the
     stream is there at all.
     """
-    w = beats * FRAMES_PER_BEAT
-    n = s.n_frames // w
-    if n == 0:
+    sigs = _beat_sigs(s, beats, mode)
+    if not sigs:
         return float('nan')
-    field = s.onsets if mode == 'onset' else s.sounding_abs
     seen, uniq = set(), 0
-    for i in range(n):
-        sig = tuple(tuple(sorted(field[f])) for f in range(i * w, i * w + w))
+    for sig in sigs:
         if sig not in seen:
             seen.add(sig)
             uniq += 1
-    return uniq / n
+    return uniq / len(sigs)
 
 
 def repetition_metrics(gen_a, gen_b, ref_a, ref_b):
@@ -493,6 +498,69 @@ def repetition_metrics(gen_a, gen_b, ref_a, ref_b):
                 rv = unique_beat_ratio(r, beats, mode)
                 out[key] = float(gv)
                 out[f'{key}_delta'] = float(gv - rv)
+    return out
+
+
+def _pc_hist(s):
+    return hist([p % 12 for ps in s.onsets for p in ps], 12)
+
+
+def _mean_pitch(s):
+    ps = [p for row in s.onsets for p in row]
+    return float(np.mean(ps)) if ps else float('nan')
+
+
+def _rate(s):
+    return s.n_onsets() / s.n_frames if s.n_frames else float('nan')
+
+
+def _prompt_stats(prompt, cont):
+    """How much a continuation follows on from its prompt.
+
+    Four statistics, each a different sense of "follows on":
+
+      reuse       fraction of the continuation's beat intervals whose
+                  content already appears in the prompt. Literal
+                  restatement of prompt material, using the signatures
+                  of unique_beat_ratio.
+      pc_jsd      divergence between prompt and continuation pitch-class
+                  distributions. Rises when the continuation leaves the
+                  prompt's key.
+      density     onsets per frame in the continuation over the same in
+                  the prompt. 1.0 keeps the prompt's activity.
+      register    mean onset pitch of the continuation minus the
+                  prompt's, in semitones.
+
+    All four are reported against the GROUND-TRUTH continuation of the
+    same prompt, because none has a good absolute value: a real
+    continuation neither copies its prompt nor ignores it, and only the
+    reference says where between those the song actually sat.
+    """
+    out = {}
+    sig_p = set(_beat_sigs(prompt, 1, 'onset'))
+    sig_c = _beat_sigs(cont, 1, 'onset')
+    out['reuse'] = (sum(1 for g in sig_c if g in sig_p) / len(sig_c)
+                    if sig_c else float('nan'))
+    out['pc_jsd'] = jsd(_pc_hist(cont), _pc_hist(prompt))
+    rp, rc = _rate(prompt), _rate(cont)
+    out['density'] = float(rc / rp) if rp else float('nan')
+    out['register'] = _mean_pitch(cont) - _mean_pitch(prompt)
+    return out
+
+
+def prompt_match_metrics(prompt_a, prompt_b, gen_a, gen_b, ref_a, ref_b):
+    """Prompt-to-continuation coherence, per stream, vs the reference."""
+    out = {}
+    for label, pr, g, r in (('a', prompt_a, gen_a, ref_a),
+                            ('b', prompt_b, gen_b, ref_b)):
+        # A system that writes only its continuation would give an empty
+        # prompt here and silently score as following nothing; surface
+        # the count so that reads as a bug rather than a result.
+        out[f'prompt_onsets_{label}'] = pr.n_onsets()
+        gs, rs = _prompt_stats(pr, g), _prompt_stats(pr, r)
+        for k in gs:
+            out[f'{k}_vs_prompt_{label}'] = float(gs[k])
+            out[f'{k}_vs_prompt_{label}_delta'] = float(gs[k] - rs[k])
     return out
 
 
@@ -712,6 +780,8 @@ def score_pair(gen_paths, ref_paths, args):
     row.update(h2_metrics(ga, gb, ra, rb, args.task))
     row.update(h1_metrics(ga, gb, ra, rb, args.task))
     row.update(repetition_metrics(ga, gb, ra, rb))
+    row.update(prompt_match_metrics(gen_a.slice(0, lo), gen_b.slice(0, lo),
+                                    ga, gb, ra, rb))
     row.update(s_metrics(ga, gb, ra, rb, args.task))
     return row
 
