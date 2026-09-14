@@ -30,8 +30,8 @@ import csv
 import math
 from collections import defaultdict
 
-from eval_metrics import (GIVEN_STREAM_BY_MODE, GROUP_ORDER, H_GROUPS,
-                          PRIMARY, STREAM_OF)
+from eval_metrics import (EXPLORATORY, GIVEN_STREAM_BY_MODE, GROUP_ORDER,
+                          H_GROUPS, PRIMARY, STREAM_OF)
 
 
 def _try_float(v):
@@ -297,7 +297,8 @@ def main():
                 is_given = (given is not None
                             and STREAM_OF.get(metric, 'unknown')
                             in (given, 'ref'))
-                star = '*' if metric in PRIMARY[args.task][h] else ' '
+                star = ('+' if h in EXPLORATORY else '*') \
+                    if metric in PRIMARY[args.task][h] else ' '
                 if is_given and star == '*':
                     print(f'    [given-stream] {metric} is the PRIMARY {h} '
                           f'endpoint but measures the GIVEN stream in '

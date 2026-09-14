@@ -974,21 +974,19 @@ def s_metrics(gen_a, gen_b, ref_a, ref_b, task):
 # choosing the winner afterwards is not a finding. H3, H2 and H1 were
 # registered in EXPERIMENTS.md before scoring; their stars are honest.
 #
-# P's star is NOT: the block was added late and its endpoint picked with
-# the numbers in hand. Either label it exploratory in the paper, or
-# apply a multiplicity correction across the P columns and say so. The
-# summary's footer calls every star pre-registered, which is true of
-# three blocks out of four.
+# P's is NOT: the block was added late and its endpoint chosen with the
+# numbers in hand. Its endpoint is joint_cov3_a_delta -- melody motif
+# AND rhythm restated together at motif scale, above a shuffled-prompt
+# control, against the real continuation's rate -- and it is printed
+# with '+' rather than '*' so the table itself says which kind it is.
+EXPLORATORY = {'P'}
+
 PRIMARY = {
     'melchord': {'H3': ['harmonic_rhythm_jsd'],
                  'H2': ['chord_tone_cov_delta'],
                  'H1': ['survival_min'],
-                 # NOT pre-registered: P was added after the first
-                 # scoring pass and this endpoint was chosen with the
-                 # results in hand. Report it as exploratory, and see
-                 # the note under PRIMARY below.
-                 'P': ['reuse_vs_prompt_a_delta'],
-                 'S': [], 'R': []},
+                 'P': ['joint_cov3_a_delta'],   # exploratory, see above
+                 'S': [], 'R': [], 'P0': []},
     'drumnondrum': {'H3': ['onset_grid_jsd_b'],
                     'H2': ['onset_sync_delta'],
                     'H1': ['survival_min'],
@@ -1022,19 +1020,30 @@ H_GROUPS = {
     'R': [f'ubr{b}_{m}_{s}{d}'
           for s in ('a', 'b') for b in (1, 2) for m in ('onset', 'state')
           for d in ('', '_delta')],
-    # P -- prompt adherence. Four pitch-side statistics then four
-    # rhythm-side ones, per stream, each against the reference
-    # continuation of the same prompt.
-    'P': [f'{k}_vs_prompt_{s}{d}'
-          for s in ('a', 'b')
-          for k in ('reuse', 'pc_jsd', 'density', 'register',
-                    'rhythm_reuse', 'grid_jsd', 'ioi_jsd', 'dur_jsd')
+    # P -- prompt adherence. Pattern coverage above a shuffled-prompt
+    # control (motif / rhythm / joint, n = 3 and 5, per stream), plus
+    # the two plain statistics that carry no estimator bias: onset rate
+    # over the prompt's and register shift. Each with a _delta against
+    # the ground-truth continuation of the same prompt.
+    'P': [f'{k}_cov{n}_{s_}{d}'
+          for s_ in ('a', 'b') for n in NGRAM_NS
+          for k in ('motif', 'rhythm', 'joint')
           for d in ('', '_delta')]
-         + [f'{k}_cov{n}_{s_}{d}'
-            for s_ in ('a', 'b') for n in NGRAM_NS
-            for k in ('motif', 'rhythm', 'joint')
+         + [f'{k}_vs_prompt_{s_}{d}'
+            for s_ in ('a', 'b') for k in ('density', 'register')
             for d in ('', '_delta')]
          + ['prompt_onsets_a', 'prompt_onsets_b'],
+    # P0 -- the prompt-adherence measures P replaced. CSV only. reuse
+    # and rhythm_reuse need a beat to be byte-equal, so a transposed
+    # restatement scores like unrelated notes and silent beats count as
+    # reuse; the four JSDs vs prompt sit at their noise floor (~0.12 for
+    # a perfect system at 24 prompt onsets) and their deltas move with
+    # output density. Kept so nothing already scored is lost.
+    'P0': [f'{k}_vs_prompt_{s_}{d}'
+           for s_ in ('a', 'b')
+           for k in ('reuse', 'rhythm_reuse', 'pc_jsd', 'grid_jsd',
+                     'ioi_jsd', 'dur_jsd')
+           for d in ('', '_delta')],
 }
 
 # Print/CSV order. H3 > H2 > H1 is the pre-registered priority; S, R and
@@ -1053,7 +1062,7 @@ GROUP_ORDER = ('H3', 'H2', 'P', 'S', 'R')
 # place. So the CSV is the superset -- everything computed is recorded
 # -- and the table is the reading order. Add 'H1' to GROUP_ORDER to put
 # it back in the table too.
-CSV_GROUPS = GROUP_ORDER + ('H1',)
+CSV_GROUPS = GROUP_ORDER + ('H1', 'P0')
 
 
 # ---------------------------------------------------------------------------
@@ -1099,7 +1108,7 @@ STREAM_OF = {
 # in the suffix, and both families read one stream only. Registering
 # them keeps E3 from presenting the GIVEN stream's copied ground truth
 # as if it discriminated systems.
-for _h in ('R', 'P'):
+for _h in ('R', 'P', 'P0'):
     for _k in H_GROUPS[_h]:
         _parts = _k.split('_')
         _s = _parts[-1] if _parts[-1] in ('a', 'b') else _parts[-2]
@@ -1467,7 +1476,8 @@ def summarize(rows, task, baseline=None):
         header = 'metric'.ljust(NAMEW) + ''.join(s.ljust(width) for s in systems)
         print(header)
         for k in keys:
-            star = '*' if k in PRIMARY[task][h] else ' '
+            star = ('+' if h in EXPLORATORY else '*') \
+                if k in PRIMARY[task][h] else ' '
             line = (star + k).ljust(NAMEW)
             base = _per_song(by_system[baseline], k) if baseline else {}
             for sysname in systems:
@@ -1492,8 +1502,9 @@ def summarize(rows, task, baseline=None):
             ns = {s: len(_per_song(by_system[s], keys[0])) for s in systems}
             print('  n songs'.ljust(NAMEW)
                   + ''.join(str(ns[s]).ljust(width) for s in systems))
-    print('\n(* = pre-registered primary endpoint; deltas/JSD: closer to 0 '
-          'is better; ratios: closer to 1 is better)')
+    print('\n(* = pre-registered primary endpoint; + = exploratory primary, '
+          'chosen after results were seen;\n deltas/JSD: closer to 0 is '
+          'better; ratios: closer to 1 is better)')
     print('NOTE std is over songs and JSD is bounded on [0,1] and skewed, so '
           'mean +- std can leave the range.\n     Each JSD here is also a '
           'small-sample estimate off ~100 onsets, biased up by ~0.06 and '
