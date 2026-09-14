@@ -224,7 +224,12 @@ def presets():
                      'duration_jsd_a', 'duration_jsd_b'],
                     2, 'General quality: corpus-level distance from the '
                        'reference', True),
-        'fit': (_block('H2'), 2, 'Melody-chord fit', False),
+        # chord_tone_cov is left off the SHEET only (2026-09-14, by
+        # request): it is CTnCTR without the passing-tone allowance, so
+        # it duplicates the row beneath it. It stays in the table and
+        # the CSV, and stays H2's registered primary.
+        'fit': ([m for m in _block('H2') if not m.startswith('chord_tone_cov')],
+                2, 'Melody-chord fit', False),
         'repetition': (_block('R'), 2, 'Repetition and structuredness', False),
         # Chance is already subtracted inside these, so 0 is a
         # meaningful zero and the raw value is the readable one -- the
