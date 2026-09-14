@@ -248,18 +248,25 @@ def presets():
         # request): it is CTnCTR without the passing-tone allowance, so
         # it duplicates the row beneath it. It stays in the table and
         # the CSV, and stays H2's registered primary.
-        'fit': ([m for m in _block('H2') if not m.startswith('chord_tone_cov')],
-                2, 'Melody-chord fit', False),
-        'repetition': (_block('R'), 2, 'Repetition and structuredness', False),
+        # DELTAS ONLY on the three per-song sheets (2026-09-14, by
+        # request). A raw value here has no target -- it rewards copying
+        # the prompt, or has no reference counterpart at all -- and it
+        # sits on the estimator's noise floor; the delta against the
+        # ground-truth continuation is the number with a meaningful
+        # zero. The raw columns stay in the table and the CSV.
+        'fit': ([m for m in _block('H2')
+                 if m.endswith('_delta') and not m.startswith('chord_tone_cov')],
+                2, 'Melody-chord fit, relative to the reference', False),
+        'repetition': ([m for m in _block('R') if m.endswith('_delta')],
+                       2, 'Repetition and structuredness, relative to the '
+                          'reference', False),
         # Raw value beside its delta. Both measures reward exact
         # repetition, so the raw value has no target line -- the delta
         # against the ground-truth continuation is where 0 means
         # "varies from the prompt as much as the real song did".
-        'prompt': ([f'{k}_prompt_{st}{d}'
-                    for st in ('a', 'b') for k in ('pc_jsd', 'onset_sim')
-                    for d in ('', '_delta')],
-                   2, 'Prompt adherence: tonal and rhythmic consistency '
-                      'with the prompt', False),
+        'prompt': ([f'{k}_prompt_{st}_delta'
+                    for st in ('a', 'b') for k in ('pc_jsd', 'onset_sim')],
+                   2, 'Prompt adherence, relative to the reference', False),
     }
 
 
@@ -643,7 +650,9 @@ def main():
             raise SystemExit(
                 f'unknown block {args.block}; presets: {" ".join(pre)}; '
                 f'raw blocks: {" ".join(H_GROUPS)}')
-        if args.deltas_only:
+        if args.deltas_only and not pooled_mode:
+            # a pooled sheet is divergence-from-reference already and
+            # carries no _delta suffix; the flag would empty it
             metrics = [m for m in metrics if m.endswith('_delta')]
     else:
         metrics = [m.strip() for m in args.metrics.split(',') if m.strip()]
