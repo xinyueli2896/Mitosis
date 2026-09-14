@@ -1,13 +1,14 @@
 #!/bin/bash
-# SLURM (CPU): box plots of an E1 metrics CSV, grouped by system family.
+# SLURM (CPU): distribution plots of an E1 metrics CSV, by system family.
 #
-# Draws one panel per metric: a box per system over the PER-SONG values
-# (samples averaged within a song first), systems ordered and coloured
-# by family. The reference level is a dashed line, the mean and its 95%
-# CI a dark stick over each box, and the best ranked system's mean a
-# solid line across the panel. Systems not present in the CSV are drawn
-# as hatched "pending" slots rather than dropped, so a reader can see
-# what is still missing.
+# Draws one panel per metric: a stippled density cloud per system over
+# the PER-SONG values (samples averaged within a song first), each
+# system in its own pastel on white, ordered by family. Quartiles are
+# short ticks, the reference level a dashed line, the mean and its 95%
+# CI an ink stick over each cloud, and the best ranked system's mean a
+# solid line across the panel in that system's colour. Systems not
+# present in the CSV are drawn as hatched "pending" slots rather than
+# dropped, so a reader can see what is still missing.
 #
 # Env knobs (--export=ALL,KEY=val):
 #   CSV       metrics CSV from eval_metrics/score_e1
@@ -170,7 +171,8 @@ echo "Done. The .pdf files are the ones to \\includegraphics."
 echo "The quality sheet is CORPUS-POOLED: one histogram per system over"
 echo "every song, so each mark is a single value with a bootstrap CI over"
 echo "songs, and there is no std to quote. The other sheets are per-song."
-echo "Boxes there are quartiles over SONGS. The dark stick is the mean and its"
+echo "Clouds there are densities over SONGS, ticks the quartiles. The ink"
+echo "stick is the mean and its"
 echo "95% CI: two systems whose sticks miss each other differ at about"
 echo "the 95% level. The dashed line is the reference -- the value a"
 echo "system scores when it matches the ground-truth continuation -- and"

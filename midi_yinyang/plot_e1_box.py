@@ -1,20 +1,24 @@
-"""Box plots of E1 per-song scores, grouped by system family.
+"""Distribution plots of E1 per-song scores, grouped by system family.
 
 Reads the per-sample metrics CSV that eval_metrics writes and draws one
-panel per metric: one box per system, systems ordered and coloured by
-family (ours / internal baselines / external baselines).
+panel per metric: one cloud per system, systems ordered by family
+(ours / internal baselines / external baselines) and each in its own
+pastel on pure white.
 
-WHAT THE MARKS MEAN, because a box plot of a distance metric is easy to
+WHAT THE MARKS MEAN, because a plot of a distance metric is easy to
 misread:
 
-  box      quartiles of the PER-SONG values, with the median as a pale
-           line; whiskers at the 5th and 95th percentiles, so the axis
-           is set by the bulk of the songs rather than the extreme
-           tails. Samples of a song are averaged first -- three samples
-           of one song share a prompt and a reference, so treating them
-           as three observations understates the spread by sqrt(3).
-  stick    the MEAN and its 95% confidence interval, drawn dark over the
-           box. This is the significance interval: two systems whose
+  cloud    the PER-SONG values as a density estimate, drawn as fine
+           semi-transparent dots: dense where the songs are, feathering
+           into the white at the tails (a violin without its outline).
+           Samples of a song are averaged first -- three samples of one
+           song share a prompt and a reference, so treating them as
+           three observations understates the spread by sqrt(3). The
+           y-range is set by the 5th-95th percentiles, not the tails.
+  ticks    quartiles, in a darker shade of the cloud's colour; the
+           middle, longer tick is the median.
+  stick    the MEAN and its 95% confidence interval, in ink over the
+           cloud. This is the significance interval: two systems whose
            sticks do not overlap differ at about the 95% level. It sits
            on the mean rather than the median so that it is like for
            like with the best-of line, which is also a mean.
@@ -24,13 +28,8 @@ misread:
            these metrics are two-sided, and a system can miss by
            exceeding it.
   solid    the mean of the best RANKED system on that panel, named in
-  line     the corner, running the full width so the unranked column
-           can be read against it.
-
-No notches: a notch deforms the box into an hourglass and folds inside
-out when the CI exceeds the quartiles, which happens on the noisier
-metrics here and reads as a broken box. The interval gets its own mark
-instead, where it cannot distort the distribution it describes.
+  line     the corner and drawn in that system's colour, running the
+           full width so the unranked column can be read against it.
 
 Nothing here is a "higher is better" axis, so no direction arrows: each
 panel says in its own label which way the reference lies.
@@ -54,6 +53,8 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.colors
+from matplotlib.legend_handler import HandlerTuple
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 
@@ -97,20 +98,42 @@ GROUPS = [
     ]),
 ]
 
-# Validated categorical slots 1-3 (see the dataviz palette reference).
-# All-pairs CVD dE 9.2, normal-vision 24.0 on the light surface. Colour
-# carries FAMILY, not system: the family is the comparison the figure is
-# making, and every box is directly labelled besides.
-FAMILY_COLOR = {
-    'Ours':                '#2a78d6',
-    'Internal baselines':  '#eb6834',
-    'External baselines':  '#1baf7a',
-    # Not a fourth categorical hue: the unranked slot is deliberately
-    # achromatic so it reads as set apart rather than as a fourth family
-    # competing on the same footing. Slot 4 would also put yellow beside
-    # orange, which fails the all-pairs floors.
-    'Not ranked':          '#8a8a85',
+# Soft pastel palette on pure white, one colour per SYSTEM, in hue
+# families so the family still reads at a glance: ours in the rose/coral
+# range, internal baselines in turquoise/teal/sage, external baselines
+# in chartreuse and lavender, the unranked column in warm grey. Every
+# column is directly labelled besides, so the colour is recognition, not
+# the only key.
+SYSTEM_COLOR = {
+    'A1':        '#f0a3ba',   # blush pink
+    'A3':        '#cd7b96',   # dusty rose
+    'A3ctcaT':   '#e98b77',   # muted coral
+    'S-scratch': '#57c3bf',   # turquoise
+    'P-mc':      '#3b93b1',   # teal blue
+    'P-cm':      '#8ab994',   # sage green
+    'WSf':       '#c2ca55',   # pale chartreuse
+    'AMT':       '#a894d3',   # lavender
+    'S1':        '#a7a199',   # warm grey
 }
+# The family's lead colour: brackets under the axis and the legend swatch.
+FAMILY_COLOR = {
+    'Ours':                '#cd7b96',
+    'Internal baselines':  '#3b93b1',
+    'External baselines':  '#a894d3',
+    'Not ranked':          '#a7a199',
+}
+
+
+def color_of(sysname, family):
+    return SYSTEM_COLOR.get(sysname, FAMILY_COLOR[family])
+
+
+def darken(color, amount=0.45):
+    """Mix a pastel toward ink so a thin mark in it still reads on white."""
+    r, g, b, _ = matplotlib.colors.to_rgba(color)
+    ir, ig, ib, _ = matplotlib.colors.to_rgba(INK)
+    return (r + (ir - r) * amount, g + (ig - g) * amount,
+            b + (ib - b) * amount)
 
 # Metrics with no reference level: raw per-stream rates whose row holds
 # no matching ground-truth statistic. Their _delta or _ratio siblings do
@@ -126,10 +149,70 @@ NO_REFERENCE = {
     'gc_a', 'gc_b', 'sc_a', 'sc_b',
 }
 
-SURFACE = '#fcfcfb'
-INK = '#0b0b0b'
-INK_2 = '#52514e'
-MUTED = '#8a8a85'
+SURFACE = '#ffffff'      # pure white: the clouds fade into it
+INK = '#2a2926'          # soft ink for text and the reference line
+INK_2 = '#5b5955'
+MUTED = '#a7a199'        # warm grey: spines, ticks, placeholders
+
+matplotlib.rcParams.update({
+    'font.family': 'sans-serif',
+    'font.sans-serif': ['Helvetica', 'Arial', 'Liberation Sans',
+                        'DejaVu Sans'],
+    'pdf.fonttype': 42,
+    'ps.fonttype': 42,
+    'text.color': INK,
+    'axes.labelcolor': INK,
+})
+
+
+def stipple(ax, pos, vals, color, rng, n=5200, half_w=0.40, ylim=None):
+    """A system's per-song values as a cloud of fine, semi-transparent dots.
+
+    The cloud is a density estimate of the per-song values -- a violin,
+    drawn as pigment dust instead of an outline. Dots are sampled from a
+    Gaussian kernel density of the values (bandwidth by Silverman's
+    rule, so the tails feather out rather than stop), spread sideways
+    in proportion to that density, and placed with a triangular
+    horizontal jitter so the interior is dense and the edges thin into
+    the white. Opacity follows the same taper. Nothing is outlined and
+    nothing is filled solid; the statistics a reader needs are drawn on
+    top as marks.
+    """
+    v = np.asarray(vals, float)
+    if len(v) < 3:
+        return
+    sd = v.std(ddof=1)
+    if sd < 1e-12:
+        y = np.full(n, v[0])
+        w = np.full(n, half_w)
+    else:
+        bw = 0.9 * 1.06 * sd * len(v) ** (-0.2)
+        y = v[rng.integers(0, len(v), n)] + rng.normal(0.0, bw, n)
+        grid = np.linspace(v.min() - 3 * bw, v.max() + 3 * bw, 256)
+        dens = np.exp(-0.5 * ((grid[:, None] - v[None, :]) / bw) ** 2).sum(1)
+        dens /= dens.max()
+        # a mild power keeps the thin tails visible as a wisp instead
+        # of a hairline; the y-density is untouched, so the cloud still
+        # darkens where the songs are
+        w = half_w * np.interp(y, grid, dens, left=0.0, right=0.0) ** 0.6
+    u = rng.random(n) - rng.random(n)          # triangular on [-1, 1]
+    x = pos + w * u
+    alpha = 0.08 + 0.28 * (1.0 - np.abs(u)) ** 0.8
+    if ylim is not None:
+        # The panel's y-range is set by the 5th-95th percentiles, so a
+        # cloud can run past it. Cut flat at the frame it would read as
+        # a solid edge, so instead it fades out over the last tenth of
+        # the range and nothing is drawn beyond.
+        lo_y, hi_y = ylim
+        band = 0.10 * (hi_y - lo_y)
+        fade = np.clip((y - lo_y) / band, 0, 1) * np.clip((hi_y - y) / band,
+                                                          0, 1)
+        keep = fade > 0
+        x, y, alpha = x[keep], y[keep], alpha[keep] * fade[keep]
+    rgba = np.tile(matplotlib.colors.to_rgba(color), (len(y), 1))
+    rgba[:, 3] = alpha
+    ax.scatter(x, y, s=rng.uniform(0.3, 1.1, len(y)), c=rgba, lw=0,
+               rasterized=True, zorder=3)
 
 DEFAULT_METRICS = [
     'harmonic_rhythm_jsd',
@@ -370,12 +453,52 @@ def read_pooled(path):
     return out
 
 
+def _finish_axes(ax, metric, order, title_chars, letter, caption):
+    """Axis furniture shared by both panel kinds.
+
+    Atlas conventions: pure white, no grid, no box -- a single warm-grey
+    axis on the left carries the scale, and the columns float over the
+    white. The panel letter is bold in the corner, the caption after it.
+    """
+    if title_chars:
+        ax.set_title('\n'.join(textwrap.wrap(label_for(metric), title_chars)),
+                     fontsize=6.4, color=INK, pad=3)
+    else:
+        ax.set_ylabel(label_for(metric), fontsize=7.0, color=INK)
+    ax.set_xlim(-0.7, len(order) - 0.3)
+    ax.tick_params(axis='y', labelsize=6.5, colors=INK_2, length=2.5,
+                   width=0.6, color=MUTED)
+    ax.tick_params(axis='x', length=0)
+    for side in ('top', 'right', 'bottom'):
+        ax.spines[side].set_visible(False)
+    ax.spines['left'].set_color(MUTED)
+    ax.spines['left'].set_linewidth(0.6)
+    ax.set_facecolor(SURFACE)
+    ax.grid(False)
+    if letter:
+        ax.annotate(letter, xy=(0.012, 0.965), xycoords='axes fraction',
+                    ha='left', va='top', fontsize=8.0, weight='bold',
+                    color=INK)
+    if caption:
+        ax.annotate(caption, xy=(0.012, 0.965), xycoords='axes fraction',
+                    xytext=(12 if letter else 0, 0), textcoords='offset points',
+                    ha='left', va='top', fontsize=6.4, color=INK)
+
+
+def _pending(ax, i, lo_y, hi_y):
+    ax.add_patch(Rectangle((i - 0.31, lo_y), 0.62, hi_y - lo_y,
+                           facecolor='none', edgecolor=MUTED,
+                           hatch='///', lw=0.6, alpha=0.5, zorder=2))
+    ax.text(i, lo_y + 0.5 * (hi_y - lo_y), 'pending', rotation=90,
+            ha='center', va='center', fontsize=6.5, color=MUTED)
+
+
 def draw_panel_pooled(ax, metric, pooled, order, present, title_chars=0,
-                      null=None):
+                      null=None, letter=''):
     """One point per system: the corpus-pooled JSD and its bootstrap CI."""
     vals = pooled.get(metric, {})
     labels, missing = [], []
-    ax.axhline(0.0, color=INK, lw=1.1, ls=(0, (4, 3)), zorder=1)
+    ax.axhline(0.0, color=INK, lw=1.0, ls=(0, (4, 3)), zorder=1)
     if null is not None and not math.isnan(null):
         # noise floor at this sample size: a system at or below it is
         # indistinguishable from perfect, and gaps below it are not gaps
@@ -389,62 +512,40 @@ def draw_panel_pooled(ax, metric, pooled, order, present, title_chars=0,
             missing.append(i)
             continue
         v, lo, hi, _ns, _no, _bl, _w = rec
+        col = color_of(sysname, family)
         if not math.isnan(lo):
             # a bare vertical line has no visible end: where the
             # interval stops was a guess. Caps make the endpoints marks.
             cap = 0.16
-            ax.plot([i, i], [lo, hi], color=INK_2, lw=1.2,
+            ax.plot([i, i], [lo, hi], color=INK_2, lw=1.1,
                     solid_capstyle='butt', zorder=4)
             for y in (lo, hi):
-                ax.plot([i - cap, i + cap], [y, y], color=INK_2, lw=1.2,
+                ax.plot([i - cap, i + cap], [y, y], color=INK_2, lw=1.1,
                         zorder=4)
-        ax.plot([i], [v], marker='o', markersize=5.5,
-                markerfacecolor=FAMILY_COLOR[family], markeredgecolor=SURFACE,
+        ax.plot([i], [v], marker='o', markersize=6.0,
+                markerfacecolor=col, markeredgecolor=SURFACE,
                 markeredgewidth=1.0, zorder=5)
         if ranked and (ranked_best is None or v < ranked_best[0]):
-            ranked_best = (v, disp, family)
+            ranked_best = (v, disp, col)
         if not ranked:
-            unranked_lines.append((v, family))
+            unranked_lines.append((v, col))
 
     # JSD is bounded below by 0 and 0 IS the reference, so best is simply
     # the smallest -- no absolute-distance rule needed here.
-    for v, family in unranked_lines:
-        ax.axhline(v, color=FAMILY_COLOR[family], lw=1.4, zorder=2)
+    for v, col in unranked_lines:
+        ax.axhline(v, color=col, lw=1.4, zorder=2)
     if ranked_best is not None:
-        ax.axhline(ranked_best[0], color=FAMILY_COLOR[ranked_best[2]],
-                   lw=1.4, zorder=2)
+        ax.axhline(ranked_best[0], color=ranked_best[2], lw=1.4, zorder=2)
 
     lo_y, hi_y = ax.get_ylim()
     hi_y = hi_y + 0.12 * (hi_y - lo_y)
     lo_y = min(lo_y, -0.02 * (hi_y - lo_y))
     ax.set_ylim(lo_y, hi_y)
-    if ranked_best is not None:
-        ax.annotate('best ranked: ' + ranked_best[1].replace('\n', ' '),
-                    xy=(0.012, 0.965), xycoords='axes fraction',
-                    ha='left', va='top', fontsize=6.4, color=INK)
     for i in missing:
-        ax.add_patch(Rectangle((i - 0.31, lo_y), 0.62, hi_y - lo_y,
-                               facecolor='none', edgecolor=MUTED,
-                               hatch='///', lw=0.8, alpha=0.55, zorder=2))
-        ax.text(i, lo_y + 0.5 * (hi_y - lo_y), 'pending', rotation=90,
-                ha='center', va='center', fontsize=6.5, color=MUTED)
-
-    if title_chars:
-        ax.set_title('\n'.join(textwrap.wrap(label_for(metric), title_chars)),
-                     fontsize=6.4, color=INK, pad=3)
-    else:
-        ax.set_ylabel(label_for(metric), fontsize=7.0, color=INK)
-    ax.set_xlim(-0.7, len(order) - 0.3)
-    ax.tick_params(axis='y', labelsize=6.5, colors=INK_2, length=2)
-    ax.tick_params(axis='x', length=0)
-    for side in ('top', 'right'):
-        ax.spines[side].set_visible(False)
-    for side in ('left', 'bottom'):
-        ax.spines[side].set_color(MUTED)
-        ax.spines[side].set_linewidth(0.8)
-    ax.set_facecolor(SURFACE)
-    ax.grid(axis='y', color=MUTED, alpha=0.22, lw=0.6, zorder=0)
-    ax.set_axisbelow(True)
+        _pending(ax, i, lo_y, hi_y)
+    caption = ('best ranked: ' + ranked_best[1].replace('\n', ' ')
+               if ranked_best is not None else '')
+    _finish_axes(ax, metric, order, title_chars, letter, caption)
     return labels
 
 
@@ -473,7 +574,8 @@ def best_ranked(metric, per_song, order, present):
     return sysname, disp, family, m
 
 
-def draw_panel(ax, metric, per_song, order, present, title_chars=0):
+def draw_panel(ax, metric, per_song, order, present, title_chars=0,
+               letter=''):
     ref = ref_level(metric)
     positions, data, colors, labels = [], [], [], []
     missing = []
@@ -486,13 +588,13 @@ def draw_panel(ax, metric, per_song, order, present, title_chars=0):
         if len(vals) >= 3:
             positions.append(i)
             data.append(vals)
-            colors.append(FAMILY_COLOR[family])
+            colors.append(color_of(sysname, family))
         else:
             missing.append(i)
 
-    # Reference line first, so boxes sit on top of it.
+    # Reference line first, so the clouds sit on top of it.
     if ref is not None:
-        ax.axhline(ref, color=INK, lw=1.1, ls=(0, (4, 3)), zorder=1)
+        ax.axhline(ref, color=INK, lw=1.0, ls=(0, (4, 3)), zorder=1)
 
     # Best of the ranked systems, drawn at its MEAN and running the full
     # width so the unranked column can be read against it. Coloured by
@@ -503,105 +605,76 @@ def draw_panel(ax, metric, per_song, order, present, title_chars=0):
     # off one box in the far-right corner is exactly what a line spares
     # them. Drawn even where there is no reference level, since its mean
     # is a comparison whether or not a target exists.
+    levels = [] if ref is None else [ref]
     for sysname, _disp, _short, family, ranked in order:
         if ranked or sysname not in present:
             continue
         m = system_mean(metric, sysname, per_song)
         if m is not None:
-            ax.axhline(m, color=FAMILY_COLOR[family], lw=1.4, zorder=2)
+            ax.axhline(m, color=color_of(sysname, family), lw=1.4, zorder=2)
+            levels.append(m)
 
     best = best_ranked(metric, per_song, order, present)
     if best is not None:
-        _bs, bdisp, bfamily, bmean = best
-        ax.axhline(bmean, color=FAMILY_COLOR[bfamily], lw=1.4, zorder=2)
+        bs, bdisp, bfamily, bmean = best
+        ax.axhline(bmean, color=color_of(bs, bfamily), lw=1.4, zorder=2)
+        levels.append(bmean)
 
-    if data:
-        # NO NOTCHES. A notch deforms the box into an hourglass, and
-        # when the CI is wider than the quartiles -- which happens on
-        # the noisier metrics here -- matplotlib folds it inside out and
-        # the box reads as broken. The interval is drawn instead as its
-        # own mark, which cannot distort the distribution it sits on.
-        bp = ax.boxplot(
-            data, positions=positions, widths=0.52,
-            # whiskers at the 5th and 95th percentiles rather than
-            # 1.5 IQR: the tails were setting the axis while the boxes
-            # and CI sticks -- where systems differ -- sat in the
-            # middle third of the panel. Still a real spread, ~40%
-            # shorter, and the axis follows the comparison.
-            whis=(5, 95),
-            notch=False, showfliers=False, showcaps=False,
-            patch_artist=True, zorder=3,
-            medianprops=dict(color=SURFACE, lw=1.4),
-            whiskerprops=dict(color=INK_2, lw=0.8, alpha=0.7),
-        )
-        for patch, c in zip(bp['boxes'], colors):
-            patch.set_facecolor(c)
-            patch.set_edgecolor(SURFACE)
-            patch.set_alpha(0.78)
-            patch.set_linewidth(0.8)
+    # The y-range is set by the 5th-95th percentiles of every system,
+    # not by the clouds' feathered tails: the tails were setting the
+    # axis while the means and their intervals -- where systems differ
+    # -- sat in the middle third of the panel. A cloud that runs past
+    # the range is simply clipped at the panel edge.
+    lo = min([np.percentile(d, 5) for d in data] + levels) if data else 0.0
+    hi = max([np.percentile(d, 95) for d in data] + levels) if data else 1.0
+    span = (hi - lo) or 1.0
+    lo, hi = lo - 0.06 * span, hi + 0.06 * span
 
-        # The mean and its 95% interval, as one mark: a dark stick
+    rng = np.random.default_rng(abs(hash(metric)) % (2 ** 32))
+    for pos, vals, c in zip(positions, data, colors):
+        # the distribution, as pigment dust
+        stipple(ax, pos, vals, c, rng, ylim=(lo, hi))
+        v = np.asarray(vals, float)
+        # quartiles as three short ticks in a darker shade of the same
+        # colour -- the box's information without the box's outline
+        q1, med, q3 = np.percentile(v, [25, 50, 75])
+        dk = darken(c)
+        for q, hw in ((q1, 0.13), (med, 0.20), (q3, 0.13)):
+            ax.plot([pos - hw, pos + hw], [q, q], color=dk, lw=0.8,
+                    alpha=0.9, solid_capstyle='butt', zorder=4)
+        # The mean and its 95% interval, as one mark: an ink stick
         # spanning the CI with the mean at its centre. The best-of line
         # is a mean, so this is what a reader compares against it --
         # putting the interval on the mean rather than on the median
         # keeps the two like for like.
-        for pos, vals in zip(positions, data):
-            v = np.asarray(vals, float)
-            m = v.mean()
-            half = 1.96 * v.std(ddof=1) / math.sqrt(len(v))
-            ax.plot([pos, pos], [m - half, m + half], color=INK, lw=1.6,
-                    solid_capstyle='butt', zorder=5)
-            ax.plot([pos], [m], marker='o', markersize=3.2,
-                    markerfacecolor=SURFACE, markeredgecolor=INK,
-                    markeredgewidth=1.0, zorder=6)
+        m = v.mean()
+        half = 1.96 * v.std(ddof=1) / math.sqrt(len(v))
+        ax.plot([pos, pos], [m - half, m + half], color=INK, lw=1.4,
+                solid_capstyle='butt', zorder=5)
+        ax.plot([pos], [m], marker='o', markersize=3.0,
+                markerfacecolor=SURFACE, markeredgecolor=INK,
+                markeredgewidth=1.0, zorder=6)
 
-    # Headroom for the caption below, claimed before anything is placed
+    # Headroom for the caption, claimed before anything is placed
     # against the limits: the placeholders span the full height, so they
     # have to be drawn against the FINAL ylim or they stop short.
-    lo, hi = ax.get_ylim()
     hi = hi + 0.12 * (hi - lo)
     ax.set_ylim(lo, hi)
-
-    if best is not None:
-        # Named in the corner rather than on the line. On the line it
-        # collided with whichever box sat at that height -- and the
-        # unranked column, the one a reader most wants to compare
-        # against this line, is exactly where the label landed.
-        ax.annotate(
-            'best ranked: ' + bdisp.replace('\n', ' '),
-            xy=(0.012, 0.965), xycoords='axes fraction',
-            ha='left', va='top', fontsize=6.4, color=INK)
 
     # Placeholder slots for systems not yet run: an empty hatched frame
     # is honest about the gap in a way a missing tick is not -- a reader
     # scanning the axis would otherwise not know the column was meant to
     # be there.
     for i in missing:
-        ax.add_patch(Rectangle((i - 0.31, lo), 0.62, hi - lo,
-                               facecolor='none', edgecolor=MUTED,
-                               hatch='///', lw=0.8, alpha=0.55, zorder=2))
-        ax.text(i, lo + 0.5 * (hi - lo), 'pending', rotation=90,
-                ha='center', va='center', fontsize=6.5, color=MUTED)
+        _pending(ax, i, lo, hi)
 
-    # In a narrow grid the metric name goes ABOVE the panel, wrapped:
-    # rotated y-axis text cannot fit a 1.75in column and runs into the
-    # neighbouring panel. Horizontal text has the whole panel width.
-    if title_chars:
-        ax.set_title('\n'.join(textwrap.wrap(label_for(metric), title_chars)),
-                     fontsize=6.4, color=INK, pad=3)
-    else:
-        ax.set_ylabel(label_for(metric), fontsize=7.0, color=INK)
-    ax.set_xlim(-0.7, len(order) - 0.3)
-    ax.tick_params(axis='y', labelsize=6.5, colors=INK_2, length=2)
-    ax.tick_params(axis='x', length=0)
-    for side in ('top', 'right'):
-        ax.spines[side].set_visible(False)
-    for side in ('left', 'bottom'):
-        ax.spines[side].set_color(MUTED)
-        ax.spines[side].set_linewidth(0.8)
-    ax.set_facecolor(SURFACE)
-    ax.grid(axis='y', color=MUTED, alpha=0.22, lw=0.6, zorder=0)
-    ax.set_axisbelow(True)
+    # Named in the corner rather than on the line. On the line it
+    # collided with whichever cloud sat at that height -- and the
+    # unranked column, the one a reader most wants to compare against
+    # this line, is exactly where the label landed.
+    caption = ('best ranked: ' + bdisp.replace('\n', ' ')
+               if best is not None else '')
+    _finish_axes(ax, metric, order, title_chars, letter, caption)
     return labels
 
 
@@ -771,11 +844,16 @@ def main():
     used = []
     for idx, m in enumerate(metrics):
         ax = axgrid[idx // ncols][idx % ncols]
+        # bold panel letters, as in a journal figure; only where there
+        # is more than one panel to point at
+        letter = chr(ord('a') + idx) if n > 1 and idx < 26 else ''
         if pooled_mode:
             labels = draw_panel_pooled(ax, m, pooled, order, present,
-                                       title_chars, null=null_level.get(m))
+                                       title_chars, null=null_level.get(m),
+                                       letter=letter)
         else:
-            labels = draw_panel(ax, m, per_song, order, present, title_chars)
+            labels = draw_panel(ax, m, per_song, order, present, title_chars,
+                                letter=letter)
         used.append((idx // ncols, idx % ncols, ax))
     for r in range(nrows):
         for c in range(ncols):
@@ -844,22 +922,23 @@ def main():
     word = 'pooled JSD' if pooled_mode else 'mean'
 
     handles = [
-        Line2D([0], [0], color=INK, lw=1.2, ls=(0, (4, 3)),
+        Line2D([0], [0], color=INK, lw=1.0, ls=(0, (4, 3)),
                label='reference level (matches ground truth)'),
         Line2D([0], [0], color=INK_2, lw=1.4,
-               label=f'{word} of the best ranked system (named per panel)'),
+               label=f'{word} of the best ranked system (named per panel; '
+                     'in its colour)'),
     ]
     if pooled_mode:
         handles += [
-            Line2D([0], [0], color='none', marker='o', markersize=5.5,
+            Line2D([0], [0], color='none', marker='o', markersize=6.0,
                    markerfacecolor=MUTED, markeredgecolor=SURFACE,
                    markeredgewidth=1.0,
                    label=f'corpus-pooled JSD, weighted per '
                          f'{pooled_weight}'),
             Line2D([0], [0], color=MUTED, lw=1.0, ls=(0, (1, 1.5)),
                    label='noise floor: reference split-half null'),
-            Line2D([0], [0], color=INK_2, lw=1.2, marker='_', markersize=7,
-                   markeredgewidth=1.2,
+            Line2D([0], [0], color=INK_2, lw=1.1, marker='_', markersize=7,
+                   markeredgewidth=1.1,
                    label='95% bootstrap CI over ' + {
                        'songs': 'songs',
                        'songs+samples': 'songs and samples',
@@ -868,10 +947,11 @@ def main():
         ]
     else:
         handles += [
-            Line2D([0], [0], color=INK_2, lw=6, alpha=0.35,
-                   label='box: quartiles over songs (line: median; '
-                         'whiskers: 5th-95th pct.)'),
-            Line2D([0], [0], color=INK, lw=1.6, marker='o', markersize=3.2,
+            Line2D([0], [0], color=MUTED, lw=0, marker='o', markersize=5.5,
+                   markerfacecolor=MUTED, markeredgecolor='none', alpha=0.45,
+                   label='cloud: density of the per-song values '
+                         '(ticks: quartiles)'),
+            Line2D([0], [0], color=INK, lw=1.4, marker='o', markersize=3.0,
                    markerfacecolor=SURFACE, markeredgecolor=INK,
                    markeredgewidth=1.0, label='mean and its 95% CI'),
         ]
@@ -880,12 +960,21 @@ def main():
         handles.insert(2, Line2D(
             [0], [0], color=FAMILY_COLOR['Not ranked'], lw=1.4,
             label=f'{word} of ' + ', '.join(unranked)))
+    labels_ = [h.get_label() for h in handles]
     if compact:
-        handles += [Line2D([0], [0], color=FAMILY_COLOR[f], lw=6,
-                           alpha=0.78, label=f) for f, _l, _r in edges]
-    fig.legend(handles=handles, loc='lower center',
+        # one legend entry per family, its swatch made of the members'
+        # own colours side by side -- colour is per system, so a single
+        # family swatch would match none of the columns exactly
+        for f, left, right in edges:
+            sw = tuple(Line2D([0], [0], color=color_of(s, f), lw=6,
+                              alpha=0.85)
+                       for s, _d, _sh, _g, _r in order[left:right + 1])
+            handles.append(sw)
+            labels_.append(f)
+    fig.legend(handles=handles, labels=labels_, loc='lower center',
                ncol=3 if compact else 2, frameon=False,
                fontsize=6.4, labelcolor=INK_2,
+               handler_map={tuple: HandlerTuple(ndivide=None, pad=0.25)},
                bbox_to_anchor=(0.5, 0.004))
     if args.title:
         fig.suptitle(args.title, fontsize=9, color=INK, y=0.995)

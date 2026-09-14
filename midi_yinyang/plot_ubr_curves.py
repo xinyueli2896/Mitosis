@@ -40,14 +40,14 @@ from matplotlib.lines import Line2D
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import eval_metrics as em                      # noqa: E402
-from plot_e1_box import (GROUPS, FAMILY_COLOR, SURFACE, INK, INK_2,  # noqa
-                         MUTED)
+from plot_e1_box import (GROUPS, SURFACE, INK, INK_2, MUTED,  # noqa
+                         color_of)
 
 PANELS = [(1, 'state', '1-beat (Full)'), (2, 'state', '2-beat (Full)'),
           (1, 'onset', '1-beat (Onset)'), (2, 'onset', '2-beat (Onset)')]
 STREAMS = [('a', 'Melody'), ('b', 'Chord')]
-# dash per member within a family, so nine systems on three hues stay
-# tellable apart without a fourth hue
+# each system has its own pastel; the dash per member within a family
+# is kept so the curves stay tellable apart in greyscale too
 MEMBER_DASH = ['-', (0, (5, 2)), (0, (1, 1.2))]
 
 
@@ -213,12 +213,12 @@ def main():
                 if m is None:
                     continue
                 x = np.arange(1, len(m) + 1) * beats
-                col = FAMILY_COLOR[family]
+                col = color_of(sysname, family)
                 ls = MEMBER_DASH[i % len(MEMBER_DASH)]
                 ax.plot(x, m, color=col, lw=1.5, ls=ls, zorder=3)
                 lo_b, hi_b = m - 1.96 * se, m + 1.96 * se
                 if not args.no_bands:
-                    ax.fill_between(x, lo_b, hi_b, color=col, alpha=0.12,
+                    ax.fill_between(x, lo_b, hi_b, color=col, alpha=0.16,
                                     lw=0, zorder=2)
                 # the first few beats swing wildly (1/1, 1/2, 2/3 ...)
                 # and would set the scale for the whole panel; scale to
@@ -247,15 +247,19 @@ def main():
                 ax.set_xlabel('phrase length (beats)', fontsize=7,
                               color=INK_2)
 
-            ax.tick_params(labelsize=6.3, colors=INK_2, length=2)
+            ax.tick_params(labelsize=6.3, colors=INK_2, length=2.5,
+                           width=0.6, color=MUTED)
             for side in ('top', 'right'):
                 ax.spines[side].set_visible(False)
             for side in ('left', 'bottom'):
                 ax.spines[side].set_color(MUTED)
-                ax.spines[side].set_linewidth(0.8)
+                ax.spines[side].set_linewidth(0.6)
             ax.set_facecolor(SURFACE)
-            ax.grid(color=MUTED, alpha=0.2, lw=0.6)
-            ax.set_axisbelow(True)
+            ax.grid(False)
+            ax.annotate(chr(ord('a') + r * len(PANELS) + c),
+                        xy=(0.02, 0.96), xycoords='axes fraction',
+                        ha='left', va='top', fontsize=8.0, weight='bold',
+                        color=INK)
 
     # one y-range per row, tight to the data: melody and chord live on
     # different scales and a shared 0..1 axis hid the differences
