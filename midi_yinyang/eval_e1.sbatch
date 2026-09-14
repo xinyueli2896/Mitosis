@@ -376,6 +376,43 @@ N_EVAL=$(ls "$EVAL_MEL" | wc -l)
 [[ "$N_EVAL" -eq "$(ls "$EVAL_CHORD" | wc -l)" ]] || {
     echo "ERROR: melody/chord split sizes differ; scoring pairs by filename"; exit 1; }
 SONG_IDS=$(ls "$EVAL_MEL" | sed 's/\.[Mm][Ii][Dd]$//' | sort | tr '\n' ' ')
+# EXCLUDE_SONGS: songs dropped from generation AND scoring. The default
+# is not a tuning knob -- it records a decision about the PROMPTS, made
+# from diagnose_prompt_window.sbatch before any result was looked at:
+#
+#   786  chord stream silent for the whole 6-bar window (383 notes in
+#        the file, first onset at frame 96, the first frame of the
+#        continuation)
+#
+# A song whose conditioning stream is silent in the prompt is a task no
+# system was given the material for. Every arm was prompted with an
+# empty chord stream there; a co-generation model invents chords anyway
+# and a cascade cannot, its conditional stage needing a chord track to
+# exist at all. The P block is worse off still: prompt_onsets_b is 0, so
+# reuse_vs_prompt_b is NaN while density_vs_prompt_b is 0.0, which reads
+# as a system that followed nothing rather than as a prompt that asked
+# nothing.
+#
+# 506 HAS THE SAME DEFECT and is not in this list (its chord enters at
+# frame 136, further past the window than 786's). It is excluded from
+# the criterion, not by it -- so P-mc stays short by that one song and
+# the table pairs on complete cases. Add it here to apply the criterion
+# evenly. Pass EXCLUDE_SONGS="" to score everything.
+EXCLUDE_SONGS="${EXCLUDE_SONGS-786}"
+if [[ -n "${EXCLUDE_SONGS// /}" ]]; then
+    _kept=""
+    for _s in $SONG_IDS; do
+        _drop=0
+        for _x in $EXCLUDE_SONGS; do
+            [[ "$_s" == "$_x" || "$_s" == "$(printf '%03d' "$((10#$_x))" 2>/dev/null)" ]] && _drop=1
+        done
+        [[ "$_drop" == "0" ]] && _kept="$_kept $_s"
+    done
+    SONG_IDS="${_kept# }"
+    N_EVAL=$(echo $SONG_IDS | wc -w)
+    echo "[prompts] EXCLUDED: $EXCLUDE_SONGS  (degenerate prompt window;"
+    echo "          see diagnose_prompt_window.sbatch) -> $N_EVAL songs"
+fi
 echo "[prompts] $N_EVAL test songs: $SONG_IDS"
 # merged, program-tagged copies for the single-stream S0 (the tokenizer
 # separates streams by program only)

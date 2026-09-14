@@ -88,6 +88,22 @@ PROMPT_MEL="$OUT_ROOT/prompts/mel"
     exit 1; }
 
 SONG_IDS=$(ls "$PROMPT_MEL" | sed 's/\.[Mm][Ii][Dd]$//' | sort)
+# Same default as eval_e1.sbatch, and it has to BE the same: a coverage
+# report against a wider song list than the one scoring uses reports
+# gaps nobody intends to fill.
+EXCLUDE_SONGS="${EXCLUDE_SONGS-786}"
+if [[ -n "${EXCLUDE_SONGS// /}" ]]; then
+    kept=""
+    for s in $SONG_IDS; do
+        drop=0
+        for x in $EXCLUDE_SONGS; do
+            [[ "$s" == "$x" || "$s" == "$(printf '%03d' "$((10#$x))" 2>/dev/null)" ]] && drop=1
+        done
+        [[ "$drop" == "0" ]] && kept="$kept$s"$'\n'
+    done
+    SONG_IDS="${kept%$'\n'}"
+    echo "[songs] EXCLUDED: $EXCLUDE_SONGS (degenerate prompt window)"
+fi
 N_EVAL=$(echo "$SONG_IDS" | wc -l)
 
 if [[ -z "$SYSTEMS" ]]; then
