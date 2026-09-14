@@ -131,6 +131,7 @@ import pretty_midi
 
 BEAT_DIV = 4
 FRAMES_PER_BAR = 16
+GC_SC_BINS = 10      # histogram over [0,1] for the per-piece statistics
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +312,9 @@ POOLED_BINS = {
     'duration_jsd_b': (33, 32),
     'mel_interval_jsd': (25, None),         # melodic interval + 12, |i| <= 12
     'voicing_jsd': (8, None),               # chord size - 1, capped at 8
+    # per-PIECE statistics: one bin per song / sample, 10 bins over [0,1]
+    'js_gc_a': (GC_SC_BINS, None), 'js_gc_b': (GC_SC_BINS, None),
+    'js_sc_a': (GC_SC_BINS, None), 'js_sc_b': (GC_SC_BINS, None),
 }
 
 
@@ -348,6 +352,65 @@ def _grid_values(s):
     return [f % FRAMES_PER_BAR for f in s.onset_frames()]
 
 
+# ---------------------------------------------------------------------------
+# Per-piece regularity statistics (Dong et al. 2020, MusPy), both in [0,1]:
+#
+#   groove consistency   1 - mean Hamming distance between the binary
+#                        onset vectors of ADJACENT bars, over the bar's
+#                        16 positions. Rhythmic regularity.
+#   scale consistency    largest fraction of onset notes inside any one
+#                        of the 24 major/minor scales. Tonal coherence.
+#
+# Reported two ways. Per song, beside the reference's value, in H3. And
+# in the pooled table as the JSD between the generated and ground-truth
+# DISTRIBUTIONS of the statistic across pieces (JS-GC, JS-SC), which is
+# how the literature quotes them: each piece contributes one bin of a
+# 10-bin histogram over [0,1], songs weighted equally as everywhere
+# else, bootstrap over songs. A note on that: two histograms of ~93
+# pieces over 10 bins carry a small-sample floor of their own, larger
+# than the event-level JSDs' -- the pooled table prints a reference
+# split-half null under every metric so it can be read against it.
+# ---------------------------------------------------------------------------
+
+_MAJOR = frozenset((0, 2, 4, 5, 7, 9, 11))
+_MINOR = frozenset((0, 2, 3, 5, 7, 8, 10))
+
+
+def _bar_onset_vectors(s):
+    n_bars = s.n_frames // FRAMES_PER_BAR
+    V = np.zeros((n_bars, FRAMES_PER_BAR))
+    for f in s.onset_frames():
+        b, pos = divmod(f, FRAMES_PER_BAR)
+        if b < n_bars:
+            V[b, pos] = 1.0
+    return V
+
+
+def groove_consistency(s):
+    V = _bar_onset_vectors(s)
+    if len(V) < 2:
+        return float('nan')
+    ham = np.abs(V[1:] - V[:-1]).sum(axis=1) / FRAMES_PER_BAR
+    return float(1.0 - ham.mean())
+
+
+def scale_consistency(s):
+    pcs = [p % 12 for ps in s.onsets for p in ps]
+    if not pcs:
+        return float('nan')
+    best = 0.0
+    for root in range(12):
+        for scale in (_MAJOR, _MINOR):
+            inn = sum(1 for pc in pcs if (pc - root) % 12 in scale)
+            best = max(best, inn / len(pcs))
+    return best
+
+
+def _unit_bin(v, n_bins=GC_SC_BINS):
+    """[0,1] -> bin index; 1.0 lands in the top bin, not past it."""
+    return [] if math.isnan(v) else [min(int(v * n_bins), n_bins - 1)]
+
+
 def h3_metrics(gen_a, gen_b, ref_a, ref_b, task):
     out = {}
     if task == 'melchord':
@@ -376,6 +439,10 @@ def h3_metrics(gen_a, gen_b, ref_a, ref_b, task):
                       if g_pos and r_pos else float('nan'))
         out[k_dur] = (jsd(_ph(k_dur, g.durations), _ph(k_dur, r.durations))
                       if g.durations and r.durations else float('nan'))
+        for name, fn in (('gc', groove_consistency), ('sc', scale_consistency)):
+            gv, rv = fn(g), fn(r)
+            out[f'{name}_{label}'] = float(gv)
+            out[f'{name}_{label}_delta'] = float(gv - rv)
     return out
 
 
@@ -1078,7 +1145,9 @@ PRIMARY = {
 H_GROUPS = {
     'H3': ['harmonic_rhythm_jsd', 'mel_stepwise_delta',
            'onset_grid_jsd_a', 'onset_grid_jsd_b',
-           'duration_jsd_a', 'duration_jsd_b'],
+           'duration_jsd_a', 'duration_jsd_b',
+           'gc_a', 'gc_a_delta', 'gc_b', 'gc_b_delta',
+           'sc_a', 'sc_a_delta', 'sc_b', 'sc_b_delta'],
     'H2': ['chord_tone_cov', 'chord_tone_cov_ref', 'chord_tone_cov_delta',
            'ctnctr', 'ctnctr_ref', 'ctnctr_delta',
            'pcs', 'pcs_ref', 'pcs_delta',
@@ -1169,6 +1238,8 @@ STREAM_OF = {
     'mel_stepwise_delta': 'a',
     'onset_grid_jsd_a': 'a', 'onset_grid_jsd_b': 'b',
     'duration_jsd_a': 'a', 'duration_jsd_b': 'b',
+    'gc_a': 'a', 'gc_a_delta': 'a', 'gc_b': 'b', 'gc_b_delta': 'b',
+    'sc_a': 'a', 'sc_a_delta': 'a', 'sc_b': 'b', 'sc_b_delta': 'b',
     'chord_tone_cov': None, 'chord_tone_cov_delta': None,
     'chord_tone_cov_ref': 'ref',
     'ctnctr': None, 'ctnctr_delta': None, 'ctnctr_ref': 'ref',
@@ -1250,6 +1321,10 @@ def _pooled_hists(gen_a, gen_b, ref_a, ref_b, task):
                                _ph('mel_interval_jsd', _interval_values(ref_a)))
     out['voicing_jsd'] = (_ph('voicing_jsd', _voicing_values(gen_b)),
                           _ph('voicing_jsd', _voicing_values(ref_b)))
+    for label, g, r in (('a', gen_a, ref_a), ('b', gen_b, ref_b)):
+        for name, fn in (('gc', groove_consistency), ('sc', scale_consistency)):
+            k = f'js_{name}_{label}'
+            out[k] = (_ph(k, _unit_bin(fn(g))), _ph(k, _unit_bin(fn(r))))
     return out
 
 
@@ -1360,6 +1435,7 @@ def _pooled_ci(G, R, n_boot=2000, seed=0, per_sample=None, by_song=True,
         Rb = np.stack([Rw2[idx[b]].sum(axis=0) for b in range(n_boot)])
         vals = _jsd_rows(Gb, Rb)
     lo, hi = np.percentile(vals, [2.5, 97.5])
+    lo = max(lo, 0.0)      # JSD cannot be negative; -0.000 is float noise
     if mode == 'one-per-song':
         # The plotted point must describe the same thing as the spread.
         # A replicate here is a single run over all songs, so the
@@ -1429,6 +1505,7 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None,
     print(' cannot go below 0, so resampling can only push it up.)')
     print('metric'.ljust(26) + ''.join(s.ljust(width) for s in systems))
     recs = []
+    null_by_key = {}
     for k in keys:
         line = k.ljust(26)
         for sysname in systems:
@@ -1458,6 +1535,12 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None,
             Gw = np.stack([_song_vector(v, by_song_w) for v in Gs])
             Rw = _norm_songs(R) if by_song_w else R
             rec['jsd'] = jsd(Gw.sum(axis=0), Rw.sum(axis=0))
+            # What a perfect system would score at HALF this n: one half
+            # of the reference against the other. A rough floor, and
+            # the one the per-piece metrics need most -- ~93 pieces over
+            # 10 bins is a small histogram.
+            if len(songs) >= 4:
+                null_by_key[k] = jsd(Rw[0::2].sum(axis=0), Rw[1::2].sum(axis=0))
             lo, hi, se, recentre = _pooled_ci(
                 Gw, Rw, n_boot=n_boot, by_song=by_song_w, mode=boot_mode,
                 per_sample=Gs if boot_mode != 'songs' else None)
@@ -1468,6 +1551,18 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None,
                 else f'{rec["jsd"]:.3f} [{rec["ci_lo"]:.3f},{rec["ci_hi"]:.3f}]'
             line += cell.ljust(width)
         print(line)
+    print('\nreference split-half null: what a PERFECT system scores against '
+          'half the corpus')
+    print('(a floor, not a target -- a system near it is at the noise level '
+          'of this sample size)')
+    for k in keys:
+        if k in null_by_key:
+            print(f'  {k:24s} {null_by_key[k]:.4f}')
+            recs.append(dict(metric=k, system='_null_ref_split',
+                             jsd=null_by_key[k], ci_lo=float('nan'),
+                             ci_hi=float('nan'), boot_se=float('nan'),
+                             n_songs=0, n_obs=0, n_boot=0, boot_mode='none',
+                             weight=weight))
     # What each pooled histogram rests on, per metric: the whole case
     # for pooling is a claim about these counts, and they differ by
     # metric -- a melody with few onsets contributes few intervals

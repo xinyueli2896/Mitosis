@@ -135,7 +135,7 @@ def main():
         print(f'[fmd] NULL CALIBRATION: reference vs itself, split {h}/'
               f'{len(ref_X)-h} = {null:.4f}')
         print('[fmd] read every system score against that floor.')
-        rows.append(dict(metric='fmd', system='_null_ref_vs_ref', jsd=null,
+        rows.append(dict(metric='fmd', system='_null_ref_split', jsd=null,
                          ci_lo=float('nan'), ci_hi=float('nan'),
                          boot_se=float('nan'), n_songs=len(set(ref_song)),
                          n_obs=len(ref_X), n_boot=0, boot_mode='none',

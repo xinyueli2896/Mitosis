@@ -121,6 +121,7 @@ NO_REFERENCE = {
     # target; the delta carries the reference
     'pc_jsd_prompt_a', 'pc_jsd_prompt_b',
     'onset_sim_prompt_a', 'onset_sim_prompt_b',
+    'gc_a', 'gc_b', 'sc_a', 'sc_b',
 }
 
 SURFACE = '#fcfcfb'
@@ -139,6 +140,12 @@ DEFAULT_METRICS = [
 # name, so an unfamiliar metric still plots.
 LABELS = {
     'fmd':                     'Frechet Music Distance (CLaMP 2)',
+    'js_gc_a':  'Groove consistency JSD (melody)',
+    'js_gc_b':  'Groove consistency JSD (chord)',
+    'js_sc_a':  'Scale consistency JSD (melody)',
+    'js_sc_b':  'Scale consistency JSD (chord)',
+    'gc_a': 'Groove consistency, melody', 'gc_b': 'Groove consistency, chord',
+    'sc_a': 'Scale consistency, melody',  'sc_b': 'Scale consistency, chord',
     'harmonic_rhythm_jsd':     'Harmonic rhythm JSD',
     'onset_grid_jsd_a':        'Onset grid JSD (melody)',
     'onset_grid_jsd_b':        'Onset grid JSD (chord)',
@@ -230,7 +237,11 @@ def presets():
         'quality': (['fmd',
                      'harmonic_rhythm_jsd',
                      'onset_grid_jsd_a', 'onset_grid_jsd_b',
-                     'duration_jsd_a', 'duration_jsd_b'],
+                     'duration_jsd_a', 'duration_jsd_b',
+                     # JSD between generated and real DISTRIBUTIONS of
+                     # two per-piece regularity statistics (Dong et al.
+                     # 2020): groove consistency and scale consistency
+                     'js_gc_a', 'js_gc_b', 'js_sc_a', 'js_sc_b'],
                     2, 'General quality: corpus-level distance from the '
                        'reference', True),
         # chord_tone_cov is left off the SHEET only (2026-09-14, by
@@ -353,11 +364,16 @@ def read_pooled(path):
     return out
 
 
-def draw_panel_pooled(ax, metric, pooled, order, present, title_chars=0):
+def draw_panel_pooled(ax, metric, pooled, order, present, title_chars=0,
+                      null=None):
     """One point per system: the corpus-pooled JSD and its bootstrap CI."""
     vals = pooled.get(metric, {})
     labels, missing = [], []
     ax.axhline(0.0, color=INK, lw=1.1, ls=(0, (4, 3)), zorder=1)
+    if null is not None and not math.isnan(null):
+        # noise floor at this sample size: a system at or below it is
+        # indistinguishable from perfect, and gaps below it are not gaps
+        ax.axhline(null, color=MUTED, lw=1.0, ls=(0, (1, 1.5)), zorder=1)
 
     ranked_best, unranked_lines = None, []
     for i, (sysname, disp, short, family, ranked) in enumerate(order):
@@ -629,6 +645,7 @@ def main():
         metrics = [m.strip() for m in args.metrics.split(',') if m.strip()]
     if args.ncols is None:
         args.ncols = auto_ncols or 2
+    user_ncols = args.ncols if args.ncols != (auto_ncols or 2) else None
     if not args.title and auto_title:
         args.title = auto_title
     if args.per_song:
@@ -636,7 +653,7 @@ def main():
     if args.pooled:
         pooled_mode = True
 
-    pooled = {}
+    pooled, null_level = {}, {}
     if pooled_mode:
         pc = args.pooled_csv or re.sub(r'_metrics\.csv$', '_pooled.csv',
                                        args.csv)
@@ -657,6 +674,17 @@ def main():
                 pooled[k] = {s_: r for s_, r in v.items()
                              if not s_.startswith('_')}
             print(f'[fmd] merged {fc}')
+        # The reference split-half null rides in the pooled CSV as a
+        # pseudo-system. It is a floor -- what a perfect system scores
+        # against half the corpus -- so it is drawn as a level on each
+        # panel, not as a column, and stripped from the system set.
+        null_level = {}
+        for k, v in list(pooled.items()):
+            for s_ in list(v):
+                if s_.startswith('_'):
+                    if s_ == '_null_ref_split':
+                        null_level[k] = v[s_][0]
+                    del v[s_]
         if 'fmd' in metrics and 'fmd' not in pooled:
             # Not scored yet. Drop the panel rather than draw a row of
             # placeholders: the sheet is complete without it, and a
@@ -664,11 +692,6 @@ def main():
             print(f'[warn] FMD not scored yet (no {fc}; eval_fmd.sbatch) '
                   '-- quality sheet drawn without it', file=sys.stderr)
             metrics = [m for m in metrics if m != 'fmd']
-            if args.ncols in (None, auto_ncols) and auto_ncols \
-                    and len(metrics) % auto_ncols:
-                # 5 panels in 2 columns leaves a hole and strands one
-                # column's names mid-figure; one column is clean.
-                args.ncols = 1
         # 1 = songs resampled, decodes held fixed; 2 = decodes resampled
         # too; one-per-song = decodes only. Two figures that differ only
         # in whisker length are otherwise indistinguishable, so the
@@ -701,6 +724,10 @@ def main():
               file=sys.stderr)
 
     n = len(metrics)
+    if user_ncols is None and n % args.ncols:
+        # A ragged grid leaves a hole and strands one column's system
+        # names mid-figure. Take the widest of 3 / 2 / 1 that fills it.
+        args.ncols = next(c for c in (3, 2, 1) if n % c == 0)
     ncols = max(1, min(args.ncols, n))
     nrows = math.ceil(n / ncols)
     fig, axgrid = plt.subplots(
@@ -717,7 +744,7 @@ def main():
         ax = axgrid[idx // ncols][idx % ncols]
         if pooled_mode:
             labels = draw_panel_pooled(ax, m, pooled, order, present,
-                                       title_chars)
+                                       title_chars, null=null_level.get(m))
         else:
             labels = draw_panel(ax, m, per_song, order, present, title_chars)
         used.append((idx // ncols, idx % ncols, ax))
@@ -796,6 +823,8 @@ def main():
                    markeredgewidth=1.0,
                    label=f'corpus-pooled JSD, weighted per '
                          f'{pooled_weight}'),
+            Line2D([0], [0], color=MUTED, lw=1.0, ls=(0, (1, 1.5)),
+                   label='noise floor: reference split-half null'),
             Line2D([0], [0], color=INK_2, lw=1.2,
                    label='95% bootstrap CI over ' + {
                        'songs': 'songs',
