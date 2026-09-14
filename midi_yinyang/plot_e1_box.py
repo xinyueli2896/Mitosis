@@ -42,7 +42,9 @@ import argparse
 import csv
 import math
 import os
+import re
 import sys
+import textwrap
 from collections import defaultdict
 
 import numpy as np
@@ -142,13 +144,11 @@ LABELS = {
     'pcs_delta':               'PCS $-$ ref.',
     'mctd_delta':              'MCTD $-$ ref.',
     'coupling_delta':          'Melody-chord coupling $-$ ref.',
-    'reuse_vs_prompt_a_delta': 'Prompt reuse, melody $-$ ref.',
-    'reuse_vs_prompt_b_delta': 'Prompt reuse, chord $-$ ref.',
-    'grid_jsd_vs_prompt_a_delta': 'Metric-position JSD vs prompt $-$ ref.',
-    'ioi_jsd_vs_prompt_a_delta':  'IOI JSD vs prompt $-$ ref.',
     'mel_interval_jsd':        'Melodic interval JSD',
     'voicing_jsd':             'Chord voicing JSD',
-    'ubr2_onset_b_delta':      'Unique beat ratio, chord $-$ ref.',
+    # The prompt-adherence and unique-beat-ratio families are labelled by
+    # label_for() from the metric name, so that 48 panels do not depend
+    # on 48 hand-kept entries staying consistent with one another.
     # H1 -- per-stream role and texture integrity
     'survival_min':            'Active-bar fraction (min of streams)',
     'survival_a':              'Active-bar fraction, melody',
@@ -173,6 +173,71 @@ LABELS = {
     'dur_contrast_delta':      'Duration contrast $-$ ref.',
     'density_contrast_delta':  'Density contrast $-$ ref.',
 }
+
+
+# The four sheets the paper wants, named for what they ask rather than
+# for the hypothesis letter they came from. Each is (metrics, default
+# ncols, title); NCOLS on the command line overrides the default, which
+# is set from the panel count -- a 32-panel sheet two columns wide is
+# two feet tall.
+#
+# 'quality' is H3 minus mel_stepwise_delta: the three divergences named
+# for the figure, per stream where the metric has one. Add
+# mel_stepwise_delta to the list if the melody-shape check belongs here
+# too.
+def _block(name, drop_ref=True):
+    from eval_metrics import H_GROUPS
+    out = list(H_GROUPS[name])
+    if drop_ref:
+        out = [m for m in out
+               if not m.endswith('_ref') and not m.startswith('prompt_onsets')]
+    return out
+
+
+def presets():
+    return {
+        'quality': (['harmonic_rhythm_jsd',
+                     'onset_grid_jsd_a', 'onset_grid_jsd_b',
+                     'duration_jsd_a', 'duration_jsd_b'],
+                    # One column: five panels in two leaves a hole in the
+                    # grid, and the column above it ends early, so its
+                    # system names land halfway up the figure.
+                    1, 'General quality: distribution match to the reference'),
+        'fit': (_block('H2'), 2, 'Melody-chord fit'),
+        'repetition': (_block('R'), 2, 'Repetition and structuredness'),
+        'prompt': (_block('P'), 4, 'Prompt adherence'),
+    }
+
+
+# Generated labels for the two big families, so 48 panels do not need 48
+# dictionary entries kept in sync by hand.
+_STREAM = {'a': 'melody', 'b': 'chord'}
+_PROMPT_STAT = {
+    'reuse':        'Prompt reuse',
+    'rhythm_reuse': 'Rhythm-figure reuse',
+    'pc_jsd':       'Pitch-class JSD vs prompt',
+    'grid_jsd':     'Metrical-position JSD vs prompt',
+    'ioi_jsd':      'Inter-onset JSD vs prompt',
+    'dur_jsd':      'Duration JSD vs prompt',
+    'density':      'Onset-rate over prompt',
+    'register':     'Register shift vs prompt (semitones)',
+}
+
+
+def label_for(metric):
+    if metric in LABELS:
+        return LABELS[metric]
+    base, delta = metric, ''
+    if base.endswith('_delta'):
+        base, delta = base[:-6], ' $-$ ref.'
+    m = re.match(r'ubr(\d)_(onset|state)_([ab])$', base)
+    if m:
+        n, mode, st = m.groups()
+        return f'Unique beat ratio, {n}-beat {mode}, {_STREAM[st]}{delta}'
+    m = re.match(r'(.+)_vs_prompt_([ab])$', base)
+    if m and m.group(1) in _PROMPT_STAT:
+        return f'{_PROMPT_STAT[m.group(1)]}, {_STREAM[m.group(2)]}{delta}'
+    return metric
 
 
 def ref_level(metric):
@@ -243,7 +308,7 @@ def best_ranked(metric, per_song, order, present):
     return sysname, disp, family, m
 
 
-def draw_panel(ax, metric, per_song, order, present):
+def draw_panel(ax, metric, per_song, order, present, title_chars=0):
     ref = ref_level(metric)
     positions, data, colors, labels = [], [], [], []
     missing = []
@@ -335,7 +400,14 @@ def draw_panel(ax, metric, per_song, order, present):
         ax.text(i, lo + 0.5 * (hi - lo), 'pending', rotation=90,
                 ha='center', va='center', fontsize=6.5, color=MUTED)
 
-    ax.set_ylabel(LABELS.get(metric, metric), fontsize=7.5, color=INK)
+    # In a narrow grid the metric name goes ABOVE the panel, wrapped:
+    # rotated y-axis text cannot fit a 1.75in column and runs into the
+    # neighbouring panel. Horizontal text has the whole panel width.
+    if title_chars:
+        ax.set_title('\n'.join(textwrap.wrap(label_for(metric), title_chars)),
+                     fontsize=6.4, color=INK, pad=3)
+    else:
+        ax.set_ylabel(label_for(metric), fontsize=7.0, color=INK)
     ax.set_xlim(-0.7, len(order) - 0.3)
     ax.tick_params(axis='y', labelsize=6.5, colors=INK_2, length=2)
     ax.tick_params(axis='x', length=0)
@@ -356,9 +428,12 @@ def main():
     p.add_argument('--out', required=True, help='output path WITHOUT extension')
     p.add_argument('--metrics', default=','.join(DEFAULT_METRICS))
     p.add_argument('--block', default='',
-                   help='hypothesis block (H1/H2/H3/P/S/R): plots every '
-                        'metric in it, overriding --metrics')
-    p.add_argument('--ncols', type=int, default=2)
+                   help='what to plot, overriding --metrics: a preset '
+                        '(quality/fit/repetition/prompt) or a raw '
+                        'hypothesis block (H1/H2/H3/P/S/R)')
+    p.add_argument('--ncols', type=int, default=None,
+                   help='panels per row; default is the '
+                        "preset's, else 2")
     p.add_argument('--deltas-only', action='store_true',
                    help='keep only the _delta panels of a block. P and R '
                         'carry a raw value and a delta for every '
@@ -370,26 +445,32 @@ def main():
     p.add_argument('--title', default='')
     args = p.parse_args()
 
+    auto_ncols, auto_title = None, ''
     if args.block:
         from eval_metrics import H_GROUPS
-        if args.block not in H_GROUPS:
-            raise SystemExit(f'unknown block {args.block}; '
-                             f'have {" ".join(H_GROUPS)}')
-        # `_ref` columns are the reference pair's own statistic, copied
-        # into every system's row: identical across columns by
-        # construction, so a box plot of one is the same box drawn nine
-        # times. The paired `_delta` carries the same information
-        # against the reference, which is what the panels show.
-        # prompt_onsets_* goes too: it is a guard on the INPUT -- it
-        # says whether a system was given a prompt at all -- not a
-        # score, and it is near-identical across systems by design.
-        metrics = [m for m in H_GROUPS[args.block]
-                   if not m.endswith('_ref')
-                   and not m.startswith('prompt_onsets')]
+        pre = presets()
+        if args.block in pre:
+            metrics, auto_ncols, auto_title = pre[args.block]
+        elif args.block in H_GROUPS:
+            # raw hypothesis block. `_ref` columns hold the reference
+            # pair's own statistic, copied into every system's row:
+            # identical across columns by construction, so a box plot of
+            # one is the same box drawn nine times. prompt_onsets_* goes
+            # too -- a guard on the INPUT, not a score.
+            metrics = _block(args.block)
+        else:
+            raise SystemExit(
+                f'unknown block {args.block}; presets: {" ".join(pre)}; '
+                f'raw blocks: {" ".join(H_GROUPS)}')
         if args.deltas_only:
             metrics = [m for m in metrics if m.endswith('_delta')]
     else:
         metrics = [m.strip() for m in args.metrics.split(',') if m.strip()]
+    if args.ncols is None:
+        args.ncols = auto_ncols or 2
+    if not args.title and auto_title:
+        args.title = auto_title
+
     per_song = read_per_song(args.csv, metrics)
 
     present = set()
@@ -416,11 +497,13 @@ def main():
                  + (2.9 if ncols > 1 else 1.6)))
     fig.patch.set_facecolor(SURFACE)
 
+    # ~12 characters per inch at 6.4pt; 0 means "use the y-axis label".
+    title_chars = int(args.width / ncols * 12) if ncols > 1 else 0
     labels = None
     used = []
     for idx, m in enumerate(metrics):
         ax = axgrid[idx // ncols][idx % ncols]
-        labels = draw_panel(ax, m, per_song, order, present)
+        labels = draw_panel(ax, m, per_song, order, present, title_chars)
         used.append((idx // ncols, idx % ncols, ax))
     for r in range(nrows):
         for c in range(ncols):

@@ -14,9 +14,14 @@
 #             (default results/E1_p96_v5b93_metrics.csv)
 #   OUT       output path WITHOUT extension; writes .pdf and .png
 #             (default: the CSV path with _metrics.csv -> _box)
-#   BLOCKS    hypothesis blocks to draw, one figure each, suffixed
-#             _<block> on OUT. Default "H3 H2 H1". Empty falls back to
-#             METRICS in a single figure.
+#   BLOCKS    what to draw, one figure each, suffixed _<block> on OUT.
+#             Default is the four paper sheets:
+#               quality     harmonic-rhythm, onset-grid and duration JSD
+#               fit         every melody-chord fit metric (H2)
+#               repetition  unique beat ratio, i.e. structuredness (R)
+#               prompt      every prompt-adherence metric (P)
+#             A raw hypothesis block (H1/H2/H3/P/S/R) also works.
+#             Empty falls back to METRICS in a single figure.
 #             H1 IS ONLY IN THE CSV IF THE RUN WAS SCORED AFTER H1 WENT
 #             BACK INTO CSV_GROUPS -- an older CSV has no survival or
 #             empty_rate columns and the H1 figure comes out all
@@ -28,7 +33,8 @@
 #             carry a raw value and a delta per statistic and only the
 #             delta has a reference level, so a P sheet goes from 32
 #             panels to 16 without losing a readable comparison.
-#   NCOLS     panels per row (default 2). At 1 the system names are
+#   NCOLS     panels per row. Default is the preset's own (4 for the
+#             32-panel prompt sheet, 2 elsewhere). At 1 the names are
 #             horizontal and two-line with family brackets under the
 #             axis; above 1 they turn vertical and the families move
 #             into the legend, which is the only way nine of them fit.
@@ -43,9 +49,9 @@
 # METRICS=onset_grid_jsd_b,duration_jsd_b,voicing_jsd,OUT=results/E1_chord_box \
 #       midi_yinyang/plot_e1_box.sbatch
 #
-#   # prompt adherence (P), deltas only -- 16 panels instead of 32:
+#   # just the prompt sheet, deltas only -- 16 panels instead of 32:
 #   sbatch --export=ALL,CSV=results/E1_p96_v5b93_metrics.csv,\
-# BLOCKS=P,DELTAS_ONLY=1 midi_yinyang/plot_e1_box.sbatch
+# BLOCKS=prompt,DELTAS_ONLY=1 midi_yinyang/plot_e1_box.sbatch
 
 #SBATCH --job-name=plot_e1_box
 #SBATCH --output=/home/xinyue.li/logs/%x_%j.out
@@ -71,9 +77,9 @@ mkdir -p /home/xinyue.li/logs
 CSV="${CSV:-results/E1_p96_v5b93_metrics.csv}"
 [[ -f "$CSV" ]] || { echo "ERROR: no $CSV -- run score_e1.sbatch first"; exit 1; }
 OUT="${OUT:-${CSV%_metrics.csv}_box}"
-BLOCKS="${BLOCKS-H3 H2 H1}"
+BLOCKS="${BLOCKS-quality fit repetition prompt}"
 METRICS="${METRICS:-}"
-NCOLS="${NCOLS:-2}"
+NCOLS="${NCOLS:-}"
 DELTAS_ONLY="${DELTAS_ONLY:-0}"
 WIDTH="${WIDTH:-7.0}"
 TITLE="${TITLE:-}"
@@ -88,20 +94,20 @@ echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "CSV   : $CSV"
 echo "OUT   : $OUT[_<block>].{pdf,png}"
 echo "BLOCKS: ${BLOCKS:-<none: single figure from METRICS>}"
-echo "NCOLS : $NCOLS   DELTAS_ONLY=$DELTAS_ONLY"
+echo "NCOLS : ${NCOLS:-<per preset>}   DELTAS_ONLY=$DELTAS_ONLY"
 echo "================================================================"
 
 if [[ -n "${BLOCKS// /}" ]]; then
     for b in $BLOCKS; do
         echo "--- $b ---"
         python plot_e1_box.py --csv "$CSV" --out "${OUT}_${b}" \
-            --block "$b" --ncols "$NCOLS" --width "$WIDTH" \
+            --block "$b" ${NCOLS:+--ncols "$NCOLS"} --width "$WIDTH" \
             $([[ "$DELTAS_ONLY" == "1" ]] && echo --deltas-only) \
             ${TITLE:+--title "$TITLE"}
     done
 else
     python plot_e1_box.py --csv "$CSV" --out "$OUT" --width "$WIDTH" \
-        --ncols "$NCOLS" ${METRICS:+--metrics "$METRICS"} \
+        ${NCOLS:+--ncols "$NCOLS"} ${METRICS:+--metrics "$METRICS"} \
         ${TITLE:+--title "$TITLE"}
 fi
 
