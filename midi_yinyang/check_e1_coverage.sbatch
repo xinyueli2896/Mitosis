@@ -197,6 +197,20 @@ else
     echo "arm runs with --skip-existing and a complete system is skipped,"
     echo "so finished work is not redone. Why a system produced nothing"
     echo "is in $OUT_ROOT/genlogs/<system>.log."
+    # ... except the cascade arms, where that advice costs 95 songs of
+    # GPU to recover a handful: only their stage A skips existing, so a
+    # plain resubmit redoes the YinYang decode for the whole corpus.
+    for name in $incomplete; do
+        case "$name" in P-mc|P-cm)
+            echo
+            echo "P-mc/P-cm are the exception: only their stage A skips"
+            echo "existing, so resubmitting redoes the YinYang decode for"
+            echo "all $N_EVAL songs. Refill just the short ones with"
+            echo "  sbatch --export=ALL,E1_ROOT=$OUT_ROOT,PIPELINE=$name \\"
+            echo "      midi_yinyang/fill_pipeline_gaps.sbatch"
+            break ;;
+        esac
+    done
     echo
     echo "A song listed at the full N_SAMPLES but audibly truncated was"
     echo "counted by filename, not by content: delete that song's folder"
