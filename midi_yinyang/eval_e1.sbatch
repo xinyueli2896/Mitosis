@@ -377,28 +377,30 @@ N_EVAL=$(ls "$EVAL_MEL" | wc -l)
     echo "ERROR: melody/chord split sizes differ; scoring pairs by filename"; exit 1; }
 SONG_IDS=$(ls "$EVAL_MEL" | sed 's/\.[Mm][Ii][Dd]$//' | sort | tr '\n' ' ')
 # EXCLUDE_SONGS: songs dropped from generation AND scoring. The default
-# is not a tuning knob -- it records a decision about the PROMPTS, made
-# from diagnose_prompt_window.sbatch before any result was looked at:
+# is not a tuning knob -- it records ONE criterion applied to the
+# PROMPTS, from diagnose_prompt_window.sbatch, before any result was
+# looked at:
 #
-#   786  chord stream silent for the whole 6-bar window (383 notes in
-#        the file, first onset at frame 96, the first frame of the
-#        continuation)
+#   the conditioning stream must sound inside the prompt window.
 #
-# A song whose conditioning stream is silent in the prompt is a task no
-# system was given the material for. Every arm was prompted with an
-# empty chord stream there; a co-generation model invents chords anyway
-# and a cascade cannot, its conditional stage needing a chord track to
-# exist at all. The P block is worse off still: prompt_onsets_b is 0, so
-# reuse_vs_prompt_b is NaN while density_vs_prompt_b is 0.0, which reads
-# as a system that followed nothing rather than as a prompt that asked
-# nothing.
+# Two songs fail it, both in the chord stream, which holds plenty of
+# notes but none before the continuation begins:
 #
-# 506 HAS THE SAME DEFECT and is not in this list (its chord enters at
-# frame 136, further past the window than 786's). It is excluded from
-# the criterion, not by it -- so P-mc stays short by that one song and
-# the table pairs on complete cases. Add it here to apply the criterion
-# evenly. Pass EXCLUDE_SONGS="" to score everything.
-EXCLUDE_SONGS="${EXCLUDE_SONGS-786}"
+#   506  489 chord notes, first onset frame 136
+#   786  383 chord notes, first onset frame  96   (window is 0..95)
+#
+# Such a song is a task no system was given the material for. Every arm
+# was prompted with an empty chord stream there; a co-generation model
+# invents chords anyway and a cascade cannot, its conditional stage
+# needing a chord track to exist at all -- which is how P-mc lost these
+# two and only these two. The P block is worse off still: prompt_onsets_b
+# is 0, so reuse_vs_prompt_b is NaN while density_vs_prompt_b is 0.0,
+# reading as a system that followed nothing rather than a prompt that
+# asked nothing.
+#
+# Quote the criterion in the paper, not the song list. Pass
+# EXCLUDE_SONGS="" to score everything.
+EXCLUDE_SONGS="${EXCLUDE_SONGS-506 786}"
 if [[ -n "${EXCLUDE_SONGS// /}" ]]; then
     _kept=""
     for _s in $SONG_IDS; do

@@ -91,7 +91,7 @@ SONG_IDS=$(ls "$PROMPT_MEL" | sed 's/\.[Mm][Ii][Dd]$//' | sort)
 # Same default as eval_e1.sbatch, and it has to BE the same: a coverage
 # report against a wider song list than the one scoring uses reports
 # gaps nobody intends to fill.
-EXCLUDE_SONGS="${EXCLUDE_SONGS-786}"
+EXCLUDE_SONGS="${EXCLUDE_SONGS-506 786}"
 if [[ -n "${EXCLUDE_SONGS// /}" ]]; then
     kept=""
     for s in $SONG_IDS; do
