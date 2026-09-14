@@ -1034,7 +1034,7 @@ def _jsd_rows(P, Q):
     return 0.5 * (kp + kq)
 
 
-def _pooled_ci(G, R, n_boot=2000, seed=0):
+def _pooled_ci(G, R, n_boot=2000, seed=0, per_sample=None):
     """Percentile CI for the pooled JSD, resampling SONGS.
 
     G, R are (n_songs, n_bins) count matrices. The song is the unit of
@@ -1054,7 +1054,29 @@ def _pooled_ci(G, R, n_boot=2000, seed=0):
         return float('nan'), float('nan'), float('nan')
     rng = np.random.default_rng(seed)
     w = rng.multinomial(n, np.full(n, 1.0 / n), size=n_boot).astype(float)
-    vals = _jsd_rows(w @ G, w @ R)
+    if per_sample is None:
+        vals = _jsd_rows(w @ G, w @ R)
+    else:
+        # Two-level (cluster) bootstrap: resample SONGS, then resample
+        # each drawn song's SAMPLES with replacement. The one-level
+        # version holds a song's three decodes fixed, so its interval
+        # covers "would this hold on other songs" but not "would this
+        # hold on another decode". This covers both, and is wider.
+        # The reference is redrawn on the same song indices either way:
+        # holding it at the full corpus would compare two different song
+        # sets and add divergence from song composition alone.
+        idx = rng.integers(0, n, size=(n_boot, n))
+        Gb = np.empty((n_boot, G.shape[1]))
+        for b in range(n_boot):
+            acc = np.zeros(G.shape[1])
+            for i in idx[b]:
+                v = per_sample[i]
+                k = len(v)
+                pick = rng.integers(0, k, size=k)
+                acc += np.sum([v[j] for j in pick], axis=0)
+            Gb[b] = acc
+        Rb = np.stack([R[idx[b]].sum(axis=0) for b in range(n_boot)])
+        vals = _jsd_rows(Gb, Rb)
     lo, hi = np.percentile(vals, [2.5, 97.5])
     # The bootstrap SE is the spread of the replicates. It is reported
     # for a table that wants a +- column, but the percentile interval is
@@ -1063,7 +1085,7 @@ def _pooled_ci(G, R, n_boot=2000, seed=0):
     return float(lo), float(hi), float(vals.std(ddof=1))
 
 
-def pooled_summary(rows, task, n_boot=2000, out_csv=None):
+def pooled_summary(rows, task, n_boot=2000, out_csv=None, two_level=False):
     """One histogram per system over the whole corpus, with a song
     bootstrap. Samples of a song are summed into that song's counts."""
     keys = [k for k in POOLED_BINS
@@ -1082,8 +1104,12 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None):
                 # the reference is the same file for every sample of a
                 # song, so it is taken once; only the generated side
                 # accumulates across samples.
-                by_song[song] = [np.zeros_like(g), np.asarray(ref, float)]
-            by_song[song][0] += g
+                by_song[song] = [[], np.asarray(ref, float)]
+            # per-SAMPLE vectors, not a running sum: a two-level
+            # bootstrap has to be able to redraw the samples of a song,
+            # and a sum has already thrown that away. The point estimate
+            # sums them back, so it is unchanged.
+            by_song[song][0].append(np.asarray(g, float))
     if not acc:
         return
     systems = sorted(acc)
@@ -1110,8 +1136,8 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None):
         for sysname in systems:
             by_song = acc[sysname].get(k, {})
             songs = [s for s, (g, r) in by_song.items()
-                     if g.sum() > 0 and r.sum() > 0]
-            n_obs = int(sum(by_song[s][0].sum() for s in songs))
+                     if sum(v.sum() for v in g) > 0 and r.sum() > 0]
+            n_obs = int(sum(v.sum() for s in songs for v in by_song[s][0]))
             rec = dict(metric=k, system=sysname, jsd=float('nan'),
                        ci_lo=float('nan'), ci_hi=float('nan'),
                        boot_se=float('nan'),
@@ -1120,11 +1146,12 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None):
             if not songs:
                 line += '--'.ljust(width)
                 continue
-            G = np.stack([by_song[s][0] for s in songs])
+            Gs = [by_song[s][0] for s in songs]
+            G = np.stack([np.sum(v, axis=0) for v in Gs])
             R = np.stack([by_song[s][1] for s in songs])
             rec['jsd'] = jsd(G.sum(axis=0), R.sum(axis=0))
             rec['ci_lo'], rec['ci_hi'], rec['boot_se'] = _pooled_ci(
-                G, R, n_boot=n_boot)
+                G, R, n_boot=n_boot, per_sample=Gs if two_level else None)
             cell = f'{rec["jsd"]:.3f}' if math.isnan(rec['ci_lo']) \
                 else f'{rec["jsd"]:.3f} [{rec["ci_lo"]:.3f},{rec["ci_hi"]:.3f}]'
             line += cell.ljust(width)
@@ -1279,6 +1306,13 @@ def main():
                    help='CSV for the corpus-pooled JSD table: one row per '
                         '(metric, system) with the pooled value, its '
                         'bootstrap interval, and the counts behind it.')
+    p.add_argument('--pooled-two-level', action='store_true',
+                   help='bootstrap the SAMPLES within each drawn song as '
+                        'well as the songs. The default one-level version '
+                        'holds a song\'s decodes fixed, so its interval '
+                        'covers other songs but not another decode; this '
+                        'covers both and is wider. Slower: it cannot be '
+                        'done as one matrix product.')
     p.add_argument('--pooled-boot', type=int, default=2000,
                    help='bootstrap replicates for the corpus-pooled JSD '
                         'table, resampling SONGS. 0 prints the pooled '
@@ -1331,7 +1365,7 @@ def main():
 
     summarize(rows, args.task, baseline=args.baseline)
     pooled_summary(rows, args.task, n_boot=args.pooled_boot,
-                   out_csv=args.pooled_out)
+                   out_csv=args.pooled_out, two_level=args.pooled_two_level)
 
 
 if __name__ == '__main__':

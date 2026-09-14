@@ -109,6 +109,12 @@
 #   BASELINE       system the paired table tests against (default A3)
 #   MEL_FOLDER / CHORD_FOLDER   default input/pop909_split/{melody,chord}
 #   OUT_ROOT       default temp/E1
+#   POOLED_TWO_LEVEL=1  bootstrap the SAMPLES within each drawn song as
+#                  well as the songs, for the corpus-pooled JSD. The
+#                  default resamples songs only, so the interval covers
+#                  "would this hold on other songs" but not "would this
+#                  hold on another decode". Two-level covers both and is
+#                  wider; the point estimate is identical either way.
 #   RESULT_TAG     extra suffix on the result files
 #   SKIP_INFER=1   score only, generate nothing (no GPU needed: submit
 #                  through score_e1.sbatch, a CPU wrapper that forces it)
@@ -717,7 +723,8 @@ python eval_metrics.py --task melchord \
     --manifest "$MANIFEST" \
     --ref-a-dir "$EVAL_MEL" --ref-b-dir "$EVAL_CHORD" \
     --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
-    --out "$METRICS" --pooled-out "$POOLED"
+    --out "$METRICS" --pooled-out "$POOLED" \
+    $([[ "${POOLED_TWO_LEVEL:-0}" == "1" ]] && echo --pooled-two-level)
 
 if [[ " ${SCORED[*]} " != *" $BASELINE "* ]]; then
     echo "WARNING: BASELINE=$BASELINE was not scored; using ${SCORED[0]} for the paired table"
