@@ -8,7 +8,9 @@ WHAT THE MARKS MEAN, because a box plot of a distance metric is easy to
 misread:
 
   box      quartiles of the PER-SONG values, with the median as a pale
-           line. Samples of a song are averaged first -- three samples
+           line; whiskers at the 5th and 95th percentiles, so the axis
+           is set by the bulk of the songs rather than the extreme
+           tails. Samples of a song are averaged first -- three samples
            of one song share a prompt and a reference, so treating them
            as three observations understates the spread by sqrt(3).
   stick    the MEAN and its 95% confidence interval, drawn dark over the
@@ -407,7 +409,7 @@ def draw_panel_pooled(ax, metric, pooled, order, present, title_chars=0,
                    lw=1.4, zorder=2)
 
     lo_y, hi_y = ax.get_ylim()
-    hi_y = hi_y + 0.17 * (hi_y - lo_y)
+    hi_y = hi_y + 0.12 * (hi_y - lo_y)
     lo_y = min(lo_y, -0.02 * (hi_y - lo_y))
     ax.set_ylim(lo_y, hi_y)
     if ranked_best is not None:
@@ -515,6 +517,12 @@ def draw_panel(ax, metric, per_song, order, present, title_chars=0):
         # own mark, which cannot distort the distribution it sits on.
         bp = ax.boxplot(
             data, positions=positions, widths=0.52,
+            # whiskers at the 5th and 95th percentiles rather than
+            # 1.5 IQR: the tails were setting the axis while the boxes
+            # and CI sticks -- where systems differ -- sat in the
+            # middle third of the panel. Still a real spread, ~40%
+            # shorter, and the axis follows the comparison.
+            whis=(5, 95),
             notch=False, showfliers=False, showcaps=False,
             patch_artist=True, zorder=3,
             medianprops=dict(color=SURFACE, lw=1.4),
@@ -545,7 +553,7 @@ def draw_panel(ax, metric, per_song, order, present, title_chars=0):
     # against the limits: the placeholders span the full height, so they
     # have to be drawn against the FINAL ylim or they stop short.
     lo, hi = ax.get_ylim()
-    hi = hi + 0.17 * (hi - lo)
+    hi = hi + 0.12 * (hi - lo)
     ax.set_ylim(lo, hi)
 
     if best is not None:
@@ -854,7 +862,8 @@ def main():
     else:
         handles += [
             Line2D([0], [0], color=INK_2, lw=6, alpha=0.35,
-                   label='box: quartiles over songs (line: median)'),
+                   label='box: quartiles over songs (line: median; '
+                         'whiskers: 5th-95th pct.)'),
             Line2D([0], [0], color=INK, lw=1.6, marker='o', markersize=3.2,
                    markerfacecolor=SURFACE, markeredgecolor=INK,
                    markeredgewidth=1.0, label='mean and its 95% CI'),
