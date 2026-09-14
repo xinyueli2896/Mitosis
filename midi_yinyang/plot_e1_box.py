@@ -98,29 +98,18 @@ GROUPS = [
     ]),
 ]
 
-# Soft pastel palette on pure white, one colour per SYSTEM, in hue
-# families so the family still reads at a glance: ours in the rose/coral
-# range, internal baselines in turquoise/teal/sage, external baselines
-# in chartreuse and lavender, the unranked column in warm grey. Every
-# column is directly labelled besides, so the colour is recognition, not
-# the only key.
-SYSTEM_COLOR = {
-    'A1':        '#f0a3ba',   # blush pink
-    'A3':        '#cd7b96',   # dusty rose
-    'A3ctcaT':   '#e98b77',   # muted coral
-    'S-scratch': '#57c3bf',   # turquoise
-    'P-mc':      '#3b93b1',   # teal blue
-    'P-cm':      '#8ab994',   # sage green
-    'WSf':       '#c2ca55',   # pale chartreuse
-    'AMT':       '#a894d3',   # lavender
-    'S1':        '#a7a199',   # warm grey
-}
-# The family's lead colour: brackets under the axis and the legend swatch.
+# Soft pastel palette on pure white. Colour carries FAMILY, not system:
+# the family is the comparison the figure is making, and every column
+# is directly labelled besides. Ours in blush pink, internal baselines
+# in turquoise, external baselines in muted coral, the unranked column
+# in warm grey. A per-system override can go in SYSTEM_COLOR; it is
+# empty by request.
+SYSTEM_COLOR = {}
 FAMILY_COLOR = {
-    'Ours':                '#cd7b96',
-    'Internal baselines':  '#3b93b1',
-    'External baselines':  '#a894d3',
-    'Not ranked':          '#a7a199',
+    'Ours':                '#ec9db5',   # blush pink
+    'Internal baselines':  '#4fbfbb',   # turquoise
+    'External baselines':  '#e98b77',   # muted coral
+    'Not ranked':          '#a7a199',   # warm grey
 }
 
 
@@ -962,14 +951,17 @@ def main():
             label=f'{word} of ' + ', '.join(unranked)))
     labels_ = [h.get_label() for h in handles]
     if compact:
-        # one legend entry per family, its swatch made of the members'
-        # own colours side by side -- colour is per system, so a single
-        # family swatch would match none of the columns exactly
+        # one legend entry per family. If members carry their own
+        # colours (SYSTEM_COLOR) the swatch is those side by side;
+        # otherwise a single swatch in the family colour.
         for f, left, right in edges:
-            sw = tuple(Line2D([0], [0], color=color_of(s, f), lw=6,
-                              alpha=0.85)
-                       for s, _d, _sh, _g, _r in order[left:right + 1])
-            handles.append(sw)
+            cols = []
+            for s, _d, _sh, _g, _r in order[left:right + 1]:
+                if color_of(s, f) not in cols:
+                    cols.append(color_of(s, f))
+            sw = tuple(Line2D([0], [0], color=c, lw=6, alpha=0.85)
+                       for c in cols)
+            handles.append(sw[0] if len(sw) == 1 else sw)
             labels_.append(f)
     fig.legend(handles=handles, labels=labels_, loc='lower center',
                ncol=3 if compact else 2, frameon=False,
