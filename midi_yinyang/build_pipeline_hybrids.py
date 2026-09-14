@@ -70,6 +70,7 @@ def build(args):
     os.makedirs(args.out, exist_ok=True)
     n = 0
     missing = []
+    empty_partner = []
     for f in files:
         m = CONT_RE.match(os.path.basename(f))
         if not m or float(m.group('temp')) != args.temperature:
@@ -133,6 +134,24 @@ def build(args):
                 start=f0 * out_step, end=max(f1, f0 + 1) * out_step,
             ))
 
+        # An empty partner track cannot be written usefully: pretty_midi
+        # only materialises an instrument on READ-BACK once it holds a
+        # note, so a hybrid whose conditioning track has none comes back
+        # as a one-instrument file, and stage C -- which asks for
+        # track-1 by name -- gets None and dies on
+        # "'NoneType' object is not subscriptable" two stages from the
+        # cause. Refuse it here, where the song and the window are still
+        # in hand. Skipping rather than aborting: one bad song must not
+        # cost the other 94 their decode.
+        if not partner_inst.notes:
+            print(f'[skip] {song}: no partner note starts in the first '
+                  f'{args.prompt_frames} frames of {partner} '
+                  f'({len(_all_notes(part_pm))} notes in the file), so the '
+                  f'conditioning track would be empty and stage C cannot '
+                  f'read it')
+            empty_partner.append(song)
+            continue
+
         out_pm = pretty_midi.PrettyMIDI(initial_tempo=OUT_BPM)
         # Nottingham convention: track 0 = melody, track 1 = chord.
         if args.generated_role == 'mel':
@@ -142,6 +161,15 @@ def build(args):
         out_pm.write(os.path.join(args.out, f'{song}__s{idx}.mid'))
         n += 1
     print(f'built {n} hybrid file(s) -> {args.out}')
+    if empty_partner:
+        uniq = sorted(set(empty_partner))
+        print(f'[warn] {len(uniq)} song(s) had an empty conditioning '
+              f'window and were skipped: {" ".join(uniq)}')
+        print('       Their prompt holds no note of the conditioning '
+              'stream in the scored window, so there is nothing for the '
+              'conditional stage to condition ON. Check the staged '
+              'prompt with diagnose_prompt_window.sbatch before assuming '
+              'the model failed.')
     if n == 0:
         have = sorted(os.path.basename(p) for p in
                       glob(os.path.join(args.partner_folder, '*.mid')))[:5]
