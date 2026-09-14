@@ -73,10 +73,30 @@ All metrics are computed on the CONTINUATION only (frames
 grid derived from the file's tempo (beat_div=4, 16 frames/bar).
 
 Every JSD is reported twice. The per-song table averages a song's
-samples, then takes mean +- std over songs; the CORPUS-POOLED table
-(--pooled-out, --pooled-boot) sums the per-song histograms into one
-histogram per system and brackets it with a percentile bootstrap over
-songs. The two differ substantially and on purpose: a per-song
+samples, then takes mean +- std over songs. The CORPUS-POOLED table
+(--pooled-out, --pooled-boot) is defined as:
+
+  1. bin each midi on the metric's shared bins; normalise every
+     histogram to sum 1 -- the reference h_i, and each generated
+     g_i1..g_iK separately
+  2. P = mean_i h_i ,  Q = mean_i ( mean_j g_ij )
+     so every SONG weighs the same, and within a song every DECODE
+     weighs the same. "Pooled" here means averaging normalised
+     histograms, NOT pooling raw event counts: raw counts would let a
+     long song, or a dense decode, outweigh a short or sparse one.
+     --pooled-weight note restores count pooling.
+  3. D = JSD(P, Q), base 2, so D is in [0,1]. One corpus-level
+     comparison, not an average of per-song divergences.
+  4. for B replicates: draw N song indices with replacement; take each
+     drawn song's reference AND all its decodes, twice if drawn twice;
+     recompute P, Q, D
+  5. report D itself with the [2.5, 97.5] percentiles of D^(b) -- not
+     the bootstrap mean, which sits above D near the floor because JSD
+     cannot go below 0 and any perturbation only raises it
+
+The interval covers uncertainty from WHICH SONGS were sampled, holding
+their observed decodes; --pooled-boot-mode adds or substitutes decode
+resampling. The two differ substantially and on purpose: a per-song
 histogram holds ~100 onsets, where the JSD estimator carries an upward
 bias of ~0.06 at 16 bins even between identical distributions, and the
 bias grows as a stream thins, so a sparse stream is charged for being
@@ -1034,6 +1054,30 @@ def _jsd_rows(P, Q):
     return 0.5 * (kp + kq)
 
 
+def _norm1(v):
+    """One histogram, normalised to sum 1; an empty one stays empty."""
+    t = float(np.sum(v))
+    return np.asarray(v, float) / t if t > 0 else np.zeros(len(v), float)
+
+
+def _song_vector(sample_vecs, by_song):
+    """One song's generated histogram from its per-sample count vectors.
+
+    by_song=True is the equal-weight construction: normalise EACH
+    sample, then average the non-empty ones, so a song contributes one
+    unit of probability and each of its decodes contributes equally
+    within that. Summing raw counts instead would let a dense decode
+    outweigh a sparse one inside the same song, which is the per-song
+    weighting mistake one level down.
+    """
+    if not by_song:
+        return np.sum(sample_vecs, axis=0)
+    ns = [_norm1(v) for v in sample_vecs if float(np.sum(v)) > 0]
+    if not ns:
+        return np.zeros(len(sample_vecs[0]), float)
+    return np.mean(ns, axis=0)
+
+
 def _norm_songs(M):
     """Row-normalise: each song contributes one unit of probability."""
     t = M.sum(axis=1, keepdims=True)
@@ -1074,12 +1118,7 @@ def _pooled_ci(G, R, n_boot=2000, seed=0, per_sample=None, by_song=True,
         for b in range(n_boot):
             acc = np.zeros(G.shape[1])
             for v in per_sample:
-                song = np.asarray(v[rng.integers(0, len(v))], float)
-                if by_song:
-                    t = song.sum()
-                    if t > 0:
-                        song = song / t
-                acc += song
+                acc += _song_vector([v[rng.integers(0, len(v))]], by_song)
             Gb[b] = acc
         vals = _jsd_rows(Gb, np.repeat(rbase[None, :], n_boot, axis=0))
     elif per_sample is None:
@@ -1101,12 +1140,7 @@ def _pooled_ci(G, R, n_boot=2000, seed=0, per_sample=None, by_song=True,
                 v = per_sample[i]
                 k = len(v)
                 pick = rng.integers(0, k, size=k)
-                song = np.sum([v[j] for j in pick], axis=0)
-                if by_song:
-                    t = song.sum()
-                    if t > 0:
-                        song = song / t
-                acc += song
+                acc += _song_vector([v[j] for j in pick], by_song)
             Gb[b] = acc
         Rw2 = _norm_songs(R) if by_song else R
         Rb = np.stack([Rw2[idx[b]].sum(axis=0) for b in range(n_boot)])
@@ -1188,6 +1222,7 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None,
             songs = [s for s, (g, r) in by_song.items()
                      if sum(v.sum() for v in g) > 0 and r.sum() > 0]
             n_obs = int(sum(v.sum() for s in songs for v in by_song[s][0]))
+            G = np.stack([np.sum(by_song[s][0], axis=0) for s in songs])
             rec = dict(metric=k, system=sysname, jsd=float('nan'),
                        ci_lo=float('nan'), ci_hi=float('nan'),
                        boot_se=float('nan'),
@@ -1198,7 +1233,6 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None,
                 line += '--'.ljust(width)
                 continue
             Gs = [by_song[s][0] for s in songs]
-            G = np.stack([np.sum(v, axis=0) for v in Gs])
             R = np.stack([by_song[s][1] for s in songs])
             # weight='song': each song contributes one unit of
             # probability, whatever its note count. Summing raw counts
@@ -1207,7 +1241,7 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None,
             # -- and contradicts the song-as-unit rule the per-song
             # table, the paired test and this bootstrap all follow.
             by_song_w = (weight == 'song')
-            Gw = _norm_songs(G) if by_song_w else G
+            Gw = np.stack([_song_vector(v, by_song_w) for v in Gs])
             Rw = _norm_songs(R) if by_song_w else R
             rec['jsd'] = jsd(Gw.sum(axis=0), Rw.sum(axis=0))
             lo, hi, se, recentre = _pooled_ci(
