@@ -235,19 +235,16 @@ def presets():
         # system is one number -- so the mark is a point and its
         # interval.
         'quality': (['fmd',
-                     'harmonic_rhythm_jsd',
-                     'onset_grid_jsd_a', 'onset_grid_jsd_b',
-                     'duration_jsd_a', 'duration_jsd_b',
                      # JSD between generated and real DISTRIBUTIONS of
                      # two per-piece regularity statistics (Dong et al.
-                     # 2020): groove consistency and scale consistency
+                     # 2020): groove consistency and scale consistency.
+                     # The event-level JSDs (harmonic rhythm, onset grid,
+                     # duration) were dropped from the sheet 2026-09-14
+                     # by request; they stay in the pooled table and CSV
+                     # and --block H3 still draws them per song.
                      'js_gc_a', 'js_gc_b', 'js_sc_a', 'js_sc_b'],
                     2, 'General quality: corpus-level distance from the '
                        'reference', True),
-        # chord_tone_cov is left off the SHEET only (2026-09-14, by
-        # request): it is CTnCTR without the passing-tone allowance, so
-        # it duplicates the row beneath it. It stays in the table and
-        # the CSV, and stays H2's registered primary.
         # DELTAS ONLY on the three per-song sheets (2026-09-14, by
         # request). A raw value here has no target -- it rewards copying
         # the prompt, or has no reference counterpart at all -- and it
