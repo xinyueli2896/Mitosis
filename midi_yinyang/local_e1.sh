@@ -43,6 +43,13 @@
 #   SKIP_INFER=1   score what is already under OUT_ROOT
 #   RESULT_TAG     suffix of the result files; default local-<systems>,
 #                  so parallel runs never share a results file
+#   DECODE_OVERRIDE  extra A3_* decode settings for the diffusion arms,
+#                  e.g. "A3_REFINE_STEPS=0" or "A3_DRAFT_TEMP=0.0001"
+#                  or "A3_SCHEDULE=ctc_alt"; applied after the system's
+#                  own settings, so they win. Pair with OUT_NAME.
+#   OUT_NAME       folder and manifest name for a single-system run,
+#                  default the system name; lets decode variants of one
+#                  checkpoint sit side by side (A12, A12-K0, A12-argmax)
 #
 # Several runs sharing one OUT_ROOT, one per GPU, is the intended use
 # on a multi-GPU box: prompt staging is done once under a lock, every
@@ -168,7 +175,8 @@ SCORED=()
 for name in $SYSTEMS; do
     read -r cp prog sched steps temp topp ckvar kind <<<"$(sys_cfg "$name")"
     ck="${!ckvar:-}"
-    dir="$OUT_ROOT/$name"
+    label="${OUT_NAME:-$name}"
+    dir="$OUT_ROOT/$label"
     if [[ "$SKIP_INFER" == "1" ]]; then
         [[ -d "$dir" ]] && SCORED+=("$name") || echo "[$name] not generated; skipped"
         continue
@@ -189,6 +197,8 @@ for name in $SYSTEMS; do
         [[ "$steps" != "-" ]] && denv+=(A3_REFINE_STEPS="$steps")
         [[ "$temp" != "-" ]] && denv+=(A3_FINAL_TEMP="$temp")
         [[ "$topp" != "-" ]] && denv+=(A3_TOP_P="$topp")
+        [[ -n "${DECODE_OVERRIDE:-}" ]] && denv+=($DECODE_OVERRIDE)
+        echo "[$name] decode env: ${denv[*]}"
         MELCHORD_CP="$cp" env "${denv[@]}" python cp_transformer_m2c_duet_block_diffusion_combined.py \
             --ckpt "$ckarg" \
             --mel-folder "$pdir/mel" --chord-folder "$pdir/chord" \
@@ -231,7 +241,7 @@ for name in $SYSTEMS; do
             --max-polyphony "$cp" --skip-existing \
             --save-name "${dir#temp/}" ;;
     esac
-    SCORED+=("$name")
+    SCORED+=("$label")
 done
 [[ ${#SCORED[@]} -gt 0 ]] || { echo "ERROR: nothing to score"; exit 1; }
 
@@ -243,7 +253,7 @@ METRICS="results/E1_${RSUF}_metrics.csv"
 POOLED="results/E1_${RSUF}_pooled.csv"
 TABLE="results/E1_${RSUF}_table.md"
 SRC_ARGS=()
-for name in "${SCORED[@]}"; do SRC_ARGS+=(--source "$name:$(sys_layout "$name"):$OUT_ROOT/$name"); done
+for name in "${SCORED[@]}"; do SRC_ARGS+=(--source "$name:$(sys_layout "${name%%-*}"):$OUT_ROOT/$name"); done
 python build_eval_manifest.py "${SRC_ARGS[@]}" --songs $SONG_IDS --modes co --out "$MANIFEST"
 # references: the UNTAGGED split -- the scorer reads all notes of each
 # single-stream file, so the program does not enter
