@@ -126,8 +126,10 @@ stage() {   # stage <program> -> folder with mel/ chord/ (chord tagged)
         mkdir -p "$dir/mel" "$dir/chord"
         for s in $SONG_IDS; do
             cp -f "$MEL_SRC/$s.mid" "$dir/mel/"; cp -f "$CHORD_SRC/$s.mid" "$dir/chord/"
-        done
-        python - "$dir/chord" "$prog" <<'RETAG'
+        done >&2
+        # stdout of this function IS the folder path (callers capture
+        # it), so everything printed here goes to stderr
+        python - "$dir/chord" "$prog" >&2 <<'RETAG'
 import glob, os, sys
 import mido
 folder, prog = sys.argv[1], int(sys.argv[2])
@@ -155,7 +157,7 @@ stage_merged() {
     local dir="$OUT_ROOT/prompts_merged_$STAGE_KEY"
     if wait_or_lock "$dir"; then
         python merge_melody_chord.py --melody "$MEL_SRC" --chord "$CHORD_SRC" \
-            --dst "$dir" --chord-program 48 --ids $SONG_IDS
+            --dst "$dir" --chord-program 48 --ids $SONG_IDS >&2
         touch "$dir/.ready"; rmdir "$dir.lock"
     fi
     echo "$dir"
