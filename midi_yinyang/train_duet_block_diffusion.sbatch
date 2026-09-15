@@ -468,7 +468,17 @@ fi
 # lockstep with the decode budget so data files and sample dump agree.
 case "$TASK" in melchord*) export MELCHORD_CP="$MAX_POLYPHONY" ;; esac
 
-conda activate "$CONDA_ENV"
+# conda activate needs conda's shell hook, which a non-interactive
+# ~/.bashrc may not install (it often returns early off a terminal).
+# Skip when the env is already active; otherwise load the hook from
+# the conda that is on PATH and activate.
+if [[ "${CONDA_DEFAULT_ENV:-}" != "$CONDA_ENV" ]]; then
+    if ! type conda >/dev/null 2>&1 || ! conda activate "$CONDA_ENV" 2>/dev/null; then
+        _base="$(conda info --base 2>/dev/null || dirname "$(dirname "$(command -v conda)")")"
+        source "$_base/etc/profile.d/conda.sh"
+        conda activate "$CONDA_ENV"
+    fi
+fi
 cd "$REPO_DIR/midi_yinyang"
 
 mkdir -p "$LOG_DIR" 2>/dev/null || true
