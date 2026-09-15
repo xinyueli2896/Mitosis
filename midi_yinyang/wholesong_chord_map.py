@@ -296,6 +296,16 @@ def main():
     n_bad = sum(b[0] for b in bad_pc)
     print(f'  pitch-class CONTENT differs on {n_bad} frames over '
           f'{len(pairs)} songs ({n_bad / len(pairs):.1f} per song of {P})')
+    # WHERE in the prompt: a difference confined to the last bar means
+    # the baseline was prompted with one bar less and generated it
+    by_bar = Counter(f // 16 for _n, _s, frames, _po, _pt in bad_pc
+                     for f in frames)
+    print('  differing frames by bar: '
+          + '  '.join(f'bar {b + 1}: {by_bar.get(b, 0)}'
+                      for b in range((P + 15) // 16)))
+    per_song_last = sum(1 for _n, _s, frames, _po, _pt in bad_pc
+                        if any(f >= P - 16 for f in frames))
+    print(f'  songs whose LAST prompt bar differs: {per_song_last}/{len(pairs)}')
     for n, s, frames, po, pt in sorted(bad_pc, reverse=True)[:args.show]:
         if n == 0:
             break
