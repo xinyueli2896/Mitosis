@@ -35,6 +35,9 @@
 #                  the shortest song: the reference is the same file,
 #                  and frames past its end are silence in the reference
 #   N_SAMPLES      default 3
+#   EXCLUDE_SONGS  songs left out of generation AND scoring, default
+#                  "506 786" as in eval_e1 (chord silent in the prompt
+#                  window). EXCLUDE_SONGS="" keeps every song in SPLIT.
 #   BASELINE       system the paired table compares against, default
 #                  the first in SYSTEMS
 #   SKIP_INFER=1   score what is already under OUT_ROOT
@@ -71,10 +74,18 @@ SKIP_INFER="${SKIP_INFER:-0}"
 RESULT_TAG="${RESULT_TAG:-local-$(echo $SYSTEMS | tr ' ' '+')}"
 BASELINE="${BASELINE:-${SYSTEMS%% *}}"
 
+EXCLUDE_SONGS="${EXCLUDE_SONGS-506 786}"
 MEL_SRC="$SPLIT/melody"; CHORD_SRC="$SPLIT/chord"
 [[ -d "$MEL_SRC" && -d "$CHORD_SRC" ]] || { echo "ERROR: no $MEL_SRC / $CHORD_SRC"; exit 1; }
-SONG_IDS=$(ls "$MEL_SRC" | sed 's/\.[Mm][Ii][Dd]$//' | sort | tr '\n' ' ')
-echo "songs: $SONG_IDS"
+SONG_IDS=""
+for s in $(ls "$MEL_SRC" | sed 's/\.[Mm][Ii][Dd]$//' | sort); do
+    skip=0
+    for x in $EXCLUDE_SONGS; do [[ "$s" == "$x" ]] && skip=1; done
+    [[ "$skip" == 0 ]] && SONG_IDS="$SONG_IDS$s "
+done
+SONG_IDS="${SONG_IDS% }"
+echo "songs ($(echo $SONG_IDS | wc -w)): $SONG_IDS"
+[[ -n "$EXCLUDE_SONGS" ]] && echo "excluded: $EXCLUDE_SONGS"
 echo "prompt $PROMPT_LENGTH frames, total $GEN_LENGTH, $N_SAMPLES samples; systems: $SYSTEMS"
 
 # per-system settings, mirroring eval_e1.sbatch
@@ -109,7 +120,9 @@ stage() {   # stage <program> -> folder with mel/ chord/ (chord tagged)
     local prog="$1" dir="$OUT_ROOT/prompts_prog$1"
     if wait_or_lock "$dir"; then
         mkdir -p "$dir/mel" "$dir/chord"
-        cp -f "$MEL_SRC"/*.mid "$dir/mel/"; cp -f "$CHORD_SRC"/*.mid "$dir/chord/"
+        for s in $SONG_IDS; do
+            cp -f "$MEL_SRC/$s.mid" "$dir/mel/"; cp -f "$CHORD_SRC/$s.mid" "$dir/chord/"
+        done
         python - "$dir/chord" "$prog" <<'RETAG'
 import glob, os, sys
 import mido
@@ -138,7 +151,7 @@ stage_merged() {
     local dir="$OUT_ROOT/prompts_merged"
     if wait_or_lock "$dir"; then
         python merge_melody_chord.py --melody "$MEL_SRC" --chord "$CHORD_SRC" \
-            --dst "$dir" --chord-program 48
+            --dst "$dir" --chord-program 48 --ids $SONG_IDS
         touch "$dir/.ready"; rmdir "$dir.lock"
     fi
     echo "$dir"
@@ -196,7 +209,7 @@ for name in $SYSTEMS; do
         # same card as this run.
         REPO_DIR="$(cd .. && pwd)" AMT_DIR="$(readlink -f "$ck")" \
         MEL_FOLDER="$(readlink -f "$MEL_SRC")" CHORD_FOLDER="$(readlink -f "$CHORD_SRC")" \
-        OUT_DIR="$(readlink -f "$OUT_ROOT")/AMT" \
+        OUT_DIR="$(readlink -f "$OUT_ROOT")/AMT" IDS="$SONG_IDS" \
         PROMPT_FRAMES="$PROMPT_LENGTH" GEN_FRAMES="$GEN_LENGTH" N_SAMPLES="$N_SAMPLES" \
             bash infer_amt_prompted.sbatch ;;
     single)
