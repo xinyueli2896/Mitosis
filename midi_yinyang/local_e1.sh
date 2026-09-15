@@ -17,9 +17,17 @@
 #   SYSTEMS        default "A12". Known: A12 (cp8, chord tagged 48,
 #                  refine with one step), A3 (cp4, tag 0, default
 #                  refine), A3ctcaT (cp4, tag 0, alternate commit at
-#                  T=1), A3fc / A3fcaT (cp8, tag 0). Each needs its
-#                  checkpoint in CKPT_<name> (a run dir or a .ckpt file;
-#                  CKPT_A3 serves A3ctcaT, CKPT_A3FC serves A3fcaT).
+#                  T=1), A3fc / A3fcaT (cp8, tag 0), A1 (causal duet,
+#                  cp4, tag 0), S1 / S-scratch (merged single-stream,
+#                  cp16, prompts merged with the chord at 48). Each
+#                  needs its checkpoint in CKPT_<name> (a run dir or a
+#                  .ckpt file; CKPT_A3 serves A3ctcaT, CKPT_A3FC serves
+#                  A3fcaT, CKPT_SSCRATCH serves S-scratch). The
+#                  cascades P-mc / P-cm run through pipeline_cogen and
+#                  are not wired here.
+#   GPU            CUDA device index for this run (sets
+#                  CUDA_VISIBLE_DEVICES); run one SYSTEMS list per GPU
+#                  in parallel shells on a multi-GPU box.
 #   PROMPT_LENGTH  default 80        GEN_LENGTH default 416 -- MUST fit
 #                  the shortest song: the reference is the same file,
 #                  and frames past its end are silence in the reference
@@ -38,6 +46,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 export PYTORCH_ENABLE_MPS_FALLBACK="${PYTORCH_ENABLE_MPS_FALLBACK:-1}"
+[[ -n "${GPU:-}" ]] && export CUDA_VISIBLE_DEVICES="$GPU"
 
 SPLIT="${SPLIT:-input/nottingham_split}"
 OUT_ROOT="${OUT_ROOT:-temp/E1_local}"
@@ -56,16 +65,20 @@ echo "songs: $SONG_IDS"
 echo "prompt $PROMPT_LENGTH frames, total $GEN_LENGTH, $N_SAMPLES samples; systems: $SYSTEMS"
 
 # per-system settings, mirroring eval_e1.sbatch
-sys_cfg() {   # -> "cp program schedule steps temp top_p ckpt_var"
+sys_cfg() {   # -> "cp program schedule steps temp top_p ckpt_var kind"
     case "$1" in
-        A12)     echo "8 48 refine 1 1.0 1.0 CKPT_A12" ;;
-        A3)      echo "4 0 refine - - - CKPT_A3" ;;
-        A3ctcaT) echo "4 0 ctc_alt - 1.0 1.0 CKPT_A3" ;;
-        A3fc)    echo "8 0 ctc_m - - - CKPT_A3FC" ;;
-        A3fcaT)  echo "8 0 ctc_alt - 1.0 1.0 CKPT_A3FC" ;;
+        A12)       echo "8 48 refine 1 1.0 1.0 CKPT_A12 diffusion" ;;
+        A3)        echo "4 0 refine - - - CKPT_A3 diffusion" ;;
+        A3ctcaT)   echo "4 0 ctc_alt - 1.0 1.0 CKPT_A3 diffusion" ;;
+        A3fc)      echo "8 0 ctc_m - - - CKPT_A3FC diffusion" ;;
+        A3fcaT)    echo "8 0 ctc_alt - 1.0 1.0 CKPT_A3FC diffusion" ;;
+        A1)        echo "4 0 - - - - CKPT_A1 causal" ;;
+        S1)        echo "16 48 - - - - CKPT_S1 single" ;;
+        S-scratch) echo "16 48 - - - - CKPT_SSCRATCH single" ;;
         *) echo "ERROR: unknown system $1" >&2; return 1 ;;
     esac
 }
+sys_layout() { case "$1" in S1|S-scratch) echo single ;; *) echo duet_multi ;; esac; }
 
 # ---- 1. prompts: one staged copy per chord program ------------------
 stage() {   # stage <program> -> folder with mel/ chord/ (chord tagged)
@@ -95,11 +108,22 @@ RETAG
     fi
     echo "$dir"
 }
+# the single-stream models read ONE file per song, both streams merged
+# with the chord on program 48 -- the only thing that keeps them apart
+stage_merged() {
+    local dir="$OUT_ROOT/prompts_merged"
+    if [[ ! -f "$dir/.ready" ]]; then
+        python merge_melody_chord.py --melody "$MEL_SRC" --chord "$CHORD_SRC" \
+            --dst "$dir" --chord-program 48
+        touch "$dir/.ready"
+    fi
+    echo "$dir"
+}
 
 # ---- 2. generate --------------------------------------------------------
 SCORED=()
 for name in $SYSTEMS; do
-    read -r cp prog sched steps temp topp ckvar <<<"$(sys_cfg "$name")"
+    read -r cp prog sched steps temp topp ckvar kind <<<"$(sys_cfg "$name")"
     ck="${!ckvar:-}"
     dir="$OUT_ROOT/$name"
     if [[ "$SKIP_INFER" == "1" ]]; then
@@ -107,23 +131,48 @@ for name in $SYSTEMS; do
         continue
     fi
     [[ -n "$ck" && -e "$ck" ]] || { echo "[$name] SKIPPED: set $ckvar to its checkpoint"; continue; }
-    pdir=$(stage "$prog")
     [[ -d "$ck" ]] && ckarg="$ck/" || ckarg="$ck"
     echo "================================================================"
-    echo "[$name] ckpt=$ck  cp=$cp  chord program=$prog  schedule=$sched"
-    denv=(A3_SCHEDULE="$sched")
-    [[ "$steps" != "-" ]] && denv+=(A3_REFINE_STEPS="$steps")
-    [[ "$temp" != "-" ]] && denv+=(A3_FINAL_TEMP="$temp")
-    [[ "$topp" != "-" ]] && denv+=(A3_TOP_P="$topp")
-    MELCHORD_CP="$cp" env "${denv[@]}" python cp_transformer_m2c_duet_block_diffusion_combined.py \
-        --ckpt "$ckarg" \
-        --mel-folder "$pdir/mel" --chord-folder "$pdir/chord" \
-        --output-dir "$dir" --modes co \
-        --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
-        --temperature 1.0 --n-samples "$N_SAMPLES" \
-        --max-polyphony "$cp" --skip-existing \
-        --model-size large --moe-num-experts 4 --moe-topk 2 \
-        --min-chord-tokens-before-eos 0
+    echo "[$name] ckpt=$ck  cp=$cp  chord program=$prog  kind=$kind${sched:+  schedule=$sched}"
+    case "$kind" in
+    diffusion)
+        pdir=$(stage "$prog")
+        denv=(A3_SCHEDULE="$sched")
+        [[ "$steps" != "-" ]] && denv+=(A3_REFINE_STEPS="$steps")
+        [[ "$temp" != "-" ]] && denv+=(A3_FINAL_TEMP="$temp")
+        [[ "$topp" != "-" ]] && denv+=(A3_TOP_P="$topp")
+        MELCHORD_CP="$cp" env "${denv[@]}" python cp_transformer_m2c_duet_block_diffusion_combined.py \
+            --ckpt "$ckarg" \
+            --mel-folder "$pdir/mel" --chord-folder "$pdir/chord" \
+            --output-dir "$dir" --modes co \
+            --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
+            --temperature 1.0 --n-samples "$N_SAMPLES" \
+            --max-polyphony "$cp" --skip-existing \
+            --model-size large --moe-num-experts 4 --moe-topk 2 \
+            --min-chord-tokens-before-eos 0 ;;
+    causal)
+        pdir=$(stage "$prog")
+        MELCHORD_CP="$cp" python cp_transformer_m2c_intra_cross_attn_combined.py \
+            --ckpt "$ckarg" \
+            --mel-folder "$pdir/mel" --chord-folder "$pdir/chord" \
+            --output-dir "$dir" --modes co \
+            --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
+            --temperature 1.0 --n-samples "$N_SAMPLES" \
+            --max-polyphony "$cp" --skip-existing \
+            --model-size large --moe-num-experts 4 --moe-topk 2 ;;
+    single)
+        mdir=$(stage_merged)
+        # cp_transformer_inference writes temp/<save-name>/ itself, so
+        # OUT_ROOT has to live under temp/ for the layout to line up
+        [[ "$OUT_ROOT" == temp/* ]] || { echo "[$name] needs OUT_ROOT under temp/"; continue; }
+        python cp_transformer_inference.py \
+            --ckpt "$ck" \
+            --midi-folder "$mdir" \
+            --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
+            --temperature 1.0 --n-samples "$N_SAMPLES" \
+            --max-polyphony "$cp" --skip-existing \
+            --save-name "${dir#temp/}" ;;
+    esac
     SCORED+=("$name")
 done
 [[ ${#SCORED[@]} -gt 0 ]] || { echo "ERROR: nothing to score"; exit 1; }
@@ -136,7 +185,7 @@ METRICS="results/E1_${RSUF}_metrics.csv"
 POOLED="results/E1_${RSUF}_pooled.csv"
 TABLE="results/E1_${RSUF}_table.md"
 SRC_ARGS=()
-for name in "${SCORED[@]}"; do SRC_ARGS+=(--source "$name:duet_multi:$OUT_ROOT/$name"); done
+for name in "${SCORED[@]}"; do SRC_ARGS+=(--source "$name:$(sys_layout "$name"):$OUT_ROOT/$name"); done
 python build_eval_manifest.py "${SRC_ARGS[@]}" --songs $SONG_IDS --modes co --out "$MANIFEST"
 # references: the UNTAGGED split -- the scorer reads all notes of each
 # single-stream file, so the program does not enter
