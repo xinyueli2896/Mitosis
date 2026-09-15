@@ -143,6 +143,10 @@
 #                                   -- so it is not an interval for a
 #                                   claim about other songs
 #   RESULT_TAG     extra suffix on the result files
+#   SUBJECTIVE=1   listening-test subset: generate and score only
+#                  SUBJECTIVE_SONGS (default "126 596 606 696 886"),
+#                  staged as a second prompt copy so folder-driven arms
+#                  see only those songs; results get a _subjective tag
 #   SKIP_INFER=1   score only, generate nothing (no GPU needed: submit
 #                  through score_e1.sbatch, a CPU wrapper that forces it)
 #   NUM_GPUS       systems that generate CONCURRENTLY, one per GPU,
@@ -456,6 +460,35 @@ if [[ ! -f "$READY" ]]; then
     python merge_melody_chord.py --melody "$EVAL_MEL" --chord "$EVAL_CHORD" \
         --dst "$EVAL_MERGED" --chord-program 48
     date > "$READY"
+fi
+# SUBJECTIVE=1: the listening-test subset. Every arm generates from a
+# prompt FOLDER, not from SONG_IDS, so restricting the ids alone would
+# still decode all 93 songs; instead a second staged copy holding only
+# SUBJECTIVE_SONGS is built from the staged prompts (same tag, same
+# crops) and every folder variable is pointed at it. Outputs land in
+# the same <OUT_ROOT>/<system>/ tree, so a system already generated for
+# the full set is skipped by --skip-existing and only new arms (A12)
+# spend GPU time. Results carry a _subjective tag so the 93-song CSV is
+# not overwritten. MIN_SONGS is satisfied by the full stage above.
+SUBJECTIVE="${SUBJECTIVE:-0}"
+SUBJECTIVE_SONGS="${SUBJECTIVE_SONGS:-126 596 606 696 886}"
+if [[ "$SUBJECTIVE" == "1" ]]; then
+    SUBJ="$OUT_ROOT/prompts_subjective"
+    rm -rf "$SUBJ"; mkdir -p "$SUBJ/mel" "$SUBJ/chord" "$SUBJ/merged_tagged"
+    kept=""
+    for s in $SUBJECTIVE_SONGS; do
+        sid=$(printf '%03d' "$((10#$s))")
+        [[ " $SONG_IDS " == *" $sid "* ]] || { echo "[subjective] $sid not staged or excluded; skipped"; continue; }
+        cp -f "$EVAL_MEL/$sid.mid" "$SUBJ/mel/"; cp -f "$EVAL_CHORD/$sid.mid" "$SUBJ/chord/"
+        cp -f "$EVAL_MERGED/$sid".* "$SUBJ/merged_tagged/" 2>/dev/null || true
+        kept="$kept$sid "
+    done
+    SONG_IDS="${kept% }"
+    N_EVAL=$(echo $SONG_IDS | wc -w)
+    [[ "$N_EVAL" -gt 0 ]] || { echo "ERROR: none of SUBJECTIVE_SONGS is staged"; exit 1; }
+    EVAL_MEL="$SUBJ/mel"; EVAL_CHORD="$SUBJ/chord"; EVAL_MERGED="$SUBJ/merged_tagged"
+    RESULT_TAG="${RESULT_TAG:+${RESULT_TAG}_}subjective"
+    echo "[subjective] SUBJECTIVE=1: $N_EVAL song(s) -> $SONG_IDS  (prompts under $SUBJ; results tagged $RESULT_TAG)"
 fi
 if [[ "$PREP_ONLY" == "1" ]]; then
     echo "[prompts] PREP_ONLY=1: staged $N_EVAL songs under $OUT_ROOT/prompts; exiting"
