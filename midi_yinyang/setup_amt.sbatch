@@ -79,7 +79,10 @@ if [[ "$FORCE" == "1" || ! -d "$AMT_DIR/.venv" ]]; then
     pip install --upgrade pip
     # torch first, so the package's own resolution does not pull a build
     # that disagrees with the driver on this cluster
-    pip install torch --index-url https://download.pytorch.org/whl/cu121
+    # transformers >= 4.53 refuses torch.load below torch 2.6 (the
+    # CVE-2025-32434 check), and the AMT weights ship as .bin, so torch
+    # has to be 2.6 or newer. cu124 wheels run on any 12.x driver.
+    pip install "torch>=2.6" --index-url https://download.pytorch.org/whl/cu124
     pip install "$AMT_DIR"
     pip install transformers accelerate mido pretty_midi
 else
