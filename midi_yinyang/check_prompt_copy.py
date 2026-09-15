@@ -38,14 +38,13 @@ from eval_metrics import load_streams          # noqa: E402
 
 def find_output(root, system, song, sample):
     """Path of one output file under the three E1 layouts, or None."""
-    cands = [
-        os.path.join(root, system, song, 'co', f'sample_{sample}.mid'),
-        os.path.join(root, system, '4_final', song, 'co',
-                     f'sample_{sample}.mid'),
-    ]
-    for c in cands:
-        if os.path.exists(c):
-            return c
+    # duet outputs carry a temperature suffix (sample_0_temp0.9.mid),
+    # the cascades and external arms do not (sample_0.mid): glob both
+    for sub in ((song, 'co'), ('4_final', song, 'co')):
+        hits = sorted(glob.glob(os.path.join(root, system, *sub,
+                                             f'sample_{sample}*.mid')))
+        if hits:
+            return hits[0]
     single = sorted(glob.glob(
         os.path.join(root, system, f'{song}.mid_temp*_continuation_*.mid')))
     if len(single) > sample:
