@@ -38,6 +38,13 @@
 #   BASELINE       system the paired table compares against, default
 #                  the first in SYSTEMS
 #   SKIP_INFER=1   score what is already under OUT_ROOT
+#   RESULT_TAG     suffix of the result files; default local-<systems>,
+#                  so parallel runs never share a results file
+#
+# Several runs sharing one OUT_ROOT, one per GPU, is the intended use
+# on a multi-GPU box: prompt staging is done once under a lock, every
+# system writes its own folder, and each run scores into its own
+# results file. Score them all together afterwards with SKIP_INFER=1.
 #
 # Example (Nottingham, A12 only):
 #   CKPT_A12=export/a12k1/epoch=..weights.ckpt GEN_LENGTH=256 bash local_e1.sh
@@ -58,7 +65,10 @@ PROMPT_LENGTH="${PROMPT_LENGTH:-80}"
 GEN_LENGTH="${GEN_LENGTH:-416}"
 N_SAMPLES="${N_SAMPLES:-3}"
 SKIP_INFER="${SKIP_INFER:-0}"
-RESULT_TAG="${RESULT_TAG:-local}"
+# default tag names the run's systems, so parallel single-system runs
+# write results/E1_p80_local-A12_*, results/E1_p80_local-AMT_*, ... and
+# the final joint scoring (SKIP_INFER=1, all systems) gets its own file
+RESULT_TAG="${RESULT_TAG:-local-$(echo $SYSTEMS | tr ' ' '+')}"
 BASELINE="${BASELINE:-${SYSTEMS%% *}}"
 
 MEL_SRC="$SPLIT/melody"; CHORD_SRC="$SPLIT/chord"
@@ -85,9 +95,19 @@ sys_cfg() {   # -> "cp program schedule steps temp top_p ckpt_var kind"
 sys_layout() { case "$1" in S1|S-scratch) echo single ;; *) echo duet_multi ;; esac; }
 
 # ---- 1. prompts: one staged copy per chord program ------------------
+# Several runs may share OUT_ROOT (one system per GPU, in parallel), so
+# a stage is built by whoever gets the lock first and the others wait
+# for its .ready mark instead of copying over each other.
+wait_or_lock() {   # wait_or_lock <dir> -> 0 = caller must build, 1 = ready
+    local dir="$1"
+    [[ -f "$dir/.ready" ]] && return 1
+    if mkdir "$dir.lock" 2>/dev/null; then return 0; fi
+    while [[ ! -f "$dir/.ready" ]]; do sleep 2; done
+    return 1
+}
 stage() {   # stage <program> -> folder with mel/ chord/ (chord tagged)
     local prog="$1" dir="$OUT_ROOT/prompts_prog$1"
-    if [[ ! -f "$dir/.ready" ]]; then
+    if wait_or_lock "$dir"; then
         mkdir -p "$dir/mel" "$dir/chord"
         cp -f "$MEL_SRC"/*.mid "$dir/mel/"; cp -f "$CHORD_SRC"/*.mid "$dir/chord/"
         python - "$dir/chord" "$prog" <<'RETAG'
@@ -108,7 +128,7 @@ for f in sorted(glob.glob(os.path.join(folder, '*.mid'))):
     m.save(f); n += 1
 print(f'[prompts] chord program -> {prog} on {n} file(s)')
 RETAG
-        touch "$dir/.ready"
+        touch "$dir/.ready"; rmdir "$dir.lock"
     fi
     echo "$dir"
 }
@@ -116,10 +136,10 @@ RETAG
 # with the chord on program 48 -- the only thing that keeps them apart
 stage_merged() {
     local dir="$OUT_ROOT/prompts_merged"
-    if [[ ! -f "$dir/.ready" ]]; then
+    if wait_or_lock "$dir"; then
         python merge_melody_chord.py --melody "$MEL_SRC" --chord "$CHORD_SRC" \
             --dst "$dir" --chord-program 48
-        touch "$dir/.ready"
+        touch "$dir/.ready"; rmdir "$dir.lock"
     fi
     echo "$dir"
 }
@@ -171,7 +191,9 @@ for name in $SYSTEMS; do
             --model-size large --moe-num-experts 4 --moe-topk 2 ;;
     amt)
         # their wrapper is portable bash: it merges the two streams with
-        # the chord at 48 itself and writes <song>/co/sample_<i>.mid
+        # the chord at 48 itself and writes <song>/co/sample_<i>.mid.
+        # CUDA_VISIBLE_DEVICES (GPU=) is inherited, so it lands on the
+        # same card as this run.
         REPO_DIR="$(cd .. && pwd)" AMT_DIR="$(readlink -f "$ck")" \
         MEL_FOLDER="$(readlink -f "$MEL_SRC")" CHORD_FOLDER="$(readlink -f "$CHORD_SRC")" \
         OUT_DIR="$(readlink -f "$OUT_ROOT")/AMT" \
