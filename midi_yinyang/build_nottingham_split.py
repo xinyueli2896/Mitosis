@@ -24,8 +24,13 @@ first onset and the offset are printed per tune so the call can be
 read off the log, and --pickup overrides it by name for any tune where
 the chords do not follow the convention.
 
-The chord track's program is set to --chord-program (default 48, the
-tag the v5 corpus carries); the melody keeps its own.
+FORMAT MATCHES heldout_v5, which build_prompt_crops writes: a pure
+tick-space window of the source with every program untouched, and the
+tempo map replaced by ONE set_tempo at tick 0 (--tempo, default 120 as
+there; 0 keeps the source map). No tag is applied here: the staging
+step of the decode wrapper (trial_a12 CHORD_PROGRAM) does that, the
+same way the E1 tree tags its prompts, so the split stays a faithful
+copy of the source. --chord-program is there only to tag on purpose.
 
 Usage (via build_nottingham_split.sbatch):
   python build_nottingham_split.py --melody-dir .../MIDI/melody \
@@ -102,6 +107,26 @@ def shift_notes(mid, ticks):
     return mid
 
 
+def force_tempo(mid, bpm):
+    """Drop every set_tempo and put one at tick 0 of track 0.
+
+    Ticks are musical positions; the tempo map only says how fast they
+    go by, so no note moves. This is the heldout_v5 convention."""
+    for tr in mid.tracks:
+        t, events = 0, []
+        for msg in tr:
+            t += msg.time
+            if msg.type != 'set_tempo':
+                events.append((t, msg))
+        prev = 0
+        for abs_t, msg in events:
+            msg.time = abs_t - prev
+            prev = abs_t
+        tr[:] = [m for _t, m in events]
+    mid.tracks[0].insert(0, mido.MetaMessage(
+        'set_tempo', tempo=mido.bpm2tempo(bpm), time=0))
+
+
 def set_program(mid, prog):
     """Every note-carrying track gets program `prog` (rewritten or added)."""
     for tr in mid.tracks:
@@ -125,7 +150,14 @@ def main():
     ap.add_argument('--chord-dir', required=True)
     ap.add_argument('--dst', required=True)
     ap.add_argument('--tunes', nargs='+', required=True)
-    ap.add_argument('--chord-program', type=int, default=48)
+    ap.add_argument('--chord-program', type=int, default=None,
+                    help='tag the chord track with this program. Default '
+                         'none: programs stay as in the source, like '
+                         'heldout_v5')
+    ap.add_argument('--tempo', type=float, default=120.0,
+                    help='replace the tempo map with one set_tempo at this '
+                         'bpm at tick 0, as build_prompt_crops does for '
+                         'heldout_v5 (default 120). 0 keeps the source map.')
     ap.add_argument('--pickup', nargs='*', default=[],
                     help='override the detection: tune=1 (has a pickup, '
                          'copy as is) or tune=0 (none, pad a bar)')
@@ -181,12 +213,17 @@ def main():
         if not pickup:
             shift_notes(mel, bar)
             shift_notes(chd, bar)
-        set_program(chd, args.chord_program)
+        if args.tempo and args.tempo > 0:
+            force_tempo(mel, args.tempo)
+            force_tempo(chd, args.tempo)
+        if args.chord_program is not None:
+            set_program(chd, args.chord_program)
         mel.save(os.path.join(mel_out, f'{tune}.mid'))
         chd.save(os.path.join(chd_out, f'{tune}.mid'))
 
     print(f'\nwrote {len(args.tunes)} pair(s) -> {mel_out} / {chd_out}; '
-          f'chord program {args.chord_program}')
+          f'programs {"untouched" if args.chord_program is None else args.chord_program}; '
+          f'tempo {"as source" if not args.tempo else f"one set_tempo at {args.tempo:g} bpm"}')
 
 
 if __name__ == '__main__':

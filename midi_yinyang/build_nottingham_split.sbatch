@@ -16,15 +16,18 @@
 # reason -- READ IT, and force any tune the rule gets wrong with
 # PICKUP="tune=1 tune=0" (1 = has a pickup, copy; 0 = none, pad).
 #
-# The chord track is tagged program CHORD_PROGRAM (default 48, the v5
-# corpus tag the A.12 run trained on).
+# FORMAT = heldout_v5: a pure tick-space copy, programs untouched, tempo
+# map replaced by one set_tempo at TEMPO bpm at tick 0 (120, as
+# build_prompt_crops writes). NOT tagged here -- trial_a12 tags the
+# chord at staging (CHORD_PROGRAM), exactly as the E1 tree does.
 #
 # Env knobs (--export=ALL,KEY=val):
 #   MELODY_SRC   default /home/xinyue.li/nottingham-dataset/MIDI/melody
 #   CHORD_SRC    default /home/xinyue.li/nottingham-dataset/MIDI/chords
 #   DST          default input/nottingham_split
 #   TUNES        default "ashover_5 hpps_9 morris_2 playford_15 xmas_8"
-#   CHORD_PROGRAM default 48
+#   TEMPO        default 120; 0 keeps the source tempo map
+#   CHORD_PROGRAM empty (default) leaves programs as in the source
 #   PICKUP       overrides, e.g. "morris_2=1 xmas_8=0"
 #
 # Example:
@@ -56,7 +59,8 @@ MELODY_SRC="${MELODY_SRC:-/home/xinyue.li/nottingham-dataset/MIDI/melody}"
 CHORD_SRC="${CHORD_SRC:-/home/xinyue.li/nottingham-dataset/MIDI/chords}"
 DST="${DST:-input/nottingham_split}"
 TUNES="${TUNES:-ashover_5 hpps_9 morris_2 playford_15 xmas_8}"
-CHORD_PROGRAM="${CHORD_PROGRAM:-48}"
+CHORD_PROGRAM="${CHORD_PROGRAM:-}"
+TEMPO="${TEMPO:-120}"
 PICKUP="${PICKUP:-}"
 
 [[ -d "$MELODY_SRC" && -d "$CHORD_SRC" ]] || {
@@ -65,12 +69,13 @@ PICKUP="${PICKUP:-}"
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
 echo "SRC=$MELODY_SRC | $CHORD_SRC"
-echo "DST=$DST  TUNES=$TUNES  CHORD_PROGRAM=$CHORD_PROGRAM  PICKUP=${PICKUP:-<detected>}"
+echo "DST=$DST  TUNES=$TUNES  TEMPO=$TEMPO  CHORD_PROGRAM=${CHORD_PROGRAM:-<untouched>}  PICKUP=${PICKUP:-<detected>}"
 echo "================================================================"
 
 python build_nottingham_split.py --melody-dir "$MELODY_SRC" \
     --chord-dir "$CHORD_SRC" --dst "$DST" --tunes $TUNES \
-    --chord-program "$CHORD_PROGRAM" ${PICKUP:+--pickup $PICKUP}
+    --tempo "$TEMPO" ${CHORD_PROGRAM:+--chord-program "$CHORD_PROGRAM"} \
+    ${PICKUP:+--pickup $PICKUP}
 
 echo "================================================================"
 echo "Staged. Decode them with trial_a12.sbatch:"
