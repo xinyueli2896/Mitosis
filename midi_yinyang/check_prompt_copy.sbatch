@@ -27,6 +27,10 @@
 #   EXCLUDE_SONGS   default "506 786", as eval_e1
 #   SHOW            songs with the lowest chord agreement to print beat
 #                   by beat, default 3
+#   MAX_VOICES      cap OUR chord prompt to its lowest n notes per onset
+#                   before comparing (0 = off). MAX_VOICES=4 is the cut
+#                   the cp4 tokenizer makes, so it checks a cp4 arm, or
+#                   a WSfv4 tree, against what that budget can hold.
 #
 # Besides the frame-level agreement, the log lists NOTE-level
 # differences: every note the system holds that our prompt does not
@@ -66,6 +70,7 @@ PROMPT_FRAMES="${PROMPT_FRAMES:-96}"
 SAMPLE="${SAMPLE:-0}"
 EXCLUDE_SONGS="${EXCLUDE_SONGS-506 786}"
 SHOW="${SHOW:-3}"
+MAX_VOICES="${MAX_VOICES:-0}"
 MEL_DIR="${MEL_DIR:-$OUT_ROOT/prompts/mel}"
 CHORD_DIR="${CHORD_DIR:-$OUT_ROOT/prompts/chord}"
 
@@ -80,4 +85,5 @@ echo "================================================================"
 python check_prompt_copy.py --out-root "$OUT_ROOT" --systems $SYSTEMS \
     --mel-dir "$MEL_DIR" --chord-dir "$CHORD_DIR" \
     --prompt-frames "$PROMPT_FRAMES" --sample $SAMPLE --show "$SHOW" \
+    --max-voices "$MAX_VOICES" \
     ${EXCLUDE_SONGS:+--exclude-songs $EXCLUDE_SONGS}

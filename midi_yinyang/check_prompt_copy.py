@@ -120,6 +120,22 @@ def note_diff(ours, theirs):
     return extra, missing
 
 
+def capped(stream, n):
+    """The stream with only the lowest n pitches of each onset frame."""
+    from eval_metrics import Stream
+    out = Stream([], 1.0, stream.n_frames)
+    for f in range(stream.n_frames):
+        keep = sorted(zip(stream.onsets[f], stream.dur_at[f]))[:n]
+        for pitch, d in keep:
+            out.onsets[f].append(pitch)
+            out.dur_at[f].append(d)
+            out.durations.append(d)
+            for g in range(f, min(f + d, stream.n_frames)):
+                out.sounding[g].add(pitch % 12)
+                out.sounding_abs[g].add(pitch)
+    return out
+
+
 def pc_name(pcs):
     names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
     return '.'.join(names[p] for p in sorted(pcs)) or '-'
@@ -169,6 +185,11 @@ def main():
     p.add_argument('--show', type=int, default=3,
                    help='print beat-by-beat chord detail for the N songs '
                         'with the lowest chord agreement')
+    p.add_argument('--max-voices', type=int, default=0,
+                   help='cap OUR chord prompt to its lowest n notes per '
+                        'onset before comparing -- the cut the cp4 '
+                        'tokenizer makes -- so a system living under that '
+                        'budget is checked against what it could hold')
     p.add_argument('--task', default='melchord')
     p.add_argument('--mel-programs', default='0,24')
     p.add_argument('--chord-programs', default='48')
@@ -194,8 +215,11 @@ def main():
         if not (os.path.exists(pm_) and os.path.exists(pc_)):
             print(f'  [skip] {s}: staged prompt missing')
             continue
-        prompts[s] = load_streams([pm_, pc_], args.task, mel_programs,
-                                  chord_programs, P)
+        pa_, pb_ = load_streams([pm_, pc_], args.task, mel_programs,
+                                chord_programs, P)
+        if args.max_voices:
+            pb_ = capped(pb_, args.max_voices)
+        prompts[s] = (pa_, pb_)
 
     for system in args.systems:
         rows = []

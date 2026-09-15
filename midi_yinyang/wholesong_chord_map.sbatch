@@ -33,6 +33,12 @@
 #   SHOW           songs to print in detail, default 4
 #   FORCE_MAP      "bass,upper,fold,merge" to override the fit, e.g.
 #                  36,60,1,0
+#   MAX_VOICES     after the map keep only the LOWEST n pitches of each
+#                  chord -- the cut our cp4 tokenizer makes (bass + 3
+#                  tones, the top tone of a seventh chord goes), so the
+#                  baseline's chord is in the representation the duet
+#                  arms live in. Default 0 = no cap. MAX_VOICES=4 with
+#                  APPLY=WSfv4 is the matched arm.
 #
 # Examples:
 #   sbatch --export=ALL,OUT_ROOT=temp/E1_v5b midi_yinyang/wholesong_chord_map.sbatch
@@ -66,6 +72,7 @@ PROMPT_FRAMES="${PROMPT_FRAMES:-96}"
 EXCLUDE_SONGS="${EXCLUDE_SONGS-506 786}"
 SHOW="${SHOW:-4}"
 FORCE_MAP="${FORCE_MAP:-}"
+MAX_VOICES="${MAX_VOICES:-0}"
 CHORD_DIR="${CHORD_DIR:-$OUT_ROOT/prompts/chord}"
 
 [[ -d "$CHORD_DIR" ]] || { echo "ERROR: no staged chord prompts at $CHORD_DIR"; exit 1; }
@@ -76,10 +83,11 @@ fi
 
 echo "================================================================"
 echo "Job ${SLURM_JOB_ID:-local}  node=$(hostname)"
-echo "OUT_ROOT=$OUT_ROOT  SYSTEM=$SYSTEM  APPLY=${APPLY:-<analyse only>}  PROMPT_FRAMES=$PROMPT_FRAMES"
+echo "OUT_ROOT=$OUT_ROOT  SYSTEM=$SYSTEM  APPLY=${APPLY:-<analyse only>}  PROMPT_FRAMES=$PROMPT_FRAMES  MAX_VOICES=$MAX_VOICES"
 echo "================================================================"
 
 python wholesong_chord_map.py --out-root "$OUT_ROOT" --system "$SYSTEM" \
     --chord-dir "$CHORD_DIR" --prompt-frames "$PROMPT_FRAMES" --show "$SHOW" \
     ${EXCLUDE_SONGS:+--exclude-songs $EXCLUDE_SONGS} \
+    --max-voices "$MAX_VOICES" \
     ${APPLY:+--apply "$APPLY"} ${FORCE_MAP:+--force-map "$FORCE_MAP"}

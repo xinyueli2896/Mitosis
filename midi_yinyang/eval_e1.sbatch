@@ -45,6 +45,12 @@
 #         the re-voicing reproduces our chord note for note on 89/90
 #         songs. Not generated here: it is derived from a complete WSf
 #         tree, and this script only scores it.
+#   WSfv4 WSfv with every chord cut to its lowest four notes
+#         (MAX_VOICES=4), the cut the cp4 tokenizer makes on the duet
+#         arms' own prompt and output -- bass + 3 tones, the top tone of
+#         a seventh chord goes. This is the baseline in the
+#         representation the duet arms live in, and the arm to put in
+#         the table beside them. Derived, score-only, like WSfv.
 #   AMT   external reference: the Anticipatory Music Transformer
 #         (arXiv:2306.08620), prompted continuation of BOTH streams from
 #         merged_tagged. The only external arm that CO-generates rather
@@ -211,7 +217,7 @@ SYSTEMS="${SYSTEMS:-A1 A3 A3f S1 S-scratch P-mc P-cm WS}"
 # (happened 2026-09-10, job 225780). With generation on, 'all' would try
 # to generate every system, so keep it to score-only runs.
 if [[ "$SYSTEMS" == "all" ]]; then
-    SYSTEMS="A11aT A11K4 A1 A1cp8 A3 A3f A3fctcaT A3K0 A3ctc A3ctcc A3ctc2 A3ctca A3ctcaT A3c A3fc A3fcaT A3fcaTar A3fcK4 A10 S1 S-scratch S0 P-mc P-cm WS WSf WSfv AMT"
+    SYSTEMS="A11aT A11K4 A1 A1cp8 A3 A3f A3fctcaT A3K0 A3ctc A3ctcc A3ctc2 A3ctca A3ctcaT A3c A3fc A3fcaT A3fcaTar A3fcK4 A10 S1 S-scratch S0 P-mc P-cm WS WSf WSfv WSfv4 AMT"
 fi
 FORCE="${FORCE:-}"
 CKPT_A1="${CKPT_A1:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_melchord_cp4tar_batch_8_schedule}"
@@ -632,9 +638,9 @@ generate() {
         CROPS_TSV="$crops" \
         OUR_MEL_DIR="$ourmel" OUR_CHORD_DIR="$ourchd" \
             bash "$MY/infer_wholesong_prompted.sbatch" ;;
-    WSfv)
-        echo "ERROR: WSfv is derived, not generated: run"
-        echo "  sbatch --export=ALL,OUT_ROOT=$OUT_ROOT,APPLY=WSfv midi_yinyang/wholesong_chord_map.sbatch"
+    WSfv|WSfv4)
+        echo "ERROR: $name is derived, not generated: run"
+        echo "  sbatch --export=ALL,OUT_ROOT=$OUT_ROOT,APPLY=$name$([[ $name == WSfv4 ]] && echo ,MAX_VOICES=4) midi_yinyang/wholesong_chord_map.sbatch"
         echo "on a complete WSf tree, then score with SKIP_INFER=1"
         exit 1 ;;
     *)  echo "ERROR: unknown system $name"; exit 1 ;;

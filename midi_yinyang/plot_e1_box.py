@@ -86,11 +86,13 @@ GROUPS = [
         ('P-cm',      'Cascade\n(chd→mel)',    'Casc–cm'),
     ]),
     ('External baselines', True, [
-        # WSfv: the whole-song baseline with its chord track re-voiced
-        # into our rendering (wholesong_chord_map.sbatch APPLY=WSfv);
-        # the raw WSf differs from every other system in absolute pitch
-        # on every chord, which the voicing and full-state metrics see.
-        ('WSfv',      'Whole-Song\nGen',            'WSG'),
+        # WSfv4: the whole-song baseline with its chord track re-voiced
+        # into our rendering and cut to four voices (wholesong_chord_map
+        # APPLY=WSfv4 MAX_VOICES=4). The raw WSf differs from every
+        # other system in absolute pitch on every chord, and the
+        # uncapped WSfv holds the fifth note of a seventh chord that the
+        # cp4 duet arms never see.
+        ('WSfv4',     'Whole-Song\nGen',            'WSG'),
         ('AMT',       'Anticipatory\nMusic Transf.', 'AMT'),
     ]),
     # Held out of the ranking and placed last, by request. It is still

@@ -129,6 +129,24 @@ def pcname(pcs):
 # ---------------------------------------------------------------------------
 # the map family
 # ---------------------------------------------------------------------------
+def cap_voices(notes, max_voices):
+    """Keep the LOWEST max_voices pitches of every segment.
+
+    This is what our tokenizer does to a chord with more notes than
+    its polyphony budget: the renderer writes bass then chord tones
+    ascending, the tokenizer keeps the first `budget` it meets, so the
+    top tone goes. Applying the same cut to the baseline's chord puts
+    it in the representation our cp4 arms actually live in.
+    """
+    if not max_voices:
+        return notes
+    out = []
+    for f0, members in segments(notes).items():
+        keep = sorted(members, key=lambda m: m[1])[:max_voices]
+        out.extend((f0, f1, p) for f1, p in keep)
+    return sorted(out)
+
+
 def revoice(notes, bass_base, upper_base, fold, merge):
     """f: re-render each chord segment of `notes` in the given convention.
 
@@ -232,6 +250,12 @@ def main():
     ap.add_argument('--apply', default='',
                     help='write f(output) for EVERY sample of the system '
                          'as this system name in the same tree')
+    ap.add_argument('--max-voices', type=int, default=0,
+                    help='after the map, keep only the LOWEST n pitches of '
+                         'each chord segment -- the cut our cp4 tokenizer '
+                         'makes (bass + 3 tones; the top tone of a seventh '
+                         'chord goes). 0 = no cap. Applied in APPLY and, '
+                         'for the check, to OUR prompt as well.')
     ap.add_argument('--force-map', default='',
                     help='use this map instead of the fitted one: '
                          'bass_base,upper_base,fold,merge e.g. 36,60,1,0')
@@ -254,7 +278,9 @@ def main():
         if not outs:
             missing.append(s)
             continue
-        ours = window(load_ours(os.path.join(args.chord_dir, f'{s}.mid')), P)
+        ours = window(cap_voices(load_ours(os.path.join(args.chord_dir,
+                                                        f'{s}.mid')),
+                                 args.max_voices), P)
         pm, inst, theirs_all = load_theirs(outs[0])
         pairs.append((s, ours, window(theirs_all, P), pm, inst, outs[0]))
     print(f'system {args.system}: {len(pairs)} songs with output, '
@@ -324,8 +350,8 @@ def main():
         for ub in upper_cands:
             for fold in (True, False):
                 for merge in (False, True):
-                    sc = np.array([agreement(o, revoice(t, bb, ub, fold,
-                                                        merge), P)
+                    sc = np.array([agreement(o, cap_voices(
+                        revoice(t, bb, ub, fold, merge), args.max_voices), P)
                                    for _s, o, t, *_ in pairs])
                     results.append((sc[:, 0].mean(), sc[:, 1].mean(),
                                     sc[:, 2].mean(), bb, ub, fold, merge))
@@ -360,7 +386,7 @@ def main():
     # residual after the map
     resid = []
     for s, o, t, *_ in pairs:
-        ft = revoice(t, bb, ub, fold, merge)
+        ft = cap_voices(revoice(t, bb, ub, fold, merge), args.max_voices)
         ao, _, _ = frame_sets(o, P)
         at, _, _ = frame_sets(ft, P)
         frames = [f for f in range(P) if (ao[f] or at[f]) and ao[f] != at[f]]
@@ -385,14 +411,17 @@ def main():
         for s in songs:
             for src in find_outputs(args.out_root, args.system, s):
                 pm, inst, theirs_all = load_theirs(src)
-                new = revoice(theirs_all, bb, ub, fold, merge)
+                new = cap_voices(revoice(theirs_all, bb, ub, fold, merge),
+                                 args.max_voices)
                 dst = os.path.join(args.out_root, args.apply, s, 'co',
                                    os.path.basename(src))
                 write_applied(pm, inst, new, dst)
                 n_files += 1
         print(f'  wrote {n_files} files under {args.out_root}/{args.apply}/')
         print(f'  map: bass -> {bb}+pc, upper -> {ub}+pc, fold={int(fold)}, '
-              f'merge={int(merge)}; melody and tempo untouched')
+              f'merge={int(merge)}; melody and tempo untouched'
+              + (f'; chords capped to the lowest {args.max_voices} voices'
+                 if args.max_voices else ''))
 
 
 if __name__ == '__main__':
