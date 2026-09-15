@@ -1,0 +1,13 @@
+# Local (Mac) inference + scoring for midi_yinyang. Install into a fresh
+# Python 3.10/3.11 env; torch's arm64 wheel carries the Metal backend.
+torch>=2.3
+numpy
+scipy
+pretty_midi
+mido
+lightning
+pytorch_lightning
+wandb
+joblib
+six
+tqdm
