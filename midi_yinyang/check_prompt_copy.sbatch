@@ -20,10 +20,20 @@
 #   OUT_ROOT        E1 tree, default temp/E1_v5b
 #   SYSTEMS         default "WSf A3ctcaT"
 #   PROMPT_FRAMES   default 96
-#   SAMPLE          which sample to read, default 0
+#   SAMPLE          sample index(es) to read, default 0; "0 1 2" reads all
+#   MEL_DIR/CHORD_DIR  what to compare AGAINST; default the tree's staged
+#                   prompts. Point CHORD_DIR at input/heldout_v5/chord to
+#                   compare with the held-out files themselves.
 #   EXCLUDE_SONGS   default "506 786", as eval_e1
 #   SHOW            songs with the lowest chord agreement to print beat
 #                   by beat, default 3
+#
+# Besides the frame-level agreement, the log lists NOTE-level
+# differences: every note the system holds that our prompt does not
+# (and the reverse), with where it sits in the chord -- highest, lowest,
+# inner -- and whether it doubles a pitch we already hold. A doubled
+# note is invisible to a set comparison, so this is the check for "one
+# more note than ours".
 #
 # Example:
 #   sbatch --export=ALL,OUT_ROOT=temp/E1_v5b,SYSTEMS="WSf A3ctcaT" \
@@ -69,5 +79,5 @@ echo "================================================================"
 
 python check_prompt_copy.py --out-root "$OUT_ROOT" --systems $SYSTEMS \
     --mel-dir "$MEL_DIR" --chord-dir "$CHORD_DIR" \
-    --prompt-frames "$PROMPT_FRAMES" --sample "$SAMPLE" --show "$SHOW" \
+    --prompt-frames "$PROMPT_FRAMES" --sample $SAMPLE --show "$SHOW" \
     ${EXCLUDE_SONGS:+--exclude-songs $EXCLUDE_SONGS}

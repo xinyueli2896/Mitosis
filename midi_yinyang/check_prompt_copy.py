@@ -94,6 +94,32 @@ def compare(ours, theirs):
                 n_ours=ours.n_onsets(), n_theirs=theirs.n_onsets())
 
 
+def note_diff(ours, theirs):
+    """Note-level differences: what THEIRS has that OURS does not, and
+    the reverse, as (frame, pitch, role, dup) with role = where the
+    extra pitch sits in that frame's chord (highest / lowest / inner /
+    alone) and dup = it doubles a pitch our chord already holds at that
+    frame (a set comparison would never see that). Onsets are compared
+    as multisets per frame, so a duplicated note counts."""
+    from collections import Counter
+    extra, missing = [], []
+    for f in range(ours.n_frames):
+        co, ct = Counter(ours.onsets[f]), Counter(theirs.onsets[f])
+        for pitch, k in (ct - co).items():
+            snd = theirs.sounding_abs[f]
+            role = ('alone' if len(snd) <= 1 else 'highest'
+                    if pitch >= max(snd) else 'lowest'
+                    if pitch <= min(snd) else 'inner')
+            extra.extend([(f, pitch, role, pitch in co)] * k)
+        for pitch, k in (co - ct).items():
+            snd = ours.sounding_abs[f]
+            role = ('alone' if len(snd) <= 1 else 'highest'
+                    if pitch >= max(snd) else 'lowest'
+                    if pitch <= min(snd) else 'inner')
+            missing.extend([(f, pitch, role, pitch in ct)] * k)
+    return extra, missing
+
+
 def pc_name(pcs):
     names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
     return '.'.join(names[p] for p in sorted(pcs)) or '-'
@@ -135,7 +161,8 @@ def main():
     p.add_argument('--mel-dir', required=True)
     p.add_argument('--chord-dir', required=True)
     p.add_argument('--prompt-frames', type=int, default=96)
-    p.add_argument('--sample', type=int, default=0)
+    p.add_argument('--sample', type=int, nargs='+', default=[0],
+                   help='sample index(es) to read; each song x sample is a row')
     p.add_argument('--song-ids', nargs='*', default=None,
                    help='default: every staged song in --mel-dir')
     p.add_argument('--exclude-songs', nargs='*', default=[])
@@ -174,15 +201,19 @@ def main():
         rows = []
         missing = 0
         for s, (pa, pb) in prompts.items():
-            f = find_output(args.out_root, system, s, args.sample)
-            if f is None:
-                missing += 1
-                continue
-            ga, gb = load_streams([f], args.task, mel_programs,
-                                  chord_programs, P)
-            rows.append((s, compare(pa, ga), compare(pb, gb), (pb, gb)))
+            for k in args.sample:
+                f = find_output(args.out_root, system, s, k)
+                if f is None:
+                    missing += 1
+                    continue
+                ga, gb = load_streams([f], args.task, mel_programs,
+                                      chord_programs, P)
+                tag = s if len(args.sample) == 1 else f'{s}/s{k}'
+                rows.append((tag, compare(pa, ga), compare(pb, gb), (pb, gb),
+                             (pa, ga), f))
         print('\n' + '=' * 72)
-        print(f'{system}: {len(rows)} songs compared, {missing} without output')
+        print(f'{system}: {len(rows)} song-sample(s) compared, {missing} '
+              f'without output')
         if not rows:
             continue
         keys = ('onset', 'pc', 'pitch', 'shift')
@@ -200,11 +231,46 @@ def main():
         worst = sorted(rows, key=lambda r: r[2]['pc'])[:args.show]
         if args.show and worst and worst[0][2]['pc'] < 0.999:
             print(f'  lowest chord agreement, beat by beat, first 2 bars:')
-            for s, _mm, mc, (pb, gb) in worst:
+            for s, _mm, mc, (pb, gb), _mel, _f in worst:
                 print(f'    song {s}: chord pc {mc["pc"]:.2f} pitch '
                       f'{mc["pitch"]:.2f} onset {mc["onset"]:.2f} '
                       f'shift {mc["shift"]:+d}')
                 show_bars(pb, gb)
+
+        # ---- note-level: extra and missing NOTES, by where they sit ----
+        # A frame whose pitch SET matches can still differ in notes: a
+        # doubled pitch, or a note that starts and stops inside a frame.
+        # And where the set differs by one pitch, this says which one --
+        # the top of the chord, the bottom, or an inner voice.
+        from collections import Counter
+        for st, idx in (('chord', 3), ('melody', 4)):
+            ex_all, mi_all = [], []
+            for r in rows:
+                o, t = r[idx]
+                ex, mi = note_diff(o, t)
+                ex_all.extend((r[0], *e) for e in ex)
+                mi_all.extend((r[0], *m) for m in mi)
+            n_tot = sum(r[idx][0].n_onsets() for r in rows)
+            print(f'  {st}: {len(ex_all)} extra note(s) in theirs, '
+                  f'{len(mi_all)} missing, over {n_tot} of our notes')
+            if ex_all:
+                roles = Counter(e[3] for e in ex_all)
+                dups = sum(1 for e in ex_all if e[4])
+                songs_hit = len({e[0] for e in ex_all})
+                print(f'    extra by position: '
+                      + ', '.join(f'{k} {v}' for k, v in roles.most_common())
+                      + f'; doubling a pitch we already hold: {dups}; '
+                        f'songs affected: {songs_hit}')
+                for sng, fr, pitch, role, dup in ex_all[:args.show * 3]:
+                    print(f'      song {sng} frame {fr:3d} (bar {fr // 16 + 1} '
+                          f'beat {(fr % 16) // 4 + 1}) pitch {pitch} '
+                          f'{role}{" (duplicate)" if dup else ""}')
+            if mi_all:
+                roles = Counter(m[3] for m in mi_all)
+                print(f'    missing by position: '
+                      + ', '.join(f'{k} {v}' for k, v in roles.most_common()))
+                for sng, fr, pitch, role, dup in mi_all[:args.show * 3]:
+                    print(f'      song {sng} frame {fr:3d} pitch {pitch} {role}')
 
 
 if __name__ == '__main__':
