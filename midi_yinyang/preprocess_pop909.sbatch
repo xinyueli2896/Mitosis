@@ -67,8 +67,17 @@
 set -euo pipefail
 source ~/.bashrc
 
-CONDA_ENV=mitosis
-REPO_DIR=/home/xinyue.li/Mitosis
+CONDA_ENV="${CONDA_ENV:-mitosis}"
+REPO_DIR="${REPO_DIR:-/home/xinyue.li/Mitosis}"
+[[ -d "$REPO_DIR" ]] || REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOG_DIR="${LOG_DIR:-/home/xinyue.li/logs}"
+# conda activate needs the shell hook, which a non-interactive ~/.bashrc
+# may not install; skip when already in the env, else load the hook
+if [[ "${CONDA_DEFAULT_ENV:-}" != "$CONDA_ENV" ]]; then
+    if ! type conda >/dev/null 2>&1 || ! conda activate "$CONDA_ENV" 2>/dev/null; then
+        source "$(conda info --base)/etc/profile.d/conda.sh"; conda activate "$CONDA_ENV"
+    fi
+fi
 
 POP909_RAW="${POP909_RAW:-/home/xinyue.li/POP909-Dataset/POP909}"
 ALIGNED_DIR="${ALIGNED_DIR:-/home/xinyue.li/POP909-Dataset/POP909-aligned}"
@@ -77,9 +86,8 @@ CHORD_DIR="${CHORD_DIR:-/home/xinyue.li/POP909-Dataset/POP909-chord}"
 FORCE="${FORCE:-0}"
 REBUILD_MIDI="${REBUILD_MIDI:-0}"
 
-conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
-mkdir -p /home/xinyue.li/logs data
+mkdir -p "$LOG_DIR" data 2>/dev/null || mkdir -p data
 
 count_mid() { find "$1" -maxdepth 1 -name '*.mid' 2>/dev/null | wc -l; }
 
