@@ -747,7 +747,10 @@ if [[ "$NGPUS" -le 1 ]]; then
         "${COMMON_ARGS[@]}" \
         "${EXTRA_TRAIN_ARGS[@]}"
 else
-    torchrun --standalone --nnodes=1 --nproc_per_node="$NGPUS" \
+    # python -m rather than the torchrun entry point: a stale ~/.local
+    # shim on PATH can shadow the env's torchrun and import a torch that
+    # is not there
+    python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node="$NGPUS" \
         cp_transformer_m2c_duet_block_diffusion.py \
         "${COMMON_ARGS[@]}" \
         "${EXTRA_TRAIN_ARGS[@]}"
