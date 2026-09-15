@@ -37,6 +37,14 @@
 #         published best AND under the comparison our system faces.
 #   WS    external reference: whole-song-gen PROMPTED lead-sheet
 #         continuation, same 6-bar prompt, its own inpainting path.
+#   WSfv  WSf with its chord track re-voiced into OUR rendering (bass at
+#         36+pc, chord tones at 60+pc) by wholesong_chord_map.sbatch
+#         APPLY=WSfv. The baseline writes chord tones at 48+pc, so its
+#         raw output differs from ours in absolute pitch on every chord
+#         while holding the same pitch classes; over the prompt bars
+#         the re-voicing reproduces our chord note for note on 89/90
+#         songs. Not generated here: it is derived from a complete WSf
+#         tree, and this script only scores it.
 #   AMT   external reference: the Anticipatory Music Transformer
 #         (arXiv:2306.08620), prompted continuation of BOTH streams from
 #         merged_tagged. The only external arm that CO-generates rather
@@ -203,7 +211,7 @@ SYSTEMS="${SYSTEMS:-A1 A3 A3f S1 S-scratch P-mc P-cm WS}"
 # (happened 2026-09-10, job 225780). With generation on, 'all' would try
 # to generate every system, so keep it to score-only runs.
 if [[ "$SYSTEMS" == "all" ]]; then
-    SYSTEMS="A11aT A11K4 A1 A1cp8 A3 A3f A3fctcaT A3K0 A3ctc A3ctcc A3ctc2 A3ctca A3ctcaT A3c A3fc A3fcaT A3fcaTar A3fcK4 A10 S1 S-scratch S0 P-mc P-cm WS WSf AMT"
+    SYSTEMS="A11aT A11K4 A1 A1cp8 A3 A3f A3fctcaT A3K0 A3ctc A3ctcc A3ctc2 A3ctca A3ctcaT A3c A3fc A3fcaT A3fcaTar A3fcK4 A10 S1 S-scratch S0 P-mc P-cm WS WSf WSfv AMT"
 fi
 FORCE="${FORCE:-}"
 CKPT_A1="${CKPT_A1:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_melchord_cp4tar_batch_8_schedule}"
@@ -624,6 +632,11 @@ generate() {
         CROPS_TSV="$crops" \
         OUR_MEL_DIR="$ourmel" OUR_CHORD_DIR="$ourchd" \
             bash "$MY/infer_wholesong_prompted.sbatch" ;;
+    WSfv)
+        echo "ERROR: WSfv is derived, not generated: run"
+        echo "  sbatch --export=ALL,OUT_ROOT=$OUT_ROOT,APPLY=WSfv midi_yinyang/wholesong_chord_map.sbatch"
+        echo "on a complete WSf tree, then score with SKIP_INFER=1"
+        exit 1 ;;
     *)  echo "ERROR: unknown system $name"; exit 1 ;;
     esac
 }

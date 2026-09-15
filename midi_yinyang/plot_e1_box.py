@@ -86,7 +86,11 @@ GROUPS = [
         ('P-cm',      'Cascade\n(chd→mel)',    'Casc–cm'),
     ]),
     ('External baselines', True, [
-        ('WSf',       'Whole-Song\nGen',            'WSG'),
+        # WSfv: the whole-song baseline with its chord track re-voiced
+        # into our rendering (wholesong_chord_map.sbatch APPLY=WSfv);
+        # the raw WSf differs from every other system in absolute pitch
+        # on every chord, which the voicing and full-state metrics see.
+        ('WSfv',      'Whole-Song\nGen',            'WSG'),
         ('AMT',       'Anticipatory\nMusic Transf.', 'AMT'),
     ]),
     # Held out of the ranking and placed last, by request. It is still
