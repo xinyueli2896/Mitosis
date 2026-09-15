@@ -35,7 +35,7 @@ copy of the source. --chord-program is there only to tag on purpose.
 Usage (via build_nottingham_split.sbatch):
   python build_nottingham_split.py --melody-dir .../MIDI/melody \
       --chord-dir .../MIDI/chords --dst input/nottingham_split \
-      --tunes ashover_5 hpps_9 morris_2 playford_15 xmas_8
+      --tunes ashover5 hpps9 morris2 playford15 xmas8
 """
 
 import argparse
@@ -47,10 +47,12 @@ import mido
 
 
 def find_file(folder, tune):
-    for cand in (f'{tune}.mid', f'{tune}.MID', f'{tune}.midi'):
-        p = os.path.join(folder, cand)
-        if os.path.exists(p):
-            return p
+    # the dataset names files ashover5.mid; accept ashover_5 as well
+    for stem in (tune, tune.replace('_', '')):
+        for cand in (f'{stem}.mid', f'{stem}.MID', f'{stem}.midi'):
+            p = os.path.join(folder, cand)
+            if os.path.exists(p):
+                return p
     hits = sorted(glob.glob(os.path.join(folder, f'{tune}*.mid')))
     if len(hits) == 1:
         return hits[0]

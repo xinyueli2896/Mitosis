@@ -34,7 +34,7 @@
 #                  selects on val_ar_loss_content instead.
 #   SONG_IDS       default "126 596 606 696 886 003 726". Numeric ids are
 #                  zero-padded to POP909's three digits; a named tune
-#                  (ashover_5, from build_nottingham_split) is used as is.
+#                  (ashover5, from build_nottingham_split) is used as is.
 #   MEL_SRC / CHORD_SRC   default input/heldout_v5/{melody,chord}
 #   OUT_DIR        default temp/trial_a12_<jobid>
 #   CHORD_PROGRAM  program pinned on the staged chord prompts, default 48
@@ -123,7 +123,7 @@ EVAL_MEL="$OUT_DIR/prompts/mel"
 EVAL_CHORD="$OUT_DIR/prompts/chord"
 mkdir -p "$EVAL_MEL" "$EVAL_CHORD"
 for s in $SONG_IDS; do
-    # POP909 ids are zero-padded to 3; a named tune (ashover_5) is used as is
+    # POP909 ids are zero-padded to 3; a named tune (ashover5) is used as is
     if [[ "$s" =~ ^[0-9]+$ ]]; then sid=$(printf '%03d' "$((10#$s))"); else sid="$s"; fi
     for pair in "$MEL_SRC:$EVAL_MEL" "$CHORD_SRC:$EVAL_CHORD"; do
         src="${pair%%:*}"; dst="${pair##*:}"

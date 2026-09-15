@@ -25,14 +25,14 @@
 #   MELODY_SRC   default /home/xinyue.li/nottingham-dataset/MIDI/melody
 #   CHORD_SRC    default /home/xinyue.li/nottingham-dataset/MIDI/chords
 #   DST          default input/nottingham_split
-#   TUNES        default "ashover_5 hpps_9 morris_2 playford_15 xmas_8"
+#   TUNES        default "ashover5 hpps9 morris2 playford15 xmas8"
 #   TEMPO        default 120; 0 keeps the source tempo map
 #   CHORD_PROGRAM empty (default) leaves programs as in the source
-#   PICKUP       overrides, e.g. "morris_2=1 xmas_8=0"
+#   PICKUP       overrides, e.g. "morris2=1 xmas8=0"
 #
 # Example:
 #   sbatch midi_yinyang/build_nottingham_split.sbatch
-#   sbatch --export=ALL,PICKUP="xmas_8=0" midi_yinyang/build_nottingham_split.sbatch
+#   sbatch --export=ALL,PICKUP="xmas8=0" midi_yinyang/build_nottingham_split.sbatch
 
 #SBATCH --job-name=build_nottingham_split
 #SBATCH --output=/home/xinyue.li/logs/%x_%j.out
@@ -58,7 +58,7 @@ mkdir -p /home/xinyue.li/logs
 MELODY_SRC="${MELODY_SRC:-/home/xinyue.li/nottingham-dataset/MIDI/melody}"
 CHORD_SRC="${CHORD_SRC:-/home/xinyue.li/nottingham-dataset/MIDI/chords}"
 DST="${DST:-input/nottingham_split}"
-TUNES="${TUNES:-ashover_5 hpps_9 morris_2 playford_15 xmas_8}"
+TUNES="${TUNES:-ashover5 hpps9 morris2 playford15 xmas8}"
 CHORD_PROGRAM="${CHORD_PROGRAM:-}"
 TEMPO="${TEMPO:-120}"
 PICKUP="${PICKUP:-}"
