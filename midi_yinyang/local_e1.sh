@@ -116,8 +116,12 @@ wait_or_lock() {   # wait_or_lock <dir> -> 0 = caller must build, 1 = ready
     while [[ ! -f "$dir/.ready" ]]; do sleep 2; done
     return 1
 }
+# The staged copy is keyed by the SONG SET as well as the program: one
+# OUT_ROOT can serve a 5-song subjective run and the full 93-song run,
+# and a stage cached from the small one must not be reused by the big.
+STAGE_KEY="$(basename "$SPLIT")_$(echo $SONG_IDS | wc -w)"
 stage() {   # stage <program> -> folder with mel/ chord/ (chord tagged)
-    local prog="$1" dir="$OUT_ROOT/prompts_prog$1"
+    local prog="$1" dir="$OUT_ROOT/prompts_prog$1_$STAGE_KEY"
     if wait_or_lock "$dir"; then
         mkdir -p "$dir/mel" "$dir/chord"
         for s in $SONG_IDS; do
@@ -148,7 +152,7 @@ RETAG
 # the single-stream models read ONE file per song, both streams merged
 # with the chord on program 48 -- the only thing that keeps them apart
 stage_merged() {
-    local dir="$OUT_ROOT/prompts_merged"
+    local dir="$OUT_ROOT/prompts_merged_$STAGE_KEY"
     if wait_or_lock "$dir"; then
         python merge_melody_chord.py --melody "$MEL_SRC" --chord "$CHORD_SRC" \
             --dst "$dir" --chord-program 48 --ids $SONG_IDS
