@@ -314,8 +314,14 @@
 set -euo pipefail
 source ~/.bashrc
 
-CONDA_ENV=mitosis
-REPO_DIR=/home/xinyue.li/Mitosis
+CONDA_ENV="${CONDA_ENV:-mitosis}"
+# REPO_DIR / LOG_DIR: the cluster's paths by default; on another machine
+# run this file with bash and pass both (or REPO_DIR is derived from the
+# script's own location). SLURM_JOB_ID is 'local' off SLURM.
+REPO_DIR="${REPO_DIR:-/home/xinyue.li/Mitosis}"
+[[ -d "$REPO_DIR" ]] || REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOG_DIR="${LOG_DIR:-/home/xinyue.li/logs}"
+SLURM_JOB_ID="${SLURM_JOB_ID:-local}"
 
 PRETRAINED=ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt
 # MoE configuration (defaults = the standard 4-expert top-2 setup).
@@ -465,7 +471,7 @@ case "$TASK" in melchord*) export MELCHORD_CP="$MAX_POLYPHONY" ;; esac
 conda activate "$CONDA_ENV"
 cd "$REPO_DIR/midi_yinyang"
 
-mkdir -p /home/xinyue.li/logs
+mkdir -p "$LOG_DIR" 2>/dev/null || true
 
 # --- detect GPU count --------------------------------------------------
 NGPUS="${SLURM_GPUS_ON_NODE:-}"
