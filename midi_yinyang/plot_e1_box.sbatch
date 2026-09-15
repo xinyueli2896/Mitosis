@@ -51,6 +51,11 @@
 #             drops Duet (refine) and keeps Duet (alt. commit).
 #   WIDTH     figure width in inches (default 7.0, a two-column page)
 #   TITLE     optional figure title
+#   QUALITY_TABLE=1 (default) also write the quality sheet as a LaTeX
+#             table, <OUT>_quality.tex: one row per system, one column
+#             per pooled metric, 95% interval under each value, best
+#             ranked system per column in bold, the reference split-half
+#             null as the last row (e1_quality_table.py).
 #   UBR_CURVES=1 (default) also draw the unique-beat-ratio curves --
 #             the BEAT paper's figure: ratio against phrase length, one
 #             curve per system, SE bands over songs. Two files:
@@ -134,6 +139,14 @@ echo "================================================================"
 if [[ -n "${BLOCKS// /}" ]]; then
     for b in $BLOCKS; do
         echo "--- $b ---"
+        if [[ "$b" == quality && "${QUALITY_TABLE:-1}" == "1" ]]; then
+            # the quality sheet as a LaTeX table too: every panel is a
+            # divergence with reference 0, so a table carries it better
+            pc="${POOLED_CSV:-${CSV%_metrics.csv}_pooled.csv}"
+            [[ -f "$pc" ]] && python e1_quality_table.py --pooled "$pc" \
+                --out "${OUT}_quality.tex" ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"} \
+                || echo "[table] no $pc; quality table skipped"
+        fi
         python plot_e1_box.py --csv "$CSV" --out "${OUT}_${b}" \
             --block "$b" ${NCOLS:+--ncols "$NCOLS"} --width "$WIDTH" \
             $([[ "$DELTAS_ONLY" == "1" ]] && echo --deltas-only) \
