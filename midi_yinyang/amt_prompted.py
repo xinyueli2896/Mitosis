@@ -81,6 +81,21 @@ def restrict_instruments(instrs):
     return _instr_logits
 
 
+def as_pretty_midi(mid):
+    """Their events_to_midi returned a pretty_midi object in the version
+    this driver was written against and a mido.MidiFile in the current
+    one. Either way, hand back a PrettyMIDI (via an in-memory round
+    trip when needed) so the split below can read .instruments."""
+    import io
+    import pretty_midi as pm
+    if hasattr(mid, 'instruments'):
+        return mid
+    buf = io.BytesIO()
+    mid.save(file=buf)
+    buf.seek(0)
+    return pm.PrettyMIDI(buf)
+
+
 def split_by_program(mid, mel_program, chord_program):
     """Their events_to_midi writes one track per instrument, unnamed.
     eval_metrics splits streams by NAME first, so name them here; notes
@@ -89,6 +104,7 @@ def split_by_program(mid, mel_program, chord_program):
     """
     import pretty_midi as pm
 
+    mid = as_pretty_midi(mid)
     out = pm.PrettyMIDI(initial_tempo=120.0)
     mel = pm.Instrument(program=mel_program, name='MELODY')
     chd = pm.Instrument(program=chord_program, name='CHORD')

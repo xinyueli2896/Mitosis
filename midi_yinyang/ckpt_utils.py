@@ -78,7 +78,9 @@ def resolve_best_ckpt(path):
     # Matching 'val_loss=' literally missed those entirely and fell back to
     # last.ckpt -- silently reintroducing the exact best-vs-last bias this
     # module exists to prevent.
-    pattern = re.compile(r'\.(val[A-Za-z0-9_]*)=([0-9.]+)\.ckpt$')
+    # export_ckpt_weights writes <same name>.weights.ckpt beside the
+    # metric tag, so a weights-only export resolves like the original
+    pattern = re.compile(r'\.(val[A-Za-z0-9_]*)=([0-9.]+)(?:\.weights)?\.ckpt$')
     by_tag = {}
     try:
         for fname in os.listdir(directory):
