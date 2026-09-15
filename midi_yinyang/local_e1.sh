@@ -22,7 +22,10 @@
 #                  cp16, prompts merged with the chord at 48). Each
 #                  needs its checkpoint in CKPT_<name> (a run dir or a
 #                  .ckpt file; CKPT_A3 serves A3ctcaT, CKPT_A3FC serves
-#                  A3fcaT, CKPT_SSCRATCH serves S-scratch). The
+#                  A3fcaT, CKPT_SSCRATCH serves S-scratch). AMT (the
+#                  Anticipatory Music Transformer) needs no checkpoint
+#                  variable: it runs from its own venv, built once with
+#                  `bash setup_amt.sbatch` from the repo root. The
 #                  cascades P-mc / P-cm run through pipeline_cogen and
 #                  are not wired here.
 #   GPU            CUDA device index for this run (sets
@@ -75,6 +78,7 @@ sys_cfg() {   # -> "cp program schedule steps temp top_p ckpt_var kind"
         A1)        echo "4 0 - - - - CKPT_A1 causal" ;;
         S1)        echo "16 48 - - - - CKPT_S1 single" ;;
         S-scratch) echo "16 48 - - - - CKPT_SSCRATCH single" ;;
+        AMT)       echo "- 48 - - - - AMT_DIR amt" ;;
         *) echo "ERROR: unknown system $1" >&2; return 1 ;;
     esac
 }
@@ -130,7 +134,12 @@ for name in $SYSTEMS; do
         [[ -d "$dir" ]] && SCORED+=("$name") || echo "[$name] not generated; skipped"
         continue
     fi
-    [[ -n "$ck" && -e "$ck" ]] || { echo "[$name] SKIPPED: set $ckvar to its checkpoint"; continue; }
+    if [[ "$kind" == amt ]]; then
+        ck="${AMT_DIR:-external/anticipation}"
+        [[ -d "$ck/.venv" ]] || { echo "[$name] SKIPPED: no venv at $ck/.venv -- run: cd .. && bash midi_yinyang/setup_amt.sbatch"; continue; }
+    else
+        [[ -n "$ck" && -e "$ck" ]] || { echo "[$name] SKIPPED: set $ckvar to its checkpoint"; continue; }
+    fi
     [[ -d "$ck" ]] && ckarg="$ck/" || ckarg="$ck"
     echo "================================================================"
     echo "[$name] ckpt=$ck  cp=$cp  chord program=$prog  kind=$kind${sched:+  schedule=$sched}"
@@ -160,6 +169,14 @@ for name in $SYSTEMS; do
             --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$cp" --skip-existing \
             --model-size large --moe-num-experts 4 --moe-topk 2 ;;
+    amt)
+        # their wrapper is portable bash: it merges the two streams with
+        # the chord at 48 itself and writes <song>/co/sample_<i>.mid
+        REPO_DIR="$(cd .. && pwd)" AMT_DIR="$(readlink -f "$ck")" \
+        MEL_FOLDER="$(readlink -f "$MEL_SRC")" CHORD_FOLDER="$(readlink -f "$CHORD_SRC")" \
+        OUT_DIR="$(readlink -f "$OUT_ROOT")/AMT" \
+        PROMPT_FRAMES="$PROMPT_LENGTH" GEN_FRAMES="$GEN_LENGTH" N_SAMPLES="$N_SAMPLES" \
+            bash infer_amt_prompted.sbatch ;;
     single)
         mdir=$(stage_merged)
         # cp_transformer_inference writes temp/<save-name>/ itself, so
