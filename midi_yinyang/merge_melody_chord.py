@@ -50,13 +50,31 @@ def _force_track_program(track, program):
     return out
 
 
+def _force_track_channel(track, channel):
+    """Put every channel message of the track on `channel`.
+
+    Readers that key instruments by CHANNEL rather than by track (the
+    anticipation package's midi_to_events is one) fold two tracks that
+    share channel 0 into whichever program_change came last, so the
+    melody vanishes into the chord. A distinct channel per stream keeps
+    them apart under either convention; the program tag is untouched.
+    """
+    out = mido.MidiTrack()
+    for msg in track:
+        if not msg.is_meta and hasattr(msg, 'channel'):
+            out.append(msg.copy(channel=channel))
+        else:
+            out.append(msg.copy())
+    return out
+
+
 def _note_tracks(mid):
     return [t for t in mid.tracks
             if any(m.type == "note_on" and m.velocity > 0 for m in t)]
 
 
 def merge_pair(mel_path, chord_path, out_path,
-               mel_program=None, chord_program=None):
+               mel_program=None, chord_program=None, chord_channel=None):
     mel = mido.MidiFile(mel_path)
     cho = mido.MidiFile(chord_path)
     if mel.ticks_per_beat != cho.ticks_per_beat:
@@ -83,6 +101,8 @@ def merge_pair(mel_path, chord_path, out_path,
         t = _rename_track(t, "CHORD")
         if chord_program is not None:
             t = _force_track_program(t, chord_program)
+        if chord_channel is not None:
+            t = _force_track_channel(t, chord_channel)
         out.tracks.append(t)
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -105,6 +125,13 @@ def main():
                              "when the combined files feed the single-stream "
                              "CP transformer, so the tokenizer keeps the "
                              "streams apart.")
+    parser.add_argument("--chord-channel", type=int, default=None,
+                        help="put the CHORD tracks on this midi channel "
+                             "(melody keeps its own, normally 0). Needed by "
+                             "readers that key instruments by channel, such "
+                             "as the AMT baseline's; without it both streams "
+                             "sit on channel 0 and the melody is read as "
+                             "chord. Default: unchanged.")
     args = parser.parse_args()
 
     mel_files = {os.path.basename(p): p
@@ -133,7 +160,8 @@ def main():
             merge_pair(mel_files[n], cho_files[n],
                        os.path.join(args.dst, n),
                        mel_program=args.mel_program,
-                       chord_program=args.chord_program)
+                       chord_program=args.chord_program,
+                       chord_channel=args.chord_channel)
         except Exception as e:
             failed.append((n, repr(e)))
     print(f"Done. {len(names) - len(failed)} merged, {len(failed)} failed.")

@@ -135,8 +135,12 @@ if [[ -z "$MERGED_FOLDER" ]]; then
         exit 1; }
     echo "[merge] $n_mel songs -> $MERGED_FOLDER (chord forced to program 48)"
     mkdir -p "$MERGED_FOLDER"
+    # --chord-channel 1: their midi_to_events keys instruments by CHANNEL,
+    # so two streams on channel 0 collapse into the last program_change
+    # and the melody is read as chord (every note came back on 48)
     python merge_melody_chord.py --melody "$MEL_FOLDER" \
-        --chord "$CHORD_FOLDER" --dst "$MERGED_FOLDER" --chord-program 48
+        --chord "$CHORD_FOLDER" --dst "$MERGED_FOLDER" --chord-program 48 \
+        --chord-channel 1
 else
     [[ -d "$MERGED_FOLDER" ]] || {
         echo "ERROR: MERGED_FOLDER=$MERGED_FOLDER does not exist"; exit 1; }
