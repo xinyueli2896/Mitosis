@@ -220,7 +220,8 @@ def main():
     )
     print(f'[main] preserve_program={args.preserve_program}  '
           f'min_chord_tokens_before_eos={args.min_acc_tokens_before_eos}')
-    model.cuda()
+    from ckpt_utils import pick_device
+    model.to(pick_device())
     model.eval()
 
     os.makedirs(args.output_dir, exist_ok=True)

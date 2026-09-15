@@ -501,7 +501,8 @@ def main():
     print(f'[main] preserve_program={args.preserve_program}  '
           f'min_chord_tokens_before_eos={args.min_acc_tokens_before_eos}')
     model.save_name = os.path.basename(args.ckpt)
-    model.cuda()
+    from ckpt_utils import pick_device
+    model.to(pick_device())
     model.eval()
 
     if args.mel_folder or args.chord_folder:

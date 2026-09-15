@@ -15,6 +15,27 @@ import re
 import zipfile
 
 
+def pick_device():
+    """CUDA if present, else Apple MPS, else CPU.
+
+    The cluster always has CUDA, so nothing changes there. On a Mac the
+    same scripts land on the Metal backend; set
+    PYTORCH_ENABLE_MPS_FALLBACK=1 so any op MPS lacks runs on the CPU
+    instead of raising. Override with MITOSIS_DEVICE=cpu|mps|cuda.
+    """
+    import os
+    import torch
+    forced = os.environ.get('MITOSIS_DEVICE')
+    if forced:
+        return torch.device(forced)
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    mps = getattr(torch.backends, 'mps', None)
+    if mps is not None and mps.is_available():
+        return torch.device('mps')
+    return torch.device('cpu')
+
+
 def resolve_best_ckpt(path):
     """Resolve a ckpt argument into an actual file path, preferring the
     metric-tagged ckpt with the smallest value over `last.ckpt`.

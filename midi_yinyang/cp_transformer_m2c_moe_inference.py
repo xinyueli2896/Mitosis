@@ -281,7 +281,8 @@ def _load_raw(midi_path, max_polyphony):
 
 def _load_prompt_tokens(model, midi_path, max_polyphony):
     """preprocess_midi -> model.preprocess -> [1, T, subseq] tokens."""
-    raw = _load_raw(midi_path, max_polyphony).unsqueeze(0).cuda()
+    raw = _load_raw(midi_path, max_polyphony).unsqueeze(0).to(
+        next(model.parameters()).device)
     pitch_shift = torch.zeros(1, dtype=torch.int8, device=raw.device)
     return model.preprocess(raw, pitch_shift)  # [1, T, subseq]
 
@@ -618,7 +619,8 @@ def main():
         global_num_layers=args.global_num_layers,
     )
     model.save_name = os.path.basename(args.ckpt)
-    model.cuda()
+    from ckpt_utils import pick_device
+    model.to(pick_device())
     model.eval()
 
     if args.mel_folder or args.chord_folder:
