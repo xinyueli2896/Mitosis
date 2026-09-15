@@ -91,6 +91,9 @@ for s in $(ls "$MEL_SRC" | sed 's/\.[Mm][Ii][Dd]$//' | sort); do
     [[ "$skip" == 0 ]] && SONG_IDS="$SONG_IDS$s "
 done
 SONG_IDS="${SONG_IDS% }"
+# the staging lock is a mkdir INSIDE OUT_ROOT, so OUT_ROOT has to exist
+# first or the failed mkdir reads as "someone else holds the lock"
+mkdir -p "$OUT_ROOT" results
 echo "songs ($(echo $SONG_IDS | wc -w)): $SONG_IDS"
 [[ -n "$EXCLUDE_SONGS" ]] && echo "excluded: $EXCLUDE_SONGS"
 echo "prompt $PROMPT_LENGTH frames, total $GEN_LENGTH, $N_SAMPLES samples; systems: $SYSTEMS"
@@ -120,7 +123,16 @@ wait_or_lock() {   # wait_or_lock <dir> -> 0 = caller must build, 1 = ready
     local dir="$1"
     [[ -f "$dir/.ready" ]] && return 1
     if mkdir "$dir.lock" 2>/dev/null; then return 0; fi
-    while [[ ! -f "$dir/.ready" ]]; do sleep 2; done
+    # someone else is building it: wait, but not forever -- a stale lock
+    # from a killed run would otherwise hang every later run
+    local waited=0
+    while [[ ! -f "$dir/.ready" ]]; do
+        sleep 2; waited=$((waited + 2))
+        if (( waited > 600 )); then
+            echo "ERROR: waited 10 min for $dir/.ready; stale lock? rm -rf $dir $dir.lock and rerun" >&2
+            exit 1
+        fi
+    done
     return 1
 }
 # The staged copy is keyed by the SONG SET as well as the program: one
