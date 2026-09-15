@@ -217,7 +217,7 @@ SYSTEMS="${SYSTEMS:-A1 A3 A3f S1 S-scratch P-mc P-cm WS}"
 # (happened 2026-09-10, job 225780). With generation on, 'all' would try
 # to generate every system, so keep it to score-only runs.
 if [[ "$SYSTEMS" == "all" ]]; then
-    SYSTEMS="A11aT A11K4 A1 A1cp8 A3 A3f A3fctcaT A3K0 A3ctc A3ctcc A3ctc2 A3ctca A3ctcaT A3c A3fc A3fcaT A3fcaTar A3fcK4 A10 S1 S-scratch S0 P-mc P-cm WS WSf WSfv WSfv4 AMT"
+    SYSTEMS="A11aT A11K4 A1 A1cp8 A3 A3f A3fctcaT A3K0 A3ctc A3ctcc A3ctc2 A3ctca A3ctcaT A3c A3fc A3fcaT A3fcaTar A3fcK4 A10 A12 S1 S-scratch S0 P-mc P-cm WS WSf WSfv WSfv4 AMT"
 fi
 FORCE="${FORCE:-}"
 CKPT_A1="${CKPT_A1:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_melchord_cp4tar_batch_8_schedule}"
@@ -233,6 +233,7 @@ CKPT_A3FC="${CKPT_A3FC:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A3fc_melc
 CKPT_A1CP8="${CKPT_A1CP8:-}"
 # A10: the same-frame-edge model (train_intra_cross_attn SAME_FRAME=1); no default.
 CKPT_A11="${CKPT_A11:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A11_melchord_cp8long_ag_batch_8_schedule}"   # A.11 agreement head; decodes exactly like A3fc
+CKPT_A12="${CKPT_A12:-ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_A12K1_melchord_v5_draft_tagged_batch_8_schedule}"   # A.12 draft-only (v5 corpus, chord TAGGED 48: run with DUET_CHORD_PROGRAM=48); cp8; decode refine/1 step
 CKPT_A10="${CKPT_A10:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_sf_melchord_cp8long_batch_8_schedule}"   # 2026-09-10 A.10 same-frame (cp8)
 export A10_DIRECTION="${A10_DIRECTION:-alt}"
 # Merged single-stream baselines: 'tagged' = chord on program 48 in the
@@ -511,7 +512,7 @@ generate() {
             --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$cp" --skip-existing \
             --model-size large --moe-num-experts 4 --moe-topk 2 ;;
-    A3|A3f|A3fctcaT|A3K0|A3ctc|A3ctcc|A3ctc2|A3ctca|A3ctcaT|A3c|A3fc|A3fcaT|A3fcK4|A3fcaTar|A11aT|A11K4)
+    A3|A3f|A3fctcaT|A3K0|A3ctc|A3ctcc|A3ctc2|A3ctca|A3ctcaT|A3c|A3fc|A3fcaT|A3fcK4|A3fcaTar|A11aT|A11K4|A12)
         # Decode variants share the A3 checkpoint and differ only in the
         # env the decoder reads (A3_REFINE_STEPS / A3_SCHEDULE):
         #   A3K0    refinement depth 0: the AR head's draft is the output
@@ -532,6 +533,7 @@ generate() {
             A3fc|A3fcaT|A3fcK4) ck="$CKPT_A3FC"; cp="$MAX_POLYPHONY_CP8" ;;
             A3fcaTar) ck="$CKPT_A3FC/best_ar"; cp="$MAX_POLYPHONY_CP8" ;;
             A11aT|A11K4) ck="$CKPT_A11"; cp="$MAX_POLYPHONY_CP8" ;;
+            A12)  ck="$CKPT_A12"; cp="$MAX_POLYPHONY_CP8" ;;
             *)    ck="$CKPT_A3" ;;
         esac
         [[ -n "$ck" ]] || { echo "[$name] SKIPPED: checkpoint knob unset"; return 0; }
@@ -547,6 +549,12 @@ generate() {
             A3c|A3fc) denv=(A3_SCHEDULE="${A3C_SCHEDULE:-ctc_m}") ;;
             A3fcaT|A3fcaTar|A3fctcaT|A11aT) denv=(A3_SCHEDULE=ctc_alt A3_FINAL_TEMP=1.0 A3_TOP_P=1.0) ;;
             A11K4)    denv=(A3_SCHEDULE=refine) ;;
+            # A.12 draft-only: one state (every slot holds the AR draft), so
+            # the only decode whose k tags match is one masked seed round
+            # and one draft round. Trained on the v5 TAGGED corpus: stage
+            # the tree with DUET_CHORD_PROGRAM=48 or half of every chord
+            # frame's content tokens are off-distribution.
+            A12)      denv=(A3_SCHEDULE=refine A3_REFINE_STEPS=1 A3_FINAL_TEMP=1.0 A3_TOP_P=1.0) ;;
             A3fcK4)   denv=(A3_SCHEDULE=refine) ;;
         esac
         env ${denv[@]+"${denv[@]}"} python cp_transformer_m2c_duet_block_diffusion_combined.py \
