@@ -9,8 +9,8 @@ baselines / not ranked), each opened by a bold header row and closed by
 a rule; one row per system, one column per metric, the 95% bootstrap
 interval over songs on a scriptsize row beneath each value (--ci
 stacked, the default, which fits one column of a two-column template);
-the best RANKED system per column in bold (least divergence). The
-unranked block is never bolded, as on the figure. The reference
+the best system per column in bold (least divergence), the unranked
+block included unless --ranked-only. The reference
 split-half null, what a perfect system scores at this sample size, is
 the last row.
 
@@ -70,6 +70,9 @@ def main():
                          'width), none = values only')
     ap.add_argument('--no-ci', action='store_true', help='same as --ci none')
     ap.add_argument('--label', default='tab:e1_quality')
+    ap.add_argument('--ranked-only', action='store_true',
+                    help='bold only among the ranked families, as on the '
+                         'figure; default bolds the best of every system')
     args = ap.parse_args()
 
     pooled = read_pooled(args.pooled)
@@ -97,14 +100,17 @@ def main():
         if rows:
             blocks.append((family, ranked, rows))
 
-    # best RANKED system per column: least divergence (0 is the
-    # reference). Ties at the printed precision are all bold -- picking
-    # one of three systems that print 0.000 would be arbitrary.
+    # best system per column: least divergence (0 is the reference).
+    # Every system competes, the unranked block too (by request,
+    # 2026-09-16); --ranked-only restores the figure's rule. Ties at the
+    # printed precision are all bold -- picking one of three systems
+    # that print 0.000 would be arbitrary.
     best = {}
     for m, _ in metrics:
         d = args.fmd_digits if m == 'fmd' else args.digits
         cands = [(round(pooled[m][s][0], d), s) for _f, ranked, rows in blocks
-                 if ranked for s, _n in rows if s in pooled[m]
+                 if ranked or not args.ranked_only
+                 for s, _n in rows if s in pooled[m]
                  and not math.isnan(pooled[m][s][0])]
         if cands:
             lo = min(v for v, _s in cands)
@@ -141,8 +147,9 @@ def main():
              r'reference)'
              + (r'; brackets: 95\% bootstrap interval over songs'
                 if args.ci != 'none' else '')
-             + r'. Bold: best among the ranked systems per column. The '
-             r'last row is the split-half null of the reference itself, '
+             + r'. Bold: best per column'
+             + (' among the ranked systems' if args.ranked_only else '')
+             + r'. The last row is the split-half null of the reference itself, '
              r'the value a perfect system scores at this sample size.}')
     L.append(r'\label{' + args.label + '}')
     L.append(r'\small')
