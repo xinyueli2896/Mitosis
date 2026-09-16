@@ -4,10 +4,13 @@ Every metric on that sheet is a corpus-pooled divergence from the
 ground-truth continuation -- Frechet Music Distance and the four
 groove/scale-consistency JSDs -- so the reference level is 0 for all of
 them and a figure with a zero line on every panel says nothing a table
-does not. One row per system, one column per metric, the value with
-its 95% bootstrap interval over songs beneath it, and the best RANKED
-system per column in bold (least divergence). The unranked system is
-listed after a rule and never bolded, as on the figure. The reference
+does not. One block per family (ours / internal baselines / external
+baselines / not ranked), each opened by a bold header row and closed by
+a rule; one row per system, one column per metric, the 95% bootstrap
+interval over songs on a scriptsize row beneath each value (--ci
+stacked, the default, which fits one column of a two-column template);
+the best RANKED system per column in bold (least divergence). The
+unranked block is never bolded, as on the figure. The reference
 split-half null, what a perfect system scores at this sample size, is
 the last row.
 
@@ -30,10 +33,10 @@ from plot_e1_box import GROUPS, read_pooled          # noqa: E402
 
 METRICS = [
     ('fmd',     r'FMD'),
-    ('js_gc_a', r'$\mathrm{JS}_{\mathrm{GC}}$ mel.'),
-    ('js_gc_b', r'$\mathrm{JS}_{\mathrm{GC}}$ chd.'),
-    ('js_sc_a', r'$\mathrm{JS}_{\mathrm{SC}}$ mel.'),
-    ('js_sc_b', r'$\mathrm{JS}_{\mathrm{SC}}$ chd.'),
+    ('js_gc_a', r'$\mathrm{JS}_{\mathrm{GC}}^{\mathrm{mel}}$'),
+    ('js_gc_b', r'$\mathrm{JS}_{\mathrm{GC}}^{\mathrm{chd}}$'),
+    ('js_sc_a', r'$\mathrm{JS}_{\mathrm{SC}}^{\mathrm{mel}}$'),
+    ('js_sc_b', r'$\mathrm{JS}_{\mathrm{SC}}^{\mathrm{chd}}$'),
 ]
 
 # display names for the paper, one line each (the figure's two-line
@@ -58,9 +61,14 @@ def main():
     ap.add_argument('--exclude', default='',
                     help='comma-separated systems to leave out')
     ap.add_argument('--digits', type=int, default=3)
-    ap.add_argument('--fmd-digits', type=int, default=2)
-    ap.add_argument('--no-ci', action='store_true',
-                    help='values only, no interval line under each')
+    ap.add_argument('--fmd-digits', type=int, default=1)
+    ap.add_argument('--ci', choices=['stacked', 'inline', 'none'],
+                    default='stacked',
+                    help='where the 95%% interval goes: stacked = a '
+                         'scriptsize row under each value (fits one '
+                         'column), inline = beside it (needs the page '
+                         'width), none = values only')
+    ap.add_argument('--no-ci', action='store_true', help='same as --ci none')
     ap.add_argument('--label', default='tab:e1_quality')
     args = ap.parse_args()
 
@@ -98,45 +106,61 @@ def main():
         if cands:
             best[m] = min(cands)[1]
 
-    def cell(m, s):
+    if args.no_ci:
+        args.ci = 'none'
+
+    def value(m, s):
         rec = pooled[m].get(s)
         if rec is None or math.isnan(rec[0]):
             return '--'
-        v, lo, hi = rec[0], rec[1], rec[2]
         d = args.fmd_digits if m == 'fmd' else args.digits
-        txt = fmt(v, d)
+        txt = fmt(rec[0], d)
         if best.get(m) == s:
             txt = r'\textbf{' + txt + '}'
-        if not args.no_ci and not math.isnan(lo):
-            txt += r' {\scriptsize[' + fmt(lo, d) + ', ' + fmt(hi, d) + ']}'
+        if args.ci == 'inline' and not math.isnan(rec[1]):
+            txt += r' {\scriptsize[' + fmt(rec[1], d) + ', ' + fmt(rec[2], d) + ']}'
         return txt
 
+    def interval(m, s):
+        rec = pooled[m].get(s)
+        if rec is None or math.isnan(rec[0]) or math.isnan(rec[1]):
+            return ''
+        d = args.fmd_digits if m == 'fmd' else args.digits
+        return r'{\scriptsize[' + fmt(rec[1], d) + ', ' + fmt(rec[2], d) + ']}'
+
+    ncol = len(metrics) + 1
     L = []
     L.append(r'\begin{table}[t]')
     L.append(r'\centering')
     L.append(r'\caption{General quality: corpus-pooled divergence from the '
-             r'ground-truth continuation, lower is better and 0 is the '
-             r'reference. Brackets: 95\% bootstrap interval over songs. '
-             r'Bold: best among the ranked systems per column. The last '
-             r'row is the split-half null of the reference itself, the '
-             r'value a perfect system scores at this sample size.}')
+             r'ground-truth continuation ($\downarrow$, 0 is the '
+             r'reference)'
+             + (r'; brackets: 95\% bootstrap interval over songs'
+                if args.ci != 'none' else '')
+             + r'. Bold: best among the ranked systems per column. The '
+             r'last row is the split-half null of the reference itself, '
+             r'the value a perfect system scores at this sample size.}')
     L.append(r'\label{' + args.label + '}')
     L.append(r'\small')
-    L.append(r'\begin{tabular}{l' + 'c' * len(metrics) + '}')
+    L.append(r'\setlength{\tabcolsep}{3.5pt}')
+    L.append(r'\begin{tabular}{@{}l' + 'c' * len(metrics) + '@{}}')
     L.append(r'\toprule')
     L.append('System & ' + ' & '.join(lab for _m, lab in metrics) + r' \\')
     L.append(r'\midrule')
     for i, (family, ranked, rows) in enumerate(blocks):
-        if i and not ranked:
+        if i:
             L.append(r'\midrule')
-        L.append(r'\multicolumn{' + str(len(metrics) + 1) + r'}{l}{\textit{'
+        L.append(r'\multicolumn{' + str(ncol) + r'}{@{}l}{\textbf{'
                  + family + r'}} \\')
         for s, name in rows:
-            L.append(name + ' & ' + ' & '.join(cell(m, s) for m, _ in metrics)
+            L.append(name + ' & ' + ' & '.join(value(m, s) for m, _ in metrics)
                      + r' \\')
+            if args.ci == 'stacked':
+                L.append(' & ' + ' & '.join(interval(m, s) for m, _ in metrics)
+                         + r' \\')
     if null:
         L.append(r'\midrule')
-        L.append(r'reference split-half null & '
+        L.append(r'\textit{reference split-half null} & '
                  + ' & '.join(fmt(null.get(m, float('nan')),
                                   args.fmd_digits if m == 'fmd' else args.digits)
                               for m, _ in metrics) + r' \\')
