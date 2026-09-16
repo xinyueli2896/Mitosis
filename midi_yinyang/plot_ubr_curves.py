@@ -40,14 +40,15 @@ from matplotlib.lines import Line2D
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import eval_metrics as em                      # noqa: E402
-from plot_e1_box import (GROUPS, SURFACE, INK, INK_2, MUTED,  # noqa
-                         color_of)
+from plot_e1_box import (GROUPS, SURFACE, INK, INK_2, MUTED, GRID,  # noqa
+                         FS_TICK, FS_LABEL, FS_TITLE, FS_LETTER,
+                         FS_LEGEND, color_of)
 
 PANELS = [(1, 'state', '1-beat (Full)'), (2, 'state', '2-beat (Full)'),
           (1, 'onset', '1-beat (Onset)'), (2, 'onset', '2-beat (Onset)')]
 STREAMS = [('a', 'Melody'), ('b', 'Chord')]
-# each system has its own pastel; the dash per member within a family
-# is kept so the curves stay tellable apart in greyscale too
+# colour is the FAMILY (plot_e1_box palette); the dash per member
+# within a family tells its systems apart, in greyscale too
 MEMBER_DASH = ['-', (0, (5, 2)), (0, (1, 1.2))]
 
 
@@ -153,13 +154,12 @@ def main():
     p.add_argument('--no-bands', action='store_true')
     p.add_argument('--exclude', default='',
                    help='comma-separated system names to leave off')
-    p.add_argument('--y', choices=['ratio', 'delta'], default='delta',
-                   help="'ratio': the unique beat ratio itself, ground "
-                        "truth as a dashed curve. 'delta' (default): system "
-                        "minus ground truth, paired per song, so the target "
-                        "is the zero line and the deviation is what the "
-                        "eye measures -- on a 0..1 axis the whole finding "
-                        "sat in the last 0.05.")
+    p.add_argument('--y', choices=['ratio', 'delta'], default='ratio',
+                   help="'ratio' (default, by request 2026-09-16): the "
+                        "unique beat ratio itself, ground truth as a dashed "
+                        "curve, each row's axis tight to its data. 'delta': "
+                        "system minus ground truth, paired per song, so the "
+                        "target is the zero line.")
     args = p.parse_args()
     args.mel_programs = {int(x) for x in args.mel_programs.split(',')}
     args.chord_programs = {int(x) for x in args.chord_programs.split(',')}
@@ -176,7 +176,7 @@ def main():
               file=sys.stderr)
 
     fig, axes = plt.subplots(len(STREAMS), len(PANELS), squeeze=False,
-                             figsize=(args.width, 1.55 * len(STREAMS) + 1.2),
+                             figsize=(args.width, 1.55 * len(STREAMS) + 1.35),
                              sharey='row')
     row_lims = {r: (np.inf, -np.inf) for r in range(len(STREAMS))}
     fig.patch.set_facecolor(SURFACE)
@@ -237,29 +237,31 @@ def main():
                 row_lims[r] = (min(row_lims[r][0], lo_y),
                                max(row_lims[r][1], hi_y))
             if r == 0:
-                ax.set_title(title, fontsize=7.5, color=INK, pad=4)
+                ax.set_title(title, fontsize=FS_TITLE, color=INK, pad=4)
             if c == 0:
                 ax.set_ylabel(f'{sname}\n' + ('UBR $-$ ground truth'
                                                if args.y == 'delta'
                                                else 'unique beat ratio'),
-                              fontsize=7, color=INK)
+                              fontsize=FS_LABEL, color=INK)
             if r == len(STREAMS) - 1:
-                ax.set_xlabel('phrase length (beats)', fontsize=7,
-                              color=INK_2)
+                ax.set_xlabel('phrase length (beats)', fontsize=FS_LABEL,
+                              color=INK)
 
-            ax.tick_params(labelsize=6.3, colors=INK_2, length=2.5,
-                           width=0.6, color=MUTED)
+            ax.tick_params(labelsize=FS_TICK, colors=INK, length=2.5,
+                           width=0.6, color=INK)
             for side in ('top', 'right'):
                 ax.spines[side].set_visible(False)
             for side in ('left', 'bottom'):
-                ax.spines[side].set_color(MUTED)
+                ax.spines[side].set_color(INK)
                 ax.spines[side].set_linewidth(0.6)
             ax.set_facecolor(SURFACE)
-            ax.grid(False)
+            ax.yaxis.grid(True, color=GRID, lw=0.5)
+            ax.xaxis.grid(False)
+            ax.set_axisbelow(True)
             ax.annotate(chr(ord('a') + r * len(PANELS) + c),
                         xy=(0.02, 0.96), xycoords='axes fraction',
-                        ha='left', va='top', fontsize=8.0, weight='bold',
-                        color=INK)
+                        ha='left', va='top', fontsize=FS_LETTER,
+                        weight='bold', color=INK)
 
     # one y-range per row, tight to the data: melody and chord live on
     # different scales and a shared 0..1 axis hid the differences
@@ -270,16 +272,16 @@ def main():
     ordered = [handles[s] for s, _, _, _ in order if s in handles]
     if '_ref' in handles:
         ordered.append(handles['_ref'])
-    fig.legend(handles=ordered, loc='lower center', ncol=5, frameon=False,
-               fontsize=6.4, labelcolor=INK_2, bbox_to_anchor=(0.5, 0.0))
+    fig.legend(handles=ordered, loc='lower center', ncol=4, frameon=False,
+               fontsize=FS_LEGEND, labelcolor=INK, bbox_to_anchor=(0.5, 0.0))
     what = ('system minus ground truth, paired per song' if args.y == 'delta'
             else 'mean over songs, samples averaged within song')
     fig.text(0.5, 0.115 if not args.no_bands else 0.10,
              'lines: ' + what
              + ('; bands: $\\pm$1.96 SE over songs' if not args.no_bands
                 else ''),
-             ha='center', fontsize=6.0, color=INK_2)
-    fig.tight_layout(rect=(0, 0.16, 1, 1))
+             ha='center', fontsize=FS_TICK, color=INK_2)
+    fig.tight_layout(rect=(0, 0.17, 1, 1))
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print(f'wrote {args.out}.{ext}')

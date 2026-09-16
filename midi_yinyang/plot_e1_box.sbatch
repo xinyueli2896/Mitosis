@@ -1,14 +1,15 @@
 #!/bin/bash
-# SLURM (CPU): distribution plots of an E1 metrics CSV, by system family.
+# SLURM (CPU): box plots of an E1 metrics CSV, by system family.
 #
-# Draws one panel per metric: a stippled density cloud per system over
-# the PER-SONG values (samples averaged within a song first), each
-# system in its own pastel on white, ordered by family. Quartiles are
-# short ticks, the reference level a dashed line, the mean and its 95%
-# CI an ink stick over each cloud, and the best ranked system's mean a
-# solid line across the panel in that system's colour. Systems not
-# present in the CSV are drawn as hatched "pending" slots rather than
-# dropped, so a reader can see what is still missing.
+# Draws one panel per metric: a standard box plot per system over the
+# PER-SONG values (samples averaged within a song first), the box in
+# its family's colour, ordered by family. Median line, whiskers at 1.5
+# IQR, outliers as dots, the mean as a white diamond, the reference
+# level a dashed line, and the best ranked system's mean a solid line
+# across the panel in that system's colour. Sized for ONE column of a
+# two-column template (WIDTH 3.4 in) at 7 pt type. Systems not present
+# in the CSV are drawn as hatched "pending" slots rather than dropped,
+# so a reader can see what is still missing.
 #
 # Env knobs (--export=ALL,KEY=val):
 #   CSV       metrics CSV from eval_metrics/score_e1
@@ -49,7 +50,10 @@
 #   EXCLUDE_SYSTEMS  comma-separated internal names to leave off every
 #             figure -- no column, no placeholder. EXCLUDE_SYSTEMS=A3
 #             drops Duet (refine) and keeps Duet (alt. commit).
-#   WIDTH     figure width in inches (default 7.0, a two-column page)
+#   WIDTH     box-sheet width in inches (default 3.4, one column of a
+#             two-column template; 7.0 for the full page)
+#   UBR_WIDTH width of the unique-beat-ratio curves (default 7.0: that
+#             figure keeps the full page width)
 #   TITLE     optional figure title
 #   QUALITY_TABLE=1 (default) also write the quality sheet as a LaTeX
 #             table, <OUT>_quality.tex: one row per system, one column
@@ -59,11 +63,12 @@
 #   UBR_CURVES=1 (default) also draw the unique-beat-ratio curves --
 #             the BEAT paper's figure: ratio against phrase length, one
 #             curve per system, SE bands over songs. Two files:
-#               _ubr_curves        system MINUS ground truth, paired per
-#                                  song -- the target is the zero line and
-#                                  the deviation is what the eye measures
-#               _ubr_curves_ratio  the ratio itself, ground truth dashed,
+#               _ubr_curves        the ratio itself, ground truth dashed,
 #                                  each row's axis tight to its data
+#                                  (the main file since 2026-09-16, by
+#                                  request)
+#               _ubr_curves_delta  system MINUS ground truth, paired per
+#                                  song -- the target is the zero line
 #             Needs the midis, not the CSV, so it reads:
 #   MANIFEST  default CSV with _metrics.csv -> _manifest.tsv
 #   EVAL_MEL / EVAL_CHORD   reference dirs, default
@@ -112,7 +117,8 @@ NCOLS="${NCOLS:-}"
 DELTAS_ONLY="${DELTAS_ONLY:-0}"
 PER_SONG="${PER_SONG:-0}"
 POOLED_CSV="${POOLED_CSV:-}"
-WIDTH="${WIDTH:-7.0}"
+WIDTH="${WIDTH:-3.4}"
+UBR_WIDTH="${UBR_WIDTH:-7.0}"
 TITLE="${TITLE:-}"
 EXCLUDE_SYSTEMS="${EXCLUDE_SYSTEMS:-}"
 UBR_CURVES="${UBR_CURVES:-1}"
@@ -165,12 +171,12 @@ fi
 if [[ "$UBR_CURVES" == "1" ]]; then
     if [[ -f "$MANIFEST" && -d "$EVAL_MEL" && -d "$EVAL_CHORD" ]]; then
         echo "--- unique beat ratio curves ---"
-        for y in delta ratio; do
-            suffix=""; [[ "$y" == ratio ]] && suffix="_ratio"
+        for y in ratio delta; do
+            suffix=""; [[ "$y" == delta ]] && suffix="_delta"
             python plot_ubr_curves.py --manifest "$MANIFEST" \
                 --ref-a-dir "$EVAL_MEL" --ref-b-dir "$EVAL_CHORD" \
                 --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
-                --width "$WIDTH" --y "$y" --out "${OUT}_ubr_curves$suffix" \
+                --width "$UBR_WIDTH" --y "$y" --out "${OUT}_ubr_curves$suffix" \
                 ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"}
         done
     else
