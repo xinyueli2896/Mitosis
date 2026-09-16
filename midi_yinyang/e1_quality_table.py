@@ -7,8 +7,11 @@ them and a figure with a zero line on every panel says nothing a table
 does not. One block per family (ours / internal baselines / external
 baselines / not ranked), each opened by a bold header row and closed by
 a rule; one row per system, one column per metric, the 95% bootstrap
-interval over songs on a scriptsize row beneath each value (--ci
-stacked, the default, which fits one column of a two-column template);
+interval over songs beside each value (--span page, the default: a
+table* across both columns of the template) or on a scriptsize row
+beneath it (--span column). Rules are plain \hline by default so the
+table needs no package beyond the template's (--rules booktabs for
+toprule/midrule);
 the best system per column in bold (least divergence), the unranked
 block included unless --ranked-only. The reference
 split-half null, what a perfect system scores at this sample size, is
@@ -63,13 +66,19 @@ def main():
     ap.add_argument('--digits', type=int, default=3)
     ap.add_argument('--fmd-digits', type=int, default=1)
     ap.add_argument('--ci', choices=['stacked', 'inline', 'none'],
-                    default='stacked',
+                    default=None,
                     help='where the 95%% interval goes: stacked = a '
                          'scriptsize row under each value (fits one '
                          'column), inline = beside it (needs the page '
                          'width), none = values only')
     ap.add_argument('--no-ci', action='store_true', help='same as --ci none')
     ap.add_argument('--label', default='tab:e1_quality')
+    ap.add_argument('--span', choices=['column', 'page'], default='page',
+                    help='page (default): table* across both columns, '
+                         'intervals inline; column: single-column table')
+    ap.add_argument('--rules', choices=['hline', 'booktabs'], default='hline',
+                    help='hline (default) needs no package; booktabs '
+                         'uses toprule/midrule/bottomrule')
     ap.add_argument('--ranked-only', action='store_true',
                     help='bold only among the ranked families, as on the '
                          'figure; default bolds the best of every system')
@@ -116,8 +125,14 @@ def main():
             lo = min(v for v, _s in cands)
             best[m] = {s for v, s in cands if v == lo}
 
+    if args.ci is None:
+        args.ci = 'inline' if args.span == 'page' else 'stacked'
     if args.no_ci:
         args.ci = 'none'
+    top, mid, bot = ((r'\toprule', r'\midrule', r'\bottomrule')
+                     if args.rules == 'booktabs'
+                     else (r'\hline', r'\hline', r'\hline'))
+    env = 'table*' if args.span == 'page' else 'table'
 
     def value(m, s):
         rec = pooled[m].get(s)
@@ -140,7 +155,7 @@ def main():
 
     ncol = len(metrics) + 1
     L = []
-    L.append(r'\begin{table}[t]')
+    L.append(r'\begin{' + env + '}[t]')
     L.append(r'\centering')
     L.append(r'\caption{General quality: corpus-pooled divergence from the '
              r'ground-truth continuation ($\downarrow$, 0 is the '
@@ -153,15 +168,16 @@ def main():
              r'the value a perfect system scores at this sample size.}')
     L.append(r'\label{' + args.label + '}')
     L.append(r'\small')
-    L.append(r'\setlength{\tabcolsep}{3.5pt}')
-    L.append(r'\begin{tabular}{@{}l' + 'c' * len(metrics) + '@{}}')
-    L.append(r'\toprule')
+    if args.span == 'column':
+        L.append(r'\setlength{\tabcolsep}{3.5pt}')
+    L.append(r'\begin{tabular}{l' + 'c' * len(metrics) + '}')
+    L.append(top)
     L.append('System & ' + ' & '.join(lab for _m, lab in metrics) + r' \\')
-    L.append(r'\midrule')
+    L.append(mid)
     for i, (family, ranked, rows) in enumerate(blocks):
         if i:
-            L.append(r'\midrule')
-        L.append(r'\multicolumn{' + str(ncol) + r'}{@{}l}{\textbf{'
+            L.append(mid)
+        L.append(r'\multicolumn{' + str(ncol) + r'}{l}{\textbf{'
                  + family + r'}} \\')
         for s, name in rows:
             L.append(name + ' & ' + ' & '.join(value(m, s) for m, _ in metrics)
@@ -170,14 +186,14 @@ def main():
                 L.append(' & ' + ' & '.join(interval(m, s) for m, _ in metrics)
                          + r' \\')
     if null:
-        L.append(r'\midrule')
+        L.append(mid)
         L.append(r'\textit{reference split-half null} & '
                  + ' & '.join(fmt(null.get(m, float('nan')),
                                   args.fmd_digits if m == 'fmd' else args.digits)
                               for m, _ in metrics) + r' \\')
-    L.append(r'\bottomrule')
+    L.append(bot)
     L.append(r'\end{tabular}')
-    L.append(r'\end{table}')
+    L.append(r'\end{' + env + '}')
     with open(args.out, 'w') as f:
         f.write('\n'.join(L) + '\n')
     print(f'wrote {args.out}')
