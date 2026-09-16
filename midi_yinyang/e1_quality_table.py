@@ -97,14 +97,18 @@ def main():
         if rows:
             blocks.append((family, ranked, rows))
 
-    # best RANKED system per column: least divergence (0 is the reference)
+    # best RANKED system per column: least divergence (0 is the
+    # reference). Ties at the printed precision are all bold -- picking
+    # one of three systems that print 0.000 would be arbitrary.
     best = {}
     for m, _ in metrics:
-        cands = [(pooled[m][s][0], s) for _f, ranked, rows in blocks if ranked
-                 for s, _n in rows if s in pooled[m]
+        d = args.fmd_digits if m == 'fmd' else args.digits
+        cands = [(round(pooled[m][s][0], d), s) for _f, ranked, rows in blocks
+                 if ranked for s, _n in rows if s in pooled[m]
                  and not math.isnan(pooled[m][s][0])]
         if cands:
-            best[m] = min(cands)[1]
+            lo = min(v for v, _s in cands)
+            best[m] = {s for v, s in cands if v == lo}
 
     if args.no_ci:
         args.ci = 'none'
@@ -115,7 +119,7 @@ def main():
             return '--'
         d = args.fmd_digits if m == 'fmd' else args.digits
         txt = fmt(rec[0], d)
-        if best.get(m) == s:
+        if s in best.get(m, ()):
             txt = r'\textbf{' + txt + '}'
         if args.ci == 'inline' and not math.isnan(rec[1]):
             txt += r' {\scriptsize[' + fmt(rec[1], d) + ', ' + fmt(rec[2], d) + ']}'
