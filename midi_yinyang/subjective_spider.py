@@ -50,8 +50,7 @@ AXES = [('consistency', 'Consistency'), ('structure', 'Structure'),
 
 # system id in the CSV -> (display name, family, line style)
 SYSTEMS = [
-    ('Duet (alt commit)', 'Duet w/o iterative refinement', 'Ours', '-'),
-    ('Duet',              'Duet',                'Ours',               (0, (5, 2))),
+    ('Duet (alt commit)', 'Duet',                'Ours',               '-'),
     ('S-scratch',         'Single-stream (scratch)',   'Internal baselines', '-'),
     ('Whole-song',        'Whole-Song Gen',            'External baselines', '-'),
     ('AMT',               'Anticipatory Music Transf.', 'External baselines', (0, (5, 2))),
@@ -64,7 +63,6 @@ GT_COLOR = INK
 # (2026-09-17, by request), instead of the E1 family colours.
 SYSTEM_COLORS = {
     'Duet (alt commit)': '#ffd700',   # gold
-    'Duet':              '#ffd700',
     'S-scratch':         '#fa8775',   # light orange
     'S-finetune':        '#ea5f94',   # pink
     'Whole-song':        '#cd34b5',   # magenta
