@@ -45,6 +45,7 @@ METRICS = [
 # display names for the paper, one line each (the figure's two-line
 # labels joined)
 NAMES = {s: d.replace('\n', ' ').replace('\u2192', r'$\to$')
+          .replace('\u2212', '$-$')
          for _g, _r, members in GROUPS for s, d, _sh in members}
 
 

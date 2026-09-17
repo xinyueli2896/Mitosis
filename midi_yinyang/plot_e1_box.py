@@ -60,10 +60,13 @@ from matplotlib.patches import Rectangle
 # Each entry is (family, ranked, members). `ranked` says whether the
 # family takes part in the best-model comparison drawn on each panel.
 #
-# A3 and A3ctcaT are the SAME checkpoint under two decodes -- A3 is the
-# default refinement schedule (K=4, T=0.9, top-p 0.95), A3ctcaT is
-# ctc_alt with the follower sampled at T=1 and no nucleus cut -- so the
-# labels name the decode, not two models.
+# Naming (2026-09-17, by request): the full model is "Duet" and each
+# variant is Duet MINUS what it lacks. A3 and A3ctcaT are the SAME
+# checkpoint under two decodes -- A3 is the refinement schedule (K=4,
+# T=0.9, top-p 0.95), A3ctcaT the alternating commit-then-condition
+# schedule (follower at T=1, no nucleus cut), i.e. Duet without the
+# iterative refinement decode. A1 is a separate checkpoint trained
+# without harmonizers (the query tokens) and decoded autoregressively.
 #
 # Each member is (internal name, long label, short label). The short
 # label is used as soon as the figure has more than one column, where
@@ -71,9 +74,9 @@ from matplotlib.patches import Rectangle
 # then goes in the figure footnote, so nothing is left to guess.
 GROUPS = [
     ('Ours', True, [
-        ('A1',        'Duet\nw/o query',            'Duet–noQ'),
-        ('A3',        'Duet\n(refine)',             'Duet–R'),
-        ('A3ctcaT',   'Duet\n(alt. commit)',        'Duet–AC'),
+        ('A3',        'Duet',                                  'Duet'),
+        ('A3ctcaT',   'Duet \u2212 iterative\nrefinement decode', 'Duet\u2212IR'),
+        ('A1',        'Duet \u2212 harmonizers',                 'Duet\u2212H'),
     ]),
     # The cascade arms (P-mc, P-cm) left the figures 2026-09-17, by
     # request; they are still scored and sit in the CSVs.
