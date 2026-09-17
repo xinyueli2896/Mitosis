@@ -1,23 +1,26 @@
-"""Developedness against motif length: for motifs of 3..8 notes, what
-share of the melody continuation's motifs are, by the strictest
-relation each has to the prompt,
+"""Developedness against motif length, in three NESTED layers: for
+motifs of 3..8 notes, how many of the melody continuation's motifs
+relate to a prompt motif under an equivalence that loosens layer by
+layer,
 
-    exact        the same pitches occur in the prompt (a copy)
-    transposed   the same intervals occur, at another pitch
-    transformed  the inversion, the retrograde, or only the contour
-                 (up/down shape) occurs
+    layer 1  copied       the same pitches occur in the prompt
+    layer 2  + transposed the same intervals occur (includes layer 1)
+    layer 3  + transformed the inversion, the retrograde or only the
+                          contour occurs (includes layers 1 and 2)
 
-with the remainder novel. One panel per layer, motif length in NOTES on
-x (a motif of m notes is m - 1 intervals), one curve per system, the
+so the index can only grow from layer to layer, and the increment from
+one layer to the next is what that device adds. The unit is ABSOLUTE:
+motifs per continuation (--unit count, default), so a system that
+writes more notes is not normalised down; --unit share divides by the
+continuation's motif count. One panel per layer, motif length in NOTES
+on x (a motif of m notes is m - 1 intervals), one curve per system, the
 ground truth dashed: the yardstick for how much a real song restates,
-transposes and transforms its opening. A system above the ground truth
-on 'exact' copies more than real music does; below it on 'transformed'
-develops less.
+transposes and transforms its opening. --y delta draws system minus
+ground truth, paired per song, with zero as the target. Melody only.
 
-The classification is the P2 share breakdown of eval_metrics (motif
-share) computed here at every length instead of at n = 3 and 5 only.
-Melody only, by request. --y delta draws system minus ground truth,
-paired per song, with zero as the target.
+--exclusive restores the earlier exclusive classification (each motif
+in the strictest class only), which is the P2 share breakdown of
+eval_metrics at every length.
 
 Usage (via plot_motif_curve.sbatch):
   python plot_motif_curve.py --manifest results/E1_p80_v5b92_manifest.tsv \
@@ -43,10 +46,15 @@ from plot_e1_box import (GROUPS, SURFACE, INK, INK_2, GRID,  # noqa: E402
                          FS_TICK, FS_LABEL, FS_TITLE, FS_LETTER,
                          color_of, grouped_legend)
 
-LAYERS = [('exact', 'Exact copy'), ('transp', 'Transposed'),
-          ('transf', 'Transformed')]
+LAYERS_NESTED = [('exact', 'Layer 1: copied'),
+                 ('transp', 'Layer 2: + transposed'),
+                 ('transf', 'Layer 3: + transformed')]
+LAYERS_EXCL = [('exact', 'Exact copy'), ('transp', 'Transposed'),
+               ('transf', 'Transformed')]
 CLASSES = ('exact', 'transp', 'inv', 'contour', 'novel')
 MEMBER_DASH = ['-', (0, (5, 2)), (0, (1, 1.2))]
+UNIT = 'count'        # set from --unit
+NESTED = True         # set from --exclusive
 
 
 def shares(prompt_line, line, n):
@@ -77,8 +85,15 @@ def shares(prompt_line, line, n):
             counts['contour'] += 1
         else:
             counts['novel'] += 1
-    out = {k: c / total for k, c in counts.items()}
-    out['transf'] = out['inv'] + out['contour']
+    scale = 1.0 if UNIT == 'count' else 1.0 / total
+    out = {k: c * scale for k, c in counts.items()}
+    out['total'] = total
+    if NESTED:
+        # cumulative: each layer contains the ones before it
+        out['transp'] = out['exact'] + out['transp']
+        out['transf'] = out['transp'] + out['inv'] + out['contour']
+    else:
+        out['transf'] = out['inv'] + out['contour']
     return out
 
 
@@ -102,7 +117,7 @@ def collect(args):
                 p_line = em._line(ra.slice(0, lo))
                 refs[song] = (ra, p_line)
                 r_line = em._line(ra.slice(lo, hi))
-                for lay in CLASSES + ('transf',):
+                for lay in CLASSES + ('transf', 'total'):
                     ref[lay][song] = np.array([
                         (shares(p_line, r_line, m - 1) or {}).get(lay, np.nan)
                         for m in lengths])
@@ -115,7 +130,7 @@ def collect(args):
                 continue
             _ra, p_line = refs[song]
             g_line = em._line(ga.slice(lo, hi))
-            for lay in CLASSES + ('transf',):
+            for lay in CLASSES + ('transf', 'total'):
                 gen[lay][system][song].append(np.array([
                     (shares(p_line, g_line, m - 1) or {}).get(lay, np.nan)
                     for m in lengths]))
@@ -155,6 +170,11 @@ def main():
     p.add_argument('--min-notes', type=int, default=3)
     p.add_argument('--max-notes', type=int, default=8)
     p.add_argument('--y', choices=['raw', 'delta'], default='raw')
+    p.add_argument('--unit', choices=['count', 'share'], default='count',
+                   help='count: motifs per continuation (default); share: '
+                        'fraction of the continuation\'s motifs')
+    p.add_argument('--exclusive', action='store_true',
+                   help='exclusive classes instead of nested layers')
     p.add_argument('--width', type=float, default=7.0)
     p.add_argument('--no-bands', action='store_true')
     p.add_argument('--exclude', default='')
@@ -162,6 +182,9 @@ def main():
     args.mel_programs = {int(x) for x in args.mel_programs.split(',')}
     args.chord_programs = {int(x) for x in args.chord_programs.split(',')}
 
+    global UNIT, NESTED
+    UNIT, NESTED = args.unit, not args.exclusive
+    LAYERS = LAYERS_NESTED if NESTED else LAYERS_EXCL
     gen, ref, lengths = collect(args)
     excluded = {x.strip() for x in args.exclude.split(',') if x.strip()}
     order = [(s, d, g, i) for g, _r, members in GROUPS
@@ -205,10 +228,12 @@ def main():
         ax.set_title(label + ('' if args.y == 'raw' else ' $-$ GT'),
                      fontsize=FS_TITLE, color=INK, pad=4)
         ax.set_xlabel('motif length (notes)', fontsize=FS_LABEL, color=INK)
-        ax.yaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=None))
+        if UNIT == 'share':
+            ax.yaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=None))
         if c == 0:
-            ax.set_ylabel('melody motifs (%)' if args.y == 'raw'
-                          else 'melody motifs (% points)',
+            unit = ('motifs per continuation' if UNIT == 'count'
+                    else 'share of melody motifs')
+            ax.set_ylabel(unit + ('' if args.y == 'raw' else ' $-$ GT'),
                           fontsize=FS_LABEL, color=INK)
         ax.set_xticks(lengths)
         ax.tick_params(labelsize=FS_TICK, colors=INK, length=2.5, width=0.6,
@@ -242,19 +267,22 @@ def main():
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print(f'wrote {args.out}.{ext}')
 
-    print(f'\nmelody motif shares by length (notes {lengths[0]}..{lengths[-1]}); '
-          'mean over songs, samples averaged within song. A share of 0.01 '
-          'is about one motif per continuation at ~100 melody notes.')
-    for lay in CLASSES:
+    m_tot, _se, _n = _stack(ref['total'])
+    print(f'\nmelody motifs by length (notes {lengths[0]}..{lengths[-1]}), '
+          f'unit={UNIT}, {"nested layers" if NESTED else "exclusive classes"}; '
+          'mean over songs, samples averaged within song')
+    if m_tot is not None:
+        print('    motifs per GT continuation: ' + ' '.join(f'{v:.0f}' for v in m_tot))
+    for lay in ([l for l, _ in LAYERS] if NESTED else CLASSES):
         print(f'  == {lay}')
         for sysname, _d, _g, _i in order:
             if sysname not in gen[lay]:
                 continue
             m, _se, _n = _stack(gen[lay][sysname])
-            print(f'    {sysname:11s} ' + ' '.join(f'{v:.3f}' for v in m))
+            print(f'    {sysname:11s} ' + ' '.join(f'{v:.2f}' for v in m))
         m, _se, _n = _stack(ref[lay])
         if m is not None:
-            print(f'    {"GT":11s} ' + ' '.join(f'{v:.3f}' for v in m))
+            print(f'    {"GT":11s} ' + ' '.join(f'{v:.2f}' for v in m))
 
 
 if __name__ == '__main__':

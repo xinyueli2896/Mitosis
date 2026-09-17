@@ -3,7 +3,9 @@
 # of MIN_NOTES..MAX_NOTES notes, the share of the continuation's motifs
 # that are an exact copy of / a transposition of / a transformation
 # (inversion, retrograde, contour) of a prompt motif, one curve per
-# system with the ground truth dashed (plot_motif_curve.py). Writes
+# system with the ground truth dashed, in NESTED layers (each contains
+# the previous) and in motifs per continuation (plot_motif_curve.py).
+# Writes
 # <OUT>.{pdf,png} (shares) and <OUT>_delta.{pdf,png} (minus ground
 # truth, paired per song).
 #
