@@ -6,8 +6,12 @@
 # its family's colour, ordered by family. Median line, whiskers at 1.5
 # IQR, outliers omitted, the mean as a white diamond, the reference
 # level a dashed line, and the best ranked system's mean a solid line
-# across the panel in that system's colour. Sized for ONE column of a
-# two-column template (WIDTH 3.4 in) at 7 pt type. Systems not present
+# across the panel in that system's colour. WIDE LAYOUT by default
+# (ORIENT=h, 2026-09-17): four metrics side by side across both columns
+# (7.0 in), systems down the y-axis, names on the leftmost panel with
+# the qualifier line (e.g. "- harmonizers") a point smaller in grey;
+# the eight-panel repetition sheet is two such rows. ORIENT=v gives the
+# one-column layout with upright boxes. Systems not present
 # in the CSV are drawn as hatched "pending" slots rather than dropped,
 # so a reader can see what is still missing.
 #
@@ -50,8 +54,10 @@
 #   EXCLUDE_SYSTEMS  comma-separated internal names to leave off every
 #             figure -- no column, no placeholder. EXCLUDE_SYSTEMS=A3
 #             drops Duet (refine) and keeps Duet (alt. commit).
-#   WIDTH     box-sheet width in inches (default 3.4, one column of a
-#             two-column template; 7.0 for the full page)
+#   ORIENT    h (default): wide layout, four panels per row, systems on
+#             the y-axis, use with figure*; v: one-column layout
+#   WIDTH     box-sheet width in inches for ORIENT=v (default 3.4, one
+#             column); the wide layout is 7.0 in
 #   UBR_WIDTH width of the unique-beat-ratio curves (default 7.0: that
 #             figure keeps the full page width)
 #   TITLE     optional figure title
@@ -118,6 +124,7 @@ DELTAS_ONLY="${DELTAS_ONLY:-0}"
 PER_SONG="${PER_SONG:-0}"
 POOLED_CSV="${POOLED_CSV:-}"
 WIDTH="${WIDTH:-3.4}"
+ORIENT="${ORIENT:-h}"
 UBR_WIDTH="${UBR_WIDTH:-7.0}"
 TITLE="${TITLE:-}"
 EXCLUDE_SYSTEMS="${EXCLUDE_SYSTEMS:-}"
@@ -154,7 +161,7 @@ if [[ -n "${BLOCKS// /}" ]]; then
                 || echo "[table] no $pc; quality table skipped"
         fi
         python plot_e1_box.py --csv "$CSV" --out "${OUT}_${b}" \
-            --block "$b" ${NCOLS:+--ncols "$NCOLS"} --width "$WIDTH" \
+            --block "$b" ${NCOLS:+--ncols "$NCOLS"} --width "$WIDTH" --orient "$ORIENT" \
             $([[ "$DELTAS_ONLY" == "1" ]] && echo --deltas-only) \
             $([[ "$PER_SONG" == "1" ]] && echo --per-song) \
             ${POOLED_CSV:+--pooled-csv "$POOLED_CSV"} \
@@ -162,7 +169,7 @@ if [[ -n "${BLOCKS// /}" ]]; then
             ${TITLE:+--title "$TITLE"}
     done
 else
-    python plot_e1_box.py --csv "$CSV" --out "$OUT" --width "$WIDTH" \
+    python plot_e1_box.py --csv "$CSV" --out "$OUT" --width "$WIDTH" --orient "$ORIENT" \
         ${NCOLS:+--ncols "$NCOLS"} ${METRICS:+--metrics "$METRICS"} \
         ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"} \
         ${TITLE:+--title "$TITLE"}

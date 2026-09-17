@@ -3,8 +3,11 @@
 Reads the per-sample metrics CSV that eval_metrics writes and draws one
 panel per metric: one box per system, systems ordered by family
 (ours / internal baselines / external baselines / not ranked), the box
-filled in its family's colour. Plain journal box plots, sized for ONE
-column of a two-column template (3.4 in wide by default).
+filled in its family's colour. Plain journal box plots. Default is the
+WIDE layout (--orient h): four metrics side by side across both columns
+of a two-column template (7.0 in), systems down the y-axis with names
+on the leftmost panel; --orient v is the one-column layout with upright
+boxes (3.4 in).
 
 WHAT THE MARKS MEAN, because a plot of a distance metric is easy to
 misread:
@@ -75,9 +78,11 @@ from matplotlib.patches import Rectangle
 # then goes in the figure footnote, so nothing is left to guess.
 GROUPS = [
     ('Ours', True, [
+        # a second line starting with a minus or a bracket is a
+        # QUALIFIER: the wide layout draws it a point smaller, in grey
         ('A3',        'Duet',                                  'Duet'),
-        ('A3ctcaT',   'Duet \u2212 iterative\nrefinement decode', 'Duet\u2212IR'),
-        ('A1',        'Duet \u2212 harmonizers',                 'Duet\u2212H'),
+        ('A3ctcaT',   'Duet\n\u2212 iterative refinement decode', 'Duet\u2212IR'),
+        ('A1',        'Duet\n\u2212 harmonizers',                 'Duet\u2212H'),
     ]),
     # The cascade arms (P-mc, P-cm) left the figures 2026-09-17, by
     # request; they are still scored and sit in the CSVs.
@@ -91,8 +96,8 @@ GROUPS = [
         # other system in absolute pitch on every chord, and the
         # uncapped WSfv holds the fifth note of a seventh chord that the
         # cp4 duet arms never see.
-        ('WSfv4',     'Whole-Song\nGen',            'WSG'),
-        ('AMT',       'Anticipatory\nMusic Transf.', 'AMT'),
+        ('WSfv4',     'Whole-Song Gen',             'WSG'),
+        ('AMT',       'Anticipatory Music Transf.', 'AMT'),
     ]),
     # Held out of the ranking and placed last, by request. It is still
     # plotted, and the best-of-the-rest line runs the full width, so a
@@ -649,6 +654,137 @@ def draw_panel(ax, metric, per_song, order, present, title_chars=0,
     return labels
 
 
+def _split_label(disp):
+    """(name, qualifier): the qualifier is a second line that starts
+    with a minus sign or a bracket, drawn smaller and greyer; anything
+    else is one line at full size."""
+    parts = disp.split('\n', 1)
+    if len(parts) == 2 and parts[1][:1] in ('−', '-', '('):
+        return parts[0], parts[1]
+    return disp.replace('\n', ' '), ''
+
+
+def draw_panel_h(ax, metric, per_song, order, present, letter=''):
+    """draw_panel with the systems down the y-axis, values along x.
+
+    Wide layout (2026-09-17): four metrics side by side across both
+    columns, the first system at the top. Same marks as draw_panel --
+    box, median, 1.5 IQR whiskers, no outliers, mean diamond, dashed
+    reference, best ranked system's mean as a solid line with a star.
+    """
+    n = len(order)
+    ypos = {i: n - 1 - i for i in range(n)}          # first system on top
+    ref = ref_level(metric)
+    positions, data, colors = [], [], []
+    missing = []
+    for i, (sysname, _disp, _short, family, _ranked) in enumerate(order):
+        vals = (list(per_song.get(metric, {}).get(sysname, {}).values())
+                if sysname in present else [])
+        if len(vals) >= 3:
+            positions.append(ypos[i]); data.append(vals)
+            colors.append(color_of(sysname, family))
+        else:
+            missing.append(ypos[i])
+
+    if ref is not None:
+        ax.axvline(ref, color=INK, lw=0.9, ls=(0, (4, 3)), zorder=1)
+    levels = [] if ref is None else [ref]
+    best = best_ranked(metric, per_song, order, present)
+    if best is not None:
+        bs, _bdisp, bfamily, bmean = best
+        ax.axvline(bmean, color=color_of(bs, bfamily), lw=1.2, zorder=2)
+        levels.append(bmean)
+
+    if data:
+        kw = ({'orientation': 'horizontal'}
+              if matplotlib.__version__ >= '3.10' else {'vert': False})
+        bp = ax.boxplot(data, positions=positions, widths=0.62,
+                        patch_artist=True, whis=1.5, showfliers=False,
+                        manage_ticks=False, zorder=3,
+                        medianprops=dict(color=INK, lw=1.0),
+                        whiskerprops=dict(lw=0.8), capprops=dict(lw=0.8),
+                        boxprops=dict(lw=0.8), **kw)
+        for k, c in enumerate(colors):
+            bp['boxes'][k].set_facecolor(lighten(c))
+            bp['boxes'][k].set_edgecolor(c)
+            for part in ('whiskers', 'caps'):
+                for art in bp[part][2 * k:2 * k + 2]:
+                    art.set_color(c)
+        for pos, vals in zip(positions, data):
+            ax.plot([float(np.mean(vals))], [pos], marker='D',
+                    markersize=2.6, markerfacecolor=SURFACE,
+                    markeredgecolor=INK, markeredgewidth=0.7, zorder=5)
+
+    ends = []
+    for d in data:
+        v = np.asarray(d, float)
+        q1, q3 = np.percentile(v, [25, 75]); iqr = q3 - q1
+        inside = v[(v >= q1 - 1.5 * iqr) & (v <= q3 + 1.5 * iqr)]
+        ends += [inside.min(), inside.max()]
+    lo = min(ends + levels) if ends else 0.0
+    hi = max(ends + levels) if ends else 1.0
+    span = (hi - lo) or 1.0
+    lo, hi = lo - 0.06 * span, hi + 0.06 * span
+    hi = hi + 0.12 * (hi - lo)                       # room for the star
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(-0.7, n - 0.3)
+    for y in missing:
+        ax.add_patch(Rectangle((lo, y - 0.31), hi - lo, 0.62,
+                               facecolor='none', edgecolor=MUTED,
+                               hatch='///', lw=0.6, alpha=0.5, zorder=2))
+        ax.text(lo + 0.5 * (hi - lo), y, 'pending', ha='center',
+                va='center', fontsize=FS_TICK, color=MUTED)
+    if best is not None:
+        by = ypos[next(i for i, o in enumerate(order) if o[0] == bs)]
+        ax.plot([hi - 0.06 * (hi - lo)], [by], marker='*', markersize=6.5,
+                markerfacecolor=color_of(bs, bfamily), markeredgecolor=INK,
+                markeredgewidth=0.5, lw=0, clip_on=False, zorder=7)
+
+    # furniture: title on top, values along x, faint vertical rules
+    ax.set_title('\n'.join(textwrap.wrap(label_for(metric), 22)),
+                 fontsize=FS_TITLE, color=INK, pad=4)
+    ax.tick_params(axis='x', labelsize=FS_TICK, colors=INK, length=2.5,
+                   width=0.6, color=INK)
+    ax.set_yticks(range(n))
+    ax.set_yticklabels([])
+    ax.tick_params(axis='y', length=0)
+    for side in ('top', 'right'):
+        ax.spines[side].set_visible(False)
+    for side in ('left', 'bottom'):
+        ax.spines[side].set_color(INK); ax.spines[side].set_linewidth(0.6)
+    ax.set_facecolor(SURFACE)
+    ax.xaxis.grid(True, color=GRID, lw=0.5, zorder=0)
+    ax.yaxis.grid(False)
+    ax.set_axisbelow(True)
+    if letter:
+        ax.annotate(letter, xy=(0.0, 1.0), xycoords='axes fraction',
+                    xytext=(-2, 4), textcoords='offset points',
+                    ha='right', va='bottom', fontsize=FS_LETTER,
+                    weight='bold', color=INK)
+    return ypos
+
+
+def _write_names_h(ax, order, ypos):
+    """System names on the y-axis of the leftmost panel, as text: the
+    model name at tick size, a qualifier line (e.g. "− harmonizers")
+    a point smaller and in grey beneath it."""
+    for i, (_s, disp, _sh, _g, _r) in enumerate(order):
+        name, qual = _split_label(disp)
+        y = ypos[i]
+        if qual:
+            ax.annotate(name, xy=(0, y), xycoords=('axes fraction', 'data'),
+                        xytext=(-4, 0.5), textcoords='offset points',
+                        ha='right', va='bottom', fontsize=FS_TICK, color=INK)
+            ax.annotate(qual, xy=(0, y), xycoords=('axes fraction', 'data'),
+                        xytext=(-4, -0.5), textcoords='offset points',
+                        ha='right', va='top', fontsize=FS_TICK - 1.0,
+                        color=INK_2)
+        else:
+            ax.annotate(name, xy=(0, y), xycoords=('axes fraction', 'data'),
+                        xytext=(-4, 0), textcoords='offset points',
+                        ha='right', va='center', fontsize=FS_TICK, color=INK)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--csv', required=True, help='eval_metrics --out CSV')
@@ -684,10 +820,16 @@ def main():
                         'level, so this halves a 32-panel sheet without '
                         'losing a comparison that can be read.')
     p.add_argument('--width', type=float, default=3.4,
-                   help='inches; 3.4 is one column of a two-column '
-                        'template, 7.0 the full page width')
+                   help='inches for --orient v (3.4 = one column). The '
+                        'wide layout uses 7.0, the full page width, '
+                        'unless a value above 5 is given')
     p.add_argument('--panel-height', type=float, default=1.35, help='inches')
     p.add_argument('--title', default='')
+    p.add_argument('--orient', choices=['h', 'v'], default='h',
+                   help="h (default): wide layout, four metrics side by "
+                        "side across both columns, systems down the "
+                        "y-axis, names on the leftmost panel; v: the "
+                        "one-column layout, boxes upright, names below")
     args = p.parse_args()
 
     auto_ncols, auto_title, pooled_mode = None, '', False
@@ -802,6 +944,69 @@ def main():
               file=sys.stderr)
 
     n = len(metrics)
+    if args.orient == 'h' and not pooled_mode:
+        # ---- wide layout: rows of four, systems down the y-axis ----
+        ncols = min(4, n)
+        nrows = math.ceil(n / ncols)
+        width = args.width if args.width > 5 else 7.0
+        row_h = 0.30 * len(order) + 0.5
+        fig, axgrid = plt.subplots(nrows, ncols, squeeze=False,
+                                   figsize=(width, row_h * nrows + 0.45))
+        fig.patch.set_facecolor(SURFACE)
+        ypos = None
+        for idx, m in enumerate(metrics):
+            ax = axgrid[idx // ncols][idx % ncols]
+            letter = chr(ord('a') + idx) if n > 1 and idx < 26 else ''
+            ypos = draw_panel_h(ax, m, per_song, order, present, letter)
+            if idx % ncols == 0:
+                _write_names_h(ax, order, ypos)
+        for r in range(nrows):
+            for c in range(ncols):
+                if r * ncols + c >= n:
+                    axgrid[r][c].set_visible(False)
+        edges = []
+        for i, (_s, _d, _sh, family, _r) in enumerate(order):
+            if edges and edges[-1][0] == family:
+                edges[-1] = (family, edges[-1][1], i)
+            else:
+                edges.append((family, i, i))
+        handles = [
+            Line2D([0], [0], color=INK, lw=0.9, ls=(0, (4, 3)),
+                   label='reference (ground truth)'),
+            Line2D([0], [0], color=INK_2, lw=1.2, marker='*', markersize=6.5,
+                   markerfacecolor=SURFACE, markeredgecolor=INK,
+                   markeredgewidth=0.5, label='best ranked (mean)'),
+            Line2D([0], [0], color=INK, lw=0, marker='D', markersize=2.8,
+                   markerfacecolor=SURFACE, markeredgecolor=INK,
+                   markeredgewidth=0.7,
+                   label='mean; whiskers 1.5 IQR, outliers omitted'),
+        ]
+        labels_ = [h.get_label() for h in handles]
+        for f, left, right in edges:
+            cols = []
+            for s_, _d, _sh, _g, _r in order[left:right + 1]:
+                if color_of(s_, f) not in cols:
+                    cols.append(color_of(s_, f))
+            sw = tuple(Rectangle((0, 0), 1, 1, facecolor=lighten(c),
+                                 edgecolor=c, lw=0.8) for c in cols)
+            handles.append(sw[0] if len(sw) == 1 else sw)
+            labels_.append(f)
+        fig.legend(handles=handles, labels=labels_, loc='lower center',
+                   ncol=4, frameon=False, fontsize=FS_LEGEND, labelcolor=INK,
+                   handlelength=1.6, handletextpad=0.5, columnspacing=1.2,
+                   handler_map={tuple: HandlerTuple(ndivide=None, pad=0.25)},
+                   bbox_to_anchor=(0.5, -0.005))
+        if args.title:
+            fig.suptitle(args.title, fontsize=FS_LETTER, color=INK, y=0.995)
+        leg_frac = 0.38 / fig.get_figheight()
+        fig.tight_layout(rect=(0, leg_frac, 1, 1.0), w_pad=1.2, h_pad=1.6)
+        for ext in ('pdf', 'png'):
+            path = f'{args.out}.{ext}'
+            fig.savefig(path, dpi=300, facecolor=SURFACE)
+            print(f'wrote {path}')
+        _print_numbers(metrics, order, per_song, pooled, pooled_mode, present)
+        return
+
     if user_ncols is None and n % args.ncols:
         # A ragged grid leaves a hole and strands one column's system
         # names mid-figure. Take the widest of 3 / 2 / 1 that fills it.
@@ -964,6 +1169,10 @@ def main():
         fig.savefig(path, dpi=300, facecolor=SURFACE)
         print(f'wrote {path}')
 
+    _print_numbers(metrics, order, per_song, pooled, pooled_mode, present)
+
+
+def _print_numbers(metrics, order, per_song, pooled, pooled_mode, present):
     # The numbers behind the picture, so a reader of the log can check a
     # mark without opening the figure.
     if pooled_mode:
