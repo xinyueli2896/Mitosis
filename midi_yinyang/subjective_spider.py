@@ -59,6 +59,18 @@ SYSTEMS = [
 ]
 GT_COLOR = INK
 
+# --palette system: one colour per system from the six-swatch set
+# (2026-09-17, by request), instead of the E1 family colours.
+SYSTEM_COLORS = {
+    'Duet (alt commit)': '#ffd700',   # gold
+    'Duet':              '#ffd700',
+    'S-scratch':         '#fa8775',   # light orange
+    'S-finetune':        '#ea5f94',   # pink
+    'Whole-song':        '#cd34b5',   # magenta
+    'AMT':               '#9d02d7',   # purple
+    'GT':                '#0000ff',   # blue
+}
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -70,6 +82,9 @@ def main():
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--rmin', type=float, default=2.0,
                     help='inner edge of the radial axis (rating scale 1-5)')
+    ap.add_argument('--palette', choices=['family', 'system'], default='family',
+                    help='family: the E1 family colours; system: one colour '
+                         'per system (SYSTEM_COLORS)')
     args = ap.parse_args()
 
     rows = list(csv.DictReader(open(args.csv, newline='')))
@@ -171,7 +186,10 @@ def main():
         if sysid not in stats:
             continue
         mean = stats[sysid][0]
-        col = GT_COLOR if fam == 'GT' else FAMILY_COLOR[fam]
+        if args.palette == 'system':
+            col = SYSTEM_COLORS[sysid]
+        else:
+            col = GT_COLOR if fam == 'GT' else FAMILY_COLOR[fam]
         v = np.concatenate([mean, mean[:1]])
         ax.plot(ang_c, v, color=col, lw=1.1, ls=ls, zorder=3)
         if fam == 'Ours':

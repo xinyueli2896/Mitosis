@@ -37,6 +37,7 @@ RATINGS="${RATINGS:?set RATINGS=<csv>}"
 OUT="${OUT:-results/subjective}"
 EXCLUDE="${EXCLUDE:-}"
 RMIN="${RMIN:-2}"
+PALETTE="${PALETTE:-family}"
 
-python subjective_spider.py --csv "$RATINGS" --out "$OUT" --rmin "$RMIN" \
+python subjective_spider.py --csv "$RATINGS" --out "$OUT" --rmin "$RMIN" --palette "$PALETTE" \
     ${EXCLUDE:+--exclude $EXCLUDE}
