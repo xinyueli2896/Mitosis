@@ -18,7 +18,7 @@ Marks:
            averaged first), colour = family, dash = member within family
   band     +- 1.96 standard errors over songs, so two curves whose bands
            miss each other differ at about the 95% level at that L
-  black    the ground-truth continuations of the same songs: the target,
+  grey     the ground-truth continuations of the same songs: the target,
   dashed   not a ceiling -- above it is too scattered, below it too
            repetitive
 
@@ -191,17 +191,17 @@ def main():
                 m, se, n = mean_se(ref[key])
                 if m is not None:
                     x = np.arange(1, len(m) + 1) * beats
-                    ax.plot(x, m, color=INK, lw=1.6, ls=(0, (4, 2)), zorder=4)
+                    ax.plot(x, m, color=INK_2, lw=1.0, ls=(0, (4, 2)), zorder=4)
                     ymin, ymax = min(ymin, m.min()), max(ymax, m.max())
                     handles['_ref'] = Line2D(
-                        [0], [0], color=INK, lw=1.6, ls=(0, (4, 2)),
+                        [0], [0], color=INK_2, lw=1.0, ls=(0, (4, 2)),
                         label=f'ground truth (n={n} songs)')
             else:
                 # the target IS the zero line
-                ax.axhline(0, color=INK, lw=1.2, ls=(0, (4, 2)), zorder=4)
+                ax.axhline(0, color=INK_2, lw=0.9, ls=(0, (4, 2)), zorder=4)
                 n_ref = len(ref[key])
                 handles['_ref'] = Line2D(
-                    [0], [0], color=INK, lw=1.2, ls=(0, (4, 2)),
+                    [0], [0], color=INK_2, lw=0.9, ls=(0, (4, 2)),
                     label=f'ground truth (n={n_ref} songs)')
             for sysname, disp, family, i in order:
                 if sysname not in gen[key]:
@@ -215,7 +215,7 @@ def main():
                 x = np.arange(1, len(m) + 1) * beats
                 col = color_of(sysname, family)
                 ls = MEMBER_DASH[i % len(MEMBER_DASH)]
-                ax.plot(x, m, color=col, lw=1.5, ls=ls, zorder=3)
+                ax.plot(x, m, color=col, lw=0.9, ls=ls, zorder=3)
                 lo_b, hi_b = m - 1.96 * se, m + 1.96 * se
                 if not args.no_bands:
                     ax.fill_between(x, lo_b, hi_b, color=col, alpha=0.16,
@@ -227,7 +227,7 @@ def main():
                 ymin = min(ymin, lo_b[k:].min())
                 ymax = max(ymax, hi_b[k:].max())
                 handles[sysname] = Line2D(
-                    [0], [0], color=col, lw=1.5, ls=ls,
+                    [0], [0], color=col, lw=0.9, ls=ls,
                     label=disp.replace('\n', ' '))
             if np.isfinite(ymin) and np.isfinite(ymax):
                 pad = 0.08 * (ymax - ymin) or 0.01
