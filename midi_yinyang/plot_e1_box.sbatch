@@ -4,7 +4,7 @@
 # Draws one panel per metric: a standard box plot per system over the
 # PER-SONG values (samples averaged within a song first), the box in
 # its family's colour, ordered by family. Median line, whiskers at 1.5
-# IQR, outliers as dots, the mean as a white diamond, the reference
+# IQR, outliers omitted, the mean as a white diamond, the reference
 # level a dashed line, and the best ranked system's mean a solid line
 # across the panel in that system's colour. Sized for ONE column of a
 # two-column template (WIDTH 3.4 in) at 7 pt type. Systems not present

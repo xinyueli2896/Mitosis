@@ -11,7 +11,8 @@ misread:
 
   box      the PER-SONG values: box from the first to the third
            quartile, median as a line across it, whiskers to the last
-           value within 1.5 IQR, outliers beyond that as small dots.
+           value within 1.5 IQR; outliers beyond the whiskers are not
+           drawn (the caption says so).
            Samples of a song are averaged first -- three samples of one
            song share a prompt and a reference, so treating them as
            three observations understates the spread by sqrt(3).
@@ -578,13 +579,14 @@ def draw_panel(ax, metric, per_song, order, present, title_chars=0,
         levels.append(bmean)
 
     # Standard box plot: quartile box, median line, whiskers to the last
-    # value within 1.5 IQR, outliers as small dots. The fill is the
-    # family colour mixed toward white so the ink median stays readable
-    # on the two dark families; the edge and whiskers carry the colour
-    # at full strength.
+    # value within 1.5 IQR. Outliers are NOT drawn (2026-09-17, by
+    # request); the caption says so. The fill is the family colour
+    # mixed toward white so the ink median stays readable on the two
+    # dark families; the edge and whiskers carry the colour at full
+    # strength.
     if data:
         bp = ax.boxplot(data, positions=positions, widths=0.62,
-                        patch_artist=True, whis=1.5, showfliers=True,
+                        patch_artist=True, whis=1.5, showfliers=False,
                         manage_ticks=False, zorder=3,
                         medianprops=dict(color=INK, lw=1.1),
                         whiskerprops=dict(lw=0.8),
@@ -606,9 +608,8 @@ def draw_panel(ax, metric, per_song, order, present, title_chars=0,
                     markersize=2.6, markerfacecolor=SURFACE,
                     markeredgecolor=INK, markeredgewidth=0.7, zorder=5)
 
-    # The y-range is set by the whiskers, not by the outliers: a single
-    # far-off song would otherwise flatten every box to a line. Outliers
-    # beyond the range are clipped, which the legend says.
+    # The y-range is set by the whiskers: a single far-off song would
+    # otherwise flatten every box to a line.
     ends = []
     for d in data:
         v = np.asarray(d, float)
@@ -927,7 +928,7 @@ def main():
             Line2D([0], [0], color=INK, lw=0, marker='D', markersize=2.8,
                    markerfacecolor=SURFACE, markeredgecolor=INK,
                    markeredgewidth=0.7,
-                   label='mean; whiskers 1.5 IQR'),
+                   label='mean; whiskers 1.5 IQR, outliers omitted'),
         ]
     labels_ = [h.get_label() for h in handles]
     if compact:
