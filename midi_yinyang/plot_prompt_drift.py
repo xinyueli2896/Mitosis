@@ -11,14 +11,21 @@ EXACTLY as eval_metrics computes them, on bar i of the continuation
                  12-bin pitch-class histogram and bar i's
     onset_sim_i  cosine between the prompt's mean per-bar binary onset
                  profile and bar i's onset vector
+    groove_i     1 - mean Hamming distance between bar i's binary onset
+                 vector and the prompt's bars (groove consistency's
+                 form, referenced to the prompt instead of the previous
+                 bar)
+    scale_i      share of bar i's onset pitch classes inside the scale
+                 that best fits the prompt (scale consistency's in-scale
+                 fraction, with the scale fixed by the prompt)
     delta_i      each statistic minus the same statistic on bar i of the
                  ground-truth continuation (paired per song)
 
 --window cumulative uses bars 0..i instead of bar i alone, i.e. the
 whole continuation so far; its last point is the sheet's number.
 
-Two figures, <out> and <out>_delta, each a 2 x 2 grid: rows are the
-two statistics, columns the two streams. The raw figure carries the
+Two figures, <out> and <out>_delta, each a 4 x 2 grid: rows are the
+four statistics, columns the two streams. The raw figure carries the
 ground truth as a dashed grey curve; the delta figure a zero line. Lines
 are means over songs (samples averaged within song), bands +-1.96 SE
 over songs. Colours are the E1 families, the dash tells systems of one
@@ -58,7 +65,24 @@ BAR = em.FRAMES_PER_BAR
 
 
 METRICS = [('pc', 'Pitch-class JSD to prompt'),
-           ('on', 'Onset similarity to prompt')]
+           ('on', 'Onset similarity to prompt'),
+           ('gc', 'Groove consistency to prompt'),
+           ('sc', 'Scale consistency to prompt')]
+
+
+def prompt_scale(prompt):
+    """The (root, scale) that covers most of the prompt's onset pitch
+    classes -- scale_consistency's own fit, on the prompt alone."""
+    pcs = [p % 12 for ps in prompt.onsets for p in ps]
+    if not pcs:
+        return None
+    best, best_set = -1.0, None
+    for root in range(12):
+        for scale in (em._MAJOR, em._MINOR):
+            inn = sum(1 for pc in pcs if (pc - root) % 12 in scale)
+            if inn > best:
+                best, best_set = inn, frozenset((root + d) % 12 for d in scale)
+    return best_set
 
 
 def curves(prompt, cont, window, bars):
@@ -66,10 +90,25 @@ def curves(prompt, cont, window, bars):
 
     window 'bar': window i = bars [i*bars, (i+1)*bars);
     window 'cumulative': window i = bars [0, (i+1)*bars).
-    Both statistics are eval_metrics' own (prompt_adherence_metrics),
-    applied to the window instead of the whole continuation."""
+
+    pc, on: eval_metrics' prompt-adherence statistics, applied to the
+            window instead of the whole continuation.
+    gc:     groove consistency's Hamming form, PROMPT-REFERENCED: 1 minus
+            the mean Hamming distance (over 16 grid positions) between
+            each window bar's binary onset vector and each prompt bar's,
+            averaged over all prompt-bar x window-bar pairs. groove
+            consistency proper compares a bar with its predecessor; here
+            the comparison is with the prompt's bars.
+    sc:     scale consistency's in-scale fraction, PROMPT-REFERENCED:
+            the share of the window's onset pitch classes that lie in
+            the scale best fitting the PROMPT. scale consistency proper
+            fits the scale to the excerpt itself; here the prompt fixes
+            the scale, so the number reads as staying in the prompt's key.
+    """
     hp = em._pc_profile_dw(prompt)
     rp = em._onset_profile(prompt, 0)
+    Vp = em._bar_onset_vectors(prompt)
+    scale = prompt_scale(prompt)
     n_windows = cont.n_frames // (BAR * bars)
     out = {m: np.full(n_windows, np.nan) for m, _ in METRICS}
     for i in range(n_windows):
@@ -82,6 +121,13 @@ def curves(prompt, cont, window, bars):
         rc = em._onset_profile(seg, 0)
         if rp is not None and rc is not None:
             out['on'][i] = em._cosine(rp, rc)
+        Vw = em._bar_onset_vectors(seg)
+        if len(Vp) and len(Vw):
+            ham = np.abs(Vw[:, None, :] - Vp[None, :, :]).sum(-1) / BAR
+            out['gc'][i] = 1.0 - float(ham.mean())
+        pcs = [p % 12 for ps in seg.onsets for p in ps]
+        if scale is not None and pcs:
+            out['sc'][i] = sum(1 for pc in pcs if pc in scale) / len(pcs)
     return out
 
 
@@ -184,7 +230,7 @@ def main():
         the statistic with the ground truth dashed; 'delta' the paired
         difference with a zero line."""
         fig, axes = plt.subplots(len(METRICS), len(STREAMS), squeeze=False,
-                                 figsize=(args.width, 1.55 * len(METRICS) + 1.1))
+                                 figsize=(args.width, 1.45 * len(METRICS) + 1.1))
         fig.patch.set_facecolor(SURFACE)
         handles = {}
         for r, (met, label) in enumerate(METRICS):
@@ -255,12 +301,13 @@ def main():
         grouped_legend(fig, blocks, y=0.0, xs=[0.08, 0.38, 0.78])
         what = ('the statistic on each window' if kind == 'raw'
                 else 'system minus ground truth, paired per song')
-        fig.text(0.5, 0.15,
+        fig.text(0.5, 1.0 / fig.get_figheight(),
                  f'lines: {what}, mean over songs (samples averaged within '
                  f'song); window: {args.window}, {unit}'
                  + ('' if args.no_bands else '; bands: $\\pm$1.96 SE over songs'),
                  ha='center', fontsize=FS_TICK, color=INK_2)
-        fig.tight_layout(rect=(0, 0.19, 1, 1), w_pad=1.2, h_pad=1.4)
+        leg = 1.3 / fig.get_figheight()
+        fig.tight_layout(rect=(0, leg, 1, 1), w_pad=1.2, h_pad=1.4)
         for ext in ('pdf', 'png'):
             fig.savefig(f'{out}.{ext}', dpi=300, facecolor=SURFACE)
             print(f'wrote {out}.{ext}')

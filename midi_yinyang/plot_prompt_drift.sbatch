@@ -4,8 +4,10 @@
 # ground truth, plus the paired delta (plot_prompt_drift.py).
 #
 # Writes <OUT>.{pdf,png} (raw statistics) and <OUT>_delta.{pdf,png}
-# (paired difference against the ground truth), each a 2 x 2 grid:
-# rows pitch-class JSD / onset similarity, columns melody / chord.
+# (paired difference against the ground truth), each a 4 x 2 grid:
+# rows pitch-class JSD / onset similarity / groove consistency /
+# scale consistency (the last two prompt-referenced), columns melody /
+# chord.
 #
 # Env knobs (--export=ALL,KEY=val):
 #   MANIFEST   default results/E1_p80_v5b92_manifest.tsv
