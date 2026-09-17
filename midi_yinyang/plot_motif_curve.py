@@ -168,6 +168,7 @@ def main():
              for i, (s, d, _sh) in enumerate(members) if s not in excluded]
     present = {s for lay in gen for s in gen[lay]}
 
+    from matplotlib.ticker import PercentFormatter
     fig, axes = plt.subplots(1, len(LAYERS), squeeze=False,
                              figsize=(args.width, 2.1))
     fig.patch.set_facecolor(SURFACE)
@@ -204,9 +205,11 @@ def main():
         ax.set_title(label + ('' if args.y == 'raw' else ' $-$ GT'),
                      fontsize=FS_TITLE, color=INK, pad=4)
         ax.set_xlabel('motif length (notes)', fontsize=FS_LABEL, color=INK)
+        ax.yaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=None))
         if c == 0:
-            ax.set_ylabel('share of melody motifs', fontsize=FS_LABEL,
-                          color=INK)
+            ax.set_ylabel('melody motifs (%)' if args.y == 'raw'
+                          else 'melody motifs (% points)',
+                          fontsize=FS_LABEL, color=INK)
         ax.set_xticks(lengths)
         ax.tick_params(labelsize=FS_TICK, colors=INK, length=2.5, width=0.6,
                        color=INK)
@@ -240,7 +243,8 @@ def main():
         print(f'wrote {args.out}.{ext}')
 
     print(f'\nmelody motif shares by length (notes {lengths[0]}..{lengths[-1]}); '
-          'mean over songs, samples averaged within song')
+          'mean over songs, samples averaged within song. A share of 0.01 '
+          'is about one motif per continuation at ~100 melody notes.')
     for lay in CLASSES:
         print(f'  == {lay}')
         for sysname, _d, _g, _i in order:
