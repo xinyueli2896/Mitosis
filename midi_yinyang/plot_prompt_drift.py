@@ -51,7 +51,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import MultipleLocator
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import eval_metrics as em                                   # noqa: E402
@@ -207,6 +207,8 @@ def main():
     p.add_argument('--width', type=float, default=7.0)
     p.add_argument('--no-bands', action='store_true')
     p.add_argument('--exclude', default='', help='comma-separated systems')
+    p.add_argument('--xtick', type=int, default=4,
+                   help='x tick every N bars (default 4)')
     args = p.parse_args()
     args.mel_programs = {int(x) for x in args.mel_programs.split(',')}
     args.chord_programs = {int(x) for x in args.chord_programs.split(',')}
@@ -281,7 +283,8 @@ def main():
                 ax.set_facecolor(SURFACE)
                 ax.yaxis.grid(True, color=GRID, lw=0.5); ax.xaxis.grid(False)
                 ax.set_axisbelow(True)
-                ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+                ax.xaxis.set_major_locator(MultipleLocator(args.xtick))
+                ax.set_xlim(0, None)
                 ax.annotate(chr(ord('a') + r * len(STREAMS) + c),
                             xy=(0.02, 0.96), xycoords='axes fraction',
                             ha='left', va='top', fontsize=FS_LETTER,

@@ -20,6 +20,7 @@
 #   WINDOW     bar (default: each bar alone) | cumulative (bars 0..i)
 #   BARS       bars per window, default 1
 #   EXCLUDE_SYSTEMS  comma-separated systems to leave off
+#   XTICK      x tick every N bars, default 4
 #
 # Example:
 #   sbatch --export=ALL,MANIFEST=results/E1_p80_v5b92_manifest.tsv \
@@ -56,6 +57,7 @@ GEN_LENGTH="${GEN_LENGTH:-416}"
 WINDOW="${WINDOW:-bar}"
 BARS="${BARS:-1}"
 EXCLUDE_SYSTEMS="${EXCLUDE_SYSTEMS:-}"
+XTICK="${XTICK:-4}"
 
 [[ -f "$MANIFEST" ]] || { echo "ERROR: no $MANIFEST -- run score_e1.sbatch first"; exit 1; }
 
@@ -63,5 +65,5 @@ echo "MANIFEST=$MANIFEST  OUT=$OUT  WINDOW=$WINDOW  BARS=$BARS  PROMPT=$PROMPT_L
 python plot_prompt_drift.py --manifest "$MANIFEST" \
     --ref-a-dir "$EVAL_MEL" --ref-b-dir "$EVAL_CHORD" \
     --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
-    --window "$WINDOW" --bars "$BARS" --out "$OUT" \
+    --window "$WINDOW" --bars "$BARS" --out "$OUT" --xtick "$XTICK" \
     ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"}
