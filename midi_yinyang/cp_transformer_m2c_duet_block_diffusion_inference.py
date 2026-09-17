@@ -167,6 +167,18 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
                 print(f'[load_model] cond_slot_prob={csp:.2f} (A.3c: trained in the '
                       f'commit-then-condition regime; decode with A3_SCHEDULE=ctc_*)')
             break
+    # Cross-pair low-rank projections: the delta weights are real
+    # parameters, so their presence IS the flag and the A matrix's first
+    # dimension is the rank. Building without them would drop the trained
+    # cross pathways (strict=False) and decode through the shared ones.
+    cross_lora_rank = 0
+    for k in state_dict_keys:
+        if k.endswith('.lq_m.A'):
+            sd_tmp = ck['state_dict'] if 'state_dict' in ck else ck
+            cross_lora_rank = int(sd_tmp[k].shape[0])
+            break
+    print(f'[load_model] cross_lora_rank={cross_lora_rank}'
+          f'{" (cross-pair low-rank Q/K/V)" if cross_lora_rank else ""}')
     if diffusion_K is None:
         for key, name in (('k_emb_m.weight', 'k_emb_m'),
                           ('k_emb_c.weight', 'k_emb_c')):
@@ -200,6 +212,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         moe_modality_hard_route=moe_modality_hard_route,
         token_level_mask=token_level_mask,
         query_block=query_block,
+        cross_lora_rank=cross_lora_rank,
     )
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)

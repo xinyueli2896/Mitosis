@@ -1933,6 +1933,13 @@ if __name__ == '__main__':
                         help='A.11: partner-agreement discrimination head on '
                              'the conditional-slot pairs. Needs '
                              '--cond_slot_prob > 0.')
+    parser.add_argument('--cross_lora_rank', type=int, default=0,
+                        help='Give the two cross-stream pathways their own '
+                             'Q/K/V projections as rank-r corrections of '
+                             'the per-stream ones (W^{ab} = W^b + B A; see '
+                             'M2CDuetBlockLayer). 0 = shared projections, '
+                             'the default block. Orthogonal to the family: '
+                             'the run name gets an L<r> suffix.')
     parser.add_argument('--agree_decoy_prob', type=float, default=0.5,
                         help='A.11: share of conditional-slot pairs whose '
                              'committed leader is swapped for a lagged frame.')
@@ -2053,6 +2060,9 @@ if __name__ == '__main__':
             abbr += f'q{a.query_pairs}'
         if fam.startswith('A8') and a.query_block != 4:
             abbr += f'b{a.query_block}'
+        if getattr(a, 'cross_lora_rank', 0) > 0:
+            abbr += f'L{a.cross_lora_rank}'      # cross-pair low-rank
+                                               # projections (any family)
         return abbr
 
     tag = f'_{args.run_tag}' if args.run_tag else ''
@@ -2118,6 +2128,7 @@ if __name__ == '__main__':
         mask_k_prob=args.mask_k_prob,
         sc_val=bool(args.sc_val),
         agree_head=bool(args.agree_head),
+        cross_lora_rank=args.cross_lora_rank,
         agree_decoy_prob=args.agree_decoy_prob,
         agree_loss_weight=args.agree_loss_weight,
     )
@@ -2139,6 +2150,7 @@ if __name__ == '__main__':
           f'moe_aux_clean_only={args.moe_aux_clean_only}  '
           f'cond_slot_prob={args.cond_slot_prob}  '
           f'agree_head={args.agree_head}  sc_ar_frac={args.sc_ar_frac}  '
+          f'cross_lora_rank={args.cross_lora_rank}  '
           f'sc_draft_temp={args.sc_draft_temp}  '
           f'sc_k_consistent={bool(args.sc_k_consistent)}  '
           f'sym_k={bool(args.sym_k)}  '
@@ -2317,6 +2329,7 @@ if __name__ == '__main__':
                     'mask_k_prob': args.mask_k_prob,
                     'sc_val': bool(args.sc_val),
                     'agree_head': bool(args.agree_head),
+                    'cross_lora_rank': args.cross_lora_rank,
                     'agree_decoy_prob': args.agree_decoy_prob,
                     'agree_loss_weight': args.agree_loss_weight,
                     'moe_aux_clean_only': bool(args.moe_aux_clean_only),

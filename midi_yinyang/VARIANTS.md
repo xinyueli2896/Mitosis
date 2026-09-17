@@ -281,6 +281,7 @@ run on the melchord cp4 / v1.2 / per-part-gate defaults.
 | **A.3f** | A.3 + the t-1 mask fix only (one change at a time) | `SLOT_SEES_PREV_FRAME=1` | `A3f` | planned 2026-09-05 |
 | **A.8** | A.3 scaffold + CONTIGUOUS BLOCK of B query pairs, decoded and committed B frames at a time | `QUERY_BLOCK=B` (default 4) | `A8` (suffix `bB` for B≠4) | trained 2026-09-05 (job 206327, 75k); NEGATIVE, closed -- see entry |
 | **A.7** | A.3 scaffold + lag-graded decoy corruption | `DECOY_CORRUPTION=1` (+ `DECOY_LAG_BINS` from `calibrate_decoy_lag`) | `A7` | planned 2026-09-02 |
+| **+L** (any family) | cross-pair low-rank Q/K/V: the two cross-stream pathways get their own projections `W^{ab} = W^b + B A` of rank r (B = 0 at init, step 0 unchanged); the same-stream pathway keeps the shared ones | `CROSS_LORA_RANK=r` | suffix `L<r>`, e.g. `A12K1L16` | added 2026-09-17; untrained |
 
 There is ONE A.4. The bugged first implementation does not keep the
 name; A.4 *means* the corrected model — token-level corruption with the

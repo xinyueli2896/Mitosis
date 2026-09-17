@@ -64,6 +64,7 @@ finetune" cost we accept.
 from __future__ import annotations
 
 import argparse
+import math
 from typing import Optional
 
 import torch
@@ -97,10 +98,53 @@ def normalize_T_query(T_query):
 # Per-layer 3-pass block (intra + cross + frame), 2 gates (gate_c, gate_f)
 # ---------------------------------------------------------------------------
 
+class LowRankDelta(nn.Module):
+    """A rank-r update B A to a d x d projection, applied as h -> h A^T B^T.
+
+    B starts at zero, so at initialisation the delta is exactly zero and
+    the projection it corrects is the pretrained one; A gets the usual
+    Kaiming-uniform start so the gradient into B is not zero. Output is
+    scaled by alpha / r, the LoRA convention, so the learning rate does
+    not have to track the rank.
+    """
+
+    def __init__(self, d, rank, alpha=None):
+        super().__init__()
+        self.rank = int(rank)
+        self.A = nn.Parameter(torch.empty(self.rank, d))
+        self.B = nn.Parameter(torch.zeros(d, self.rank))
+        nn.init.kaiming_uniform_(self.A, a=math.sqrt(5))
+        self.scale = float(alpha if alpha is not None else self.rank) / self.rank
+
+    def forward(self, h):
+        return (h @ self.A.t()) @ self.B.t() * self.scale
+
+
 class M2CDuetBlockLayer(nn.Module):
     """One transformer block, post-LN, with per-modality Q/K/V/O, three
     key-masked SDPA passes (intra + cross + frame), per-modality cross
     and frame gates, and a shared MoE FFN.
+
+    CROSS-PAIR PROJECTIONS (cross_lora_rank > 0, 2026-09-17). By default
+    a stream reads the other stream through the SAME Q/K/V projections
+    it uses on itself: the cross pathway a -> b scores H_b W_Q^b against
+    H_a W_K^a and reads H_a W_V^a, so the bilinear form melody uses to
+    read chord is fixed by the two forms the streams use to read
+    themselves, and only head specialisation can tell the pathways
+    apart. With a rank the two cross pathways get their own projections
+    as a low-rank correction of the per-stream ones,
+
+        W_Q^{ab} = W_Q^b + B_Q^{ab} A_Q^{ab}     (queries of the target b)
+        W_K^{ab} = W_K^a + B_K^{ab} A_K^{ab}     (keys of the source a)
+        W_V^{ab} = W_V^a + B_V^{ab} A_V^{ab}     (values of the source a)
+
+    for (a, b) in {(c, m), (m, c)}. The same-stream pathway keeps the
+    uncorrected projections. Both cross-stream passes -- the strictly
+    past cross pass and the same-frame pass -- use the corrected
+    tensors, since both are readings of the other stream. The deltas
+    start at zero (B = 0), so step 0 is unchanged from the default
+    block; the gates keep their role of scaling the pathway. Parameters
+    added per layer: 6 deltas x 2 r d.
 
     Three masks built per-call from (clean_len, T_query, device),
     where T_query is one frame index or a tuple of Q of them:
@@ -118,12 +162,27 @@ class M2CDuetBlockLayer(nn.Module):
                  moe_num_experts, moe_topk, moe_intermediate_size,
                  dropout=0.0, gate_init_bias=-10.0,
                  moe_modality_bias=False, moe_modality_gates=False,
-                 moe_modality_hard_route=False):
+                 moe_modality_hard_route=False, cross_lora_rank=0):
         super().__init__()
         assert hidden_size % num_heads == 0
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
+        # Cross-pair low-rank projections (see class docstring). Names:
+        #   lq_m  Delta W_Q^{c->m}, on h_m: melody's queries INTO chord
+        #   lk_m  Delta W_K^{m->c}, on h_m: melody's keys AS READ BY chord
+        #   lv_m  Delta W_V^{m->c}, on h_m: melody's values as read by chord
+        # and the mirror set on h_c. Absent (None) at rank 0, so the
+        # state dict of a default model is unchanged.
+        self.cross_lora_rank = int(cross_lora_rank)
+        if self.cross_lora_rank > 0:
+            r = self.cross_lora_rank
+            self.lq_m = LowRankDelta(hidden_size, r)
+            self.lk_m = LowRankDelta(hidden_size, r)
+            self.lv_m = LowRankDelta(hidden_size, r)
+            self.lq_c = LowRankDelta(hidden_size, r)
+            self.lk_c = LowRankDelta(hidden_size, r)
+            self.lv_c = LowRankDelta(hidden_size, r)
 
         # Per-modality Q/K/V/O projections.
         self.q_m = nn.Linear(hidden_size, hidden_size)
@@ -370,12 +429,19 @@ class M2CDuetBlockLayer(nn.Module):
         h_m_all = torch.cat([h_m_clean, h_qm], dim=1)   # [B, T_full+1, H]
         h_c_all = torch.cat([h_c_clean, h_qc], dim=1)   # [B, T_full+1, H]
 
-        q_m = self._split_heads(self.q_m(h_m_all))
-        k_m = self._split_heads(self.k_m(h_m_all))
-        v_m = self._split_heads(self.v_m(h_m_all))
-        q_c = self._split_heads(self.q_c(h_c_all))
-        k_c = self._split_heads(self.k_c(h_c_all))
-        v_c = self._split_heads(self.v_c(h_c_all))
+        pq_m, pk_m, pv_m = self.q_m(h_m_all), self.k_m(h_m_all), self.v_m(h_m_all)
+        pq_c, pk_c, pv_c = self.q_c(h_c_all), self.k_c(h_c_all), self.v_c(h_c_all)
+        q_m, k_m, v_m = (self._split_heads(t) for t in (pq_m, pk_m, pv_m))
+        q_c, k_c, v_c = (self._split_heads(t) for t in (pq_c, pk_c, pv_c))
+        if self.cross_lora_rank > 0:
+            # the cross-stream readings get their own projections: the
+            # per-stream ones plus a low-rank correction per pair
+            qx_m = self._split_heads(pq_m + self.lq_m(h_m_all))
+            kx_m = self._split_heads(pk_m + self.lk_m(h_m_all))
+            vx_m = self._split_heads(pv_m + self.lv_m(h_m_all))
+            qx_c = self._split_heads(pq_c + self.lq_c(h_c_all))
+            kx_c = self._split_heads(pk_c + self.lk_c(h_c_all))
+            vx_c = self._split_heads(pv_c + self.lv_c(h_c_all))
 
         # Scatter back into flat [B, h, L, d_k] in the interleaved+appended
         # layout. Mod-A occupies even clean positions then position clean_len;
@@ -397,15 +463,22 @@ class M2CDuetBlockLayer(nn.Module):
         cos_L = cos[:, :, :L]
         sin_L = sin[:, :, :L]
         q, k = _apply_rope(q, k, cos_L, sin_L)
+        if self.cross_lora_rank > 0:
+            qx, kx, vx = _scatter(qx_m, qx_c), _scatter(kx_m, kx_c), _scatter(vx_m, vx_c)
+            qx, kx = _apply_rope(qx, kx, cos_L, sin_L)
+        else:
+            qx, kx, vx = q, k, v
 
-        # Three SDPA passes.
+        # Three SDPA passes. The same-stream pass reads the per-stream
+        # projections; both cross-stream passes read the (possibly
+        # corrected) cross tensors, identical to q/k/v at rank 0.
         m_intra, m_cross, m_frame = self._build_masks(clean_len, T_query, q.device)
         out_intra = F.scaled_dot_product_attention(q, k, v, attn_mask=m_intra)
-        out_cross = F.scaled_dot_product_attention(q, k, v, attn_mask=m_cross)
+        out_cross = F.scaled_dot_product_attention(qx, kx, vx, attn_mask=m_cross)
         # Empty-row guard for mask_frame: clean tokens at frame 0 have only
         # their same-frame partner -- non-empty. Query rows always non-empty
         # (the other query). So no extra guard needed here.
-        out_frame = F.scaled_dot_product_attention(q, k, v, attn_mask=m_frame)
+        out_frame = F.scaled_dot_product_attention(qx, kx, vx, attn_mask=m_frame)
 
         out_intra = self._merge_heads(out_intra)   # [B, L, H]
         out_cross = self._merge_heads(out_cross)
@@ -498,7 +571,7 @@ class M2CDuetBlockAttn(RoFormerSymbolicTransformer):
                  global_dropout=0.0, preserve_program=True,
                  gate_init_bias=-10.0, query_loss_weight=1.0,
                  moe_modality_bias=False, moe_modality_gates=False,
-                 moe_modality_hard_route=False,
+                 moe_modality_hard_route=False, cross_lora_rank=0,
                  **kwargs):
         super().__init__(
             *args,
@@ -530,9 +603,11 @@ class M2CDuetBlockAttn(RoFormerSymbolicTransformer):
                 moe_modality_bias=moe_modality_bias,
                 moe_modality_gates=moe_modality_gates,
                 moe_modality_hard_route=moe_modality_hard_route,
+                cross_lora_rank=cross_lora_rank,
             )
             for _ in range(self.global_num_layers)
         ])
+        self.cross_lora_rank = int(cross_lora_rank)
 
         # Per-modality SOS offsets (matches intra-cross-attn).
         self.sos_offset_m = nn.Parameter(torch.zeros(self.hidden_size))

@@ -228,6 +228,12 @@
 #                           is then on its own scale and NOT comparable
 #                           across the A family; val_ar_loss_content
 #                           still is, and best_ar/ still tracks it.
+#   --export=ALL,CROSS_LORA_RANK=r   cross-pair low-rank Q/K/V: the two
+#                           cross-stream pathways get their own projections
+#                           W^{ab} = W^b + B A of rank r (B = 0 at init, so
+#                           step 0 is the default block). Works with any
+#                           family; run name gets an L<r> suffix; load_model
+#                           detects it from the ckpt. 0 = off (default).
 #   --export=ALL,AGREE_HEAD=1        A.11: partner-agreement detection
 #                           head on the conditional-slot pairs (needs
 #                           COND_SLOT_PROB > 0). AGREE_DECOY_PROB (0.5)
@@ -424,6 +430,11 @@ export MELCHORD_TAG
 MASK_K_PROB="${MASK_K_PROB:-}"
 SC_VAL="${SC_VAL:-0}"
 AGREE_HEAD="${AGREE_HEAD:-0}"
+# Cross-pair low-rank projections: the two cross-stream pathways get
+# their own Q/K/V as rank-r corrections of the per-stream ones
+# (W^{ab} = W^b + B A, B = 0 at init). Orthogonal to the family; the run
+# name gets an L<r> suffix. 0 = the default shared projections.
+CROSS_LORA_RANK="${CROSS_LORA_RANK:-0}"
 AGREE_DECOY_PROB="${AGREE_DECOY_PROB:-0.5}"
 AGREE_LOSS_WEIGHT="${AGREE_LOSS_WEIGHT:-0.3}"
 # MoE load-balancing loss: weight (0 disables it) and whether the
@@ -546,6 +557,8 @@ if [[ -z "${MODEL_ABBR:-}" ]]; then
     [[ "$DIFFUSION_K" != "4" ]] && MODEL_ABBR="${MODEL_ABBR}K${DIFFUSION_K}"
     [[ "$FAM" == "A6" && "$QUERY_PAIRS" != "8" ]] && MODEL_ABBR="${MODEL_ABBR}q${QUERY_PAIRS}"
     [[ "$FAM" == A8* && "$QUERY_BLOCK" != "4" ]] && MODEL_ABBR="${MODEL_ABBR}b${QUERY_BLOCK}"
+    # same order as derive_model_abbr: the L suffix comes last
+    [[ "$CROSS_LORA_RANK" != "0" ]] && MODEL_ABBR="${MODEL_ABBR}L${CROSS_LORA_RANK}"
 fi
 RUN_DIR="ckpt/m2c_duet_block_diffusion_${SCHEME_VERSION}_large_gnl12_${MODEL_ABBR}_${TASK}${MELCHORD_TAG}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
@@ -664,6 +677,9 @@ fi
 # early-run files and the converged weights are never written. 0 = off.
 if [[ "$SLOT_SEES_PREV_FRAME" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--slot_sees_prev_frame)
+fi
+if [[ "$CROSS_LORA_RANK" != "0" ]]; then
+    EXTRA_TRAIN_ARGS+=(--cross_lora_rank "$CROSS_LORA_RANK")
 fi
 if [[ "$AGREE_HEAD" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--agree_head
