@@ -78,11 +78,11 @@ from matplotlib.patches import Rectangle
 # then goes in the figure footnote, so nothing is left to guess.
 GROUPS = [
     ('Ours', True, [
-        # a second line starting with a minus or a bracket is a
+        # a second line starting with "w/o", a minus or a bracket is a
         # QUALIFIER: the wide layout draws it a point smaller, in grey
         ('A3',        'Duet',                                  'Duet'),
-        ('A3ctcaT',   'Duet\n\u2212 iterative refinement decode', 'Duet\u2212IR'),
-        ('A1',        'Duet\n\u2212 harmonizers',                 'Duet\u2212H'),
+        ('A3ctcaT',   'Duet\nw/o iterative refinement',  'Duet w/o IR'),
+        ('A1',        'Duet\nw/o harmonizers',            'Duet w/o H'),
     ]),
     # The cascade arms (P-mc, P-cm) left the figures 2026-09-17, by
     # request; they are still scored and sit in the CSVs.
@@ -663,7 +663,8 @@ def _split_label(disp):
     with a minus sign or a bracket, drawn smaller and greyer; anything
     else is one line at full size."""
     parts = disp.split('\n', 1)
-    if len(parts) == 2 and parts[1][:1] in ('−', '-', '('):
+    if len(parts) == 2 and (parts[1][:1] in ('−', '-', '(')
+                            or parts[1].startswith('w/o')):
         return parts[0], parts[1]
     return disp.replace('\n', ' '), ''
 

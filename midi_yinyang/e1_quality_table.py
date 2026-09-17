@@ -47,6 +47,17 @@ METRICS = [
 NAMES = {s: d.replace('\n', ' ').replace('\u2192', r'$\to$')
           .replace('\u2212', '$-$')
          for _g, _r, members in GROUPS for s, d, _sh in members}
+# (base, qualifier) per system: a variant row directly under its base
+# model's row prints only the qualifier, indented and small
+PARTS = {s: (d.split('\n', 1) + [''])[:2]
+         for _g, _r, members in GROUPS for s, d, _sh in members}
+
+
+def row_name(s, prev_base):
+    base, qual = PARTS[s]
+    if qual and base == prev_base:
+        return r'\hspace{1em}{\footnotesize ' + qual + '}'
+    return NAMES[s]
 
 
 def fmt(v, digits):
@@ -180,9 +191,11 @@ def main():
             L.append(mid)
         L.append(r'\multicolumn{' + str(ncol) + r'}{l}{\textbf{'
                  + family + r'}} \\')
-        for s, name in rows:
-            L.append(name + ' & ' + ' & '.join(value(m, s) for m, _ in metrics)
-                     + r' \\')
+        prev_base = None
+        for s, _name in rows:
+            L.append(row_name(s, prev_base) + ' & '
+                     + ' & '.join(value(m, s) for m, _ in metrics) + r' \\')
+            prev_base = PARTS[s][0]
             if args.ci == 'stacked':
                 L.append(' & ' + ' & '.join(interval(m, s) for m, _ in metrics)
                          + r' \\')

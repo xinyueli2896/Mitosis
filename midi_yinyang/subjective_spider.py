@@ -50,8 +50,7 @@ AXES = [('consistency', 'Consistency'), ('structure', 'Structure'),
 
 # system id in the CSV -> (display name, family, line style)
 SYSTEMS = [
-    ('Duet (alt commit)', 'Duet − iterative refinement decode',
-     'Ours', '-'),
+    ('Duet (alt commit)', 'Duet w/o iterative refinement', 'Ours', '-'),
     ('Duet',              'Duet',                'Ours',               (0, (5, 2))),
     ('S-scratch',         'Single-stream (scratch)',   'Internal baselines', '-'),
     ('Whole-song',        'Whole-Song Gen',            'External baselines', '-'),
