@@ -66,6 +66,12 @@
 #             per pooled metric, 95% interval under each value, best
 #             ranked system per column in bold, the reference split-half
 #             null as the last row (e1_quality_table.py).
+#   MOTIF_SHARE=1 (default) also draw the motif-development shares,
+#             <OUT>_motif_share: per stream, one stacked bar per system
+#             of the continuation's interval n-grams by relation to the
+#             prompt (exact / transposed / inverted / contour / novel),
+#             ground truth on top. MOTIF_N picks the n-gram length (3).
+#             Needs the P2 columns, i.e. a CSV scored after 2026-09-17.
 #   UBR_CURVES=1 (default) also draw the unique-beat-ratio curves --
 #             the BEAT paper's figure: ratio against phrase length, one
 #             curve per system, SE bands over songs. Two files:
@@ -173,6 +179,16 @@ else
         ${NCOLS:+--ncols "$NCOLS"} ${METRICS:+--metrics "$METRICS"} \
         ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"} \
         ${TITLE:+--title "$TITLE"}
+fi
+
+if [[ "${MOTIF_SHARE:-1}" == "1" ]]; then
+    # motif development: stacked shares of the continuation's interval
+    # n-grams by relation to the prompt (P2 block; needs a CSV scored
+    # with the current eval_metrics, else the script says so)
+    echo "--- motif share ---"
+    python plot_motif_share.py --csv "$CSV" --out "${OUT}_motif_share" \
+        --n "${MOTIF_N:-3}" ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"} \
+        || echo "[motif share] skipped (see message above)"
 fi
 
 if [[ "$UBR_CURVES" == "1" ]]; then

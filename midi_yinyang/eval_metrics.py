@@ -856,6 +856,101 @@ def _cov_vs_chance(cont, prompt, n, rng):
     return obs - float(np.mean(null))
 
 
+# ---------------------------------------------------------------------------
+# Motif DEVELOPMENT (P2, 2026-09-17): the same n-gram machinery with the
+# prompt's interval sequence TRANSFORMED before matching, so the classic
+# developmental devices are scored separately, each above its own
+# shuffled-prompt chance level and against the ground truth:
+#
+#   inv_cov       prompt intervals negated          -- inversion
+#   retro_cov     reversed and negated              -- retrograde
+#   contour_cov   reduced to their signs            -- same shape, new
+#                                                      intervals
+#
+# and a SHARE breakdown: every interval n-gram of the continuation is
+# classified once, in this order, by the strictest relation it has to
+# the prompt --
+#
+#   exact      the absolute-pitch n-gram itself occurs in the prompt line
+#   transp     the interval n-gram occurs (a transposition)
+#   inv        its inversion or retrograde occurs
+#   contour    only its sign pattern occurs
+#   novel      none of the above
+#
+# so the five shares sum to 1 per continuation, and "repeated" (exact +
+# transp) separates from "developed" (inv + contour) and from "new".
+# Contour matches are cheap at n = 3 (27 sign patterns), so read the
+# shares against the ground truth's; the delta does that.
+# ---------------------------------------------------------------------------
+
+def _transformed(seq, how):
+    if how == 'inv':
+        return [-v for v in seq]
+    if how == 'retro':
+        return [-v for v in reversed(seq)]
+    if how == 'contour':
+        return [int(np.sign(v)) for v in seq]
+    return list(seq)
+
+
+def _grams(seq, n):
+    return [tuple(seq[i:i + n]) for i in range(len(seq) - n + 1)]
+
+
+def motif_development_metrics(prompt_a, prompt_b, gen_a, gen_b, ref_a, ref_b):
+    out = {}
+    for label, pr, g, r in (('a', prompt_a, gen_a, ref_a),
+                            ('b', prompt_b, gen_b, ref_b)):
+        low = (label == 'b')
+        p_line = _line(pr, low)
+        p_iv = [b[1] - a[1] for a, b in zip(p_line, p_line[1:])]
+        for who, s_ in (('gen', g), ('ref', r)):
+            line = _line(s_, low)
+            iv = [b[1] - a[1] for a, b in zip(line, line[1:])]
+            for n in NGRAM_NS:
+                # transformed coverage, chance-corrected like motif_cov
+                for how in ('inv', 'retro', 'contour'):
+                    cseq = iv if how != 'contour' else _transformed(iv, 'contour')
+                    pseq = _transformed(p_iv, how)
+                    out[f'_{who}_{how}_cov{n}_{label}'] = _cov_vs_chance(
+                        cseq, pseq, n, np.random.default_rng(n))
+                # share breakdown
+                pitch_p = {tuple(x[1] for x in p_line[i:i + n + 1])
+                           for i in range(len(p_line) - n)}
+                iv_p = set(_grams(p_iv, n))
+                inv_p = set(_grams(_transformed(p_iv, 'inv'), n)) \
+                    | set(_grams(_transformed(p_iv, 'retro'), n))
+                ct_p = set(_grams(_transformed(p_iv, 'contour'), n))
+                counts = dict(exact=0, transp=0, inv=0, contour=0, novel=0)
+                total = 0
+                for i in range(len(iv) - n + 1):
+                    total += 1
+                    pg = tuple(x[1] for x in line[i:i + n + 1])
+                    ig = tuple(iv[i:i + n])
+                    if pg in pitch_p:
+                        counts['exact'] += 1
+                    elif ig in iv_p:
+                        counts['transp'] += 1
+                    elif ig in inv_p:
+                        counts['inv'] += 1
+                    elif tuple(int(np.sign(v)) for v in ig) in ct_p:
+                        counts['contour'] += 1
+                    else:
+                        counts['novel'] += 1
+                for k, c in counts.items():
+                    out[f'_{who}_motif{n}_share_{k}_{label}'] = (
+                        c / total if total else float('nan'))
+        for n in NGRAM_NS:
+            keys = [f'{how}_cov{n}_{label}' for how in ('inv', 'retro', 'contour')]
+            keys += [f'motif{n}_share_{k}_{label}'
+                     for k in ('exact', 'transp', 'inv', 'contour', 'novel')]
+            for key in keys:
+                gv, rv = out.pop(f'_gen_{key}'), out.pop(f'_ref_{key}')
+                out[key] = float(gv)
+                out[f'{key}_delta'] = float(gv - rv)
+    return out
+
+
 def prompt_pattern_metrics(prompt_a, prompt_b, gen_a, gen_b, ref_a, ref_b):
     """Transposition-invariant motif/rhythm coverage, vs the reference."""
     out = {}
@@ -1134,12 +1229,12 @@ PRIMARY = {
                  'H2': ['chord_tone_cov_delta'],
                  'H1': ['survival_min'],
                  'P': [],       # undecided until the results are in
-                 'S': [], 'R': [], 'P0': [], 'P1': []},
+                 'S': [], 'R': [], 'P0': [], 'P1': [], 'P2': []},
     'drumnondrum': {'H3': ['onset_grid_jsd_b'],
                     'H2': ['onset_sync_delta'],
                     'H1': ['survival_min'],
                     'P': [],       # undecided until the results are in
-                    'S': [], 'R': [], 'P0': [], 'P1': []},
+                    'S': [], 'R': [], 'P0': [], 'P1': [], 'P2': []},
 }
 
 H_GROUPS = {
@@ -1183,6 +1278,18 @@ H_GROUPS = {
           + [f'{k}_vs_prompt_{s_}{d}'
              for s_ in ('a', 'b') for k in ('density', 'register')
              for d in ('', '_delta')],
+    # P2 -- motif development (2026-09-17): transformed-prompt coverage
+    # (inversion, retrograde, contour) and the exact / transposed /
+    # inverted / contour / novel share breakdown of the continuation's
+    # interval n-grams. CSV only; plotted by plot_motif_share.py.
+    'P2': [f'{how}_cov{n}_{s_}{d}'
+           for s_ in ('a', 'b') for n in NGRAM_NS
+           for how in ('inv', 'retro', 'contour')
+           for d in ('', '_delta')]
+          + [f'motif{n}_share_{k}_{s_}{d}'
+             for s_ in ('a', 'b') for n in NGRAM_NS
+             for k in ('exact', 'transp', 'inv', 'contour', 'novel')
+             for d in ('', '_delta')],
     # P0 -- the prompt-adherence measures P replaced. CSV only. reuse
     # and rhythm_reuse need a beat to be byte-equal, so a transposed
     # restatement scores like unrelated notes and silent beats count as
@@ -1212,7 +1319,7 @@ GROUP_ORDER = ('H3', 'H2', 'P', 'S', 'R')
 # place. So the CSV is the superset -- everything computed is recorded
 # -- and the table is the reading order. Add 'H1' to GROUP_ORDER to put
 # it back in the table too.
-CSV_GROUPS = GROUP_ORDER + ('H1', 'P0', 'P1')
+CSV_GROUPS = GROUP_ORDER + ('H1', 'P0', 'P1', 'P2')
 
 
 # ---------------------------------------------------------------------------
@@ -1260,7 +1367,7 @@ STREAM_OF = {
 # in the suffix, and both families read one stream only. Registering
 # them keeps E3 from presenting the GIVEN stream's copied ground truth
 # as if it discriminated systems.
-for _h in ('R', 'P', 'P0', 'P1'):
+for _h in ('R', 'P', 'P0', 'P1', 'P2'):
     for _k in H_GROUPS[_h]:
         _parts = _k.split('_')
         _s = _parts[-1] if _parts[-1] in ('a', 'b') else _parts[-2]
@@ -1604,6 +1711,7 @@ def score_pair(gen_paths, ref_paths, args):
     row.update(prompt_match_metrics(pa, pb, ga, gb, ra, rb,
                                     phase=lo % FRAMES_PER_BAR))
     row.update(prompt_pattern_metrics(pa, pb, ga, gb, ra, rb))
+    row.update(motif_development_metrics(pa, pb, ga, gb, ra, rb))
     row.update(prompt_adherence_metrics(pa, pb, ga, gb, ra, rb,
                                         phase=lo % FRAMES_PER_BAR))
     row.update(s_metrics(ga, gb, ra, rb, args.task))
