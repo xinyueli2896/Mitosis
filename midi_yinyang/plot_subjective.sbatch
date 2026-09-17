@@ -36,8 +36,9 @@ mkdir -p /home/xinyue.li/logs results
 RATINGS="${RATINGS:?set RATINGS=<csv>}"
 OUT="${OUT:-results/subjective}"
 EXCLUDE="${EXCLUDE:-}"
-RMIN="${RMIN:-2}"
+RMIN="${RMIN:-3}"
 PALETTE="${PALETTE:-family}"
+SQUASH="${SQUASH:-0.12}"
 
-python subjective_spider.py --csv "$RATINGS" --out "$OUT" --rmin "$RMIN" --palette "$PALETTE" \
+python subjective_spider.py --csv "$RATINGS" --out "$OUT" --rmin "$RMIN" --palette "$PALETTE" --squash "$SQUASH" \
     ${EXCLUDE:+--exclude $EXCLUDE}

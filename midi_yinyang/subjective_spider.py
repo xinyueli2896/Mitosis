@@ -12,7 +12,9 @@ and the mapping is not recoverable), then:
     the MEAN over all kept ratings of that system, family colours as in
     plot_e1_box (ours gold, internal slate, external maroon, unranked
     grey, ground truth in ink dashed, only ours filled); the radial axis
-    runs from --rmin (default 2) to 5 of the 1..5 scale
+    runs from --rmin (default 3) to 5, piecewise linear: the band above
+    the ground-truth maximum gets --squash of the radius (default 0.12)
+    so the systems spread out; tick labels are scale values
   * a per-system table of mean and 95% interval per axis, the interval
     from a bootstrap over RATERS (a rater's ratings are not
     independent), and an overall mean
@@ -80,8 +82,13 @@ def main():
     ap.add_argument('--n-boot', type=int, default=2000)
     ap.add_argument('--width', type=float, default=3.4)
     ap.add_argument('--seed', type=int, default=0)
-    ap.add_argument('--rmin', type=float, default=2.0,
+    ap.add_argument('--rmin', type=float, default=3.0,
                     help='inner edge of the radial axis (rating scale 1-5)')
+    ap.add_argument('--squash', type=float, default=0.12,
+                    help='share of the radius given to the range ABOVE the '
+                         'ground-truth maximum, up to 5; the rest goes to '
+                         '[rmin, GT max], so the systems spread out. 0 = '
+                         'linear axis')
     ap.add_argument('--palette', choices=['family', 'system'], default='family',
                     help='family: the E1 family colours; system: one colour '
                          'per system (SYSTEM_COLORS)')
@@ -165,17 +172,30 @@ def main():
     K = len(AXES)
     ang = np.linspace(0, 2 * np.pi, K, endpoint=False)
     ang_c = np.concatenate([ang, ang[:1]])
+    # Radial mapping: piecewise linear. [rmin, gt_max] fills (1 - squash)
+    # of the radius, [gt_max, 5] the remaining share, so the empty band
+    # above the ground truth stops eating the room the systems need.
+    # Tick labels keep the ORIGINAL scale values. Say so in the caption.
+    gt_max = float(stats['GT'][0].max()) if 'GT' in stats else 5.0
+    knee = min(gt_max + 0.05, 5.0)
+    if args.squash > 0 and knee < 5.0:
+        def rmap(v):
+            v = np.asarray(v, float)
+            lo_part = (v - args.rmin) / (knee - args.rmin) * (1 - args.squash)
+            hi_part = (1 - args.squash) + (v - knee) / (5.0 - knee) * args.squash
+            return np.where(v <= knee, lo_part, hi_part)
+    else:
+        def rmap(v):
+            return (np.asarray(v, float) - args.rmin) / (5.0 - args.rmin)
     fig = plt.figure(figsize=(args.width, args.width * 1.02))
     ax = fig.add_subplot(111, polar=True)
     fig.patch.set_facecolor(SURFACE); ax.set_facecolor(SURFACE)
     ax.set_theta_offset(np.pi / 2); ax.set_theta_direction(-1)
-    # radial axis from 2: every mean sits between 3.2 and 4.4, and the
-    # empty 1..2 ring only compressed the differences. Say so in the
-    # caption.
-    ax.set_ylim(args.rmin, 5)
-    ax.set_yticks([t for t in (2, 3, 4, 5) if t >= args.rmin])
-    ax.set_yticklabels([str(t) for t in (2, 3, 4, 5) if t >= args.rmin],
-                       fontsize=FS_TICK - 1, color=INK_2)
+    ax.set_ylim(0, 1)
+    ticks = [t for t in (2, 2.5, 3, 3.5, 4, 4.5, 5) if t >= args.rmin]
+    ax.set_yticks(list(rmap(ticks)))
+    ax.set_yticklabels([f'{t:g}' for t in ticks], fontsize=FS_TICK - 1,
+                       color=INK_2)
     ax.set_rlabel_position(90 / K)
     ax.set_xticks(ang)
     ax.set_xticklabels([lab for _a, lab in AXES], fontsize=FS_LABEL, color=INK)
@@ -190,7 +210,7 @@ def main():
             col = SYSTEM_COLORS[sysid]
         else:
             col = GT_COLOR if fam == 'GT' else FAMILY_COLOR[fam]
-        v = np.concatenate([mean, mean[:1]])
+        v = rmap(np.concatenate([mean, mean[:1]]))
         ax.plot(ang_c, v, color=col, lw=1.1, ls=ls, zorder=3)
         if fam == 'Ours':
             # only our polygon is filled: five stacked fills greyed the
