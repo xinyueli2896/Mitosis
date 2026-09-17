@@ -42,7 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import eval_metrics as em                      # noqa: E402
 from plot_e1_box import (GROUPS, SURFACE, INK, INK_2, MUTED, GRID,  # noqa
                          FS_TICK, FS_LABEL, FS_TITLE, FS_LETTER,
-                         FS_LEGEND, color_of)
+                         FS_LEGEND, color_of, grouped_legend)
 
 PANELS = [(1, 'state', '1-beat (Full)'), (2, 'state', '2-beat (Full)'),
           (1, 'onset', '1-beat (Onset)'), (2, 'onset', '2-beat (Onset)')]
@@ -269,11 +269,21 @@ def main():
         lo_y, hi_y = row_lims[r]
         if np.isfinite(lo_y) and np.isfinite(hi_y):
             axes[r][0].set_ylim(lo_y, hi_y)
-    ordered = [handles[s] for s, _, _, _ in order if s in handles]
-    if '_ref' in handles:
-        ordered.append(handles['_ref'])
-    fig.legend(handles=ordered, loc='lower center', ncol=4, frameon=False,
-               fontsize=FS_LEGEND, labelcolor=INK, bbox_to_anchor=(0.5, 0.0))
+    # legend in titled blocks by model group; colour is the group, the
+    # dash tells systems of one group apart
+    blocks = []
+    for title, fams in (('Ours', ('Ours',)),
+                        ('Baselines', ('Internal baselines',
+                                       'External baselines', 'Not ranked')),
+                        ('Reference', ('_ref',))):
+        if title == 'Reference':
+            hs = [handles['_ref']] if '_ref' in handles else []
+        else:
+            hs = [handles[s] for s, _d, g, _i in order
+                  if g in fams and s in handles]
+        if hs:
+            blocks.append((title, hs, [h.get_label() for h in hs]))
+    grouped_legend(fig, blocks, y=0.0, xs=[0.08, 0.38, 0.78])
     what = ('system minus ground truth, paired per song' if args.y == 'delta'
             else 'mean over songs, samples averaged within song')
     fig.text(0.5, 0.115 if not args.no_bands else 0.10,

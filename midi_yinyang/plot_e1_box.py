@@ -145,6 +145,39 @@ def lighten(color, amount=0.55):
     r, g, b, _ = matplotlib.colors.to_rgba(color)
     return (r + (1 - r) * amount, g + (1 - g) * amount, b + (1 - b) * amount)
 
+
+def grouped_legend(fig, blocks, y=0.0, xs=None, ncol=None, loc='lower left',
+                   **kw):
+    """Several titled legend blocks side by side along the bottom.
+
+    blocks: [(title, handles, labels)]. Each block is its own legend
+    with a left-aligned bold title, so colour (model group) and mark or
+    line type sit in separate, labelled blocks instead of one mixed
+    list. xs: block anchors in figure fraction (left edges for the
+    default loc='lower left'; default evenly spaced); ncol: columns per
+    block, an int or one per block (default 1).
+    """
+    n = len(blocks)
+    if xs is None:
+        xs = [(i + 0.5) / n for i in range(n)]
+    opts = dict(handlelength=1.6, handletextpad=0.5, columnspacing=1.0,
+                labelspacing=0.3)
+    opts.update(kw)
+    if not isinstance(ncol, (list, tuple)):
+        ncol = [ncol or 1] * n
+    legs = []
+    for (title, handles, labels), x, nc in zip(blocks, xs, ncol):
+        leg = fig.legend(handles=handles, labels=labels, loc=loc,
+                         bbox_to_anchor=(x, y), ncol=nc, frameon=False,
+                         fontsize=FS_LEGEND, labelcolor=INK, title=title,
+                         title_fontsize=FS_LEGEND, alignment='left',
+                         handler_map={tuple: HandlerTuple(ndivide=None,
+                                                          pad=0.25)}, **opts)
+        leg.get_title().set_color(INK)
+        leg.get_title().set_fontweight('bold')
+        legs.append(leg)
+    return legs
+
 # Metrics with no reference level: raw per-stream rates whose row holds
 # no matching ground-truth statistic. Their _delta or _ratio siblings do
 # have one, and those are the panels to read for "how close to real".
@@ -956,7 +989,7 @@ def main():
         width = args.width if args.width > 5 else 7.0
         row_h = 0.30 * len(order) + 0.5
         fig, axgrid = plt.subplots(nrows, ncols, squeeze=False,
-                                   figsize=(width, row_h * nrows + 0.45))
+                                   figsize=(width, row_h * nrows + 0.6))
         fig.patch.set_facecolor(SURFACE)
         ypos = None
         for idx, m in enumerate(metrics):
@@ -975,18 +1008,19 @@ def main():
                 edges[-1] = (family, edges[-1][1], i)
             else:
                 edges.append((family, i, i))
-        handles = [
+        # legend in two titled blocks: model group (colour) and marks
+        marks = [
             Line2D([0], [0], color=INK, lw=0.9, ls=(0, (4, 3)),
                    label='reference (ground truth)'),
             Line2D([0], [0], color=INK_2, lw=1.2, marker='*', markersize=6.5,
                    markerfacecolor=SURFACE, markeredgecolor=INK,
-                   markeredgewidth=0.5, label='best ranked (mean)'),
+                   markeredgewidth=0.5, label='best ranked system (mean)'),
             Line2D([0], [0], color=INK, lw=0, marker='D', markersize=2.8,
                    markerfacecolor=SURFACE, markeredgecolor=INK,
                    markeredgewidth=0.7,
-                   label='mean; whiskers 1.5 IQR, outliers omitted'),
+                   label='mean (box: quartiles; whiskers: 1.5 IQR; no outliers)'),
         ]
-        labels_ = [h.get_label() for h in handles]
+        groups_h, groups_l = [], []
         for f, left, right in edges:
             cols = []
             for s_, _d, _sh, _g, _r in order[left:right + 1]:
@@ -994,16 +1028,14 @@ def main():
                     cols.append(color_of(s_, f))
             sw = tuple(Rectangle((0, 0), 1, 1, facecolor=lighten(c),
                                  edgecolor=c, lw=0.8) for c in cols)
-            handles.append(sw[0] if len(sw) == 1 else sw)
-            labels_.append(f)
-        fig.legend(handles=handles, labels=labels_, loc='lower center',
-                   ncol=4, frameon=False, fontsize=FS_LEGEND, labelcolor=INK,
-                   handlelength=1.6, handletextpad=0.5, columnspacing=1.2,
-                   handler_map={tuple: HandlerTuple(ndivide=None, pad=0.25)},
-                   bbox_to_anchor=(0.5, -0.005))
+            groups_h.append(sw[0] if len(sw) == 1 else sw)
+            groups_l.append(f)
+        grouped_legend(fig, [('Model group', groups_h, groups_l),
+                             ('Marks', marks, [h.get_label() for h in marks])],
+                       y=-0.005, xs=[0.14, 0.52], ncol=[2, 1])
         if args.title:
             fig.suptitle(args.title, fontsize=FS_LETTER, color=INK, y=0.995)
-        leg_frac = 0.38 / fig.get_figheight()
+        leg_frac = 0.52 / fig.get_figheight()
         fig.tight_layout(rect=(0, leg_frac, 1, 1.0), w_pad=1.2, h_pad=1.6)
         for ext in ('pdf', 'png'):
             path = f'{args.out}.{ext}'

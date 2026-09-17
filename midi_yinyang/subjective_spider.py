@@ -42,7 +42,7 @@ from matplotlib.lines import Line2D
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plot_e1_box import (SURFACE, INK, INK_2, GRID, FAMILY_COLOR,  # noqa
-                         FS_TICK, FS_LABEL, FS_LEGEND)
+                         FS_TICK, FS_LABEL, FS_LEGEND, grouped_legend)
 
 AXES = [('consistency', 'Consistency'), ('structure', 'Structure'),
         ('fit', 'Melody-chord fit'), ('musicality', 'Musicality'),
@@ -215,11 +215,28 @@ def main():
             # only our polygon is filled: five stacked fills greyed the
             # whole interior
             ax.fill(ang_c, v, color=col, alpha=0.12, lw=0, zorder=2)
-        handles.append(Line2D([0], [0], color=col, lw=1.1, ls=ls, label=disp))
-    fig.legend(handles=handles, loc='lower center', ncol=2, frameon=False,
-               fontsize=FS_LEGEND, labelcolor=INK, handlelength=2.0,
-               columnspacing=1.0, bbox_to_anchor=(0.5, 0.0))
-    fig.tight_layout(rect=(0, 0.16, 1, 1))
+        handles.append((fam, Line2D([0], [0], color=col, lw=1.1, ls=ls,
+                                    label=disp)))
+    # legend in titled blocks by model group; colour is the group, line
+    # type tells systems of one group apart
+    blocks = []
+    for title, fams in (('Ours', ('Ours',)),
+                        ('Baselines', ('Internal baselines',
+                                       'External baselines', 'Not ranked')),
+                        ('Reference', ('GT',))):
+        hs = [h for f, h in handles if f in fams]
+        if hs:
+            blocks.append((title, hs, [h.get_label() for h in hs]))
+    # one column is too narrow for three blocks in a row: Ours and
+    # Reference stack on the left, the baselines sit on the right
+    by_title = {t: (t, h, l) for t, h, l in blocks}
+    if 'Ours' in by_title:
+        grouped_legend(fig, [by_title['Ours']], y=0.10, xs=[0.02], handlelength=2.0)
+    if 'Reference' in by_title:
+        grouped_legend(fig, [by_title['Reference']], y=0.0, xs=[0.02], handlelength=2.0)
+    if 'Baselines' in by_title:
+        grouped_legend(fig, [by_title['Baselines']], y=0.0, xs=[0.5], handlelength=2.0)
+    fig.tight_layout(rect=(0, 0.22, 1, 1))
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print(f'wrote {args.out}.{ext}')
