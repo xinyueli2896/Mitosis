@@ -17,9 +17,9 @@ EXACTLY as eval_metrics computes them, on bar i of the continuation
 --window cumulative uses bars 0..i instead of bar i alone, i.e. the
 whole continuation so far; its last point is the sheet's number.
 
-Layout: one row per stream (melody, chord), four columns: pitch-class
-JSD, its delta, onset similarity, its delta. Raw panels carry the
-ground truth as a dashed grey curve; delta panels a zero line. Lines
+Two figures, <out> and <out>_delta, each a 2 x 2 grid: rows are the
+two statistics, columns the two streams. The raw figure carries the
+ground truth as a dashed grey curve; the delta figure a zero line. Lines
 are means over songs (samples averaged within song), bands +-1.96 SE
 over songs. Colours are the E1 families, the dash tells systems of one
 family apart, legend in titled blocks.
@@ -176,87 +176,98 @@ def main():
               file=sys.stderr)
 
     unit = 'bar' if args.bars == 1 else f'{args.bars} bars'
-    panels = [(m, kind) for m, _ in METRICS for kind in ('raw', 'delta')]
-    fig, axes = plt.subplots(len(STREAMS), len(panels), squeeze=False,
-                             figsize=(args.width, 1.55 * len(STREAMS) + 1.1))
-    fig.patch.set_facecolor(SURFACE)
-    handles = {}
     table = {}
-    for r, (st, sname) in enumerate(STREAMS):
-        for c, (met, kind) in enumerate(panels):
-            ax = axes[r][c]
-            key = (st, met)
-            if kind == 'raw':
-                m, se, n = _stack(ref[key])
-                if m is not None:
-                    x = np.arange(1, len(m) + 1) * args.bars
-                    ax.plot(x, m, color=INK_2, lw=1.0, ls=(0, (4, 2)), zorder=4)
-                    handles['_ref'] = Line2D([0], [0], color=INK_2, lw=1.0,
-                                             ls=(0, (4, 2)),
-                                             label=f'ground truth (n={n} songs)')
-            else:
-                ax.axhline(0, color=INK_2, lw=0.9, ls=(0, (4, 2)), zorder=4)
-            for sysname, disp, family, i in order:
-                if sysname not in gen[key]:
-                    continue
-                m, se, n = (_stack(gen[key][sysname]) if kind == 'raw'
-                            else _stack(gen[key][sysname], ref[key]))
-                if m is None:
-                    continue
-                x = np.arange(1, len(m) + 1) * args.bars
-                col = color_of(sysname, family)
-                ls = MEMBER_DASH[i % len(MEMBER_DASH)]
-                ax.plot(x, m, color=col, lw=0.9, ls=ls, zorder=3)
-                if not args.no_bands:
-                    ax.fill_between(x, m - 1.96 * se, m + 1.96 * se,
-                                    color=col, alpha=0.14, lw=0, zorder=2)
-                handles[sysname] = Line2D([0], [0], color=col, lw=0.9, ls=ls,
-                                          label=disp.replace('\n', ' '))
-                table[(st, met, kind, sysname)] = m
-            base = dict(METRICS)[met]
-            ax.set_title((base if kind == 'raw' else base + ' $-$ GT')
-                         + f'\n{sname.lower()}', fontsize=FS_TITLE, color=INK,
-                         pad=4)
-            if r == len(STREAMS) - 1:
-                ax.set_xlabel(f'continuation position ({unit}s)' if args.bars == 1
-                              else f'continuation position (bars)',
-                              fontsize=FS_LABEL, color=INK)
-            ax.tick_params(labelsize=FS_TICK, colors=INK, length=2.5,
-                           width=0.6, color=INK)
-            for side in ('top', 'right'):
-                ax.spines[side].set_visible(False)
-            for side in ('left', 'bottom'):
-                ax.spines[side].set_color(INK); ax.spines[side].set_linewidth(0.6)
-            ax.set_facecolor(SURFACE)
-            ax.yaxis.grid(True, color=GRID, lw=0.5); ax.xaxis.grid(False)
-            ax.set_axisbelow(True)
-            ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-            ax.annotate(chr(ord('a') + r * len(panels) + c), xy=(0.02, 0.96),
-                        xycoords='axes fraction', ha='left', va='top',
-                        fontsize=FS_LETTER, weight='bold', color=INK)
 
-    blocks = []
-    for title, fams in (('Ours', ('Ours',)),
-                        ('Baselines', ('Internal baselines',
-                                       'External baselines', 'Not ranked')),
-                        ('Reference', ('_ref',))):
-        if title == 'Reference':
-            hs = [handles['_ref']] if '_ref' in handles else []
-        else:
-            hs = [handles[s] for s, _d, g, _i in order
-                  if g in fams and s in handles]
-        if hs:
-            blocks.append((title, hs, [h.get_label() for h in hs]))
-    grouped_legend(fig, blocks, y=0.0, xs=[0.08, 0.38, 0.78])
-    fig.text(0.5, 0.15,
-             f'lines: mean over songs, samples averaged within song; '
-             f'window: {args.window}, {unit}'
-             + ('' if args.no_bands else '; bands: $\\pm$1.96 SE over songs'),
-             ha='center', fontsize=FS_TICK, color=INK_2)
-    fig.tight_layout(rect=(0, 0.19, 1, 1), w_pad=1.0, h_pad=1.4)
-    for ext in ('pdf', 'png'):
-        fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
-        print(f'wrote {args.out}.{ext}')
+    def draw(kind, out):
+        """One figure: rows = statistic (pitch-class JSD, onset
+        similarity), columns = stream (melody, chord). kind 'raw' draws
+        the statistic with the ground truth dashed; 'delta' the paired
+        difference with a zero line."""
+        fig, axes = plt.subplots(len(METRICS), len(STREAMS), squeeze=False,
+                                 figsize=(args.width, 1.55 * len(METRICS) + 1.1))
+        fig.patch.set_facecolor(SURFACE)
+        handles = {}
+        for r, (met, label) in enumerate(METRICS):
+            for c, (st, sname) in enumerate(STREAMS):
+                ax = axes[r][c]
+                key = (st, met)
+                if kind == 'raw':
+                    m, se, n = _stack(ref[key])
+                    if m is not None:
+                        x = np.arange(1, len(m) + 1) * args.bars
+                        ax.plot(x, m, color=INK_2, lw=1.0, ls=(0, (4, 2)),
+                                zorder=4)
+                        handles['_ref'] = Line2D(
+                            [0], [0], color=INK_2, lw=1.0, ls=(0, (4, 2)),
+                            label=f'ground truth (n={n} songs)')
+                else:
+                    ax.axhline(0, color=INK_2, lw=0.9, ls=(0, (4, 2)), zorder=4)
+                for sysname, disp, family, i in order:
+                    if sysname not in gen[key]:
+                        continue
+                    m, se, n = (_stack(gen[key][sysname]) if kind == 'raw'
+                                else _stack(gen[key][sysname], ref[key]))
+                    if m is None:
+                        continue
+                    x = np.arange(1, len(m) + 1) * args.bars
+                    col = color_of(sysname, family)
+                    ls = MEMBER_DASH[i % len(MEMBER_DASH)]
+                    ax.plot(x, m, color=col, lw=0.9, ls=ls, zorder=3)
+                    if not args.no_bands:
+                        ax.fill_between(x, m - 1.96 * se, m + 1.96 * se,
+                                        color=col, alpha=0.14, lw=0, zorder=2)
+                    handles[sysname] = Line2D([0], [0], color=col, lw=0.9,
+                                              ls=ls, label=disp.replace('\n', ' '))
+                    table[(st, met, kind, sysname)] = m
+                ax.set_title((label if kind == 'raw' else label + ' $-$ GT')
+                             + f', {sname.lower()}', fontsize=FS_TITLE,
+                             color=INK, pad=4)
+                if r == len(METRICS) - 1:
+                    ax.set_xlabel('continuation position (bars)',
+                                  fontsize=FS_LABEL, color=INK)
+                ax.tick_params(labelsize=FS_TICK, colors=INK, length=2.5,
+                               width=0.6, color=INK)
+                for side in ('top', 'right'):
+                    ax.spines[side].set_visible(False)
+                for side in ('left', 'bottom'):
+                    ax.spines[side].set_color(INK)
+                    ax.spines[side].set_linewidth(0.6)
+                ax.set_facecolor(SURFACE)
+                ax.yaxis.grid(True, color=GRID, lw=0.5); ax.xaxis.grid(False)
+                ax.set_axisbelow(True)
+                ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+                ax.annotate(chr(ord('a') + r * len(STREAMS) + c),
+                            xy=(0.02, 0.96), xycoords='axes fraction',
+                            ha='left', va='top', fontsize=FS_LETTER,
+                            weight='bold', color=INK)
+        blocks = []
+        for title, fams in (('Ours', ('Ours',)),
+                            ('Baselines', ('Internal baselines',
+                                           'External baselines', 'Not ranked')),
+                            ('Reference', ('_ref',))):
+            if title == 'Reference':
+                hs = [handles['_ref']] if '_ref' in handles else []
+            else:
+                hs = [handles[s] for s, _d, g, _i in order
+                      if g in fams and s in handles]
+            if hs:
+                blocks.append((title, hs, [h.get_label() for h in hs]))
+        grouped_legend(fig, blocks, y=0.0, xs=[0.08, 0.38, 0.78])
+        what = ('the statistic on each window' if kind == 'raw'
+                else 'system minus ground truth, paired per song')
+        fig.text(0.5, 0.15,
+                 f'lines: {what}, mean over songs (samples averaged within '
+                 f'song); window: {args.window}, {unit}'
+                 + ('' if args.no_bands else '; bands: $\\pm$1.96 SE over songs'),
+                 ha='center', fontsize=FS_TICK, color=INK_2)
+        fig.tight_layout(rect=(0, 0.19, 1, 1), w_pad=1.2, h_pad=1.4)
+        for ext in ('pdf', 'png'):
+            fig.savefig(f'{out}.{ext}', dpi=300, facecolor=SURFACE)
+            print(f'wrote {out}.{ext}')
+        plt.close(fig)
+
+    draw('raw', args.out)
+    draw('delta', args.out + '_delta')
 
     # numbers: first / middle / last third of the continuation
     print(f'\nwindow={args.window}, {unit}; thirds of the continuation: '
