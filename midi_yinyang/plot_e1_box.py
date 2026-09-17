@@ -75,10 +75,10 @@ GROUPS = [
         ('A3',        'Duet\n(refine)',             'Duet–R'),
         ('A3ctcaT',   'Duet\n(alt. commit)',        'Duet–AC'),
     ]),
+    # The cascade arms (P-mc, P-cm) left the figures 2026-09-17, by
+    # request; they are still scored and sit in the CSVs.
     ('Internal baselines', True, [
         ('S-scratch', 'Single-stream\n(scratch)',   'SS–scr'),
-        ('P-mc',      'Cascade\n(mel→chd)',    'Casc–mc'),
-        ('P-cm',      'Cascade\n(chd→mel)',    'Casc–cm'),
     ]),
     ('External baselines', True, [
         # WSfv4: the whole-song baseline with its chord track re-voiced
