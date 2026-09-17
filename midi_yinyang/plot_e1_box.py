@@ -103,15 +103,16 @@ GROUPS = [
     ]),
 ]
 
-# Palette (2026-09-16, by request): six swatches, colour carries FAMILY,
-# not system -- the family is the comparison the figure is making, and
-# every column is directly labelled besides. Ours in gold so it stands
-# out from the two dark baseline families; the unranked column in the
-# warm grey; near-black for ink and the slate for secondary marks.
-# A per-system override can go in SYSTEM_COLOR; it is empty by request.
+# Palette (2026-09-17, by request): four of the six swatches carry the
+# FAMILIES -- the two darkest (near-black, navy) are kept off the boxes
+# and used only for text and spines. Colour carries family, not system:
+# the family is the comparison the figure is making, and every column
+# is directly labelled besides. Ours in gold; internal baselines in
+# slate; external baselines in maroon; the unranked column in warm
+# grey. A per-system override can go in SYSTEM_COLOR; it is empty by
+# request.
 PALETTE = {
     'black':  '#252323',
-    'navy':   '#1b263b',
     'maroon': '#462025',
     'gold':   '#e7af36',
     'slate':  '#70798c',
@@ -120,7 +121,7 @@ PALETTE = {
 SYSTEM_COLOR = {}
 FAMILY_COLOR = {
     'Ours':                PALETTE['gold'],
-    'Internal baselines':  PALETTE['navy'],
+    'Internal baselines':  PALETTE['slate'],
     'External baselines':  PALETTE['maroon'],
     'Not ranked':          PALETTE['grey'],
 }
@@ -151,7 +152,7 @@ NO_REFERENCE = {
 
 SURFACE = '#ffffff'          # white ground
 INK = PALETTE['black']       # text, spines, medians, the reference line
-INK_2 = PALETTE['slate']     # secondary text and tick labels
+INK_2 = '#5a5754'            # secondary text (slate now carries a family)
 MUTED = PALETTE['grey']      # placeholders, the noise-floor line
 GRID = '#e8e6e2'             # horizontal rules behind the boxes
 
