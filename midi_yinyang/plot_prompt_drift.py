@@ -1,28 +1,28 @@
-"""Prompt drift across the continuation: pitch-class JSD against the
-prompt, bar by bar, for every system and for the ground truth.
+"""Prompt drift across the continuation: the two prompt-adherence
+statistics of the E1 sheet, bar by bar, for every system and for the
+ground truth.
 
-The prompt-adherence row of the E1 sheets is ONE number per song: the
-duration-weighted pitch-class histogram of the whole continuation
-against the prompt's, as a JSD, minus the same for the ground-truth
-continuation. This figure spreads that number over TIME. For bar i of
-the continuation (frames prompt + 16 i .. prompt + 16 (i + 1)) it
-computes
+The prompt sheet reports, per song, ONE number per statistic over the
+whole continuation. This figure spreads both over TIME, computed
+EXACTLY as eval_metrics computes them, on bar i of the continuation
+(frames prompt + 16 i .. prompt + 16 (i + 1)) instead of on the whole:
 
-    jsd_i   = JSD( pc(prompt), pc(bar i of the generation) )
-    delta_i = jsd_i - JSD( pc(prompt), pc(bar i of the ground truth) )
+    pc_jsd_i     JSD (base 2) between the prompt's duration-weighted
+                 12-bin pitch-class histogram and bar i's
+    onset_sim_i  cosine between the prompt's mean per-bar binary onset
+                 profile and bar i's onset vector
+    delta_i      each statistic minus the same statistic on bar i of the
+                 ground-truth continuation (paired per song)
 
-with pc() the duration-weighted 12-bin pitch-class histogram used by
-eval_metrics, so the two panels answer, per bar: how far has the
-generation moved from the prompt's pitch material, and is that more or
-less than the real song had moved by the same bar. --window cumulative
-uses bars 0..i instead of bar i alone, i.e. the whole continuation so
-far, which is smoother and reads as "drift of the piece to date".
+--window cumulative uses bars 0..i instead of bar i alone, i.e. the
+whole continuation so far; its last point is the sheet's number.
 
-Layout: one row per stream (melody, chord), two columns: the JSD itself
-with the ground truth as a dashed grey curve, and the paired delta with
-zero as the target. Lines are means over songs (samples averaged within
-song), bands +-1.96 SE over songs. Colours are the E1 families, the
-dash tells systems of one family apart, legend in titled blocks.
+Layout: one row per stream (melody, chord), four columns: pitch-class
+JSD, its delta, onset similarity, its delta. Raw panels carry the
+ground truth as a dashed grey curve; delta panels a zero line. Lines
+are means over songs (samples averaged within song), bands +-1.96 SE
+over songs. Colours are the E1 families, the dash tells systems of one
+family apart, legend in titled blocks.
 
 Reads the same manifest and reference dirs as eval_metrics, so the
 curves are over exactly the scored set.
@@ -57,25 +57,31 @@ MEMBER_DASH = ['-', (0, (5, 2)), (0, (1, 1.2))]
 BAR = em.FRAMES_PER_BAR
 
 
-def pc_jsd(prompt_hist, seg):
-    h = em._pc_profile_dw(seg)
-    if h.sum() <= 0 or prompt_hist.sum() <= 0:
-        return float('nan')
-    return em.jsd(prompt_hist, h)
+METRICS = [('pc', 'Pitch-class JSD to prompt'),
+           ('on', 'Onset similarity to prompt')]
 
 
-def curve(prompt, cont, window, bars):
-    """One value per window of the continuation.
+def curves(prompt, cont, window, bars):
+    """{metric: one value per window of the continuation}.
 
     window 'bar': window i = bars [i*bars, (i+1)*bars);
-    window 'cumulative': window i = bars [0, (i+1)*bars)."""
+    window 'cumulative': window i = bars [0, (i+1)*bars).
+    Both statistics are eval_metrics' own (prompt_adherence_metrics),
+    applied to the window instead of the whole continuation."""
     hp = em._pc_profile_dw(prompt)
+    rp = em._onset_profile(prompt, 0)
     n_windows = cont.n_frames // (BAR * bars)
-    out = np.full(n_windows, np.nan)
+    out = {m: np.full(n_windows, np.nan) for m, _ in METRICS}
     for i in range(n_windows):
         lo = 0 if window == 'cumulative' else i * BAR * bars
         hi = (i + 1) * BAR * bars
-        out[i] = pc_jsd(hp, cont.slice(lo, hi))
+        seg = cont.slice(lo, hi)
+        hc = em._pc_profile_dw(seg)
+        if hp.sum() > 0 and hc.sum() > 0:
+            out['pc'][i] = em.jsd(hp, hc)
+        rc = em._onset_profile(seg, 0)
+        if rp is not None and rc is not None:
+            out['on'][i] = em._cosine(rp, rc)
     return out
 
 
@@ -96,8 +102,10 @@ def collect(args):
                      os.path.join(args.ref_b_dir, f'{song}.mid')],
                     args.task, args.mel_programs, args.chord_programs, hi)
                 for st, s_ in zip('ab', refs[song]):
-                    ref[st][song] = curve(s_.slice(0, lo), s_.slice(lo, hi),
-                                          args.window, args.bars)
+                    cv = curves(s_.slice(0, lo), s_.slice(lo, hi),
+                                args.window, args.bars)
+                    for m, _ in METRICS:
+                        ref[(st, m)][song] = cv[m]
             try:
                 ga, gb = em.load_streams(path.split(';'), args.task,
                                          args.mel_programs,
@@ -109,9 +117,10 @@ def collect(args):
             # system by construction; it is read from the reference so a
             # system that re-renders its prompt cannot move the yardstick.
             for st, s_, r_ in zip('ab', (ga, gb), refs[song]):
-                gen[st][system][song].append(
-                    curve(r_.slice(0, lo), s_.slice(lo, hi),
-                          args.window, args.bars))
+                cv = curves(r_.slice(0, lo), s_.slice(lo, hi),
+                            args.window, args.bars)
+                for m, _ in METRICS:
+                    gen[(st, m)][system][song].append(cv[m])
     return gen, ref
 
 
@@ -160,23 +169,25 @@ def main():
     excluded = {x.strip() for x in args.exclude.split(',') if x.strip()}
     order = [(s, d, g, i) for g, _r, members in GROUPS
              for i, (s, d, _sh) in enumerate(members) if s not in excluded]
-    present = {s for st in gen for s in gen[st]}
+    present = {s for k in gen for s in gen[k]}
     absent = [s for s, _, _, _ in order if s not in present]
     if absent:
         print(f'[warn] not in the manifest, not drawn: {" ".join(absent)}',
               file=sys.stderr)
 
     unit = 'bar' if args.bars == 1 else f'{args.bars} bars'
-    fig, axes = plt.subplots(len(STREAMS), 2, squeeze=False,
-                             figsize=(args.width, 1.7 * len(STREAMS) + 1.1))
+    panels = [(m, kind) for m, _ in METRICS for kind in ('raw', 'delta')]
+    fig, axes = plt.subplots(len(STREAMS), len(panels), squeeze=False,
+                             figsize=(args.width, 1.55 * len(STREAMS) + 1.1))
     fig.patch.set_facecolor(SURFACE)
     handles = {}
     table = {}
     for r, (st, sname) in enumerate(STREAMS):
-        for c in range(2):
+        for c, (met, kind) in enumerate(panels):
             ax = axes[r][c]
-            if c == 0:
-                m, se, n = _stack(ref[st])
+            key = (st, met)
+            if kind == 'raw':
+                m, se, n = _stack(ref[key])
                 if m is not None:
                     x = np.arange(1, len(m) + 1) * args.bars
                     ax.plot(x, m, color=INK_2, lw=1.0, ls=(0, (4, 2)), zorder=4)
@@ -186,10 +197,10 @@ def main():
             else:
                 ax.axhline(0, color=INK_2, lw=0.9, ls=(0, (4, 2)), zorder=4)
             for sysname, disp, family, i in order:
-                if sysname not in gen[st]:
+                if sysname not in gen[key]:
                     continue
-                m, se, n = (_stack(gen[st][sysname]) if c == 0
-                            else _stack(gen[st][sysname], ref[st]))
+                m, se, n = (_stack(gen[key][sysname]) if kind == 'raw'
+                            else _stack(gen[key][sysname], ref[key]))
                 if m is None:
                     continue
                 x = np.arange(1, len(m) + 1) * args.bars
@@ -201,10 +212,11 @@ def main():
                                     color=col, alpha=0.14, lw=0, zorder=2)
                 handles[sysname] = Line2D([0], [0], color=col, lw=0.9, ls=ls,
                                           label=disp.replace('\n', ' '))
-                table[(st, c, sysname)] = m
-            ax.set_title(('JSD to prompt' if c == 0 else
-                          'JSD to prompt $-$ ground truth') + f', {sname.lower()}',
-                         fontsize=FS_TITLE, color=INK, pad=4)
+                table[(st, met, kind, sysname)] = m
+            base = dict(METRICS)[met]
+            ax.set_title((base if kind == 'raw' else base + ' $-$ GT')
+                         + f'\n{sname.lower()}', fontsize=FS_TITLE, color=INK,
+                         pad=4)
             if r == len(STREAMS) - 1:
                 ax.set_xlabel(f'continuation position ({unit}s)' if args.bars == 1
                               else f'continuation position (bars)',
@@ -219,7 +231,7 @@ def main():
             ax.yaxis.grid(True, color=GRID, lw=0.5); ax.xaxis.grid(False)
             ax.set_axisbelow(True)
             ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-            ax.annotate(chr(ord('a') + r * 2 + c), xy=(0.02, 0.96),
+            ax.annotate(chr(ord('a') + r * len(panels) + c), xy=(0.02, 0.96),
                         xycoords='axes fraction', ha='left', va='top',
                         fontsize=FS_LETTER, weight='bold', color=INK)
 
@@ -236,34 +248,37 @@ def main():
         if hs:
             blocks.append((title, hs, [h.get_label() for h in hs]))
     grouped_legend(fig, blocks, y=0.0, xs=[0.08, 0.38, 0.78])
-    fig.text(0.5, 0.135,
+    fig.text(0.5, 0.15,
              f'lines: mean over songs, samples averaged within song; '
              f'window: {args.window}, {unit}'
              + ('' if args.no_bands else '; bands: $\\pm$1.96 SE over songs'),
              ha='center', fontsize=FS_TICK, color=INK_2)
-    fig.tight_layout(rect=(0, 0.17, 1, 1), w_pad=1.5, h_pad=1.2)
+    fig.tight_layout(rect=(0, 0.19, 1, 1), w_pad=1.0, h_pad=1.4)
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print(f'wrote {args.out}.{ext}')
 
     # numbers: first / middle / last third of the continuation
-    print(f'\nJSD to prompt (window={args.window}, {unit}); thirds of the '
-          f'continuation, then the delta against the ground truth')
-    for st, sname in STREAMS:
-        print(f'  {sname}')
-        for sysname, disp, _g, _i in order:
-            raw = table.get((st, 0, sysname)); dl = table.get((st, 1, sysname))
-            if raw is None:
-                continue
-            k = len(raw) // 3 or 1
-            fmt = lambda v: ' '.join(f'{np.nanmean(v[j*k:(j+1)*k]):.3f}'
-                                     for j in range(3))
-            print(f'    {sysname:11s} jsd {fmt(raw)}   delta {fmt(dl)}')
-        m, _se, _n = _stack(ref[st])
-        if m is not None:
-            k = len(m) // 3 or 1
-            print(f'    {"GT":11s} jsd ' + ' '.join(
-                f'{np.nanmean(m[j*k:(j+1)*k]):.3f}' for j in range(3)))
+    print(f'\nwindow={args.window}, {unit}; thirds of the continuation: '
+          f'raw statistic, then its delta against the ground truth')
+    for met, label in METRICS:
+        print(f'  == {label}')
+        for st, sname in STREAMS:
+            print(f'  {sname}')
+            for sysname, disp, _g, _i in order:
+                raw = table.get((st, met, 'raw', sysname))
+                dl = table.get((st, met, 'delta', sysname))
+                if raw is None:
+                    continue
+                k = len(raw) // 3 or 1
+                fmt = lambda v: ' '.join(f'{np.nanmean(v[j*k:(j+1)*k]):+.3f}'
+                                         for j in range(3))
+                print(f'    {sysname:11s} raw {fmt(raw)}   delta {fmt(dl)}')
+            m, _se, _n = _stack(ref[(st, met)])
+            if m is not None:
+                k = len(m) // 3 or 1
+                print(f'    {"GT":11s} raw ' + ' '.join(
+                    f'{np.nanmean(m[j*k:(j+1)*k]):+.3f}' for j in range(3)))
 
 
 if __name__ == '__main__':
