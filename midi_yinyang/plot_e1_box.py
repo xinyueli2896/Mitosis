@@ -116,12 +116,16 @@ GROUPS = [
 # slate; external baselines in maroon; the unranked column in warm
 # grey. A per-system override can go in SYSTEM_COLOR; it is empty by
 # request.
+# Vibrant variants of the four family swatches (2026-09-17, by request:
+# the originals read as vintage). Same hue roles -- warm gold for ours,
+# a cool blue for the internal baselines, a red for the external ones,
+# a neutral for the unranked column -- with the saturation raised.
 PALETTE = {
     'black':  '#252323',
-    'maroon': '#462025',
-    'gold':   '#e7af36',
-    'slate':  '#70798c',
-    'grey':   '#a39c8f',
+    'maroon': '#b3243f',    # was #462025
+    'gold':   '#f2a900',    # was #e7af36
+    'slate':  '#3b7dd8',    # was #70798c
+    'grey':   '#9a9186',    # was #a39c8f
 }
 SYSTEM_COLOR = {}
 FAMILY_COLOR = {
