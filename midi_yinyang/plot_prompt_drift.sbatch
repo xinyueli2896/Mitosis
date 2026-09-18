@@ -4,9 +4,9 @@
 # ground truth, plus the paired delta (plot_prompt_drift.py).
 #
 # Writes <OUT>.{pdf,png} (raw statistics) and <OUT>_delta.{pdf,png}
-# (paired difference against the ground truth), each a 4 x 2 grid:
-# rows pitch-class JSD / onset similarity / groove consistency /
-# scale consistency (the last two prompt-referenced), columns melody /
+# (paired difference against the ground truth), each a 2 x 2 grid:
+# rows pitch-class JSD / onset similarity (EXTRA=1 adds groove and
+# scale consistency to the prompt), columns melody /
 # chord.
 #
 # Env knobs (--export=ALL,KEY=val):
@@ -58,6 +58,7 @@ WINDOW="${WINDOW:-bar}"
 BARS="${BARS:-1}"
 EXCLUDE_SYSTEMS="${EXCLUDE_SYSTEMS:-}"
 XTICK="${XTICK:-4}"
+EXTRA="${EXTRA:-0}"
 
 [[ -f "$MANIFEST" ]] || { echo "ERROR: no $MANIFEST -- run score_e1.sbatch first"; exit 1; }
 
@@ -65,5 +66,5 @@ echo "MANIFEST=$MANIFEST  OUT=$OUT  WINDOW=$WINDOW  BARS=$BARS  PROMPT=$PROMPT_L
 python plot_prompt_drift.py --manifest "$MANIFEST" \
     --ref-a-dir "$EVAL_MEL" --ref-b-dir "$EVAL_CHORD" \
     --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
-    --window "$WINDOW" --bars "$BARS" --out "$OUT" --xtick "$XTICK" \
+    --window "$WINDOW" --bars "$BARS" --out "$OUT" --xtick "$XTICK" $([[ "$EXTRA" == "1" ]] && echo --extra) \
     ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"}

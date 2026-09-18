@@ -24,8 +24,9 @@ EXACTLY as eval_metrics computes them, on bar i of the continuation
 --window cumulative uses bars 0..i instead of bar i alone, i.e. the
 whole continuation so far; its last point is the sheet's number.
 
-Two figures, <out> and <out>_delta, each a 4 x 2 grid: rows are the
-four statistics, columns the two streams. The raw figure carries the
+Two figures, <out> and <out>_delta, each a 2 x 2 grid: rows are the
+two statistics, columns the two streams (--extra adds the groove and
+scale rows). The raw figure carries the
 ground truth as a dashed grey curve; the delta figure a zero line. Lines
 are means over songs (samples averaged within song), bands +-1.96 SE
 over songs. Colours are the E1 families, the dash tells systems of one
@@ -64,10 +65,13 @@ MEMBER_DASH = ['-', (0, (5, 2)), (0, (1, 1.2))]
 BAR = em.FRAMES_PER_BAR
 
 
+# The prompt-referenced groove and scale consistency rows (gc, sc) were
+# dropped from the figure 2026-09-18, by request; the code that computes
+# them stays below and --extra puts them back.
 METRICS = [('pc', 'Pitch-class JSD to prompt'),
-           ('on', 'Onset similarity to prompt'),
-           ('gc', 'Groove consistency to prompt'),
-           ('sc', 'Scale consistency to prompt')]
+           ('on', 'Onset similarity to prompt')]
+EXTRA_METRICS = [('gc', 'Groove consistency to prompt'),
+                 ('sc', 'Scale consistency to prompt')]
 
 
 def prompt_scale(prompt):
@@ -110,7 +114,7 @@ def curves(prompt, cont, window, bars):
     Vp = em._bar_onset_vectors(prompt)
     scale = prompt_scale(prompt)
     n_windows = cont.n_frames // (BAR * bars)
-    out = {m: np.full(n_windows, np.nan) for m, _ in METRICS}
+    out = {m: np.full(n_windows, np.nan) for m, _ in METRICS + EXTRA_METRICS}
     for i in range(n_windows):
         lo = 0 if window == 'cumulative' else i * BAR * bars
         hi = (i + 1) * BAR * bars
@@ -209,9 +213,14 @@ def main():
     p.add_argument('--exclude', default='', help='comma-separated systems')
     p.add_argument('--xtick', type=int, default=4,
                    help='x tick every N bars (default 4)')
+    p.add_argument('--extra', action='store_true',
+                   help='also draw the prompt-referenced groove and scale '
+                        'consistency rows')
     args = p.parse_args()
     args.mel_programs = {int(x) for x in args.mel_programs.split(',')}
     args.chord_programs = {int(x) for x in args.chord_programs.split(',')}
+    if args.extra:
+        METRICS.extend(EXTRA_METRICS)
 
     gen, ref = collect(args)
     excluded = {x.strip() for x in args.exclude.split(',') if x.strip()}
