@@ -51,8 +51,10 @@
 #             horizontal and two-line with family brackets under the
 #             axis; above 1 they turn vertical and the families move
 #             into the legend, which is the only way nine of them fit.
-#   EXCLUDE_SYSTEMS  comma-separated internal names to leave off every
-#             figure -- no column, no placeholder. EXCLUDE_SYSTEMS=A3
+#   EXCLUDE_SYSTEMS  internal names to leave off every figure, SPACE-separated
+#             (sbatch --export splits on commas, so a comma list loses
+#             every item but the first); no column, no placeholder.
+#             EXCLUDE_SYSTEMS=A3
 #             drops Duet (refine) and keeps Duet (alt. commit).
 #   ORIENT    h (default): wide layout, four panels per row, systems on
 #             the y-axis, use with figure*; v: one-column layout

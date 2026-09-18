@@ -29,6 +29,7 @@ Usage (via plot_motif_curve.sbatch):
 """
 
 import argparse
+import re
 import os
 import sys
 from collections import defaultdict
@@ -186,7 +187,7 @@ def main():
     UNIT, NESTED = args.unit, not args.exclusive
     LAYERS = LAYERS_NESTED if NESTED else LAYERS_EXCL
     gen, ref, lengths = collect(args)
-    excluded = {x.strip() for x in args.exclude.split(',') if x.strip()}
+    excluded = {x for x in re.split(r'[,\s]+', args.exclude) if x}   # commas OR spaces: sbatch --export splits on commas
     order = [(s, d, g, i) for g, _r, members in GROUPS
              for i, (s, d, _sh) in enumerate(members) if s not in excluded]
     present = {s for lay in gen for s in gen[lay]}

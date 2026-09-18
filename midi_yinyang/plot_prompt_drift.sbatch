@@ -19,7 +19,8 @@
 #   PROMPT_LENGTH 80   GEN_LENGTH 416
 #   WINDOW     bar (default: each bar alone) | cumulative (bars 0..i)
 #   BARS       bars per window, default 1
-#   EXCLUDE_SYSTEMS  comma-separated systems to leave off
+#   EXCLUDE_SYSTEMS  systems to leave off, SPACE-separated (sbatch --export
+#              splits on commas, so a comma list loses every item but the first)
 #   XTICK      x tick every N bars, default 4
 #
 # Example:

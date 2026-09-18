@@ -113,7 +113,7 @@ def main():
         print(f'[warn] not in the CSVs, column dropped: {" ".join(missing)}',
               file=sys.stderr)
 
-    excluded = {x.strip() for x in args.exclude.split(',') if x.strip()}
+    excluded = {x for x in re.split(r'[,\s]+', args.exclude) if x}   # commas OR spaces: sbatch --export splits on commas
     blocks = []      # (family, ranked, [(sys, name)])
     for family, ranked, members in GROUPS:
         rows = [(s, NAMES[s]) for s, _d, _sh in members

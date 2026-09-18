@@ -964,7 +964,7 @@ def main():
     src = pooled if pooled_mode else per_song
     for m in metrics:
         present |= set(src.get(m, {}))
-    excluded = {x.strip() for x in args.exclude.split(',') if x.strip()}
+    excluded = {x for x in re.split(r'[,\s]+', args.exclude) if x}   # commas OR spaces: sbatch --export splits on commas
     order = [(s, d, sh, g, ranked)
              for g, ranked, members in GROUPS for s, d, sh in members
              if s not in excluded]

@@ -16,7 +16,8 @@
 #   EVAL_MEL / EVAL_CHORD   reference dirs
 #   PROMPT_LENGTH 80   GEN_LENGTH 416
 #   MIN_NOTES 3   MAX_NOTES 8
-#   EXCLUDE_SYSTEMS  comma-separated systems to leave off
+#   EXCLUDE_SYSTEMS  systems to leave off, SPACE-separated (sbatch --export
+#              splits on commas, so a comma list loses every item but the first)
 
 #SBATCH --job-name=plot_motif_curve
 #SBATCH --output=/home/xinyue.li/logs/%x_%j.out

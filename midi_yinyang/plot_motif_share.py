@@ -24,6 +24,7 @@ Usage (via plot_e1_box.sbatch, MOTIF_SHARE=1):
 """
 
 import argparse
+import re
 import csv
 import math
 import os
@@ -94,7 +95,7 @@ def main():
     args = p.parse_args()
 
     means, gt = read(args.csv, args.n)
-    excluded = {x.strip() for x in args.exclude.split(',') if x.strip()}
+    excluded = {x for x in re.split(r'[,\s]+', args.exclude) if x}   # commas OR spaces: sbatch --export splits on commas
     order = [(s, d, g) for g, _r, members in GROUPS
              for s, d, _sh in members if s not in excluded]
     present = {s for _st, s in means}
