@@ -64,7 +64,8 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
     dotted = (0, (1.2, 1.2))
 
     # block frame
-    bx, by, bw, bh = 3.9, 3.2, 8.4, 6.4
+    bx, bw = 3.9, 8.4
+    by, bh = (3.2, 6.4) if style == 'brief' else (2.35, 7.25)
     rbox(ax, bx, by, bw, bh, fc='white', ec=INK, lw=0.7, z=2)
     ax.text(bx + bw / 2, by + bh - 0.3, r'global-stack block $\times L$', fontsize=FS + 0.8,
             ha='center', va='center', color=INK)
@@ -149,31 +150,49 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
         qy = gy - 0.78
         y_ln_att, y_add_att = gy + 0.25, ay + 0.28
     else:
-        # one attention sublayer box; the passes are only colour swatches
-        # that key panel (b), the gates sit on its output edge
-        ay = ry - 1.6
+        # the attention as its dataflow: per-stream Q/K/V -> three masked
+        # passes -> gates on the two cross passes -> sum -> per-stream W_O
         aw = bw - 0.5 - sp
-        rbox(ax, bx + 0.25, ay, aw, 1.05, fc=BLOCK, ec='none', z=2)
-        ax.text(bx + 0.5, ay + 0.75, 'Duet attention  (see b)', fontsize=FS - 0.2,
-                ha='left', va='center', color=INK)
-        swx = bx + 0.5
-        for key, lab in (('same', 'same stream'), ('cross', 'cross, earlier'),
-                         ('frame', 'same frame')):
-            ax.add_patch(Rectangle((swx, ay + 0.17), 0.42, 0.3, fc=PASS_L[key], ec=PASS_C[key],
-                                   lw=0.5, zorder=4))
-            ax.text(swx + 0.52, ay + 0.32, lab, fontsize=FS - 1.6, ha='left', va='center',
-                    color=INK)
-            swx += 1.95
-        # gates on the sublayer's output (cross and same-frame passes)
-        ax.text(bx + 0.25 + aw - 1.35, ay + 0.75, 'gates', fontsize=FS - 1.6, ha='right',
+        cx = bx + 0.25 + aw / 2
+        y_wo, y_sum, y_gate, y_sd, y_q = ry - 0.85, ry - 1.3, ry - 1.8, ry - 2.75, ry - 3.55
+        ax.text(bx + 0.5, y_wo + 0.22, 'Duet attention\n(masks: see b)', fontsize=FS - 1.0,
+                ha='left', va='center', color=INK, linespacing=1.2)
+        ax.plot([cx + 1.3, bx + bw - 0.25 - sp], [y_wo + 0.22] * 2, color=INK_2, lw=0.6, zorder=2)
+        # per-stream output projection, tied to the residual add on the spine
+        rbox(ax, bx + 0.25 + aw / 2 - 1.3, y_wo, 2.6, 0.45, r'$W_O^x$ / $W_O^y$  (per stream)',
+             fc=GREY_L, ec=INK, ls=dotted, lw=0.6, fs=FS - 1.3)
+        # sum
+        ax.add_patch(Circle((cx, y_sum), 0.17, fc='white', ec=INK, lw=0.6, zorder=5))
+        ax.text(cx, y_sum, '+', fontsize=FS - 0.4, ha='center', va='center', color=INK, zorder=6)
+        arrow(ax, (cx, y_sum + 0.19), (cx, y_wo - 0.02), color=INK_2)
+        # three passes
+        sw = (aw - 0.5) / 3
+        passes = (('same', 'same stream\ncausal', None), ('cross', 'cross stream\nearlier frames', '$g$'),
+                  ('frame', 'same frame\nboth streams', '$f$'))
+        for i, (key, lab, gate) in enumerate(passes):
+            x0_ = bx + 0.25 + i * (sw + 0.25)
+            for k in (2, 1, 0):                      # stacked = multi-head
+                rbox(ax, x0_ + 0.05 * k, y_sd + 0.05 * k, sw, 0.62, lab if k == 0 else '',
+                     fc=PASS_L[key], ec=PASS_C[key], lw=0.5, fs=FS - 1.6, z=4 - k)
+            xm = x0_ + sw / 2
+            if gate:
+                ax.add_patch(Circle((xm, y_gate), 0.19, fc=GOLD_L, ec=GOLD, lw=0.6, zorder=5))
+                ax.text(xm, y_gate, gate, fontsize=FS - 0.8, ha='center', va='center', color=INK,
+                        zorder=6)
+                arrow(ax, (xm, y_sd + 0.64), (xm, y_gate - 0.21), color=INK_2)
+                arrow(ax, (xm, y_gate + 0.21), (cx + (-0.12 if xm < cx else 0.12), y_sum - 0.14),
+                      color=INK_2)
+            else:
+                arrow(ax, (xm, y_sd + 0.64), (cx - 0.14, y_sum - 0.1), color=INK_2)
+            # both streams' Q, K, V feed every pass
+            arrow(ax, (bx + 0.25 + (bw - 0.8 - sp) / 4, y_q + 0.57), (xm - 0.25, y_sd - 0.02),
+                  color=BLUE, lw=0.5, ms=3.5)
+            arrow(ax, (bx + 0.55 + 3 * (bw - 0.8 - sp) / 4, y_q + 0.57), (xm + 0.25, y_sd - 0.02),
+                  color=RED, lw=0.5, ms=3.5)
+        ax.text(bx + 0.25 + aw - 0.05, y_gate, 'gates\n(new)', fontsize=FS - 1.8, ha='right',
                 va='center', color=INK_2)
-        for k, g in enumerate(('$g$', '$f$')):
-            gx = bx + 0.25 + aw - 1.0 + k * 0.55
-            ax.add_patch(Circle((gx, ay + 0.75), 0.2, fc=GOLD_L, ec=GOLD, lw=0.6, zorder=5))
-            ax.text(gx, ay + 0.75, g, fontsize=FS - 0.8, ha='center', va='center', color=INK,
-                    zorder=6)
-        qy = ay - 0.78
-        y_ln_att, y_add_att = qy + 0.27, ay + 0.52
+        qy = y_q
+        y_ln_att, y_add_att = qy + 0.27, y_wo + 0.22
     hw = (bw - 0.8 - sp) / 2
     rbox(ax, bx + 0.25, qy, hw, 0.55, r'$W_Q^x, W_K^x, W_V^x, W_O^x$', fc=BLUE_L,
          ec=INK, ls=dotted, lw=0.6, fs=FS - 0.4)
@@ -191,10 +210,13 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
         ax.add_patch(Circle((xs_, y_add), 0.17, fc='white', ec=INK_2, lw=0.6, zorder=4))
         ax.text(xs_, y_add, '+', fontsize=FS - 0.6, ha='center', va='center', color=INK, zorder=5)
         ax.plot([bx + bw - 0.25 - sp, xs_ - 0.18], [y_tie, y_tie], color=INK_2, lw=0.6, zorder=2)
-    ax.text(xs_, qy - 0.1, 'residual', fontsize=FS - 1.8, ha='center', va='top', color=INK_2)
+    if style == 'brief':
+        ax.text(xs_, qy - 0.1, 'residual', fontsize=FS - 1.8, ha='center', va='top', color=INK_2)
+    else:
+        ax.text(xs_ - 0.35, by + bh - 0.32, 'residual', fontsize=FS - 1.8, ha='right', va='center', color=INK_2)
 
     # hidden states below the block: interleaved x, y, ... then q_x, q_y
-    hy = 1.75
+    hy = 1.75 if style == 'brief' else 1.25
     n = 4
     xs = []
     sq, step = 0.58, 0.74
@@ -217,13 +239,18 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
         col = GOLD if gold else (BLUE if i % 2 == 0 else RED)
         arrow(ax, (xc, hy + sq + 0.02), (tgt + (i - n) * 0.12, qy - 0.02), color=col, lw=0.5,
               ms=4, rad=0.0, style='-')
-    ax.text(bx + bw / 2, hy - 0.8,
-            'shared sequence: the two streams interleaved by frame, then the harmonizers of frame $t$;\n'
-            'wires: each token is projected by its own stream\'s $W$',
-            fontsize=FS - 1.1, ha='center', va='center', color=INK_2)
+    if style == 'brief':
+        ax.text(bx + bw / 2, hy - 0.8,
+                'shared sequence: the two streams interleaved by frame, then the harmonizers of frame $t$;\n'
+                'wires: each token is projected by its own stream\'s $W$',
+                fontsize=FS - 1.1, ha='center', va='center', color=INK_2)
+    else:
+        ax.text(bx + bw / 2, hy - 0.62,
+                'shared sequence: streams interleaved by frame, then the harmonizers of frame $t$',
+                fontsize=FS - 1.4, ha='center', va='center', color=INK_2)
 
     # loss: formula under the sequence, its terms in the left column
-    ax.text(bx + bw / 2, 0.42,
+    ax.text(bx + bw / 2, 0.42 if style == 'brief' else 0.22,
             r'$\mathcal{L}=\mathcal{L}_{\mathrm{AR}}+\lambda\,\mathcal{L}_{\mathrm{harm}}'
             r'+\lambda_{\mathrm{aux}}\,\mathcal{L}_{\mathrm{aux}}$',
             fontsize=FS + 1.4, ha='center', va='center', color=INK)
