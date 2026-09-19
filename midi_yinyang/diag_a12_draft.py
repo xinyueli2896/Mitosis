@@ -108,9 +108,13 @@ def main():
     tok = model.tokenizer
     eos, pad = tok.eos_token, tok.pad_token
     K = model.diffusion_K
-    print(f'[diag] K={K}  sc_ar_free_run_flag='
-          f'{int(getattr(model, "sc_ar_free_run_flag", torch.tensor(0)))}  '
-          f'sc_draft_temp={float(getattr(model, "sc_draft_temp", 0.0))}')
+    # the trained values live in the ckpt's buffers; the loader builds
+    # the model with constructor defaults for these
+    def buf(name, default=0.0):
+        b = getattr(model, name, None)
+        return float(b) if b is not None else default
+    print(f'[diag] K={K}  sc_ar_free_run_flag={int(buf("sc_ar_free_run_flag"))}  '
+          f'sc_draft_temp (trained)={buf("sc_draft_temp_flag")}')
 
     songs = sorted(os.path.basename(p)[:-4]
                    for p in glob.glob(os.path.join(args.mel_folder, '*.mid')))
@@ -121,6 +125,8 @@ def main():
                    'identical': []} for src in ('teacher_forced', 'free_run')}
     rev = {src: {'ce': [], 'acc': []}
            for src in ('teacher_forced', 'free_run', 'oracle', 'mask')}
+    # revision loss split by whether the draft equalled the ground truth
+    split = {src: {'same': [], 'diff': []} for src in ('teacher_forced', 'free_run')}
 
     import mido, tempfile
     for song in songs:
@@ -202,10 +208,13 @@ def main():
                             sc_mask_c=on, sc_emb_c=emb_c,
                             sc_toks_m=dm.view(1, S), sc_toks_c=dc.view(1, S))
                         ql = q_logits.view(2, S, V)
-                        for si, gt in ((0, gt_m), (1, gt_c)):
+                        for si, (d, gt) in enumerate(((dm, gt_m), (dc, gt_c))):
                             keep = gt != pad
-                            rev[src]['ce'].append(float(F.cross_entropy(ql[si][keep], gt[keep])))
+                            ce = float(F.cross_entropy(ql[si][keep], gt[keep]))
+                            rev[src]['ce'].append(ce)
                             rev[src]['acc'].append(float((ql[si].argmax(-1)[keep] == gt[keep]).float().mean()))
+                            if src in split:
+                                split[src]['same' if bool((d == gt).all()) else 'diff'].append(ce)
         print(f'[diag] {song}: {len(targets)} target frames done')
 
     print('\n== DRAFT vs GROUND TRUTH (both streams, all targets, all seeds) ==')
@@ -217,6 +226,13 @@ def main():
     print(f'{"harmonizer holds":16s} {"CE":>7s} {"acc":>7s}')
     for src, d in rev.items():
         print(f'{src:16s} {np.mean(d["ce"]):7.3f} {np.mean(d["acc"]):7.3f}')
+    print('\n== REVISION CE split by whether the draft equalled the ground truth ==')
+    print(f'{"source":16s} {"n_same":>7s} {"CE_same":>8s} {"n_diff":>7s} {"CE_diff":>8s}')
+    for src, d in split.items():
+        print(f'{src:16s} {len(d["same"]):7d} '
+              f'{(np.mean(d["same"]) if d["same"] else float("nan")):8.3f} '
+              f'{len(d["diff"]):7d} '
+              f'{(np.mean(d["diff"]) if d["diff"] else float("nan")):8.3f}')
     print('\nRead: if free_run CE >> teacher_forced CE, the harmonizers were '
           'trained on drafts they never meet at decode; retrain with '
           'SC_AR_FREE_RUN=1. If the two are alike, the draft path is not '
