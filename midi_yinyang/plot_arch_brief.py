@@ -35,7 +35,7 @@ from plot_e1_box import SURFACE, INK, INK_2, PALETTE  # noqa: E402
 BLUE, RED, GOLD, GREY = PALETTE['slate'], PALETTE['maroon'], PALETTE['gold'], PALETTE['grey']
 BLUE_L, RED_L, GOLD_L, GREY_L = '#c9d9f3', '#ecc9cf', '#fbe6b3', '#e3e0dc'
 BLOCK = '#ecebe8'
-FS = 6.4
+FS = 7.0
 
 
 def rbox(ax, x, y, w, h, text='', fc=GREY_L, ec=INK, lw=0.6, ls='-', fs=FS,
@@ -54,99 +54,135 @@ def arrow(ax, p, q, color=INK_2, lw=0.6, ms=5, z=4, rad=0.0, style='-|>'):
 
 
 # ---------------------------------------------------------------- left
-def draw_block(ax, lora=True):
-    ax.set_xlim(0, 10); ax.set_ylim(0, 10); ax.axis('off')
+def draw_block(ax, lora=True, W=14.6):
+    """Panel units: W wide x 10 tall, square units (the caller sizes the
+    axes to match)."""
+    ax.set_xlim(0, W); ax.set_ylim(0, 10); ax.axis('off')
     dotted = (0, (1.2, 1.2))
 
-    # legend (top-left)
-    lx, ly = 0.25, 9.3
-    ax.add_patch(Rectangle((lx, ly), 0.4, 0.3, fc='white', ec=INK, lw=0.6, ls=dotted))
-    ax.text(lx + 0.55, ly + 0.15, 'initialised from\npretrained model',
-            fontsize=FS - 1.2, va='center', color=INK)
-    ax.add_patch(Rectangle((lx, ly - 0.6), 0.4, 0.3, fc=BLUE_L, ec=BLUE, lw=0.5))
-    ax.text(lx + 0.55, ly - 0.45, 'melody hidden state', fontsize=FS - 1.2, va='center', color=INK)
-    ax.add_patch(Rectangle((lx, ly - 1.1), 0.4, 0.3, fc=RED_L, ec=RED, lw=0.5))
-    ax.text(lx + 0.55, ly - 0.95, 'chord hidden state', fontsize=FS - 1.2, va='center', color=INK)
-    ax.add_patch(Rectangle((lx, ly - 1.6), 0.4, 0.3, fc=GOLD_L, ec=GOLD, lw=0.6))
-    ax.text(lx + 0.55, ly - 1.45, 'harmonizer (added)', fontsize=FS - 1.2, va='center', color=INK)
-
     # block frame
-    bx, by, bw, bh = 3.65, 3.2, 6.2, 6.3
+    bx, by, bw, bh = 3.9, 3.2, 8.4, 6.4
     rbox(ax, bx, by, bw, bh, fc='white', ec=INK, lw=0.7, z=2)
-    ax.text(bx + bw / 2, by + bh - 0.3, r'global-stack block $\times L$', fontsize=FS + 0.6,
+    ax.text(bx + bw / 2, by + bh - 0.3, r'global-stack block $\times L$', fontsize=FS + 0.8,
             ha='center', va='center', color=INK)
 
+    # the two pretrained models, whose weights fill the dotted parts
+    px, pw = 0.3, 2.9
+    rbox(ax, px, 7.55, pw, 0.95, 'pretrained $\\mathrm{LM}_x$\n(melody)', fc=BLUE_L, ec=BLUE,
+         lw=0.6, fs=FS - 0.4)
+    rbox(ax, px, 5.35, pw, 0.95, 'pretrained $\\mathrm{LM}_y$\n(chord)', fc=RED_L, ec=RED,
+         lw=0.6, fs=FS - 0.4)
+    ax.text(px + pw / 2, 6.95, 'weights copied into\nthe dotted parts', fontsize=FS - 1.2,
+            ha='center', va='center', color=INK_2)
+    arrow(ax, (px + pw, 8.02), (bx - 0.05, 8.02), color=BLUE, style='-|>')
+    arrow(ax, (px + pw, 5.82), (bx - 0.05, 5.82), color=RED, style='-|>')
+    for a in ax.patches[-2:]:
+        a.set_linestyle(dotted)
+
+    # legend (bottom-left)
+    lx, ly = 0.3, 3.55
+    ax.add_patch(Rectangle((lx, ly), 0.4, 0.3, fc='white', ec=INK, lw=0.6, ls=dotted))
+    ax.text(lx + 0.55, ly + 0.15, 'initialised from\npretrained model',
+            fontsize=FS - 1.0, va='center', color=INK)
+    ax.add_patch(Rectangle((lx, ly - 0.65), 0.4, 0.3, fc=BLUE_L, ec=BLUE, lw=0.5))
+    ax.text(lx + 0.55, ly - 0.5, 'melody hidden state', fontsize=FS - 1.0, va='center', color=INK)
+    ax.add_patch(Rectangle((lx, ly - 1.2), 0.4, 0.3, fc=RED_L, ec=RED, lw=0.5))
+    ax.text(lx + 0.55, ly - 1.05, 'chord hidden state', fontsize=FS - 1.0, va='center', color=INK)
+    ax.add_patch(Rectangle((lx, ly - 1.75), 0.4, 0.3, fc=GOLD_L, ec=GOLD, lw=0.6))
+    ax.text(lx + 0.55, ly - 1.6, 'harmonizer (added)', fontsize=FS - 1.0, va='center', color=INK)
+
     # expert pool
-    ey = by + bh - 2.0
-    rbox(ax, bx + 0.25, ey, bw - 0.5, 1.45, fc=BLOCK, ec='none', z=2)
-    ax.text(bx + bw / 2, ey + 1.22, 'expert pool  (top-2 per token)', fontsize=FS, ha='center',
-            va='center', color=INK)
-    ew = (bw - 0.5 - 0.5 * 3 - 0.4) / 4
+    ey = by + bh - 2.05
+    sp = 1.0                                      # room for the residual spine
+    rbox(ax, bx + 0.25, ey, bw - 0.5 - sp, 1.45, fc=BLOCK, ec='none', z=2)
+    ax.text(bx + (bw - sp) / 2, ey + 1.22, 'expert pool  (shared, top-2 per token)', fontsize=FS,
+            ha='center', va='center', color=INK)
+    ew = (bw - 0.5 - sp - 0.5 * 3 - 0.6) / 4
     for i in range(4):
-        rbox(ax, bx + 0.45 + i * (ew + 0.5), ey + 0.2, ew, 0.75, r'$\mathrm{FFN}_%d$' % (i + 1),
+        rbox(ax, bx + 0.55 + i * (ew + 0.5), ey + 0.2, ew, 0.75, r'$\mathrm{FFN}_%d$' % (i + 1),
              fc='white', ec=INK, ls=dotted, lw=0.6)
     # routers
     ry = ey - 0.85
-    rbox(ax, bx + 1.3, ry, 1.4, 0.5, 'router', fc=BLUE_L, ec=BLUE, lw=0.5, fs=FS - 0.4)
-    rbox(ax, bx + bw - 2.7, ry, 1.4, 0.5, 'router', fc=RED_L, ec=RED, lw=0.5, fs=FS - 0.4)
-    ax.text(bx + bw / 2, ry - 0.2, 'one router per stream', fontsize=FS - 1.2, ha='center', va='center', color=INK_2)
-    for x in (bx + 2.0, bx + bw - 2.0):
+    rbox(ax, bx + 1.5, ry, 1.5, 0.5, 'router', fc=BLUE_L, ec=BLUE, lw=0.5, fs=FS - 0.4)
+    rbox(ax, bx + bw - sp - 3.0, ry, 1.5, 0.5, 'router', fc=RED_L, ec=RED, lw=0.5, fs=FS - 0.4)
+    ax.text(bx + (bw - sp) / 2, ry + 0.25, 'one router\nper stream', fontsize=FS - 1.2, ha='center',
+            va='center', color=INK_2)
+    for x in (bx + 2.25, bx + bw - sp - 2.25):
         arrow(ax, (x, ry + 0.5), (x, ey - 0.02), color=INK_2)
     # attention bar
-    ay = ry - 0.85
-    rbox(ax, bx + 0.25, ay, bw - 0.5, 0.55, fc=BLOCK, ec='none', z=2)
-    ax.text(bx + bw / 2, ay + 0.28, 'Duet attention: three masked passes', fontsize=FS,
-            ha='center', va='center', color=INK)
+    ay = ry - 0.8
+    rbox(ax, bx + 0.25, ay, bw - 0.5 - sp, 0.55, fc=BLOCK, ec='none', z=2)
+    ax.text(bx + (bw - sp) / 2, ay + 0.28, 'Duet attention: three masked passes',
+            fontsize=FS, ha='center', va='center', color=INK)
     # gold additions
-    gy = ay - 0.75
-    rbox(ax, bx + 0.25, gy, 1.2, 0.5, 'gates $g,f$', fc=GOLD_L, ec=GOLD, lw=0.6, fs=FS - 1.0)
-    rbox(ax, bx + 1.6, gy, 2.95, 0.5, 'same-frame pass', fc=GOLD_L, ec=GOLD, lw=0.6, fs=FS - 1.0)
+    gy = ay - 0.72
+    gw = (bw - 0.5 - sp - 0.3 * 2) / 3 if lora else (bw - 0.5 - sp - 0.3) / 2
+    labels = ['gates $g$, $f$', 'same-frame pass']
     if lora:
-        rbox(ax, bx + 4.7, gy, bw - 4.95, 0.5, r'$\Delta W$ low-rank', fc=GOLD_L, ec=GOLD, lw=0.6, fs=FS - 1.2)
+        labels.append(r'$\Delta W$ on cross $Q,K,V$')
+    for i, lab in enumerate(labels):
+        rbox(ax, bx + 0.25 + i * (gw + 0.3), gy, gw, 0.5, lab, fc=GOLD_L, ec=GOLD, lw=0.6,
+             fs=FS - 1.0)
     # qkv per stream
-    qy = gy - 0.75
-    rbox(ax, bx + 0.25, qy, (bw - 0.7) / 2, 0.55, r'$W_Q^x, W_K^x, W_V^x, W_O^x$', fc=BLUE_L,
-         ec=INK, ls=dotted, lw=0.6, fs=FS - 0.6)
-    rbox(ax, bx + 0.45 + (bw - 0.7) / 2, qy, (bw - 0.7) / 2, 0.55,
-         r'$W_Q^y, W_K^y, W_V^y, W_O^y$', fc=RED_L, ec=INK, ls=dotted, lw=0.6, fs=FS - 0.6)
-    ax.text(bx + bw / 2, qy - 0.22, 'one projection set per pretrained model',
-            fontsize=FS - 1.1, ha='center', va='center', color=INK_2)
+    qy = gy - 0.78
+    hw = (bw - 0.8 - sp) / 2
+    rbox(ax, bx + 0.25, qy, hw, 0.55, r'$W_Q^x, W_K^x, W_V^x, W_O^x$', fc=BLUE_L,
+         ec=INK, ls=dotted, lw=0.6, fs=FS - 0.4)
+    rbox(ax, bx + 0.55 + hw, qy, hw, 0.55, r'$W_Q^y, W_K^y, W_V^y, W_O^y$', fc=RED_L,
+         ec=INK, ls=dotted, lw=0.6, fs=FS - 0.4)
+
+    # residual spine: pre-LN, sublayer, add (both streams share the layout)
+    xs_ = bx + bw - sp / 2
+    ax.plot([xs_, xs_], [qy + 0.1, ey + 1.45], color=INK_2, lw=0.7, zorder=2)
+    arrow(ax, (xs_, ey + 1.3), (xs_, by + bh - 0.5), color=INK_2, lw=0.7)
+    for y_ln, y_add, y_tie in ((gy + 0.25, ay + 0.28, ay + 0.28),
+                               (ry + 0.25, ey + 0.72, ey + 0.72)):
+        rbox(ax, xs_ - 0.3, y_ln - 0.17, 0.6, 0.34, 'LN', fc='white', ec=INK_2, lw=0.5,
+             fs=FS - 1.6, z=4)
+        ax.add_patch(Circle((xs_, y_add), 0.17, fc='white', ec=INK_2, lw=0.6, zorder=4))
+        ax.text(xs_, y_add, '+', fontsize=FS - 0.6, ha='center', va='center', color=INK, zorder=5)
+        ax.plot([bx + bw - 0.25 - sp, xs_ - 0.18], [y_tie, y_tie], color=INK_2, lw=0.6, zorder=2)
+    ax.text(xs_, qy - 0.1, 'residual', fontsize=FS - 1.8, ha='center', va='top', color=INK_2)
 
     # hidden states below the block: interleaved x, y, ... then q_x, q_y
-    hy = 1.7
-    n = 3
+    hy = 1.75
+    n = 4
     xs = []
-    x = bx + 0.1
+    sq, step = 0.58, 0.74
+    x = bx + 0.3
     for i in range(n):
         for col, ec, lab in ((BLUE_L, BLUE, rf'$x_{i + 1}$'), (RED_L, RED, rf'$y_{i + 1}$')):
-            ax.add_patch(Rectangle((x, hy), 0.55, 0.55, fc=col, ec=ec, lw=0.5, zorder=3))
-            ax.text(x + 0.275, hy - 0.25, lab, fontsize=FS - 0.8, ha='center', va='center', color=INK)
-            xs.append(x + 0.275); x += 0.68
-    ax.text(x + 0.02, hy + 0.27, r'$\cdots$', fontsize=FS + 1, va='center', color=INK); x += 0.5
+            ax.add_patch(Rectangle((x, hy), sq, sq, fc=col, ec=ec, lw=0.5, zorder=3))
+            ax.text(x + sq / 2, hy - 0.27, lab, fontsize=FS - 0.6, ha='center', va='center', color=INK)
+            xs.append(x + sq / 2); x += step
+    ax.text(x + 0.05, hy + sq / 2, r'$\cdots$', fontsize=FS + 1, va='center', color=INK); x += 0.6
     for col, ec, lab in ((GOLD_L, GOLD, r'$q_x$'), (GOLD_L, GOLD, r'$q_y$')):
-        ax.add_patch(Rectangle((x, hy), 0.55, 0.55, fc=col, ec=ec, lw=0.6, zorder=3))
-        ax.text(x + 0.275, hy - 0.25, lab, fontsize=FS - 0.8, ha='center', va='center', color=INK)
-        xs.append(x + 0.275); x += 0.68
+        ax.add_patch(Rectangle((x, hy), sq, sq, fc=col, ec=ec, lw=0.6, zorder=3))
+        ax.text(x + sq / 2, hy - 0.27, lab, fontsize=FS - 0.6, ha='center', va='center', color=INK)
+        xs.append(x + sq / 2); x += step
     # wires from hidden states into the matching projection box
-    left_c, right_c = bx + 0.25 + (bw - 0.7) / 4, bx + 0.45 + 3 * (bw - 0.7) / 4
+    left_c, right_c = bx + 0.25 + hw / 2, bx + 0.55 + 1.5 * hw
     for i, xc in enumerate(xs):
         gold = i >= 2 * n
         tgt = left_c if (i % 2 == 0) else right_c
         col = GOLD if gold else (BLUE if i % 2 == 0 else RED)
-        arrow(ax, (xc, hy + 0.57), (tgt + (i - n) * 0.12, qy - 0.02), color=col, lw=0.5,
+        arrow(ax, (xc, hy + sq + 0.02), (tgt + (i - n) * 0.12, qy - 0.02), color=col, lw=0.5,
               ms=4, rad=0.0, style='-')
-    ax.text(bx + bw / 2, hy - 0.7, 'interleaved content tokens; harmonizers',
+    ax.text(bx + bw / 2, hy - 0.8,
+            'shared sequence: the two streams interleaved by frame, then the harmonizers of frame $t$;\n'
+            'wires: each token is projected by its own stream\'s $W$',
             fontsize=FS - 1.1, ha='center', va='center', color=INK_2)
 
-    # loss
-    ax.text(bx + bw / 2, 0.55,
+    # loss: formula under the sequence, its terms in the left column
+    ax.text(bx + bw / 2, 0.42,
             r'$\mathcal{L}=\mathcal{L}_{\mathrm{AR}}+\lambda\,\mathcal{L}_{\mathrm{harm}}'
             r'+\lambda_{\mathrm{aux}}\,\mathcal{L}_{\mathrm{aux}}$',
-            fontsize=FS + 2, ha='center', va='center', color=INK)
-    ax.text(bx + bw / 2, 0.12,
-            r'$\mathcal{L}_{\mathrm{AR}}$: CE at content tokens; '
-            r'$\mathcal{L}_{\mathrm{harm}}$: CE at harmonizers',
-            fontsize=FS - 1.5, ha='center', va='center', color=INK_2)
+            fontsize=FS + 1.4, ha='center', va='center', color=INK)
+    ax.text(px + pw / 2, 0.6,
+            r'$\mathcal{L}_{\mathrm{AR}}$: CE at content tokens' + '\n'
+            r'$\mathcal{L}_{\mathrm{harm}}$: CE at harmonizers' + '\n'
+            r'$\mathcal{L}_{\mathrm{aux}}$: expert load balance',
+            fontsize=FS - 1.4, ha='center', va='center', color=INK_2)
 
 
 # --------------------------------------------------------------- right
@@ -198,79 +234,67 @@ def stack(ax, x, y_top, L, clean_len, w=0.4, h=0.15, step=0.2):
 
 
 def draw_attention(fig, rect, lora=True):
-    """rect: [x0, y0, w, h] in figure fraction for the whole right panel."""
+    """rect: [x0, y0, w, h] in figure fraction for the whole right panel.
+    Compact: the three masks stacked, each feeding its term of the gated
+    sum on the right."""
     x0, y0, w, h = rect
     T = 4
     intra, cross, frame, clean_len = masks(T)
     L = clean_len + 2
     labels = [rf'$x_{i // 2 + 1}$' if i % 2 == 0 else rf'$y_{i // 2 + 1}$' for i in range(clean_len)]
     labels += [r'$q_x$', r'$q_y$']
-    ax = fig.add_axes(rect); ax.set_xlim(0, 10); ax.set_ylim(0, 10); ax.axis('off')
-    ax.text(5, 9.8, "Duet attention: three masked passes reuse each token's per-stream Q, K, V",
-            fontsize=FS + 0.4, ha='center', va='center', color=INK, weight='bold')
-    # legend, bottom-left under the Q K V note
-    lx = 0.25
-    for k, (fc, ec, txt) in enumerate(((BLUE_L, BLUE, 'melody query, kept'),
-                                       (RED_L, RED, 'chord query, kept'),
-                                       (GOLD_L, GOLD, 'harmonizer query, kept'),
-                                       ('white', '#cfcbc6', 'blocked by causality'))):
-        yy = 1.55 - k * 0.42
-        ax.add_patch(Rectangle((lx, yy, ), 0.3, 0.26, fc=fc, ec=ec, lw=0.4,
-                               hatch='////' if txt.startswith('blocked') else ''))
-        ax.text(lx + 0.4, yy + 0.13, txt, fontsize=FS - 1.6, va='center', color=INK)
+    H = 16
+    ax = fig.add_axes(rect); ax.set_xlim(0, 10); ax.set_ylim(0, H); ax.axis('off')
+    ax.text(5, H - 0.35, 'Duet attention: three masked passes', fontsize=FS + 0.4, ha='center',
+            va='center', color=INK, weight='bold')
 
-    # Q K V stacks
-    for k, name in enumerate(('Q', 'K', 'V')):
-        xx = 0.45 + k * 0.6
-        ax.text(xx + 0.2, 8.55, name, fontsize=FS, ha='center', va='center', color=INK)
-        stack(ax, xx, 8.05, L, clean_len, w=0.42, h=0.3, step=0.42)
-    ax.text(1.25, 3.65, 'per-stream projections\n(dotted boxes on the left)\nRoPE on Q, K'
-            + ('\n$\\Delta W$ on cross-stream Q, K, V' if lora else ''),
-            fontsize=FS - 1.5, ha='center', va='top', color=INK_2)
-
-    # masks: three insets, tops in panel units
     names = [('same stream, causal', intra, r'$u_{\mathrm{same}}$', None),
              ('cross stream, earlier frames', cross, r'$u_{\mathrm{cross}}$', '$g$'),
              ('same frame', frame, r'$u_{\mathrm{frame}}$', '$f$')]
     fw, fh = fig.get_figwidth(), fig.get_figheight()
-    mh_in = 0.74                                     # mask edge in inches
+    mh_in = 0.66                                     # mask edge in inches
     mw = mh_in / fw; mh = mh_in / fh                  # figure fractions
-    tops_u = [8.85, 6.0, 3.15]                        # panel units
-    ycs = []
+    tops_u = [14.2, 9.95, 5.7]                        # panel units
+    mleft_u = 1.35
+    right_u = mleft_u + mw / w * 10
+    sum_x, sum_y = 8.0, 8.9
     for (title, m, uname, gname), top_u in zip(names, tops_u):
-        top = y0 + h * top_u / 10
-        axm = fig.add_axes([x0 + w * 0.29, top - mh, mw, mh])
+        top = y0 + h * top_u / H
+        axm = fig.add_axes([x0 + w * mleft_u / 10, top - mh, mw, mh])
         draw_mask(axm, m, clean_len, title, labels)
-        yc = top_u - (mh / h) * 10 / 2
-        ycs.append(yc)
-        right_u = (0.29 * w + mw) / w * 10
-        arrow(ax, (2.3, 6.2), (2.55, yc), color=INK_2)
-        ux = right_u + 0.55
-        arrow(ax, (right_u + 0.05, yc), (ux - 0.05, yc), color=INK_2)
-        stack(ax, ux, yc + 0.85, L, clean_len, w=0.4, h=0.14, step=0.19)
-        ax.text(ux + 0.2, yc + 1.25, uname, fontsize=FS - 0.4, ha='center', va='center', color=INK)
+        yc = top_u - (mh / h) * H / 2
+        ax.text(right_u + 0.1, yc + 0.9, uname, fontsize=FS - 0.4, ha='left', va='center',
+                color=INK)
         if gname:
-            rbox(ax, ux + 0.75, yc - 0.25, 0.5, 0.5, gname, fc=GOLD_L, ec=GOLD, lw=0.6, fs=FS)
-            arrow(ax, (ux + 0.42, yc), (ux + 0.72, yc), color=INK_2)
-            arrow(ax, (ux + 1.27, yc), (7.75, 5.0), color=INK_2)
+            rbox(ax, right_u + 0.45, yc - 0.4, 0.75, 0.8, gname, fc=GOLD_L, ec=GOLD, lw=0.6, fs=FS)
+            arrow(ax, (right_u + 0.05, yc), (right_u + 0.42, yc), color=INK_2)
+            arrow(ax, (right_u + 1.25, yc), (sum_x - 0.32, sum_y), color=INK_2)
         else:
-            arrow(ax, (ux + 0.42, yc), (7.75, 5.0), color=INK_2)
+            arrow(ax, (right_u + 0.05, yc), (sum_x - 0.32, sum_y), color=INK_2)
     # sum, W_O, output
-    ax.add_patch(Circle((7.95, 5.0), 0.2, fc='white', ec=INK, lw=0.6, zorder=4))
-    ax.text(7.95, 5.0, '+', fontsize=FS + 1, ha='center', va='center', color=INK, zorder=5)
-    rbox(ax, 8.35, 4.72, 0.8, 0.56, r'$W_O$', fc='white', ec=INK, ls=(0, (1.2, 1.2)), lw=0.6, fs=FS)
-    ax.text(8.75, 4.45, 'per stream', fontsize=FS - 1.6, ha='center', va='center', color=INK_2)
-    arrow(ax, (8.15, 5.0), (8.33, 5.0), color=INK_2)
-    arrow(ax, (9.17, 5.0), (9.38, 5.0), color=INK_2)
-    stack(ax, 9.42, 5.85, L, clean_len, w=0.4, h=0.14, step=0.19)
-    ax.text(9.62, 6.25, r'$o$', fontsize=FS, ha='center', va='center', color=INK)
-    ax.text(9.62, 3.75, '+ residual, LN', fontsize=FS - 1.6, ha='center', va='center', color=INK_2)
-    # formula
-    ax.text(6.6, 0.85, r'$o = W_O\,(u_{\mathrm{same}} + g\,u_{\mathrm{cross}} + f\,u_{\mathrm{frame}})$',
-            fontsize=FS + 0.4, ha='center', va='center', color=INK)
-    ax.text(6.6, 0.35, r'$g=\sigma(w_g^{\top}h+b_g)$, $f=\sigma(w_f^{\top}h+b_f)$; '
-            r'$b\approx-10$, so $g,f\approx0$ at init', fontsize=FS - 1.4, ha='center',
-            va='center', color=INK_2)
+    ax.add_patch(Circle((sum_x, sum_y), 0.3, fc='white', ec=INK, lw=0.6, zorder=4))
+    ax.text(sum_x, sum_y, '+', fontsize=FS + 1, ha='center', va='center', color=INK, zorder=5)
+    rbox(ax, sum_x - 0.85, sum_y + 1.0, 1.7, 1.15, '$W_O$\n(per stream)', fc='white', ec=INK,
+         ls=(0, (1.2, 1.2)), lw=0.6, fs=FS - 1.2)
+    arrow(ax, (sum_x, sum_y + 0.32), (sum_x, sum_y + 0.97), color=INK_2)
+    arrow(ax, (sum_x, sum_y + 2.17), (sum_x, sum_y + 2.75), color=INK_2)
+    ax.text(sum_x, sum_y + 3.05, r'$o$', fontsize=FS, ha='center', va='center', color=INK)
+    ax.text(sum_x, sum_y + 3.55, '+ residual, LN', fontsize=FS - 1.6, ha='center', va='center',
+            color=INK_2)
+    # formula + legend
+    ax.text(5, 1.55, r'$o = W_O\,(u_{\mathrm{same}} + g\,u_{\mathrm{cross}} + f\,u_{\mathrm{frame}})$',
+            fontsize=FS + 0.2, ha='center', va='center', color=INK)
+    ax.text(5, 1.0, r'$g,f=\sigma(\cdot)$, bias $-10$: both $\approx 0$ at init',
+            fontsize=FS - 1.4, ha='center', va='center', color=INK_2)
+    lx = 0.35
+    for k, (fc, ec, txt) in enumerate(((BLUE_L, BLUE, 'melody query'),
+                                       (RED_L, RED, 'chord query'),
+                                       (GOLD_L, GOLD, 'harmonizer query'),
+                                       ('white', '#cfcbc6', 'blocked (causality)'))):
+        xx = lx + (k % 2) * 4.9; yy = 0.45 - (k // 2) * 0.4
+        ax.add_patch(Rectangle((xx, yy), 0.4, 0.28, fc=fc, ec=ec, lw=0.4,
+                               hatch='////' if txt.startswith('blocked') else ''))
+        ax.text(xx + 0.5, yy + 0.14, txt, fontsize=FS - 1.6, va='center', color=INK)
 
 
 def main():
@@ -280,9 +304,12 @@ def main():
     args = ap.parse_args()
     fig = plt.figure(figsize=(7.2, 3.6))
     fig.patch.set_facecolor(SURFACE)
-    axl = fig.add_axes([0.0, 0.02, 0.34, 0.96])
-    draw_block(axl, lora=not args.no_lora)
-    draw_attention(fig, [0.35, 0.03, 0.64, 0.94], lora=not args.no_lora)
+    # left 70 %, right 30 %; the left panel's units are square
+    lw_, lh_ = 0.69, 0.96
+    W = lw_ * fig.get_figwidth() / (lh_ * fig.get_figheight()) * 10
+    axl = fig.add_axes([0.005, 0.02, lw_, lh_])
+    draw_block(axl, lora=not args.no_lora, W=W)
+    draw_attention(fig, [0.70, 0.03, 0.295, 0.94], lora=not args.no_lora)
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print(f'wrote {args.out}.{ext}')
