@@ -460,6 +460,62 @@ def draw_arcs(fig, rect):
             fontsize=FS - 1.6, ha='center', va='center', color=INK_2, linespacing=1.2)
 
 
+def draw_matrix(fig, rect, T=4):
+    """Panel (b) as one admission matrix: queries on rows, keys on
+    columns, cell colour = the pass that admits the pair (the three
+    masks are disjoint), hatched = blocked by causality."""
+    x0, y0, w, h = rect
+    ax = fig.add_axes(rect); ax.set_xlim(0, 10); ax.set_ylim(0, 10); ax.axis('off')
+    ax.text(0.0, 9.95, 'b', fontsize=FS + 2.5, weight='bold', ha='left', va='top', color=INK)
+    ax.text(0.7, 9.93, f'who attends to whom (one layer): frames 1-{T} committed,\n'
+            f'harmonizers drafting frame {T + 1}; colour = admitting pass',
+            fontsize=FS - 0.6, ha='left', va='top', color=INK, linespacing=1.25)
+    intra, cross, frame, clean_len = masks(T)
+    L = clean_len + 2
+    labels = [rf'$x_{i // 2 + 1}$' if i % 2 == 0 else rf'$y_{i // 2 + 1}$' for i in range(clean_len)]
+    labels += [r'$q_x$', r'$q_y$']
+    # square inset, sized in inches
+    fw, fh = fig.get_figwidth(), fig.get_figheight()
+    edge_in = min(w * fw * 0.66, h * fh * 0.6)
+    mw, mh = edge_in / fw, edge_in / fh
+    axm = fig.add_axes([x0 + w * 0.14, y0 + h * 0.27, mw, mh])
+    axm.set_xlim(-0.5, L - 0.5); axm.set_ylim(L - 0.5, -0.5); axm.set_aspect('equal')
+    for i in range(L):
+        for j in range(L):
+            key = 'same' if intra[i, j] else 'cross' if cross[i, j] else 'frame' if frame[i, j] else None
+            if key:
+                axm.add_patch(Rectangle((j - 0.5, i - 0.5), 1, 1, fc=PASS_L[key], ec=PASS_C[key],
+                                        lw=0.35))
+            else:
+                blocked = j > i and i < clean_len
+                axm.add_patch(Rectangle((j - 0.5, i - 0.5), 1, 1, fc='white', ec='#dddad6',
+                                        lw=0.25, hatch='////' if blocked else ''))
+    axm.axhline(clean_len - 0.5, color=INK, lw=0.6); axm.axvline(clean_len - 0.5, color=INK, lw=0.6)
+    axm.set_xticks(range(L)); axm.set_yticks(range(L))
+    axm.set_xticklabels(labels, fontsize=FS - 1.4); axm.set_yticklabels(labels, fontsize=FS - 1.4)
+    for lab, i in zip(axm.get_xticklabels() + axm.get_yticklabels(), list(range(L)) * 2):
+        lab.set_color(GOLD if i >= clean_len else (BLUE if i % 2 == 0 else RED))
+    axm.tick_params(length=0, pad=1.5)
+    axm.xaxis.tick_top()
+    for sp_ in axm.spines.values():
+        sp_.set_color(INK); sp_.set_linewidth(0.6)
+    axm.xaxis.set_label_position('top')
+    axm.set_xlabel('keys', fontsize=FS - 1.0, color=INK_2, labelpad=2)
+    axm.set_ylabel('queries', fontsize=FS - 1.0, color=INK_2, labelpad=2)
+    # legend, below the matrix
+    for k, (key, lab, gate) in enumerate((('same', 'same stream, causal', ''),
+                                          ('cross', 'cross stream, earlier', r'$\times g$'),
+                                          ('frame', 'same frame', r'$\times f$'))):
+        xx, yy = 0.7 + (k % 2) * 4.8, 1.55 - (k // 2) * 0.55
+        ax.add_patch(Rectangle((xx, yy), 0.42, 0.32, fc=PASS_L[key], ec=PASS_C[key], lw=0.4))
+        ax.text(xx + 0.55, yy + 0.16, lab + (f'  {gate}' if gate else ''), fontsize=FS - 1.6,
+                va='center', color=INK)
+    ax.add_patch(Rectangle((5.5, 1.0), 0.42, 0.32, fc='white', ec='#cfcbc6', lw=0.4, hatch='////'))
+    ax.text(6.05, 1.16, 'blocked by causality', fontsize=FS - 1.6, va='center', color=INK)
+    ax.text(0.7, 0.35, 'content tokens never see a harmonizer; the two harmonizers see each other',
+            fontsize=FS - 1.7, ha='left', va='center', color=INK_2)
+
+
 def draw_decode(fig, rect):
     """Panel (c): alternating-commit decode of one frame t, as the
     inference schedule ctc_alt runs it: (1) with both harmonizers masked,
@@ -560,8 +616,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True)
     ap.add_argument('--no-lora', action='store_true')
-    ap.add_argument('--style', choices=['masks', 'arcs'], default='arcs',
-                    help='right panel: three mask matrices, or reach arcs over the token row')
+    ap.add_argument('--style', choices=['masks', 'arcs', 'matrix'], default='matrix',
+                    help='right panel: three mask matrices (old layout), reach arcs, or one admission matrix')
     args = ap.parse_args()
     if args.style == 'masks':
         fig = plt.figure(figsize=(7.2, 3.6))
@@ -579,7 +635,10 @@ def main():
         axl = fig.add_axes([0.005, 0.30, lw_, lh_])
         draw_block(axl, lora=not args.no_lora, W=W, style='sublayer')
         axl.text(0.0, 9.95, 'a', fontsize=FS + 2.5, weight='bold', ha='left', va='top', color=INK)
-        draw_arcs(fig, [0.635, 0.305, 0.36, 0.68])
+        if args.style == 'arcs':
+            draw_arcs(fig, [0.635, 0.305, 0.36, 0.68])
+        else:
+            draw_matrix(fig, [0.635, 0.305, 0.36, 0.68])
         draw_decode(fig, [0.01, 0.005, 0.98, 0.27])
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
