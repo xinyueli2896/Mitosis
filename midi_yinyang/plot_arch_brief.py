@@ -184,11 +184,6 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
                       color=INK_2)
             else:
                 arrow(ax, (xm, y_sd + 0.64), (cx - 0.14, y_sum - 0.1), color=INK_2)
-            # both streams' Q, K, V feed every pass
-            arrow(ax, (bx + 0.25 + (bw - 0.8 - sp) / 4, y_q + 0.57), (xm - 0.25, y_sd - 0.02),
-                  color=BLUE, lw=0.5, ms=3.5)
-            arrow(ax, (bx + 0.55 + 3 * (bw - 0.8 - sp) / 4, y_q + 0.57), (xm + 0.25, y_sd - 0.02),
-                  color=RED, lw=0.5, ms=3.5)
         ax.text(bx + 0.25 + aw - 0.05, y_gate, 'gates\n(new)', fontsize=FS - 1.8, ha='right',
                 va='center', color=INK_2)
         qy = y_q
