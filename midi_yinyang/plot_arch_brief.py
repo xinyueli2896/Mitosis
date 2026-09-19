@@ -135,7 +135,7 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
                   color=INK if on else '#b8b3ad', lw=0.7 if on else 0.45, ms=4)
             if not on:
                 ax.patches[-1].set_linestyle(DASH)
-        ax.text(bx + 0.45, y_ffn_out + 0.02, 'expert pool: two copies\nof each pretrained FFN',
+        ax.text(bx + 0.45, y_ffn_out + 0.02, 'expert pool\n(pretrained FFN copies)',
                 fontsize=FS - 1.5, ha='left', va='center', color=INK, linespacing=1.15)
         ax.text(bx + 0.25 + (bw - 0.5 - sp) - 0.2, y_ffn_out + 0.02,
                 r'$y=\sum_{i\in\mathrm{top}\text{-}2} p_i\,\mathrm{FFN}_i(h)$',
@@ -159,7 +159,7 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
                       color=col, lw=0.7 if on else 0.45, ms=4)
                 if not on:
                     ax.patches[-1].set_linestyle(DASH)
-        ax.text(bx + (bw - sp) / 2, ry - 0.28, 'one router per stream; example: a stream-$x$ token, top-2 solid',
+        ax.text(bx + (bw - sp) / 2, ry - 0.28, 'one router per stream; top-2 solid',
                 fontsize=FS - 1.6, ha='center', va='center', color=INK_2)
     if style == 'brief':
         # attention bar
@@ -213,7 +213,7 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
                       color=INK_2)
             else:
                 arrow(ax, (xm, y_sd + 0.64), (cx - 0.14, y_sum - 0.1), color=INK_2)
-        ax.text(bx + 0.25 + aw - 0.05, y_gate, 'gates\n(new)', fontsize=FS - 1.8, ha='right',
+        ax.text(bx + 0.25 + aw - 0.05, y_gate, 'gates', fontsize=FS - 1.8, ha='right',
                 va='center', color=INK_2)
         qy = y_q
         y_ln_att, y_add_att = qy + 0.27, y_wo + 0.22
@@ -270,7 +270,7 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
                 fontsize=FS - 1.1, ha='center', va='center', color=INK_2)
     else:
         ax.text(bx + bw / 2, hy - 0.62,
-                'shared sequence: streams interleaved by frame, then the harmonizers of frame $t$',
+                'interleaved streams, then the harmonizers of frame $t$',
                 fontsize=FS - 1.4, ha='center', va='center', color=INK_2)
 
     if style == 'brief':
@@ -467,8 +467,7 @@ def draw_matrix(fig, rect, T=4):
     x0, y0, w, h = rect
     ax = fig.add_axes(rect); ax.set_xlim(0, 10); ax.set_ylim(0, 10); ax.axis('off')
     ax.text(0.0, 9.95, 'b', fontsize=FS + 2.5, weight='bold', ha='left', va='top', color=INK)
-    ax.text(0.7, 9.93, f'who attends to whom (one layer): frames 1-{T} committed,\n'
-            f'harmonizers drafting frame {T + 1}; colour = admitting pass',
+    ax.text(0.7, 9.93, 'who attends to whom (one layer)',
             fontsize=FS - 0.6, ha='left', va='top', color=INK, linespacing=1.25)
     intra, cross, frame, clean_len = masks(T)
     L = clean_len + 2
@@ -512,8 +511,6 @@ def draw_matrix(fig, rect, T=4):
                 va='center', color=INK)
     ax.add_patch(Rectangle((5.5, 1.0), 0.42, 0.32, fc='white', ec='#cfcbc6', lw=0.4, hatch='////'))
     ax.text(6.05, 1.16, 'blocked by causality', fontsize=FS - 1.6, va='center', color=INK)
-    ax.text(0.7, 0.35, 'content tokens never see a harmonizer; the two harmonizers see each other',
-            fontsize=FS - 1.7, ha='left', va='center', color=INK_2)
 
 
 def draw_decode(fig, rect):
@@ -526,8 +523,7 @@ def draw_decode(fig, rect):
     parity."""
     ax = fig.add_axes(rect); ax.set_xlim(0, 30); ax.set_ylim(0, 8); ax.axis('off')
     ax.text(0.0, 7.85, 'c', fontsize=FS + 2.5, weight='bold', ha='left', va='top', color=INK)
-    ax.text(0.9, 7.8, 'alternating-commit decode of frame $t$ (here stream $x$ leads; '
-            'at $t{+}1$ stream $y$ leads). Two forwards per frame, no refinement.',
+    ax.text(0.9, 7.8, 'alternating-commit decode of frame $t$ ($x$ leads; $y$ leads at $t{+}1$)',
             fontsize=FS - 0.4, ha='left', va='top', color=INK)
     sq, gap = 0.78, 0.16
     y0 = 3.3
@@ -584,31 +580,26 @@ def draw_decode(fig, rect):
     # step 1: both harmonizers masked, leader drafted from the prefix
     xh, cxs = step(0.4, '1', 'draft the leader', ('mask', 'mask'),
                    ('prefix_last', r'$x_t \sim p(x_t\mid\mathrm{prefix})$', BLUE_L, BLUE),
-                   'both harmonizers masked ($k{=}K$); the leader\'s frame is sampled\n'
-                   'from stream $x$\'s next-frame head')
+                   'harmonizers masked')
     # the arrow for step 1 comes from the last prefix token of stream y (the
     # head at position 2t-1 predicts x_t): redraw out with that x
     # step 2: leader committed into its harmonizer, follower predicted
     xh2, cxs2 = step(10.6, '2', 'condition the follower', ('hold_x', 'mask'),
                      ('q_y', r'$y_t \sim p(y_t\mid x_t,\mathrm{prefix})$', RED_L, RED),
-                     '$x_t$ is written into $q_x$ ($k{=}0$); $q_y$ stays masked and reads\n'
-                     '$q_x$ through the same-frame pass, then $y_t$ is sampled from $q_y$')
+                     '$x_t$ written into $q_x$; $q_y$ reads it')
     cxa, cxb = cxs2
     ax.add_patch(Arc(((cxa + cxb) / 2, y0 + sq), cxb - cxa, 0.9, theta1=0, theta2=180,
                      color=GOLD, lw=0.9, zorder=2))
     ax.text(cxa - sq / 2 - 0.1, y0 + sq + 0.45, 'same-frame\npass', fontsize=FS - 1.9, ha='right',
             va='center', color=INK_2, linespacing=1.1)
     # step 3: commit both, roles swap
-    ax.text(19.9, 6.6, '3  commit both; swap roles', fontsize=FS - 0.6, ha='left', va='center',
+    ax.text(19.9, 6.6, '3  commit, swap roles', fontsize=FS - 0.6, ha='left', va='center',
             color=INK, weight='bold')
     xh3, _ = prefix(19.9)
     token(xh3, y0, BLUE_L, BLUE, '$x_t$', lw=0.9)
     token(xh3 + sq + gap, y0, RED_L, RED, '$y_t$', lw=0.9)
     ax.text(xh3 + 2 * (sq + gap) + 0.1, y0 + sq / 2, r'$\rightarrow$ at $t{+}1$,' + '\n$y$ leads',
             fontsize=FS - 1.5, ha='left', va='center', color=INK, linespacing=1.15)
-    ax.text(19.9, 0.55, '$x_t, y_t$ become content tokens of frame $t$; the leader\n'
-            'alternates with frame parity, so neither stream always follows',
-            fontsize=FS - 1.6, ha='left', va='center', color=INK_2, linespacing=1.2)
     return cxs, cxs2
 
 
