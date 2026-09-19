@@ -89,9 +89,9 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
 
     # legend (bottom-left)
     lx, ly = 0.3, 3.55
-    for k, (fc, ec, ls, txt) in enumerate(((BLUE_L, BLUE, '-', 'melody hidden state'),
+    for k, (fc, ec, ls, txt) in enumerate(((BLUE_L, BLUE, '-', 'stream $x$ (melody)'),
                                            (BLUE_L, INK, dotted, 'weights from $\\mathrm{LM}_x$'),
-                                           (RED_L, RED, '-', 'chord hidden state'),
+                                           (RED_L, RED, '-', 'stream $y$ (chord)'),
                                            (RED_L, INK, dotted, 'weights from $\\mathrm{LM}_y$'),
                                            (GOLD_L, GOLD, '-', 'harmonizer (new)'))):
         yy = ly - k * 0.5
@@ -99,22 +99,50 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
         ax.text(lx + 0.55, yy + 0.15, txt, fontsize=FS - 1.0, va='center', color=INK)
 
     # expert pool
-    ey = by + bh - 2.05
     sp = 1.0                                      # room for the residual spine
-    rbox(ax, bx + 0.25, ey, bw - 0.5 - sp, 1.45, fc=BLOCK, ec='none', z=2)
-    ax.text(bx + (bw - sp) / 2, ey + 1.22,
-            'expert pool: two copies of each pretrained FFN, top-2 per token',
-            fontsize=FS - 0.5 if style == 'brief' else FS - 1.1,
-            ha='center', va='center', color=INK)
+    ps = (0.61, 0.27, 0.08, 0.04)                 # example gate values (a melody token)
+    if style == 'brief':
+        ey = by + bh - 2.05
+        rbox(ax, bx + 0.25, ey, bw - 0.5 - sp, 1.45, fc=BLOCK, ec='none', z=2)
+        ax.text(bx + (bw - sp) / 2, ey + 1.22,
+                'expert pool: two copies of each pretrained FFN, top-2 per token',
+                fontsize=FS - 0.5, ha='center', va='center', color=INK)
+    else:
+        ey = by + bh - 2.35
+        rbox(ax, bx + 0.25, ey, bw - 0.5 - sp, 1.75, fc=BLOCK, ec='none', z=2)
     ew = (bw - 0.5 - sp - 0.5 * 3 - 0.6) / 4
     for i in range(4):
-        rbox(ax, bx + 0.55 + i * (ew + 0.5), ey + 0.2, ew, 0.75, r'$\mathrm{FFN}_%d$' % (i + 1),
-             fc=BLUE_L if i < 2 else RED_L, ec=INK, ls=dotted, lw=0.6)
+        lab = r'$\mathrm{FFN}_%d$' % (i + 1)
+        if style != 'brief':
+            lab += '\n$p{=}%.2f$' % ps[i]
+        rbox(ax, bx + 0.55 + i * (ew + 0.5), ey + 0.2, ew, 0.75, lab,
+             fc=BLUE_L if i < 2 else RED_L, ec=INK, ls=dotted, lw=0.6,
+             fs=FS if style == 'brief' else FS - 1.2)
+    ffn_cx = [bx + 0.55 + i * (ew + 0.5) + ew / 2 for i in range(4)]
+    y_ffn_out = ey + 0.72
+    if style != 'brief':
+        # Switch-style: the token's top-2 experts (solid) are summed with
+        # their gate values; the others (dashed) are skipped
+        cxp = bx + 0.25 + (bw - 0.5 - sp) / 2
+        y_ffn_out = ey + 1.45
+        ax.add_patch(Circle((cxp, y_ffn_out), 0.17, fc='white', ec=INK, lw=0.6, zorder=5))
+        ax.text(cxp, y_ffn_out, '+', fontsize=FS - 0.4, ha='center', va='center', color=INK,
+                zorder=6)
+        for i, cx_ in enumerate(ffn_cx):
+            on = i in (0, 2)
+            arrow(ax, (cx_, ey + 0.97), (cxp + (-0.14 if cx_ < cxp else 0.14), y_ffn_out - 0.1),
+                  color=INK if on else '#b8b3ad', lw=0.7 if on else 0.45, ms=4)
+            if not on:
+                ax.patches[-1].set_linestyle(DASH)
+        ax.text(bx + 0.45, y_ffn_out + 0.02, 'expert pool: two copies\nof each pretrained FFN',
+                fontsize=FS - 1.5, ha='left', va='center', color=INK, linespacing=1.15)
+        ax.text(bx + 0.25 + (bw - 0.5 - sp) - 0.2, y_ffn_out + 0.02,
+                r'$y=\sum_{i\in\mathrm{top}\text{-}2} p_i\,\mathrm{FFN}_i(h)$',
+                fontsize=FS - 1.3, ha='right', va='center', color=INK)
     # routers
-    ry = ey - 0.85 if style == 'brief' else ey - 1.45
+    ry = ey - 0.85 if style == 'brief' else ey - 1.25
     rbox(ax, bx + 1.5, ry, 1.5, 0.5, 'router', fc=BLUE_L, ec=BLUE, lw=0.5, fs=FS - 0.4)
     rbox(ax, bx + bw - sp - 3.0, ry, 1.5, 0.5, 'router', fc=RED_L, ec=RED, lw=0.5, fs=FS - 0.4)
-    ffn_cx = [bx + 0.55 + i * (ew + 0.5) + ew / 2 for i in range(4)]
     if style == 'brief':
         ax.text(bx + (bw - sp) / 2, ry + 0.25, 'one router\nper stream', fontsize=FS - 1.2,
                 ha='center', va='center', color=INK_2)
@@ -123,14 +151,14 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
     else:
         # Switch-style fan-out: every router reaches every expert; its
         # top-2 (an example) solid, the rest dashed
-        for x_r, col, top in ((bx + 2.25, BLUE, (0, 2)), (bx + bw - sp - 2.25, RED, (1, 3))):
+        for x_r, col, top in ((bx + 2.25, BLUE, (0, 2)), (bx + bw - sp - 2.25, RED, ())):
             for i, cx in enumerate(ffn_cx):
                 on = i in top
                 arrow(ax, (x_r, ry + 0.5), (cx + (-0.12 if col == BLUE else 0.12), ey + 0.18),
                       color=col, lw=0.7 if on else 0.45, ms=4)
                 if not on:
                     ax.patches[-1].set_linestyle(DASH)
-        ax.text(bx + (bw - sp) / 2, ry - 0.28, 'one router per stream; each token goes to its top-2 experts (solid)',
+        ax.text(bx + (bw - sp) / 2, ry - 0.28, 'one router per stream; example: a stream-$x$ token, top-2 solid',
                 fontsize=FS - 1.6, ha='center', va='center', color=INK_2)
     if style == 'brief':
         # attention bar
@@ -154,13 +182,13 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
         # passes -> gates on the two cross passes -> sum -> per-stream W_O
         aw = bw - 0.5 - sp
         cx = bx + 0.25 + aw / 2
-        y_wo, y_sum, y_gate, y_sd, y_q = ry - 0.85, ry - 1.3, ry - 1.8, ry - 2.75, ry - 3.55
+        y_wo, y_sum, y_gate, y_sd, y_q = ry - 0.85, ry - 1.28, ry - 1.72, ry - 2.6, ry - 3.4
         ax.text(bx + 0.5, y_wo + 0.22, 'Duet attention\n(masks: see b)', fontsize=FS - 1.0,
                 ha='left', va='center', color=INK, linespacing=1.2)
-        ax.plot([cx + 1.3, bx + bw - 0.25 - sp], [y_wo + 0.22] * 2, color=INK_2, lw=0.6, zorder=2)
         # per-stream output projection, tied to the residual add on the spine
-        rbox(ax, bx + 0.25 + aw / 2 - 1.3, y_wo, 2.6, 0.45, r'$W_O^x$ / $W_O^y$  (per stream)',
+        rbox(ax, bx + 0.25 + aw / 2 - 1.55, y_wo, 3.1, 0.45, r'output projection $W_O^x$ / $W_O^y$',
              fc=GREY_L, ec=INK, ls=dotted, lw=0.6, fs=FS - 1.3)
+        ax.plot([cx + 1.55, bx + bw - 0.25 - sp], [y_wo + 0.22] * 2, color=INK_2, lw=0.6, zorder=2)
         # sum
         ax.add_patch(Circle((cx, y_sum), 0.17, fc='white', ec=INK, lw=0.6, zorder=5))
         ax.text(cx, y_sum, '+', fontsize=FS - 0.4, ha='center', va='center', color=INK, zorder=6)
@@ -189,9 +217,9 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
         qy = y_q
         y_ln_att, y_add_att = qy + 0.27, y_wo + 0.22
     hw = (bw - 0.8 - sp) / 2
-    rbox(ax, bx + 0.25, qy, hw, 0.55, r'$W_Q^x, W_K^x, W_V^x, W_O^x$', fc=BLUE_L,
+    rbox(ax, bx + 0.25, qy, hw, 0.55, r'$W_Q^x, W_K^x, W_V^x, W_O^x$' if style == 'brief' else r'$W_Q^x, W_K^x, W_V^x$', fc=BLUE_L,
          ec=INK, ls=dotted, lw=0.6, fs=FS - 0.4)
-    rbox(ax, bx + 0.55 + hw, qy, hw, 0.55, r'$W_Q^y, W_K^y, W_V^y, W_O^y$', fc=RED_L,
+    rbox(ax, bx + 0.55 + hw, qy, hw, 0.55, r'$W_Q^y, W_K^y, W_V^y, W_O^y$' if style == 'brief' else r'$W_Q^y, W_K^y, W_V^y$', fc=RED_L,
          ec=INK, ls=dotted, lw=0.6, fs=FS - 0.4)
 
     # residual spine: pre-LN, sublayer, add (both streams share the layout)
@@ -199,7 +227,7 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
     ax.plot([xs_, xs_], [qy + 0.1, ey + 1.45], color=INK_2, lw=0.7, zorder=2)
     arrow(ax, (xs_, ey + 1.3), (xs_, by + bh - 0.5), color=INK_2, lw=0.7)
     for y_ln, y_add, y_tie in ((y_ln_att, y_add_att, y_add_att),
-                               (ry + 0.25, ey + 0.72, ey + 0.72)):
+                               (ry + 0.25, y_ffn_out, y_ffn_out)):
         rbox(ax, xs_ - 0.3, y_ln - 0.17, 0.6, 0.34, 'LN', fc='white', ec=INK_2, lw=0.5,
              fs=FS - 1.6, z=4)
         ax.add_patch(Circle((xs_, y_add), 0.17, fc='white', ec=INK_2, lw=0.6, zorder=4))
