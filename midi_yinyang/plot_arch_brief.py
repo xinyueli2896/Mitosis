@@ -632,14 +632,16 @@ def main():
         fig.patch.set_facecolor(SURFACE)
         lw_, lh_ = 0.62, 0.69
         W = lw_ * fig.get_figwidth() / (lh_ * fig.get_figheight()) * 10
-        axl = fig.add_axes([0.005, 0.30, lw_, lh_])
+        # bottom-up reading order: the block (a) and the map (b) at the
+        # bottom, the decode stage (c) on top
+        axl = fig.add_axes([0.005, 0.01, lw_, lh_])
         draw_block(axl, lora=not args.no_lora, W=W, style='sublayer')
         axl.text(0.0, 9.95, 'a', fontsize=FS + 2.5, weight='bold', ha='left', va='top', color=INK)
         if args.style == 'arcs':
-            draw_arcs(fig, [0.635, 0.305, 0.36, 0.68])
+            draw_arcs(fig, [0.635, 0.015, 0.36, 0.68])
         else:
-            draw_matrix(fig, [0.635, 0.305, 0.36, 0.68])
-        draw_decode(fig, [0.01, 0.005, 0.98, 0.27])
+            draw_matrix(fig, [0.635, 0.015, 0.36, 0.68])
+        draw_decode(fig, [0.01, 0.715, 0.98, 0.27])
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print(f'wrote {args.out}.{ext}')
