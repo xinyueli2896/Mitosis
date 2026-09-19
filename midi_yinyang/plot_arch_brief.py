@@ -67,40 +67,44 @@ def draw_block(ax, lora=True, W=14.6):
             ha='center', va='center', color=INK)
 
     # the two pretrained models, whose weights fill the dotted parts
-    px, pw = 0.3, 2.9
-    rbox(ax, px, 7.55, pw, 0.95, 'pretrained $\\mathrm{LM}_x$\n(melody)', fc=BLUE_L, ec=BLUE,
-         lw=0.6, fs=FS - 0.4)
-    rbox(ax, px, 5.35, pw, 0.95, 'pretrained $\\mathrm{LM}_y$\n(chord)', fc=RED_L, ec=RED,
-         lw=0.6, fs=FS - 0.4)
-    ax.text(px + pw / 2, 6.95, 'weights copied into\nthe dotted parts', fontsize=FS - 1.2,
-            ha='center', va='center', color=INK_2)
-    arrow(ax, (px + pw, 8.02), (bx - 0.05, 8.02), color=BLUE, style='-|>')
-    arrow(ax, (px + pw, 5.82), (bx - 0.05, 5.82), color=RED, style='-|>')
-    for a in ax.patches[-2:]:
-        a.set_linestyle(dotted)
+    px, pw = 0.3, 3.1
+    for y_, col, ecol, nm, tag, ffn in ((7.7, BLUE_L, BLUE, 'x', 'melody', '1, 2'),
+                                        (4.85, RED_L, RED, 'y', 'chord', '3, 4')):
+        rbox(ax, px, y_, pw, 1.45, fc=col, ec=ecol, lw=0.6)
+        ax.text(px + pw / 2, y_ + 1.15, f'pretrained $\\mathrm{{LM}}_{nm}$ ({tag})',
+                fontsize=FS - 0.2, ha='center', va='center', color=INK)
+        ax.text(px + pw / 2, y_ + 0.55,
+                f'attention $W_{{Q,K,V,O}}\\;\\rightarrow\\;W^{nm}$\n'
+                f'dense FFN $\\rightarrow$ $\\mathrm{{FFN}}_{{{ffn}}}$',
+                fontsize=FS - 1.3, ha='center', va='center', color=INK, linespacing=1.4)
+        arrow(ax, (px + pw, y_ + 0.72), (bx - 0.05, y_ + 0.72), color=ecol, style='-|>')
+        ax.patches[-1].set_linestyle(dotted)
+    ax.text(px + pw / 2, 7.0, 'weights copied into the dotted\nboxes of the same colour;\n'
+            'routers, gates, harmonizers are new', fontsize=FS - 1.4, ha='center',
+            va='center', color=INK_2)
 
     # legend (bottom-left)
     lx, ly = 0.3, 3.55
-    ax.add_patch(Rectangle((lx, ly), 0.4, 0.3, fc='white', ec=INK, lw=0.6, ls=dotted))
-    ax.text(lx + 0.55, ly + 0.15, 'initialised from\npretrained model',
-            fontsize=FS - 1.0, va='center', color=INK)
-    ax.add_patch(Rectangle((lx, ly - 0.65), 0.4, 0.3, fc=BLUE_L, ec=BLUE, lw=0.5))
-    ax.text(lx + 0.55, ly - 0.5, 'melody hidden state', fontsize=FS - 1.0, va='center', color=INK)
-    ax.add_patch(Rectangle((lx, ly - 1.2), 0.4, 0.3, fc=RED_L, ec=RED, lw=0.5))
-    ax.text(lx + 0.55, ly - 1.05, 'chord hidden state', fontsize=FS - 1.0, va='center', color=INK)
-    ax.add_patch(Rectangle((lx, ly - 1.75), 0.4, 0.3, fc=GOLD_L, ec=GOLD, lw=0.6))
-    ax.text(lx + 0.55, ly - 1.6, 'harmonizer (added)', fontsize=FS - 1.0, va='center', color=INK)
+    for k, (fc, ec, ls, txt) in enumerate(((BLUE_L, BLUE, '-', 'melody hidden state'),
+                                           (BLUE_L, INK, dotted, 'weights from $\\mathrm{LM}_x$'),
+                                           (RED_L, RED, '-', 'chord hidden state'),
+                                           (RED_L, INK, dotted, 'weights from $\\mathrm{LM}_y$'),
+                                           (GOLD_L, GOLD, '-', 'harmonizer (new)'))):
+        yy = ly - k * 0.5
+        ax.add_patch(Rectangle((lx, yy), 0.4, 0.3, fc=fc, ec=ec, lw=0.6, ls=ls))
+        ax.text(lx + 0.55, yy + 0.15, txt, fontsize=FS - 1.0, va='center', color=INK)
 
     # expert pool
     ey = by + bh - 2.05
     sp = 1.0                                      # room for the residual spine
     rbox(ax, bx + 0.25, ey, bw - 0.5 - sp, 1.45, fc=BLOCK, ec='none', z=2)
-    ax.text(bx + (bw - sp) / 2, ey + 1.22, 'expert pool  (shared, top-2 per token)', fontsize=FS,
+    ax.text(bx + (bw - sp) / 2, ey + 1.22,
+            'expert pool: two copies of each pretrained FFN, top-2 per token', fontsize=FS - 0.5,
             ha='center', va='center', color=INK)
     ew = (bw - 0.5 - sp - 0.5 * 3 - 0.6) / 4
     for i in range(4):
         rbox(ax, bx + 0.55 + i * (ew + 0.5), ey + 0.2, ew, 0.75, r'$\mathrm{FFN}_%d$' % (i + 1),
-             fc='white', ec=INK, ls=dotted, lw=0.6)
+             fc=BLUE_L if i < 2 else RED_L, ec=INK, ls=dotted, lw=0.6)
     # routers
     ry = ey - 0.85
     rbox(ax, bx + 1.5, ry, 1.5, 0.5, 'router', fc=BLUE_L, ec=BLUE, lw=0.5, fs=FS - 0.4)
