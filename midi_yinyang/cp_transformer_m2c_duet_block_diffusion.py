@@ -160,7 +160,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  agree_head=False, agree_decoy_prob=0.5,
                  agree_loss_weight=0.3, sc_ar_frac=0.0,
                  sc_draft_temp=0.0, sc_k_consistent=False,
-                 sym_k=False, mask_k_prob=None, sc_val=False, **kwargs):
+                 sym_k=False, mask_k_prob=None, sc_val=False,
+                 sc_ar_free_run=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- conditional slots (A.3c) ------------------------------------
@@ -227,6 +228,21 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             'sc_ar_frac_flag',
             torch.tensor(float(sc_ar_frac), dtype=torch.float32))
         self.sc_ar_frac = float(sc_ar_frac)
+        # --- sc_ar_free_run (2026-09-19): the AR-head draft is produced
+        # the way the DECODE produces it. Without it the draft is a
+        # per-position sample from the TEACHER-FORCED AR logits: each
+        # sub-token is drawn given the ground-truth prefix of its frame,
+        # so the draft keeps the true frame's note count, EOS position
+        # and program tokens and its errors never compound, and no
+        # validity mask is applied. The decode instead runs
+        # local_sampling free-running from the content hidden state, so
+        # the harmonizers meet drafts with their own structure. With the
+        # flag the probe calls local_sampling itself. Travels in the
+        # ckpt as a buffer (informational).
+        self.sc_ar_free_run = bool(sc_ar_free_run)
+        self.register_buffer('sc_ar_free_run_flag',
+                             torch.tensor(int(self.sc_ar_free_run),
+                                          dtype=torch.long))
         # --- what the k tag means (A.12) ---------------------------------
         # The decode's slot is one of exactly three things (_build_slot in
         # the inference module): the mask embedding tagged k=K (round K,
@@ -1131,6 +1147,11 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         h_clean_global = h_global[:, :seq_len]
         h_query_global = h_global[:, seq_len:]             # [B, 2Q, H]
         self._last_slot_h = h_query_global                 # A.11 head input
+        if getattr(self, '_stash_h', False):
+            # for the free-running draft (sc_ar_free_run) and for
+            # diag_a12_draft: the content hidden states the decode's
+            # local_sampling reads
+            self._last_h_clean_global = h_clean_global.detach()
 
         ar_logits = self.local_decode(h_clean_global, emb)
 
@@ -1373,9 +1394,12 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                     k_full = torch.full((batch_size, n_pairs), K,
                                         device=x.device, dtype=torch.long)
                     self._agree_lag_m = self._agree_lag_c = None
+                    if self.sc_ar_free_run:
+                        self._stash_h = True
                     ar_logits_sc, q_logits_sc, _ = self.forward(
                         x, T_query=T_query, k_m=k_full, k_c=k_full,
                     )
+                    self._stash_h = False
                     V = self.tokenizer.n_tokens
                     # Validation takes argmax regardless of
                     # sc_draft_temp, so val_loss is deterministic.
@@ -1402,10 +1426,27 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                             batch_size, full_seq_len, subseq_len, V)
                         rows_m = torch.tensor(
                             [2 * t for t in tq], device=x.device)
-                        ar_toks_m = self._draft_from_logits(
-                            ar4[:, rows_m], temp=dtemp)
-                        ar_toks_c = self._draft_from_logits(
-                            ar4[:, rows_m + 1], temp=dtemp)
+                        if self.sc_ar_free_run:
+                            # the decode's own sampler, free-running
+                            # from the content rows, one call per pair
+                            hg = self._last_h_clean_global
+                            t_draft = (self.sc_draft_temp if dtemp is None
+                                       else float(dtemp))
+                            ar_toks_m = torch.stack([
+                                self.local_sampling(
+                                    hg[:, 2 * t], max_subseq_len=subseq_len,
+                                    temperature=t_draft, token_type_id=0)
+                                for t in tq], dim=1)          # [B, Q, S]
+                            ar_toks_c = torch.stack([
+                                self.local_sampling(
+                                    hg[:, 2 * t + 1], max_subseq_len=subseq_len,
+                                    temperature=t_draft, token_type_id=1)
+                                for t in tq], dim=1)
+                        else:
+                            ar_toks_m = self._draft_from_logits(
+                                ar4[:, rows_m], temp=dtemp)
+                            ar_toks_c = self._draft_from_logits(
+                                ar4[:, rows_m + 1], temp=dtemp)
                         use_ar_m = (torch.rand(batch_size, n_pairs,
                                                device=x.device)
                                     < self.sc_ar_frac)
@@ -1867,6 +1908,11 @@ if __name__ == '__main__':
                              'at content t-2, one frame short of what '
                              'the AR head at the same phase sees. A.3f '
                              'alone; A.9 with --query_pairs -1.')
+    parser.add_argument('--sc_ar_free_run', action='store_true', default=False,
+                        help='A.12: build the AR-head draft with local_sampling '
+                             '(free-running, validity-masked, as the decode '
+                             'does) instead of per-position samples from the '
+                             'teacher-forced AR logits. See __init__.')
     parser.add_argument('--sc_ar_frac', type=float, default=0.0,
                         help='A.12: share of self-conditioned slots whose '
                              'draft comes from the AR CONTENT HEAD rather '
@@ -2022,7 +2068,8 @@ if __name__ == '__main__':
                                                # frame, A.3 decode
         elif (getattr(a, 'sc_ar_frac', 0.0) > 0
               or getattr(a, 'sc_k_consistent', False)):
-            fam = 'A12'                        # AR-head self-conditioning
+            fam = 'A12fr' if getattr(a, 'sc_ar_free_run', False) else 'A12'
+                                               # AR-head self-conditioning
                                                # drafts (the decode's own
                                                # seed distribution)
         elif getattr(a, 'agree_head', False):
@@ -2122,6 +2169,7 @@ if __name__ == '__main__':
         query_block=args.query_block,
         cond_slot_prob=args.cond_slot_prob,
         sc_ar_frac=args.sc_ar_frac,
+        sc_ar_free_run=bool(args.sc_ar_free_run),
         sc_draft_temp=args.sc_draft_temp,
         sc_k_consistent=bool(args.sc_k_consistent),
         sym_k=bool(args.sym_k),
@@ -2323,6 +2371,7 @@ if __name__ == '__main__':
                     'slot_sees_prev_frame': bool(args.slot_sees_prev_frame),
                     'cond_slot_prob': args.cond_slot_prob,
                     'sc_ar_frac': args.sc_ar_frac,
+                    'sc_ar_free_run': bool(args.sc_ar_free_run),
                     'sc_draft_temp': args.sc_draft_temp,
                     'sc_k_consistent': bool(args.sc_k_consistent),
                     'sym_k': bool(args.sym_k),

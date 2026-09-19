@@ -410,6 +410,9 @@ SLOT_SEES_PREV_FRAME="${SLOT_SEES_PREV_FRAME:-0}"
 # independent uniform draw. Decode such a ckpt with A3_SCHEDULE=ctc_*.
 COND_SLOT_PROB="${COND_SLOT_PROB:-0}"
 SC_AR_FRAC="${SC_AR_FRAC:-0}"
+# A.12: free-running AR-head drafts (local_sampling, as the decode) instead
+# of per-position samples from the teacher-forced AR logits. Family A12fr.
+SC_AR_FREE_RUN="${SC_AR_FREE_RUN:-0}"
 SC_DRAFT_TEMP="${SC_DRAFT_TEMP:-0}"
 SC_K_CONSISTENT="${SC_K_CONSISTENT:-0}"
 SYM_K="${SYM_K:-0}"
@@ -537,6 +540,7 @@ if [[ -z "${MODEL_ABBR:-}" ]]; then
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" && "$QUERY_PAIRS" == "-1" ]]; then FAM="A9"
     elif [[ "$SC_AR_FRAC" != "0" || "$SC_K_CONSISTENT" == "1" \
             || "$SYM_K" == "1" || -n "$MASK_K_PROB" ]]; then FAM="A12"
+        [[ "$SC_AR_FREE_RUN" == "1" ]] && FAM="A12fr"
     elif [[ "$AGREE_HEAD" == "1" ]]; then FAM="A11"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" && "$COND_SLOT_PROB" != "0" ]]; then FAM="A3fc"
     elif [[ "$SLOT_SEES_PREV_FRAME" == "1" ]]; then FAM="A3f"
@@ -688,6 +692,9 @@ if [[ "$AGREE_HEAD" == "1" ]]; then
 fi
 if [[ "$SC_AR_FRAC" != "0" ]]; then
     EXTRA_TRAIN_ARGS+=(--sc_ar_frac "$SC_AR_FRAC")
+fi
+if [[ "$SC_AR_FREE_RUN" == "1" ]]; then
+    EXTRA_TRAIN_ARGS+=(--sc_ar_free_run)
 fi
 if [[ "$SC_DRAFT_TEMP" != "0" ]]; then
     EXTRA_TRAIN_ARGS+=(--sc_draft_temp "$SC_DRAFT_TEMP")
