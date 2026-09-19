@@ -273,16 +273,17 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
                 'shared sequence: streams interleaved by frame, then the harmonizers of frame $t$',
                 fontsize=FS - 1.4, ha='center', va='center', color=INK_2)
 
-    # loss: formula under the sequence, its terms in the left column
-    ax.text(bx + bw / 2, 0.42 if style == 'brief' else 0.22,
-            r'$\mathcal{L}=\mathcal{L}_{\mathrm{AR}}+\lambda\,\mathcal{L}_{\mathrm{harm}}'
-            r'+\lambda_{\mathrm{aux}}\,\mathcal{L}_{\mathrm{aux}}$',
-            fontsize=FS + 1.4, ha='center', va='center', color=INK)
-    ax.text(px + pw / 2, 0.6,
-            r'$\mathcal{L}_{\mathrm{AR}}$: CE at content tokens' + '\n'
-            r'$\mathcal{L}_{\mathrm{harm}}$: CE at harmonizers' + '\n'
-            r'$\mathcal{L}_{\mathrm{aux}}$: expert load balance',
-            fontsize=FS - 1.4, ha='center', va='center', color=INK_2)
+    if style == 'brief':
+        # loss: formula under the sequence, its terms in the left column
+        ax.text(bx + bw / 2, 0.42 if style == 'brief' else 0.22,
+                r'$\mathcal{L}=\mathcal{L}_{\mathrm{AR}}+\lambda\,\mathcal{L}_{\mathrm{harm}}'
+                r'+\lambda_{\mathrm{aux}}\,\mathcal{L}_{\mathrm{aux}}$',
+                fontsize=FS + 1.4, ha='center', va='center', color=INK)
+        ax.text(px + pw / 2, 0.6,
+                r'$\mathcal{L}_{\mathrm{AR}}$: CE at content tokens' + '\n'
+                r'$\mathcal{L}_{\mathrm{harm}}$: CE at harmonizers' + '\n'
+                r'$\mathcal{L}_{\mathrm{aux}}$: expert load balance',
+                fontsize=FS - 1.4, ha='center', va='center', color=INK_2)
 
 
 # --------------------------------------------------------------- right
@@ -459,6 +460,102 @@ def draw_arcs(fig, rect):
             fontsize=FS - 1.6, ha='center', va='center', color=INK_2, linespacing=1.2)
 
 
+def draw_decode(fig, rect):
+    """Panel (c): alternating-commit decode of one frame t, as the
+    inference schedule ctc_alt runs it: (1) with both harmonizers masked,
+    draft the leader stream's frame from the committed prefix; (2) commit
+    it into the leader's harmonizer and predict the follower from its
+    masked harmonizer, which sees the leader through the same-frame pass;
+    (3) commit both as content tokens; the leader alternates with frame
+    parity."""
+    ax = fig.add_axes(rect); ax.set_xlim(0, 30); ax.set_ylim(0, 8); ax.axis('off')
+    ax.text(0.0, 7.85, 'c', fontsize=FS + 2.5, weight='bold', ha='left', va='top', color=INK)
+    ax.text(0.9, 7.8, 'alternating-commit decode of frame $t$ (here stream $x$ leads; '
+            'at $t{+}1$ stream $y$ leads). Two forwards per frame, no refinement.',
+            fontsize=FS - 0.4, ha='left', va='top', color=INK)
+    sq, gap = 0.78, 0.16
+    y0 = 3.3
+
+    def token(x, y, col, ec, lab='', masked=False, lw=0.6, z=3):
+        ax.add_patch(Rectangle((x, y), sq, sq, fc='white' if masked else col, ec=ec, lw=lw,
+                               hatch='////' if masked else '', zorder=z))
+        if lab:
+            ax.text(x + sq / 2, y - 0.42, lab, fontsize=FS - 1.4, ha='center', va='center',
+                    color=INK)
+        return x + sq / 2
+
+    def prefix(x):
+        xs = []
+        for i, (col, ec, lab) in enumerate(((BLUE_L, BLUE, '$x_1$'), (RED_L, RED, '$y_1$'))):
+            xs.append(token(x + i * (sq + gap), y0, col, ec, lab))
+        ax.text(x + 2 * (sq + gap) + 0.2, y0 + sq / 2, r'$\cdots$', fontsize=FS, va='center',
+                color=INK)
+        x2 = x + 2 * (sq + gap) + 0.75
+        for i, (col, ec, lab) in enumerate(((BLUE_L, BLUE, '$x_{t-1}$'), (RED_L, RED, '$y_{t-1}$'))):
+            xs.append(token(x2 + i * (sq + gap), y0, col, ec, lab))
+        ax.plot([x - 0.15, x2 + 2 * sq + gap + 0.05], [y0 - 0.85] * 2, color=INK_2, lw=0.5)
+        ax.text((x - 0.15 + x2 + 2 * sq + gap) / 2, y0 - 1.15, 'committed prefix',
+                fontsize=FS - 1.6, ha='center', va='center', color=INK_2)
+        return x2 + 2 * (sq + gap) + 0.25, xs
+
+    def step(x, n, title, q_state, out, note):
+        ax.text(x, 6.6, f'{n}  {title}', fontsize=FS - 0.6, ha='left', va='center', color=INK,
+                weight='bold')
+        xh, pxs = prefix(x)
+        # harmonizer pair
+        cxs = []
+        for k, (st, lab) in enumerate(zip(q_state, ('$q_x$', '$q_y$'))):
+            xx = xh + k * (sq + gap)
+            if st == 'mask':
+                cxs.append(token(xx, y0, GOLD_L, GOLD, lab, masked=True))
+            elif st == 'hold_x':
+                cxs.append(token(xx, y0, BLUE_L, BLUE, lab, lw=0.9))
+                ax.text(xx + sq / 2, y0 + sq / 2, '$x_t$', fontsize=FS - 1.2, ha='center',
+                        va='center', color=INK, zorder=4)
+            else:
+                cxs.append(token(xx, y0, GOLD_L, GOLD, lab))
+        if out:
+            src, lab, col, ec = out
+            src_x = {'prefix_last': pxs[-1], 'q_x': cxs[0], 'q_y': cxs[1]}[src]
+            arrow(ax, (src_x, y0 + sq + 0.05), (src_x, y0 + sq + 1.0), color=INK_2)
+            token(src_x - sq / 2, y0 + sq + 1.05, col, ec)
+            ax.text(src_x + sq / 2 + 0.15, y0 + sq + 1.05 + sq / 2, lab, fontsize=FS - 1.2,
+                    ha='left', va='center', color=INK)
+        ax.text(x, 0.55, note, fontsize=FS - 1.6, ha='left', va='center', color=INK_2,
+                linespacing=1.2)
+        return xh, cxs
+
+    # step 1: both harmonizers masked, leader drafted from the prefix
+    xh, cxs = step(0.4, '1', 'draft the leader', ('mask', 'mask'),
+                   ('prefix_last', r'$x_t \sim p(x_t\mid\mathrm{prefix})$', BLUE_L, BLUE),
+                   'both harmonizers masked ($k{=}K$); the leader\'s frame is sampled\n'
+                   'from stream $x$\'s next-frame head')
+    # the arrow for step 1 comes from the last prefix token of stream y (the
+    # head at position 2t-1 predicts x_t): redraw out with that x
+    # step 2: leader committed into its harmonizer, follower predicted
+    xh2, cxs2 = step(10.6, '2', 'condition the follower', ('hold_x', 'mask'),
+                     ('q_y', r'$y_t \sim p(y_t\mid x_t,\mathrm{prefix})$', RED_L, RED),
+                     '$x_t$ is written into $q_x$ ($k{=}0$); $q_y$ stays masked and reads\n'
+                     '$q_x$ through the same-frame pass, then $y_t$ is sampled from $q_y$')
+    cxa, cxb = cxs2
+    ax.add_patch(Arc(((cxa + cxb) / 2, y0 + sq), cxb - cxa, 0.9, theta1=0, theta2=180,
+                     color=GOLD, lw=0.9, zorder=2))
+    ax.text(cxa - sq / 2 - 0.1, y0 + sq + 0.45, 'same-frame\npass', fontsize=FS - 1.9, ha='right',
+            va='center', color=INK_2, linespacing=1.1)
+    # step 3: commit both, roles swap
+    ax.text(19.9, 6.6, '3  commit both; swap roles', fontsize=FS - 0.6, ha='left', va='center',
+            color=INK, weight='bold')
+    xh3, _ = prefix(19.9)
+    token(xh3, y0, BLUE_L, BLUE, '$x_t$', lw=0.9)
+    token(xh3 + sq + gap, y0, RED_L, RED, '$y_t$', lw=0.9)
+    ax.text(xh3 + 2 * (sq + gap) + 0.1, y0 + sq / 2, r'$\rightarrow$ at $t{+}1$,' + '\n$y$ leads',
+            fontsize=FS - 1.5, ha='left', va='center', color=INK, linespacing=1.15)
+    ax.text(19.9, 0.55, '$x_t, y_t$ become content tokens of frame $t$; the leader\n'
+            'alternates with frame parity, so neither stream always follows',
+            fontsize=FS - 1.6, ha='left', va='center', color=INK_2, linespacing=1.2)
+    return cxs, cxs2
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True)
@@ -466,18 +563,24 @@ def main():
     ap.add_argument('--style', choices=['masks', 'arcs'], default='arcs',
                     help='right panel: three mask matrices, or reach arcs over the token row')
     args = ap.parse_args()
-    fig = plt.figure(figsize=(7.2, 3.6))
-    fig.patch.set_facecolor(SURFACE)
-    # left 70 %, right 30 %; the left panel's units are square
-    lw_, lh_ = (0.69, 0.96) if args.style == 'masks' else (0.62, 0.96)
-    W = lw_ * fig.get_figwidth() / (lh_ * fig.get_figheight()) * 10
-    axl = fig.add_axes([0.005, 0.02, lw_, lh_])
-    draw_block(axl, lora=not args.no_lora, W=W,
-               style='brief' if args.style == 'masks' else 'sublayer')
     if args.style == 'masks':
+        fig = plt.figure(figsize=(7.2, 3.6))
+        fig.patch.set_facecolor(SURFACE)
+        lw_, lh_ = 0.69, 0.96
+        W = lw_ * fig.get_figwidth() / (lh_ * fig.get_figheight()) * 10
+        axl = fig.add_axes([0.005, 0.02, lw_, lh_])
+        draw_block(axl, lora=not args.no_lora, W=W, style='brief')
         draw_attention(fig, [0.70, 0.03, 0.295, 0.94], lora=not args.no_lora)
     else:
-        draw_arcs(fig, [0.635, 0.03, 0.36, 0.94])
+        fig = plt.figure(figsize=(7.2, 5.0))
+        fig.patch.set_facecolor(SURFACE)
+        lw_, lh_ = 0.62, 0.69
+        W = lw_ * fig.get_figwidth() / (lh_ * fig.get_figheight()) * 10
+        axl = fig.add_axes([0.005, 0.30, lw_, lh_])
+        draw_block(axl, lora=not args.no_lora, W=W, style='sublayer')
+        axl.text(0.0, 9.95, 'a', fontsize=FS + 2.5, weight='bold', ha='left', va='top', color=INK)
+        draw_arcs(fig, [0.635, 0.305, 0.36, 0.68])
+        draw_decode(fig, [0.01, 0.005, 0.98, 0.27])
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print(f'wrote {args.out}.{ext}')
