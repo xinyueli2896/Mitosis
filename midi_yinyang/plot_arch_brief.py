@@ -26,7 +26,7 @@ import torch
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyBboxPatch, FancyArrowPatch, Rectangle, Circle
+from matplotlib.patches import FancyBboxPatch, FancyArrowPatch, Rectangle, Circle, Arc
 from matplotlib.lines import Line2D
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -35,6 +35,9 @@ from plot_e1_box import SURFACE, INK, INK_2, PALETTE  # noqa: E402
 BLUE, RED, GOLD, GREY = PALETTE['slate'], PALETTE['maroon'], PALETTE['gold'], PALETTE['grey']
 BLUE_L, RED_L, GOLD_L, GREY_L = '#c9d9f3', '#ecc9cf', '#fbe6b3', '#e3e0dc'
 BLOCK = '#ecebe8'
+PASS_C = {'same': '#6f8fc9', 'cross': '#c0596c', 'frame': GOLD}
+PASS_L = {'same': '#d6e0f3', 'cross': '#efd3d8', 'frame': GOLD_L}
+DASH = (0, (3, 1.5))
 FS = 7.0
 
 
@@ -54,7 +57,7 @@ def arrow(ax, p, q, color=INK_2, lw=0.6, ms=5, z=4, rad=0.0, style='-|>'):
 
 
 # ---------------------------------------------------------------- left
-def draw_block(ax, lora=True, W=14.6):
+def draw_block(ax, lora=True, W=14.6, style='brief'):
     """Panel units: W wide x 10 tall, square units (the caller sizes the
     axes to match)."""
     ax.set_xlim(0, W); ax.set_ylim(0, 10); ax.axis('off')
@@ -99,36 +102,78 @@ def draw_block(ax, lora=True, W=14.6):
     sp = 1.0                                      # room for the residual spine
     rbox(ax, bx + 0.25, ey, bw - 0.5 - sp, 1.45, fc=BLOCK, ec='none', z=2)
     ax.text(bx + (bw - sp) / 2, ey + 1.22,
-            'expert pool: two copies of each pretrained FFN, top-2 per token', fontsize=FS - 0.5,
+            'expert pool: two copies of each pretrained FFN, top-2 per token',
+            fontsize=FS - 0.5 if style == 'brief' else FS - 1.1,
             ha='center', va='center', color=INK)
     ew = (bw - 0.5 - sp - 0.5 * 3 - 0.6) / 4
     for i in range(4):
         rbox(ax, bx + 0.55 + i * (ew + 0.5), ey + 0.2, ew, 0.75, r'$\mathrm{FFN}_%d$' % (i + 1),
              fc=BLUE_L if i < 2 else RED_L, ec=INK, ls=dotted, lw=0.6)
     # routers
-    ry = ey - 0.85
+    ry = ey - 0.85 if style == 'brief' else ey - 1.45
     rbox(ax, bx + 1.5, ry, 1.5, 0.5, 'router', fc=BLUE_L, ec=BLUE, lw=0.5, fs=FS - 0.4)
     rbox(ax, bx + bw - sp - 3.0, ry, 1.5, 0.5, 'router', fc=RED_L, ec=RED, lw=0.5, fs=FS - 0.4)
-    ax.text(bx + (bw - sp) / 2, ry + 0.25, 'one router\nper stream', fontsize=FS - 1.2, ha='center',
-            va='center', color=INK_2)
-    for x in (bx + 2.25, bx + bw - sp - 2.25):
-        arrow(ax, (x, ry + 0.5), (x, ey - 0.02), color=INK_2)
-    # attention bar
-    ay = ry - 0.8
-    rbox(ax, bx + 0.25, ay, bw - 0.5 - sp, 0.55, fc=BLOCK, ec='none', z=2)
-    ax.text(bx + (bw - sp) / 2, ay + 0.28, 'Duet attention: three masked passes',
-            fontsize=FS, ha='center', va='center', color=INK)
-    # gold additions
-    gy = ay - 0.72
-    gw = (bw - 0.5 - sp - 0.3 * 2) / 3 if lora else (bw - 0.5 - sp - 0.3) / 2
-    labels = ['gates $g$, $f$', 'same-frame pass']
-    if lora:
-        labels.append(r'$\Delta W$ on cross $Q,K,V$')
-    for i, lab in enumerate(labels):
-        rbox(ax, bx + 0.25 + i * (gw + 0.3), gy, gw, 0.5, lab, fc=GOLD_L, ec=GOLD, lw=0.6,
-             fs=FS - 1.0)
-    # qkv per stream
-    qy = gy - 0.78
+    ffn_cx = [bx + 0.55 + i * (ew + 0.5) + ew / 2 for i in range(4)]
+    if style == 'brief':
+        ax.text(bx + (bw - sp) / 2, ry + 0.25, 'one router\nper stream', fontsize=FS - 1.2,
+                ha='center', va='center', color=INK_2)
+        for x in (bx + 2.25, bx + bw - sp - 2.25):
+            arrow(ax, (x, ry + 0.5), (x, ey - 0.02), color=INK_2)
+    else:
+        # Switch-style fan-out: every router reaches every expert; its
+        # top-2 (an example) solid, the rest dashed
+        for x_r, col, top in ((bx + 2.25, BLUE, (0, 2)), (bx + bw - sp - 2.25, RED, (1, 3))):
+            for i, cx in enumerate(ffn_cx):
+                on = i in top
+                arrow(ax, (x_r, ry + 0.5), (cx + (-0.12 if col == BLUE else 0.12), ey + 0.18),
+                      color=col, lw=0.7 if on else 0.45, ms=4)
+                if not on:
+                    ax.patches[-1].set_linestyle(DASH)
+        ax.text(bx + (bw - sp) / 2, ry - 0.28, 'one router per stream; each token goes to its top-2 experts (solid)',
+                fontsize=FS - 1.6, ha='center', va='center', color=INK_2)
+    if style == 'brief':
+        # attention bar
+        ay = ry - 0.8
+        rbox(ax, bx + 0.25, ay, bw - 0.5 - sp, 0.55, fc=BLOCK, ec='none', z=2)
+        ax.text(bx + (bw - sp) / 2, ay + 0.28, 'Duet attention: three masked passes',
+                fontsize=FS, ha='center', va='center', color=INK)
+        # gold additions
+        gy = ay - 0.72
+        gw = (bw - 0.5 - sp - 0.3 * 2) / 3 if lora else (bw - 0.5 - sp - 0.3) / 2
+        labels = ['gates $g$, $f$', 'same-frame pass']
+        if lora:
+            labels.append(r'$\Delta W$ on cross $Q,K,V$')
+        for i, lab in enumerate(labels):
+            rbox(ax, bx + 0.25 + i * (gw + 0.3), gy, gw, 0.5, lab, fc=GOLD_L, ec=GOLD, lw=0.6,
+                 fs=FS - 1.0)
+        qy = gy - 0.78
+        y_ln_att, y_add_att = gy + 0.25, ay + 0.28
+    else:
+        # one attention sublayer box; the passes are only colour swatches
+        # that key panel (b), the gates sit on its output edge
+        ay = ry - 1.6
+        aw = bw - 0.5 - sp
+        rbox(ax, bx + 0.25, ay, aw, 1.05, fc=BLOCK, ec='none', z=2)
+        ax.text(bx + 0.5, ay + 0.75, 'Duet attention  (see b)', fontsize=FS - 0.2,
+                ha='left', va='center', color=INK)
+        swx = bx + 0.5
+        for key, lab in (('same', 'same stream'), ('cross', 'cross, earlier'),
+                         ('frame', 'same frame')):
+            ax.add_patch(Rectangle((swx, ay + 0.17), 0.42, 0.3, fc=PASS_L[key], ec=PASS_C[key],
+                                   lw=0.5, zorder=4))
+            ax.text(swx + 0.52, ay + 0.32, lab, fontsize=FS - 1.6, ha='left', va='center',
+                    color=INK)
+            swx += 1.95
+        # gates on the sublayer's output (cross and same-frame passes)
+        ax.text(bx + 0.25 + aw - 1.35, ay + 0.75, 'gates', fontsize=FS - 1.6, ha='right',
+                va='center', color=INK_2)
+        for k, g in enumerate(('$g$', '$f$')):
+            gx = bx + 0.25 + aw - 1.0 + k * 0.55
+            ax.add_patch(Circle((gx, ay + 0.75), 0.2, fc=GOLD_L, ec=GOLD, lw=0.6, zorder=5))
+            ax.text(gx, ay + 0.75, g, fontsize=FS - 0.8, ha='center', va='center', color=INK,
+                    zorder=6)
+        qy = ay - 0.78
+        y_ln_att, y_add_att = qy + 0.27, ay + 0.52
     hw = (bw - 0.8 - sp) / 2
     rbox(ax, bx + 0.25, qy, hw, 0.55, r'$W_Q^x, W_K^x, W_V^x, W_O^x$', fc=BLUE_L,
          ec=INK, ls=dotted, lw=0.6, fs=FS - 0.4)
@@ -139,7 +184,7 @@ def draw_block(ax, lora=True, W=14.6):
     xs_ = bx + bw - sp / 2
     ax.plot([xs_, xs_], [qy + 0.1, ey + 1.45], color=INK_2, lw=0.7, zorder=2)
     arrow(ax, (xs_, ey + 1.3), (xs_, by + bh - 0.5), color=INK_2, lw=0.7)
-    for y_ln, y_add, y_tie in ((gy + 0.25, ay + 0.28, ay + 0.28),
+    for y_ln, y_add, y_tie in ((y_ln_att, y_add_att, y_add_att),
                                (ry + 0.25, ey + 0.72, ey + 0.72)):
         rbox(ax, xs_ - 0.3, y_ln - 0.17, 0.6, 0.34, 'LN', fc='white', ec=INK_2, lw=0.5,
              fs=FS - 1.6, z=4)
@@ -301,19 +346,87 @@ def draw_attention(fig, rect, lora=True):
         ax.text(xx + 0.5, yy + 0.14, txt, fontsize=FS - 1.6, va='center', color=INK)
 
 
+def draw_arcs(fig, rect):
+    """Panel (b): who attends to whom in one layer, as reach arcs over the
+    token row: a content query above the row, a harmonizer query below,
+    arcs coloured by pass. Admission rule from the model's own masks."""
+    ax = fig.add_axes(rect); ax.set_xlim(0, 10); ax.set_ylim(0, 10); ax.axis('off')
+    intra, cross, frame, clean_len = masks(3)
+    L = clean_len + 2
+    ax.text(0.0, 9.95, 'b', fontsize=FS + 2.5, weight='bold', ha='left', va='top', color=INK)
+    ax.text(0.7, 9.93, 'who attends to whom (one layer, frames 1-3 committed,\n'
+            'harmonizers drafting frame 4)', fontsize=FS - 0.4, ha='left', va='top',
+            color=INK, linespacing=1.25)
+    toks = ['$x_1$', '$y_1$', '$x_2$', '$y_2$', '$x_3$', '$y_3$', '$q_x$', '$q_y$']
+    cols = [BLUE, RED] * 3 + [GOLD, GOLD]
+    fcs = [BLUE_L, RED_L] * 3 + [GOLD_L, GOLD_L]
+    xs = [0.85 + i * 1.2 for i in range(L)]
+    y0 = 4.55
+    for x, t, c, f in zip(xs, toks, cols, fcs):
+        ax.add_patch(Rectangle((x - 0.4, y0), 0.8, 0.7, fc=f, ec=c, lw=0.6, zorder=3))
+        ax.text(x, y0 - 0.38, t, fontsize=FS - 0.6, ha='center', va='center', color=INK)
+
+    def key_of(i, j):
+        return 'same' if intra[i, j] else 'cross' if cross[i, j] else 'frame' if frame[i, j] else None
+
+    def arc(i, j, above):
+        key = key_of(i, j)
+        if key is None or i == j:
+            return
+        xi, xj = xs[i], xs[j]
+        c = (xi + xj) / 2; r = abs(xi - xj) / 2
+        h = min(0.4 + r * 0.5, 2.3)
+        y = y0 + 0.7 if above else y0 - 0.55
+        a = Arc((c, y), 2 * r, 2 * h, theta1=0 if above else 180, theta2=180 if above else 360,
+                color=PASS_C[key], lw=0.8, zorder=2)
+        a.set_linestyle('-' if key != 'cross' else DASH)
+        ax.add_patch(a)
+
+    qi, hi = 4, 6                                   # x_3 above, q_x below
+    for j in range(L):
+        arc(qi, j, True)
+        arc(hi, j, False)
+    ax.add_patch(Rectangle((xs[qi] - 0.46, y0 - 0.06), 0.92, 0.82, fc='none', ec=INK, lw=0.8,
+                           zorder=4))
+    ax.text(0.45, 8.15, 'above: content query $x_3$', fontsize=FS - 1.1, ha='left',
+            va='center', color=INK)
+    ax.text(0.45, 1.05, 'below: harmonizer query $q_x$', fontsize=FS - 1.1, ha='left',
+            va='center', color=INK)
+    ax.add_patch(Rectangle((xs[hi] - 0.46, y0 - 0.06), 0.92, 0.82, fc='none', ec=INK, lw=0.8,
+                           zorder=4))
+    # legend
+    for k, (key, lab, gate) in enumerate((('same', 'same stream, causal', ''),
+                                          ('cross', 'cross stream, earlier', r'$\times g$'),
+                                          ('frame', 'same frame', r'$\times f$'))):
+        yy = 8.75 - k * 0.4
+        ax.plot([4.7, 5.3], [yy, yy], color=PASS_C[key], lw=1.0,
+                ls='-' if key != 'cross' else DASH)
+        ax.text(5.45, yy, lab + (f'  {gate}' if gate else ''), fontsize=FS - 1.6, va='center',
+                color=INK)
+    ax.text(5.0, 0.35, 'every token is a query of the same three passes; a content token\n'
+            'never sees a harmonizer, and the two harmonizers see each other',
+            fontsize=FS - 1.6, ha='center', va='center', color=INK_2, linespacing=1.2)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True)
     ap.add_argument('--no-lora', action='store_true')
+    ap.add_argument('--style', choices=['masks', 'arcs'], default='arcs',
+                    help='right panel: three mask matrices, or reach arcs over the token row')
     args = ap.parse_args()
     fig = plt.figure(figsize=(7.2, 3.6))
     fig.patch.set_facecolor(SURFACE)
     # left 70 %, right 30 %; the left panel's units are square
-    lw_, lh_ = 0.69, 0.96
+    lw_, lh_ = (0.69, 0.96) if args.style == 'masks' else (0.62, 0.96)
     W = lw_ * fig.get_figwidth() / (lh_ * fig.get_figheight()) * 10
     axl = fig.add_axes([0.005, 0.02, lw_, lh_])
-    draw_block(axl, lora=not args.no_lora, W=W)
-    draw_attention(fig, [0.70, 0.03, 0.295, 0.94], lora=not args.no_lora)
+    draw_block(axl, lora=not args.no_lora, W=W,
+               style='brief' if args.style == 'masks' else 'sublayer')
+    if args.style == 'masks':
+        draw_attention(fig, [0.70, 0.03, 0.295, 0.94], lora=not args.no_lora)
+    else:
+        draw_arcs(fig, [0.635, 0.03, 0.36, 0.94])
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print(f'wrote {args.out}.{ext}')
