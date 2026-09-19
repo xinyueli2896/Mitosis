@@ -64,15 +64,15 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
     dotted = (0, (1.2, 1.2))
 
     # block frame
-    bx, bw = 3.9, 8.4
+    bx, bw = (3.9, 8.4) if style == 'brief' else (2.85, 9.45)
     by, bh = (3.2, 6.4) if style == 'brief' else (2.35, 7.25)
     rbox(ax, bx, by, bw, bh, fc='white', ec=INK, lw=0.7, z=2)
     ax.text(bx + bw / 2, by + bh - 0.3, r'global-stack block $\times L$', fontsize=FS + 0.8,
             ha='center', va='center', color=INK)
 
     # the two pretrained models, whose weights fill the dotted parts
-    px, pw = 0.3, 3.1
-    for y_, col, ecol, nm, tag, ffn in ((7.7, BLUE_L, BLUE, 'x', 'melody', '1, 2'),
+    px, pw = (0.3, 3.1) if style == 'brief' else (0.3, 2.3)
+    for y_, col, ecol, nm, tag, ffn in () if style != 'brief' else ((7.7, BLUE_L, BLUE, 'x', 'melody', '1, 2'),
                                         (4.85, RED_L, RED, 'y', 'chord', '3, 4')):
         rbox(ax, px, y_, pw, 1.45, fc=col, ec=ecol, lw=0.6)
         ax.text(px + pw / 2, y_ + 1.15, f'pretrained $\\mathrm{{LM}}_{nm}$ ({tag})',
@@ -83,12 +83,13 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
                 fontsize=FS - 1.3, ha='center', va='center', color=INK, linespacing=1.4)
         arrow(ax, (px + pw, y_ + 0.72), (bx - 0.05, y_ + 0.72), color=ecol, style='-|>')
         ax.patches[-1].set_linestyle(dotted)
-    ax.text(px + pw / 2, 7.0, 'weights copied into the dotted\nboxes of the same colour;\n'
-            'routers, gates, harmonizers are new', fontsize=FS - 1.4, ha='center',
-            va='center', color=INK_2)
+    if style == 'brief':
+        ax.text(px + pw / 2, 7.0, 'weights copied into the dotted\nboxes of the same colour;\n'
+                'routers, gates, harmonizers are new', fontsize=FS - 1.4, ha='center',
+                va='center', color=INK_2)
 
     # legend (bottom-left)
-    lx, ly = 0.3, 3.55
+    lx, ly = (0.3, 3.55) if style == 'brief' else (0.3, 9.0)
     for k, (fc, ec, ls, txt) in enumerate(((BLUE_L, BLUE, '-', 'stream $x$ (melody)'),
                                            (BLUE_L, INK, dotted, 'weights from $\\mathrm{LM}_x$'),
                                            (RED_L, RED, '-', 'stream $y$ (chord)'),
