@@ -255,14 +255,21 @@ def draw_block(ax, lora=True, W=14.6, style='brief'):
         ax.add_patch(Rectangle((x, hy), sq, sq, fc=col, ec=ec, lw=0.6, zorder=3))
         ax.text(x + sq / 2, hy - 0.27, lab, fontsize=FS - 0.6, ha='center', va='center', color=INK)
         xs.append(x + sq / 2); x += step
-    # wires from hidden states into the matching projection box
-    left_c, right_c = bx + 0.25 + hw / 2, bx + 0.55 + 1.5 * hw
-    for i, xc in enumerate(xs):
-        gold = i >= 2 * n
-        tgt = left_c if (i % 2 == 0) else right_c
-        col = GOLD if gold else (BLUE if i % 2 == 0 else RED)
-        arrow(ax, (xc, hy + sq + 0.02), (tgt + (i - n) * 0.12, qy - 0.02), color=col, lw=0.5,
-              ms=4, rad=0.0, style='-')
+    if style == 'brief':
+        # wires from hidden states into the matching projection box
+        left_c, right_c = bx + 0.25 + hw / 2, bx + 0.55 + 1.5 * hw
+        for i, xc in enumerate(xs):
+            gold = i >= 2 * n
+            tgt = left_c if (i % 2 == 0) else right_c
+            col = GOLD if gold else (BLUE if i % 2 == 0 else RED)
+            arrow(ax, (xc, hy + sq + 0.02), (tgt + (i - n) * 0.12, qy - 0.02), color=col, lw=0.5,
+                  ms=4, rad=0.0, style='-')
+    else:
+        # one arrow into the block; colour says which projection set a token uses
+        xm = (xs[0] + xs[-1]) / 2
+        arrow(ax, (xm, hy + sq + 0.05), (xm, by - 0.03), color=INK_2, lw=0.8, ms=6)
+        ax.text(xm + 0.25, (hy + sq + by) / 2, 'colour = projection set ($q_x$: $W^x$, $q_y$: $W^y$)',
+                fontsize=FS - 1.5, ha='left', va='center', color=INK_2)
     if style == 'brief':
         ax.text(bx + bw / 2, hy - 0.8,
                 'shared sequence: the two streams interleaved by frame, then the harmonizers of frame $t$;\n'
