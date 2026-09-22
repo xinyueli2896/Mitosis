@@ -63,7 +63,7 @@ def build():
     # the last committed token and the harmonizer of the stream
     cX, cQX, cY, cQY = 4.95, 6.65, 8.9, 10.6        # slots: x lane (x_3, q_x), y lane (y_3, q_y)
     lanes = (('x', cX, cQX), ('y', cY, cQY))
-    bx0, bx1, by0, by1 = 3.65, 11.85, 0.72, 5.6
+    bx0, bx1, by0, by1 = 3.65, 11.85, 0.68, 5.9
     S.rect(bx0, by0, bx1 - bx0, by1 - by0, fill='FFFFFF', line=INK, lw=1.0, z=0)
     S.text(bx1 - 0.7, by0 + 0.05, 0.6, 0.24, [('×', ''), ('L', 'i')], size=10, align='r')
     colour = {'x': (LAV, LAV_D), 'y': (TEAL, TEAL_D)}
@@ -87,20 +87,20 @@ def build():
                runs=[('LM', ''), (s, 'sub i')] if s in colour else plain('LM'), size=5.5, color=col, z=6)
 
     # attention bar with one projection set per stream
-    yAt = 4.95
+    yAt = 5.25
     S.rect(bx0 + 0.2, yAt, bx1 - bx0 - 0.4, 0.5, fill=GREY, line=None, z=0)
     S.text(bx0 + 0.25, yAt + 0.01, 1.2, 0.2, plain('attention'), size=8, align='l', color=INK_2)
     for s, c1, c2 in lanes:
         lane_bar(s, yAt + 0.17, 0.3, Wqkv(s), 8.5, dash=True)
     # readouts per token, labelled with the key set
-    yR = 4.3
+    yR = 4.55
     bw, bg = 0.5, 0.04
     keys = {cX: (sub('x', '≤3'), sub('y', '≤2'), sub('y', '3')),
             cQX: (sub('x', '≤3'), sub('y', '≤3'), sub('q', 'y')),
             cY: (sub('y', '≤3'), sub('x', '≤2'), sub('x', '3')),
             cQY: (sub('y', '≤3'), sub('x', '≤3'), sub('q', 'x'))}
     r = 0.17
-    yG, ySum, yWo = 3.88, 3.5, 3.12
+    yG, ySum, yWo = 4.08, 3.68, 3.28
     for s, c1, c2 in lanes:
         own = colour[s]; oth = colour['y' if s == 'x' else 'x']
         for cx in (c1, c2):
@@ -120,13 +120,13 @@ def build():
         # one output projection per stream
         lane_bar(s, yWo, 0.3, [('output projection  ', ''), ('W', 'i'), ('O', 'sup i'), (s, 'sub i')], 8, dash=True)
     # Add & Norm after attention
-    yA1 = 2.72
+    yA1 = 2.85
     S.rect(bx0 + 0.2, yA1, bx1 - bx0 - 0.4, 0.3, fill=GREY, line=None, runs=plain('add & norm'), size=8.5)
     for _, c1, c2 in lanes:
         for cx in (c1, c2):
             S.line(cx, yWo - 0.02, cx, yA1 + 0.3, lw=0.6, arrow=True)
     # one router per stream, pi bars at the outer sides
-    yRt = 2.22
+    yRt = 2.32
     pis = {'x': (0.61, 0.08, 0.27, 0.04), 'y': (0.04, 0.27, 0.61, 0.08)}
     for s, c1, c2 in lanes:
         lane_bar(s, yRt, 0.3, [('router ', ''), ('G', 'i'), ('(' + s + ')', 'sup i')], 8.5, line=INK, lw=1.3)
@@ -138,7 +138,7 @@ def build():
     S.text(bx0 + 0.02, yRt - 0.2, 0.5, 0.18, [('π', 'i')], size=8, align='l', color=INK_2)
     S.text(bx1 - 0.5, yRt - 0.2, 0.5, 0.18, [('π', 'i')], size=8, align='r', color=INK_2)
     # experts, shared by both streams
-    yE = 1.68
+    yE = 1.75
     ex = [bx0 + 1.0, bx0 + 2.6, bx0 + 4.2, bx0 + 5.8]
     for i, fx in enumerate(ex):
         S.rect(fx, yE, 1.25, 0.32, fill=GREY, line=INK, lw=0.6, dash=True,
@@ -163,27 +163,27 @@ def build():
     for _, c1, c2 in lanes:
         for cx in (c1, c2):
             S.line(cx, yM - 0.02, cx, yA2 + 0.3, lw=0.6, arrow=True)
-            S.line(cx, yA2 - 0.02, cx, 0.2 + tk + 0.02, lw=0.6, arrow=True)
-    token(cX, 0.2, 'x', sub('x', '4'))
-    token(cQX, 0.2, 'ox', sub('x', '4'))
-    token(cY, 0.2, 'y', sub('y', '4'))
-    token(cQY, 0.2, 'oy', sub('y', '4'))
-    S.text(cX + 0.28, 0.2, 1.2, 0.46, [('next-frame', ''), ('\n', ''), ('head', '')], size=6.5, color=INK_2, align='l')
-    S.text(cQX + 0.28, 0.2, 1.3, 0.46, [('harmonizer', ''), ('\n', ''), ('estimate', '')], size=6.5, color=INK_2, align='l')
-    S.text(cY + 0.28, 0.2, 1.2, 0.46, [('next-frame', ''), ('\n', ''), ('head', '')], size=6.5, color=INK_2, align='l')
-    S.text(cQY + 0.28, 0.2, 1.3, 0.46, [('harmonizer', ''), ('\n', ''), ('estimate', '')], size=6.5, color=INK_2, align='l')
+            S.line(cx, yA2 - 0.02, cx, 0.12 + tk + 0.02, lw=0.6, arrow=True)
+    token(cX, 0.12, 'x', sub('x', '4'))
+    token(cQX, 0.12, 'ox', sub('x', '4'))
+    token(cY, 0.12, 'y', sub('y', '4'))
+    token(cQY, 0.12, 'oy', sub('y', '4'))
+    S.text(cX + 0.28, 0.12, 1.2, 0.46, [('next-frame', ''), ('\n', ''), ('head', '')], size=6.5, color=INK_2, align='l')
+    S.text(cQX + 0.28, 0.12, 1.3, 0.46, [('harmonizer', ''), ('\n', ''), ('estimate', '')], size=6.5, color=INK_2, align='l')
+    S.text(cY + 0.28, 0.12, 1.2, 0.46, [('next-frame', ''), ('\n', ''), ('head', '')], size=6.5, color=INK_2, align='l')
+    S.text(cQY + 0.28, 0.12, 1.3, 0.46, [('harmonizer', ''), ('\n', ''), ('estimate', '')], size=6.5, color=INK_2, align='l')
     S.text(bx0 + 0.25, yG - 0.08, 0.6, 0.16, plain('gates'), size=6.5, color=INK_2, align='l')
     S.text(bx0 + 0.25, yR + 0.06, 0.6, 0.16, plain('keys'), size=6.5, color=INK_2, align='l')
     S.text(cX - 0.75, yAt + 0.01, 3.4, 0.18, [('x', 'i'), ('3', 'sub i'), (' and ', ''), ('q', 'i'), ('x', 'sub i'), (' share every component', '')], size=6.5, color=INK_2, align='r')
     S.text(cY - 0.75, yAt + 0.01, 3.4, 0.18, [('y', 'i'), ('3', 'sub i'), (' and ', ''), ('q', 'i'), ('y', 'sub i'), (' share every component', '')], size=6.5, color=INK_2, align='r')
 
     # ================================================================ context, banks, current tokens
-    yC = 6.7
+    yC = 6.85
     ctx = [(0.55, 'x', '1'), (1.05, 'y', '1'), (1.55, 'x', '2'), (2.05, 'y', '2')]
     for cx, k, i in ctx:
         token(cx, yC, k, sub(k, i))
     S.text(0.35, yC + tk + 0.02, 2.0, 0.18, plain('context'), size=8, color=INK_2, align='l')
-    yB = 5.95
+    yB = 6.15
     S.rect(0.38, yB - 0.07, 1.2, tk + 0.14, fill='FFFFFF', line=INK, lw=0.7)
     token(0.66, yB, 'x', sub('x', '1')); token(1.3, yB, 'x', sub('x', '2'))
     S.rect(1.85, yB - 0.07, 1.2, tk + 0.14, fill='FFFFFF', line=INK, lw=0.7)
