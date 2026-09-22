@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK, INK_2  # noqa: E402
 import fig_arch_pptx
 
-fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 15.5, 7.5
+fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 16.0, 7.8
 # the drawing's colours
 LAV, LAV_D = 'B8BBEC', '8F93D9'          # stream x
 TEAL, TEAL_D = 'B7DBD8', '7CBDB7'        # stream y
@@ -49,7 +49,7 @@ def Wqkv(s):
 
 def build():
     S = Spec()
-    tk = 0.4
+    tk = 0.46
 
     def token(cx, y, kind, lab, dash=False, size=8.5):
         fill, line = {'x': (LAV, LAV_D), 'y': (TEAL, TEAL_D), 'q': (HARM, HARM_D),
@@ -68,7 +68,7 @@ def build():
     S.text(bx1 - 0.7, by0 + 0.05, 0.6, 0.24, [('×', ''), ('L', 'i')], size=10, align='r')
     colour = {'x': (LAV, LAV_D), 'y': (TEAL, TEAL_D)}
 
-    def plus(cx, cy, r=0.1):
+    def plus(cx, cy, r=0.11):
         S.rect(cx - r, cy - r, 2 * r, 2 * r, fill='FFFFFF', line=INK, lw=0.7, shape='ellipse', z=4)
         S.line(cx - 0.05, cy, cx + 0.05, cy, lw=0.7, z=5)
         S.line(cx, cy - 0.05, cx, cy + 0.05, lw=0.7, z=5)
@@ -85,23 +85,23 @@ def build():
     S.rect(bx0 + 0.2, yAt, bx1 - bx0 - 0.4, 0.5, fill=GREY, line=None, z=0)
     S.text(bx0 + 0.25, yAt + 0.01, 1.2, 0.2, plain('attention'), size=8, align='l', color=INK_2)
     for s, c1, c2 in lanes:
-        lane_bar(s, yAt + 0.2, 0.26, Wqkv(s), 8.5, dash=True)
+        lane_bar(s, yAt + 0.17, 0.3, Wqkv(s), 8.5, dash=True)
     # readouts per token, labelled with the key set
     yR = 4.3
-    bw, bg = 0.38, 0.05
+    bw, bg = 0.5, 0.04
     keys = {cX: (sub('x', '≤3'), sub('y', '≤2'), sub('y', '3')),
             cQX: (sub('x', '≤3'), sub('y', '≤3'), sub('q', 'y')),
             cY: (sub('y', '≤3'), sub('x', '≤2'), sub('x', '3')),
             cQY: (sub('y', '≤3'), sub('x', '≤3'), sub('q', 'x'))}
-    r = 0.13
-    yG, ySum, yWo = 3.88, 3.55, 3.15
+    r = 0.17
+    yG, ySum, yWo = 3.88, 3.5, 3.12
     for s, c1, c2 in lanes:
         own = colour[s]; oth = colour['y' if s == 'x' else 'x']
         for cx in (c1, c2):
             for k, (lab, (fill, line)) in enumerate(zip(keys[cx], (own, oth, (HARM, HARM_D)))):
                 x = cx + (k - 1) * (bw + bg)
-                S.rect(x - bw / 2, yR, bw, 0.28, fill=fill, line=line, lw=0.7, runs=lab, size=7.5)
-                S.line(x, yAt + 0.18, x, yR + 0.3, lw=0.6, arrow=True, color=INK_2)
+                S.rect(x - bw / 2, yR, bw, 0.3, fill=fill, line=line, lw=0.7, runs=lab, size=7.5)
+                S.line(x, yAt + 0.18, x, yR + 0.32, lw=0.6, arrow=True, color=INK_2)
             plus(cx, ySum)
             S.line(cx - (bw + bg), yR - 0.02, cx - 0.08, ySum + 0.08, lw=0.6, arrow=True)
             for k, kind in ((0, 'c'), (1, 'f')):
@@ -112,10 +112,10 @@ def build():
                 S.line(gx - 0.03, yG - r, cx + 0.04, ySum + 0.08, lw=0.6, arrow=True)
             S.line(cx, ySum - 0.1, cx, yWo + 0.27, lw=0.6, arrow=True)
         # one output projection per stream
-        lane_bar(s, yWo, 0.25, [('output projection  ', ''), ('W', 'i'), ('O', 'sup i'), (s, 'sub i')], 8, dash=True)
+        lane_bar(s, yWo, 0.3, [('output projection  ', ''), ('W', 'i'), ('O', 'sup i'), (s, 'sub i')], 8, dash=True)
     # Add & Norm after attention
     yA1 = 2.72
-    S.rect(bx0 + 0.2, yA1, bx1 - bx0 - 0.4, 0.28, fill=GREY, line=None, runs=plain('add & norm'), size=8.5)
+    S.rect(bx0 + 0.2, yA1, bx1 - bx0 - 0.4, 0.3, fill=GREY, line=None, runs=plain('add & norm'), size=8.5)
     for _, c1, c2 in lanes:
         for cx in (c1, c2):
             S.line(cx, yWo - 0.02, cx, yA1 + 0.3, lw=0.6, arrow=True)
@@ -123,7 +123,7 @@ def build():
     yRt = 2.22
     pis = {'x': (0.61, 0.08, 0.27, 0.04), 'y': (0.04, 0.27, 0.61, 0.08)}
     for s, c1, c2 in lanes:
-        lane_bar(s, yRt, 0.28, [('router ', ''), ('G', 'i'), ('(' + s + ')', 'sup i')], 8.5, line=colour[s][1])
+        lane_bar(s, yRt, 0.3, [('router ', ''), ('G', 'i'), ('(' + s + ')', 'sup i')], 8.5, line=colour[s][1])
         for cx in (c1, c2):
             S.line(cx, yA1 - 0.02, cx, yRt + 0.3, lw=0.6, arrow=True)
     for s, x0_ in (('x', bx0 + 0.05), ('y', bx1 - 0.44)):
@@ -135,7 +135,7 @@ def build():
     yE = 1.68
     ex = [bx0 + 1.0, bx0 + 2.6, bx0 + 4.2, bx0 + 5.8]
     for i, fx in enumerate(ex):
-        S.rect(fx, yE, 1.15, 0.3, fill=GREY, line=INK, lw=0.6, dash=True,
+        S.rect(fx, yE, 1.25, 0.32, fill=GREY, line=INK, lw=0.6, dash=True,
                runs=[('Exp ', ''), (str(i + 1), '')], size=8.5)
     for s, c1, c2 in lanes:
         rx = (c1 + c2) / 2
@@ -153,7 +153,7 @@ def build():
                 S.line(fx + 0.575 + (0.1 if s == 'y' else -0.1), yE - 0.02, mid + (0.3 if s == 'y' else -0.3),
                        yM + 0.28, color=colour[s][1], lw=0.9, arrow=True)
     yA2 = by0 + 0.08
-    S.rect(bx0 + 0.2, yA2, bx1 - bx0 - 0.4, 0.28, fill=GREY, line=None, runs=plain('add & norm'), size=8.5)
+    S.rect(bx0 + 0.2, yA2, bx1 - bx0 - 0.4, 0.3, fill=GREY, line=None, runs=plain('add & norm'), size=8.5)
     for _, c1, c2 in lanes:
         for cx in (c1, c2):
             S.line(cx, yM - 0.02, cx, yA2 + 0.3, lw=0.6, arrow=True)
@@ -162,34 +162,34 @@ def build():
     token(cQX, 0.2, 'ox', sub('x', '4'))
     token(cY, 0.2, 'y', sub('y', '4'))
     token(cQY, 0.2, 'oy', sub('y', '4'))
-    S.text(cX + 0.25, 0.24, 1.1, 0.16, plain('next-frame head'), size=6.5, color=INK_2, align='l')
-    S.text(cQX + 0.25, 0.24, 1.4, 0.16, plain('harmonizer estimate'), size=6.5, color=INK_2, align='l')
-    S.text(cY + 0.25, 0.24, 1.1, 0.16, plain('next-frame head'), size=6.5, color=INK_2, align='l')
-    S.text(cQY + 0.25, 0.24, 1.4, 0.16, plain('harmonizer estimate'), size=6.5, color=INK_2, align='l')
+    S.text(cX + 0.28, 0.2, 1.2, 0.46, [('next-frame', ''), ('\n', ''), ('head', '')], size=6.5, color=INK_2, align='l')
+    S.text(cQX + 0.28, 0.2, 1.3, 0.46, [('harmonizer', ''), ('\n', ''), ('estimate', '')], size=6.5, color=INK_2, align='l')
+    S.text(cY + 0.28, 0.2, 1.2, 0.46, [('next-frame', ''), ('\n', ''), ('head', '')], size=6.5, color=INK_2, align='l')
+    S.text(cQY + 0.28, 0.2, 1.3, 0.46, [('harmonizer', ''), ('\n', ''), ('estimate', '')], size=6.5, color=INK_2, align='l')
     S.text(bx0 + 0.25, yG - 0.08, 0.6, 0.16, plain('gates'), size=6.5, color=INK_2, align='l')
     S.text(bx0 + 0.25, yR + 0.06, 0.6, 0.16, plain('keys'), size=6.5, color=INK_2, align='l')
-    S.text(cX - 0.75, yAt + 0.01, 3.4, 0.18, [('stream ', ''), ('x', 'i'), (' lane: ', ''), ('x', 'i'), ('3', 'sub i'), (' and ', ''), ('q', 'i'), ('x', 'sub i'), (' share every component', '')], size=6.5, color=INK_2, align='r')
-    S.text(cY - 0.75, yAt + 0.01, 3.4, 0.18, [('stream ', ''), ('y', 'i'), (' lane: ', ''), ('y', 'i'), ('3', 'sub i'), (' and ', ''), ('q', 'i'), ('y', 'sub i'), (' share every component', '')], size=6.5, color=INK_2, align='r')
+    S.text(cX - 0.75, yAt + 0.01, 3.4, 0.18, [('x', 'i'), ('3', 'sub i'), (' and ', ''), ('q', 'i'), ('x', 'sub i'), (' share every component', '')], size=6.5, color=INK_2, align='r')
+    S.text(cY - 0.75, yAt + 0.01, 3.4, 0.18, [('y', 'i'), ('3', 'sub i'), (' and ', ''), ('q', 'i'), ('y', 'sub i'), (' share every component', '')], size=6.5, color=INK_2, align='r')
 
     # ================================================================ context, banks, current tokens
     yC = 6.7
-    ctx = [(0.55, 'x', '1'), (1.0, 'y', '1'), (1.45, 'x', '2'), (1.9, 'y', '2')]
+    ctx = [(0.55, 'x', '1'), (1.05, 'y', '1'), (1.55, 'x', '2'), (2.05, 'y', '2')]
     for cx, k, i in ctx:
         token(cx, yC, k, sub(k, i))
     S.text(0.35, yC + tk + 0.02, 2.0, 0.18, plain('context'), size=8, color=INK_2, align='l')
     yB = 5.95
-    S.rect(0.4, yB - 0.07, 1.15, tk + 0.14, fill='FFFFFF', line=INK, lw=0.7)
-    token(0.68, yB, 'x', sub('x', '1')); token(1.13, yB, 'x', sub('x', '2'))
-    S.rect(1.8, yB - 0.07, 1.15, tk + 0.14, fill='FFFFFF', line=INK, lw=0.7)
-    token(2.08, yB, 'y', sub('y', '1')); token(2.53, yB, 'y', sub('y', '2'))
-    S.line(1.2, yC - 0.02, 1.0, yB + tk + 0.1, lw=1.4, arrow=True)
-    S.line(1.3, yC - 0.02, 2.3, yB + tk + 0.1, lw=1.4, arrow=True)
+    S.rect(0.38, yB - 0.07, 1.2, tk + 0.14, fill='FFFFFF', line=INK, lw=0.7)
+    token(0.66, yB, 'x', sub('x', '1')); token(1.3, yB, 'x', sub('x', '2'))
+    S.rect(1.85, yB - 0.07, 1.2, tk + 0.14, fill='FFFFFF', line=INK, lw=0.7)
+    token(2.13, yB, 'y', sub('y', '1')); token(2.77, yB, 'y', sub('y', '2'))
+    S.line(1.3, yC - 0.02, 1.0, yB + tk + 0.1, lw=1.4, arrow=True)
+    S.line(1.4, yC - 0.02, 2.4, yB + tk + 0.1, lw=1.4, arrow=True)
     # banks -> attention projections (elbow lines, as drawn)
     S.line(0.97, yB - 0.09, 0.97, yB - 0.35, lw=0.8)
     S.line(0.97, yB - 0.35, cX - 0.6, yB - 0.35, lw=0.8)
     S.line(cX - 0.6, yB - 0.35, cX - 0.6, yAt + 0.48, lw=0.8, arrow=True)
-    S.line(2.37, yB - 0.09, 2.37, yB - 0.2, lw=0.8)
-    S.line(2.37, yB - 0.2, cY - 0.6, yB - 0.2, lw=0.8)
+    S.line(2.45, yB - 0.09, 2.45, yB - 0.2, lw=0.8)
+    S.line(2.45, yB - 0.2, cY - 0.6, yB - 0.2, lw=0.8)
     S.line(cY - 0.6, yB - 0.2, cY - 0.6, yAt + 0.48, lw=0.8, arrow=True)
     # current tokens and harmonizers, in sequence order; each enters its stream's lane
     bX, bY, bQX, bQY = cX, cQX, cY, cQY              # bottom positions: x_3, y_3, q_x, q_y
@@ -203,8 +203,8 @@ def build():
     S.line(bQY, yC - 0.02, cQY, yAt + 0.48, lw=0.8, arrow=True)
     S.text(bX - 0.6, yC + tk + 0.02, 1.2, 0.18, plain('last committed'), size=7, color=INK_2)
     S.text(bY - 0.6, yC + tk + 0.02, 1.2, 0.18, plain('last committed'), size=7, color=INK_2)
-    S.text(bQX - 0.75, yC + tk + 0.02, 1.5, 0.18, plain('harmonizer, predicts frame 4'), size=7, color=INK_2)
-    S.text(bQY - 0.75, yC + tk + 0.02, 1.5, 0.18, plain('harmonizer, predicts frame 4'), size=7, color=INK_2)
+    S.text(bQX - 0.75, yC + tk + 0.02, 1.5, 0.4, [('harmonizer,', ''), ('\n', ''), ('predicts frame 4', '')], size=7, color=INK_2)
+    S.text(bQY - 0.75, yC + tk + 0.02, 1.5, 0.4, [('harmonizer,', ''), ('\n', ''), ('predicts frame 4', '')], size=7, color=INK_2)
 
     # ================================================================ left column
     # legend
@@ -215,7 +215,7 @@ def build():
                ((TEAL, TEAL_D, False), [('stream ', ''), ('y', 'i'), (' (chord) token', '')]),
                ((HARM, HARM_D, False), plain('harmonizer token')),
                (('FFFFFF', HARM_D, True), plain('masked harmonizer')),
-               (('FFFFFF', INK, True), [('copied from the pretrained LM', ''), ('s', 'sub i')])]
+               (('FFFFFF', INK, True), [('copied from LM', ''), ('s', 'sub i')])]
     for k, ((fill, line, dash), lab) in enumerate(entries):
         yy = ly0 + 0.34 + k * 0.23
         if dash == 'l':
@@ -226,7 +226,7 @@ def build():
     # pretrained model, brief
     px0, py0 = 0.4, 2.35
     S.rect(px0, py0, 2.9, 2.0, fill='FFFFFF', line=INK, lw=0.8)
-    S.text(px0 + 0.1, py0 + 0.04, 2.7, 0.22, [('pretrained LM', ''), ('s', 'sub i'), ('  (single stream)', '')], size=9, align='l')
+    S.text(px0 + 0.1, py0 + 0.04, 2.7, 0.22, [('pretrained LM', ''), ('s', 'sub i'), (' (one stream)', '')], size=8, align='l')
     S.text(px0 + 0.1, py0 + 0.26, 2.7, 0.18, [('one per stream; here LM', ''), ('x', 'sub i'), (' = LM', ''), ('y', 'sub i')], size=7, color=INK_2, align='l')
     rows = [(py0 + 0.55, 'local decoder', LIGHT, INK_2, False),
             (py0 + 0.87, 'FFN', 'FFFFFF', INK, True),
@@ -240,16 +240,16 @@ def build():
     S.text(px0 + 0.1, py0 + 0.85, 0.3, 0.2, [('×', ''), ('L', 'i')], size=7, color=INK_2, align='l')
     for yy in (py0 + 1.51, py0 + 1.19, py0 + 0.87):
         S.line(px0 + 1.6, yy - 0.02, px0 + 1.6, yy - 0.08, lw=0.5, arrow=True)
-    S.text(px0 + 0.1, py0 + 1.78, 2.7, 0.18, plain('attention → W per stream;  FFN → every expert'), size=7, color=INK_2, align='l')
+    S.text(px0 + 0.1, py0 + 1.78, 2.7, 0.18, [('attention → ', ''), ('W', 'i'), ('s', 'sub i'), (';  FFN → every expert', '')], size=6.5, color=INK_2, align='l')
     # arrows to the block: attention -> attention bar, FFN -> experts
     S.line(px0 + 2.72, py0 + 1.31, bx0 - 0.02, yAt + 0.33, color=INK_2, lw=0.7, dash=True, arrow=True)
     S.line(px0 + 2.72, py0 + 0.99, bx0 - 0.02, yE + 0.15, color=INK_2, lw=0.7, dash=True, arrow=True)
 
     # ================================================================ decoding (right column, stacked)
-    dx0, dx1 = 12.15, 15.3
+    dx0, dx1 = 12.15, 15.8
     S.rect(dx0, 0.3, dx1 - dx0, 6.95, fill='FFFFFF', line=INK, lw=0.8)
-    S.text(dx0 + 0.1, 0.34, 3.0, 0.22, plain('decoding frame 4 (alternating commit)'), size=9, align='l')
-    ts, tg = 0.28, 0.04
+    S.text(dx0 + 0.1, 0.34, 3.5, 0.22, plain('decoding frame 4, alternating commit'), size=8.5, align='l')
+    ts, tg = 0.32, 0.05
 
     def row(x, y, kinds, labs):
         xs = []
@@ -264,17 +264,17 @@ def build():
     pre_l = [sub('x', '1'), sub('y', '1'), sub('x', '2'), sub('y', '2'), sub('x', '3'), sub('y', '3')]
     steps = [(0.75, '1  draft the leader', ['qm', 'qm'], [sub('q', 'x'), sub('q', 'y')], 'x',
               m('x', ('4', 'sub'), (' ∼ ', 'r'), 'p', ('(', 'r'), 'x', ('4', 'sub'), (' | ', 'r'), 'x', ('≤3', 'sub'), (', ', 'r'), 'y', ('≤3', 'sub'), (')', 'r')),
-              [('harmonizers masked; ', ''), ('x', 'i'), ('4', 'sub i'), (' is sampled from the', '')],
-              [('stream-', ''), ('x', 'i'), (' next-frame head', '')]),
+              [('harmonizers masked;', '')],
+              [('x', 'i'), ('4', 'sub i'), (' from the stream-', ''), ('x', 'i'), (' next-frame head', '')]),
              (2.95, '2  condition the follower', ['qx', 'qm'], [sub('x', '4'), sub('q', 'y')], 'y',
               m('y', ('4', 'sub'), (' ∼ ', 'r'), 'p', ('(', 'r'), 'y', ('4', 'sub'), (' | ', 'r'), 'x', ('4', 'sub'), (', ', 'r'), 'x', ('≤3', 'sub'), (', ', 'r'), 'y', ('≤3', 'sub'), (')', 'r')),
-              [('x', 'i'), ('4', 'sub i'), (' is written into ', ''), ('q', 'i'), ('x', 'sub i'), ('; ', ''), ('q', 'i'), ('y', 'sub i'), (' reads it as', '')],
-              [('its partner and emits ', ''), ('y', 'i'), ('4', 'sub i')]),
+              [('x', 'i'), ('4', 'sub i'), (' written into ', ''), ('q', 'i'), ('x', 'sub i'), (';', '')],
+              [('q', 'i'), ('y', 'sub i'), (' reads it as partner, emits ', ''), ('y', 'i'), ('4', 'sub i')]),
              (5.15, '3  commit both, swap roles', ['x', 'y'], [sub('x', '4'), sub('y', '4')], None, None,
               [('x', 'i'), ('4', 'sub i'), (', ', ''), ('y', 'i'), ('4', 'sub i'), (' join the context;', '')],
-              [('at frame 5 stream ', ''), ('y', 'i'), (' leads', '')])]
+              [('at frame 5, stream ', ''), ('y', 'i'), (' leads', '')])]
     for y0, title, qk, ql, out, formula, note1, note2 in steps:
-        S.text(dx0 + 0.1, y0, 3.0, 0.2, [(title, 'b')], size=8, align='l')
+        S.text(dx0 + 0.1, y0, 3.5, 0.2, [(title, 'b')], size=8, align='l')
         yr_ = y0 + 0.55
         xs = row(dx0 + 0.1, yr_, pre_k + qk, pre_l + ql)
         if formula:
@@ -286,11 +286,14 @@ def build():
             S.line(ox_ + ts / 2, yr_ - 0.2, ox_ + ts / 2, yr_ - 0.04, lw=0.7, arrow=True)
             S.rect(ox_, yr_ - 0.02, ts, ts, fill=fill, line=line, lw=0.9,
                    runs=sub('x', '4') if out == 'x' else sub('y', '4'), size=6.5)
-            S.text(dx0 + 0.1, yr_ + ts + 0.04, 3.0, 0.2, formula, size=7.5, align='l')
+            S.text(dx0 + 0.1, yr_ + ts + 0.04, 3.5, 0.2, formula, size=7.5, align='l')
             if out == 'y':
                 S.line(xs[6] + ts / 2 - 0.02, yr_ - 0.08, xs[7] - ts / 2 + 0.02, yr_ - 0.08, color=HARM_D, lw=1.2, arrow=True)
-        S.text(dx0 + 0.1, yr_ + ts + 0.28, 3.0, 0.18, note1, size=7, color=INK_2, align='l')
-        S.text(dx0 + 0.1, yr_ + ts + 0.44, 3.0, 0.18, note2, size=7, color=INK_2, align='l')
+        S.text(dx0 + 0.1, yr_ + ts + 0.3, 3.5, 0.18, note1, size=7, color=INK_2, align='l')
+        S.text(dx0 + 0.1, yr_ + ts + 0.48, 3.5, 0.18, note2, size=7, color=INK_2, align='l')
+    for it in S.items:                          # every label 1.5x: the slide is 15.5 in wide
+        if 'size' in it:
+            it['size'] = round(it['size'] * 1.4, 1)
     return S
 
 
