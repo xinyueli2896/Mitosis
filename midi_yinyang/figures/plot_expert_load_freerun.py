@@ -42,7 +42,7 @@ MG = [
     [.236, .282, .147, .335], [.217, .178, .266, .340],
     [.206, .320, .283, .191], [.376, .166, .256, .201]]
 
-PANELS = [('Shared router', SHARED), ('Per-modality gates', MG)]
+PANELS = [('Shared router', SHARED), ('Stream-specific routers', MG)]
 VMAX = 0.45
 
 

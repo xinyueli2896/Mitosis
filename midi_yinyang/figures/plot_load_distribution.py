@@ -61,7 +61,7 @@ def panel(ax, shared, mg, title):
     ax.text(1 / E + 0.006, 0.15, r'$1/E$', fontsize=6.5, color='0.3',
             va='bottom')
     for vals, color, name, yrug in ((shared, C_SHARED, 'shared', 0.22),
-                                    (mg, C_MG, 'per-mod. gates', 0.50)):
+                                    (mg, C_MG, 'stream-specific', 0.50)):
         v = np.array(vals, dtype=float).ravel()
         d = kde(v, grid)
         label = (f'{name} ' r'($\sigma$=' f'{v.std(ddof=1):.3f}, '

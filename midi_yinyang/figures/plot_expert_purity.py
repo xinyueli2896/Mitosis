@@ -62,7 +62,7 @@ def main():
     fig, axes = plt.subplots(1, 2, figsize=(3.35, 2.9), sharey=True)
     for ax, (title, data) in zip(
             axes, [('Shared router', SHARED),
-                   ('Per-modality gates', MG)]):
+                   ('Stream-specific routers', MG)]):
         im = ax.imshow(np.array(data), cmap='RdBu', vmin=0, vmax=100,
                        aspect='auto', interpolation='nearest')
         annotate(ax, data)

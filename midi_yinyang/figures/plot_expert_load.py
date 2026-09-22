@@ -51,8 +51,8 @@ MG = [
     [.177, .347, .205, .271], [.320, .227, .247, .206]]
 
 PANELS = [('Shared router', SHARED),
-          ('Shared + modality bias', MB),
-          ('Per-modality gates', MG)]
+          ('Shared + stream bias', MB),
+          ('Stream-specific routers', MG)]
 VMAX = 0.45
 
 

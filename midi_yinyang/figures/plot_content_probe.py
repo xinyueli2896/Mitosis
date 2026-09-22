@@ -63,7 +63,7 @@ def main():
                 label='shared router')
     b2 = ax.bar(x + w/2, [counts[1], counts[3]], width=w*0.92,
                 color=C_MG, edgecolor='black', linewidth=0.3,
-                label='per-modality gates')
+                label='stream-specific routers')
     for xi, c in zip([x[0]-w/2, x[0]+w/2, x[1]-w/2, x[1]+w/2],
                      [counts[0], counts[1], counts[2], counts[3]]):
         ax.text(xi, c + 0.25, str(c), ha='center', fontsize=7.5)
