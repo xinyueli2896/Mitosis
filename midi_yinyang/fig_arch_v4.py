@@ -302,6 +302,8 @@ def build():
     for it in S.items:                          # every label 1.5x: the slide is 15.5 in wide
         if 'size' in it:
             it['size'] = round(it['size'] * 1.4, 1)
+        if it['k'] == 'rect' and it['line']:      # one outline weight everywhere; only the type differs
+            it['lw'] = 0.9
     return S
 
 
