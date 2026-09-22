@@ -61,8 +61,8 @@ def build():
     # one lane per stream for the content token; harmonizers are only
     # pointed into the block and read out above it (their target is the
     # ground-truth token of the frame). As few arrows and words as possible.
-    cX, cY = 5.6, 9.5                                 # lane centres (content tokens)
-    hX, hY = 7.2, 11.1                                # harmonizer columns
+    cX, cY = 5.4, 8.8                                 # lane centres (content tokens)
+    hX, hY = 10.7, 11.4                               # harmonizer columns, at the end of the input
     lanes = (('x', cX), ('y', cY))
     LW = 2.5
     bx0, bx1, by0, by1 = 3.65, 11.85, 0.68, 5.9
@@ -145,8 +145,7 @@ def build():
     for s, hx in (('x', hX), ('y', hY)):
         S.line(hx, by0 - 0.02, hx, 0.12 + tk + 0.02, lw=0.6, arrow=True)
         token(hx, 0.12, 'o' + s, sub(s, '4'))
-    S.text(hX - 0.6, 0.6, 1.2, 0.2, plain('objective'), size=6.5, color=INK_2)
-    S.text(hY - 0.6, 0.6, 1.2, 0.2, plain('objective'), size=6.5, color=INK_2)
+    S.text(hX - 0.7, 0.6, 1.4, 0.2, plain('objective'), size=6.5, color=INK_2)
 
     # ================================================================ context, banks, current tokens
     yC = 6.85
