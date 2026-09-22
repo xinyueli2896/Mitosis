@@ -78,8 +78,6 @@ def build():
         x0_, x1_ = c1 - 0.75, c2 + 0.75
         S.rect(x0_, y, x1_ - x0_, h, fill=fill or colour[s][0], line=line or INK, lw=lw, dash=dash,
                runs=runs, size=size)
-        if tag_:
-            tag(x1_, y, tag_)
         return x0_, x1_
 
     def tag(x_right, y_top, s):
@@ -93,7 +91,7 @@ def build():
     S.rect(bx0 + 0.2, yAt, bx1 - bx0 - 0.4, 0.5, fill=GREY, line=None, z=0)
     S.text(bx0 + 0.25, yAt + 0.01, 1.2, 0.2, plain('attention'), size=8, align='l', color=INK_2)
     for s, c1, c2 in lanes:
-        lane_bar(s, yAt + 0.17, 0.3, Wqkv(s), 8.5, dash=True, tag_=s)
+        lane_bar(s, yAt + 0.17, 0.3, Wqkv(s), 8.5, dash=True)
     # readouts per token, labelled with the key set
     yR = 4.3
     bw, bg = 0.5, 0.04
@@ -120,7 +118,7 @@ def build():
                 S.line(gx - 0.03, yG - r, cx + 0.04, ySum + 0.08, lw=0.6, arrow=True)
             S.line(cx, ySum - 0.1, cx, yWo + 0.27, lw=0.6, arrow=True)
         # one output projection per stream
-        lane_bar(s, yWo, 0.3, [('output projection  ', ''), ('W', 'i'), ('O', 'sup i'), (s, 'sub i')], 8, dash=True, tag_=s)
+        lane_bar(s, yWo, 0.3, [('output projection  ', ''), ('W', 'i'), ('O', 'sup i'), (s, 'sub i')], 8, dash=True)
     # Add & Norm after attention
     yA1 = 2.72
     S.rect(bx0 + 0.2, yA1, bx1 - bx0 - 0.4, 0.3, fill=GREY, line=None, runs=plain('add & norm'), size=8.5)
@@ -145,7 +143,6 @@ def build():
     for i, fx in enumerate(ex):
         S.rect(fx, yE, 1.25, 0.32, fill=GREY, line=INK, lw=0.6, dash=True,
                runs=[('Exp ', ''), (str(i + 1), '')], size=8.5)
-        tag(fx + 1.25, yE, 'LM')
     for s, c1, c2 in lanes:
         rx = (c1 + c2) / 2
         for fx, p in zip(ex, pis[s]):
@@ -224,14 +221,11 @@ def build():
                ((TEAL, TEAL_D, False), [('stream ', ''), ('y', 'i'), (' (chord) token', '')]),
                ((HARM, INK, 'new'), plain('harmonizer token')),
                (('FFFFFF', HARM_D, True), plain('masked harmonizer')),
-               (('FFFFFF', INK, 'tag'), [('copied from LM', ''), ('s', 'sub i'), (' (tag), fine-tuned', '')]),
+               (('FFFFFF', INK, True), [('copied from LM', ''), ('s', 'sub i'), (', fine-tuned', '')]),
                (('FFFFFF', INK, 'new'), plain('new, trained from scratch'))]
     for k, ((fill, line, kind), lab) in enumerate(entries):
         yy = ly0 + 0.34 + k * 0.23
-        if kind == 'tag':
-            S.rect(lx0 + 0.12, yy + 0.02, 0.3, 0.16, fill=fill, line=line, lw=0.7, dash=True)
-            S.rect(lx0 + 0.3, yy - 0.05, 0.22, 0.11, fill='FFFFFF', line=INK_2, lw=0.5, runs=plain('LM'), size=4, z=6)
-        elif kind == 'new':
+        if kind == 'new':
             S.rect(lx0 + 0.12, yy + 0.02, 0.3, 0.16, fill=fill, line=line, lw=1.3)
         else:
             S.rect(lx0 + 0.12, yy + 0.02, 0.3, 0.16, fill=fill, line=line, lw=0.7, dash=bool(kind))
@@ -255,6 +249,8 @@ def build():
     for yy in (py0 + 1.51, py0 + 1.19, py0 + 0.87):
         S.line(px0 + 1.6, yy - 0.02, px0 + 1.6, yy - 0.08, lw=0.5, arrow=True)
     S.text(px0 + 0.1, py0 + 1.78, 2.7, 0.18, [('attention → ', ''), ('W', 'i'), ('s', 'sub i'), (', ', ''), ('W', 'i'), ('O', 'sup i'), ('s', 'sub i'), (';  FFN → every Exp', '')], size=6.5, color=INK_2, align='l')
+    S.line(px0 + 2.72, py0 + 1.31, bx0 - 0.02, yAt + 0.33, color=INK_2, lw=0.7, dash=True, arrow=True)
+    S.line(px0 + 2.72, py0 + 0.99, bx0 - 0.02, yE + 0.15, color=INK_2, lw=0.7, dash=True, arrow=True)
     # arrows to the block: attention -> attention bar, FFN -> experts
 
     # ================================================================ decoding (right column, stacked)
