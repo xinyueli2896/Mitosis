@@ -34,9 +34,7 @@ for (const it of items) {
     if (it.line) {
       opts.line = { color: it.line, width: it.lw };
       if (it.dash) opts.line.dashType = 'sysDot';
-    } else {
-      opts.line = { color: 'FFFFFF', width: 0, transparency: 100 };
-    }
+    }                                   // no outline: leave `line` unset
     const shape = it.shape === 'ellipse' ? pres.ShapeType.ellipse : pres.ShapeType.rect;
     if (it.runs && it.runs.length) {
       slide.addText(runsToText(it.runs, it.size, it.color, false),
@@ -52,7 +50,8 @@ for (const it of items) {
         valign: it.valign === 't' ? 'top' : 'middle', fit: 'none', wrap: false });
   } else if (it.k === 'line') {
     const x = Math.min(it.x1, it.x2), y = Math.min(it.y1, it.y2);
-    const w = Math.abs(it.x2 - it.x1), h = Math.abs(it.y2 - it.y1);
+    // never a zero-extent shape: PowerPoint rejects lines with w or h = 0
+    const w = Math.max(Math.abs(it.x2 - it.x1), 0.004), h = Math.max(Math.abs(it.y2 - it.y1), 0.004);
     const opts = { x: x, y: y, w: w, h: h, line: { color: it.color, width: it.lw } };
     if (it.dash) opts.line.dashType = 'dash';
     if (it.arrow) opts.line.endArrowType = 'triangle';
