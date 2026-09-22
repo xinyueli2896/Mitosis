@@ -147,18 +147,12 @@ def build():
                        yM + 0.28, color=colour[s][1], lw=0.9, arrow=True)
     yA2 = by0 + 0.08
     S.rect(bx0 + 0.2, yA2, bx1 - bx0 - 0.4, 0.3, fill=GREY, line=None, runs=plain('add & norm'), size=8.5)
-    # outputs: the same lane emits the next-frame prediction (from the content token)
-    # or the harmonizer estimate (from the harmonizer); one fork per lane
+    # outputs: one predicted token per lane
     for s, cx in lanes:
         S.line(cx, yM - 0.02, cx, yA2 + 0.32, lw=0.6, arrow=True)
-        S.line(cx, yA2 - 0.02, cx, 0.5, lw=0.6)
-        S.line(cx, 0.5, cx - 0.7, 0.5, lw=0.6); S.line(cx, 0.5, cx + 0.7, 0.5, lw=0.6)
-        S.line(cx - 0.7, 0.5, cx - 0.7, 0.12 + tk + 0.02, lw=0.6, arrow=True)
-        S.line(cx + 0.7, 0.5, cx + 0.7, 0.12 + tk + 0.02, lw=0.6, arrow=True)
-        token(cx - 0.7, 0.12, s, sub(s, '4'))
-        token(cx + 0.7, 0.12, 'o' + s, sub(s, '4'))
-        S.text(cx - 0.7 - 1.35, 0.12, 1.1, 0.46, [('next frame,', ''), ('\n', ''), ('from ', ''), (s, 'i'), ('3', 'sub i')], size=6.5, color=INK_2, align='r')
-        S.text(cx + 0.7 + 0.28, 0.12, 1.2, 0.46, [('estimate,', ''), ('\n', ''), ('from ', ''), ('q', 'i'), (s, 'sub i')], size=6.5, color=INK_2, align='l')
+        S.line(cx, yA2 - 0.02, cx, 0.12 + tk + 0.02, lw=0.6, arrow=True)
+        token(cx, 0.12, s, sub(s, '4'))
+        S.text(cx + 0.28, 0.12, 1.6, 0.46, [('predicted frame 4', ''), ('\n', ''), ('(next-frame head)', '')], size=6.5, color=INK_2, align='l')
     S.text(bx0 + 0.25, yG - 0.08, 0.6, 0.16, plain('gates'), size=6.5, color=INK_2, align='l')
     S.text(bx0 + 0.25, yR + 0.1, 0.6, 0.16, plain('keys'), size=6.5, color=INK_2, align='l')
 
@@ -182,38 +176,15 @@ def build():
     S.line(2.45, yB - 0.09, 2.45, yB - 0.2, lw=0.8)
     S.line(2.45, yB - 0.2, cY - 1.1, yB - 0.2, lw=0.8)
     S.line(cY - 1.1, yB - 0.2, cY - 1.1, yAt + 0.48, lw=0.8, arrow=True)
-    # the four tokens of the frame in sequence order; each enters its stream's lane
-    bX, bY, bQX, bQY = 4.2, 5.1, 6.05, 6.95
+    # the last committed frame enters the block
+    bX, bY = 4.6, 5.7
     token(bX, yC, 'x', sub('x', '3')); token(bY, yC, 'y', sub('y', '3'))
-    token(bQX, yC, 'q', sub('q', 'x')); token(bQY, yC, 'q', sub('q', 'y'))
-    S.line(bX, yC - 0.02, cX - 0.12, yAt + 0.48, lw=0.8, arrow=True)
-    S.line(bQX, yC - 0.02, cX + 0.12, yAt + 0.48, lw=0.8, arrow=True)
-    S.line(bY, yC - 0.02, cY - 0.12, yAt + 0.48, lw=0.8, arrow=True)
-    S.line(bQY, yC - 0.02, cY + 0.12, yAt + 0.48, lw=0.8, arrow=True)
+    S.line(bX, yC - 0.02, cX, yAt + 0.48, lw=0.8, arrow=True)
+    S.line(bY, yC - 0.02, cY, yAt + 0.48, lw=0.8, arrow=True)
     S.text(bX - 0.45, yC + tk + 0.02, 1.8, 0.18, plain('last committed frame'), size=7, color=INK_2, align='l')
-    S.text(bQX - 0.4, yC + tk + 0.02, 1.6, 0.18, plain('harmonizers'), size=7, color=INK_2, align='l')
-    # the difference table: entry, keys, target per token type
-    tx0, ty0 = 7.55, 6.62
-    cols_w = [0.45, 1.85, 0.5, 0.5, 0.55, 0.65]
-    head = [plain('token'), plain('enters as'), plain('own'), plain('other'), plain('partner'), plain('predicts')]
-    rows = [
-        (sub('x', '3'), [('enc(', ''), ('x', 'i'), ('3', 'sub i'), (')', '')], sub('x', '≤3'), sub('y', '≤2'), sub('y', '3'), sub('x', '4')),
-        (sub('q', 'x'), [('mask+', ''), ('e', 'i'), ('x', 'sub i'), (' or enc(', ''), ('x', 'i'), ('4', 'sub i'), (')+', ''), ('e', 'i'), ('x', 'sub i')], sub('x', '≤3'), sub('y', '≤3'), sub('q', 'y'), [('x', 'i'), ('4', 'sub i'), (' est.', '')]),
-        (sub('y', '3'), [('enc(', ''), ('y', 'i'), ('3', 'sub i'), (')', '')], sub('y', '≤3'), sub('x', '≤2'), sub('x', '3'), sub('y', '4')),
-        (sub('q', 'y'), [('mask+', ''), ('e', 'i'), ('y', 'sub i'), (' or enc(', ''), ('y', 'i'), ('4', 'sub i'), (')+', ''), ('e', 'i'), ('y', 'sub i')], sub('y', '≤3'), sub('x', '≤3'), sub('q', 'x'), [('y', 'i'), ('4', 'sub i'), (' est.', '')]),
-    ]
-    rh = 0.24
-    x = tx0
-    for w, h_ in zip(cols_w, head):
-        S.rect(x, ty0, w, rh, fill=LIGHT, line=INK_2, lw=0.5, runs=h_, size=6.5)
-        x += w
-    for i, row in enumerate(rows):
-        x = tx0
-        fill = (LAV if i < 2 else TEAL) if i % 2 == 0 else (HARM if True else LIGHT)
-        for j, (w, cell) in enumerate(zip(cols_w, row)):
-            S.rect(x, ty0 + rh * (i + 1), w, rh, fill=fill if j == 0 else 'FFFFFF', line=INK_2, lw=0.5, runs=cell, size=6.5)
-            x += w
-    S.text(tx0, ty0 + rh * 5 + 0.03, 4.4, 0.2, plain('content token vs harmonizer: same lane, same weights; only entry, keys and target differ'), size=6.5, color=INK_2, align='l')
+    # key sets, concrete, for the content token of each lane
+    S.text(cX - 1.3, yR + 0.42, 2.6, 0.18, [('x', 'i'), ('3', 'sub i'), (' reads  ', ''), ('x', 'i'), ('≤3', 'sub i'), ('  |  ', ''), ('y', 'i'), ('≤2', 'sub i'), ('  |  ', ''), ('y', 'i'), ('3', 'sub i')], size=6.5, color=INK_2)
+    S.text(cY - 1.3, yR + 0.42, 2.6, 0.18, [('y', 'i'), ('3', 'sub i'), (' reads  ', ''), ('y', 'i'), ('≤3', 'sub i'), ('  |  ', ''), ('x', 'i'), ('≤2', 'sub i'), ('  |  ', ''), ('x', 'i'), ('3', 'sub i')], size=6.5, color=INK_2)
 
     # ================================================================ left column
     # legend
@@ -258,8 +229,16 @@ def build():
 
     # ================================================================ decoding (right column, stacked)
     dx0, dx1 = 12.15, 15.8
-    S.rect(dx0, 0.3, dx1 - dx0, 6.95, fill='FFFFFF', line=INK, lw=0.8)
+    S.rect(dx0, 0.3, dx1 - dx0, 7.6, fill='FFFFFF', line=INK, lw=0.8)
     S.text(dx0 + 0.1, 0.34, 3.5, 0.22, plain('decoding frame 4, alternating commit'), size=8.5, align='l')
+    # what a harmonizer is, stated once where it is used
+    S.rect(dx0 + 0.1, 0.62, dx1 - dx0 - 0.2, 1.0, fill='FFFFFF', line=INK, lw=0.7)
+    S.rect(dx0 + 0.2, 0.7, 0.3, 0.3, fill=HARM, line=INK, lw=0.9, runs=sub('q', 's'), size=6.5)
+    S.text(dx0 + 0.58, 0.66, 3.0, 0.2, [('harmonizer ', ''), ('q', 'i'), ('s', 'sub i'), (': one token per stream,', '')], size=6.5, align='l')
+    S.text(dx0 + 0.58, 0.86, 3.0, 0.2, [('appended after the context; same lane as stream ', ''), ('s', 'i')], size=6.5, align='l')
+    S.text(dx0 + 0.2, 1.08, 3.3, 0.2, [('input: mask + ', ''), ('e', 'i'), ('s', 'sub i'), (' or enc(committed) + ', ''), ('e', 'i'), ('s', 'sub i')], size=6.5, align='l', color=INK_2)
+    S.text(dx0 + 0.2, 1.26, 3.3, 0.2, [('reads ', ''), ('x', 'i'), ('≤3', 'sub i'), (', ', ''), ('y', 'i'), ('≤3', 'sub i'), (', the other harmonizer; predicts frame 4', '')], size=6.5, align='l', color=INK_2)
+
     ts, tg = 0.32, 0.05
 
     def row(x, y, kinds, labs):
@@ -273,15 +252,15 @@ def build():
 
     pre_k = ['x', 'y', 'x', 'y', 'x', 'y']
     pre_l = [sub('x', '1'), sub('y', '1'), sub('x', '2'), sub('y', '2'), sub('x', '3'), sub('y', '3')]
-    steps = [(0.75, '1  draft the leader', ['qm', 'qm'], [sub('q', 'x'), sub('q', 'y')], 'x',
+    steps = [(1.8, '1  draft the leader', ['qm', 'qm'], [sub('q', 'x'), sub('q', 'y')], 'x',
               m('x', ('4', 'sub'), (' ∼ ', 'r'), 'p', ('(', 'r'), 'x', ('4', 'sub'), (' | ', 'r'), 'x', ('≤3', 'sub'), (', ', 'r'), 'y', ('≤3', 'sub'), (')', 'r')),
               [('harmonizers masked;', '')],
               [('x', 'i'), ('4', 'sub i'), (' from the stream-', ''), ('x', 'i'), (' next-frame head', '')]),
-             (2.95, '2  condition the follower', ['qx', 'qm'], [sub('x', '4'), sub('q', 'y')], 'y',
+             (3.85, '2  condition the follower', ['qx', 'qm'], [sub('x', '4'), sub('q', 'y')], 'y',
               m('y', ('4', 'sub'), (' ∼ ', 'r'), 'p', ('(', 'r'), 'y', ('4', 'sub'), (' | ', 'r'), 'x', ('4', 'sub'), (', ', 'r'), 'x', ('≤3', 'sub'), (', ', 'r'), 'y', ('≤3', 'sub'), (')', 'r')),
               [('x', 'i'), ('4', 'sub i'), (' written into ', ''), ('q', 'i'), ('x', 'sub i'), (';', '')],
               [('q', 'i'), ('y', 'sub i'), (' reads it as partner, emits ', ''), ('y', 'i'), ('4', 'sub i')]),
-             (5.15, '3  commit both, swap roles', ['x', 'y'], [sub('x', '4'), sub('y', '4')], None, None,
+             (5.9, '3  commit both, swap roles', ['x', 'y'], [sub('x', '4'), sub('y', '4')], None, None,
               [('x', 'i'), ('4', 'sub i'), (', ', ''), ('y', 'i'), ('4', 'sub i'), (' join the context;', '')],
               [('at frame 5, stream ', ''), ('y', 'i'), (' leads', '')])]
     for y0, title, qk, ql, out, formula, note1, note2 in steps:
