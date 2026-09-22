@@ -54,8 +54,8 @@ def build():
     def token(cx, y, kind, lab, dash=False, size=8.5):
         fill, line = {'x': (LAV, LAV_D), 'y': (TEAL, TEAL_D), 'q': (HARM, HARM_D),
                       'qm': ('FFFFFF', HARM_D), 'ox': ('FFFFFF', LAV_D), 'oy': ('FFFFFF', TEAL_D)}[kind]
-        S.rect(cx - tk / 2, y, tk, tk, fill=fill, line=line, lw=1.0, dash=dash or kind == 'qm',
-               runs=lab, size=size)
+        S.rect(cx - tk / 2, y, tk, tk, fill=fill, line=INK if kind == 'q' else line,
+               lw=1.3 if kind == 'q' else 1.0, dash=dash or kind == 'qm', runs=lab, size=size)
 
     # ================================================================ block
     # two lanes, one per stream; each lane holds that stream's components
@@ -73,19 +73,27 @@ def build():
         S.line(cx - 0.05, cy, cx + 0.05, cy, lw=0.7, z=5)
         S.line(cx, cy - 0.05, cx, cy + 0.05, lw=0.7, z=5)
 
-    def lane_bar(s, y, h, runs, size, fill=None, line=None, dash=False):
+    def lane_bar(s, y, h, runs, size, fill=None, line=None, dash=False, lw=0.7, tag_=None):
         _, c1, c2 = [l for l in lanes if l[0] == s][0]
         x0_, x1_ = c1 - 0.75, c2 + 0.75
-        S.rect(x0_, y, x1_ - x0_, h, fill=fill or colour[s][0], line=line or INK, lw=0.7, dash=dash,
+        S.rect(x0_, y, x1_ - x0_, h, fill=fill or colour[s][0], line=line or INK, lw=lw, dash=dash,
                runs=runs, size=size)
+        if tag_:
+            tag(x1_, y, tag_)
         return x0_, x1_
+
+    def tag(x_right, y_top, s):
+        """provenance tag on the top-right corner of a copied component"""
+        col = colour[s][1] if s in colour else INK_2
+        S.rect(x_right - 0.46, y_top - 0.09, 0.44, 0.17, fill='FFFFFF', line=col, lw=0.6,
+               runs=[('LM', ''), (s, 'sub i')] if s in colour else plain('LM'), size=5.5, color=col, z=6)
 
     # attention bar with one projection set per stream
     yAt = 4.95
     S.rect(bx0 + 0.2, yAt, bx1 - bx0 - 0.4, 0.5, fill=GREY, line=None, z=0)
     S.text(bx0 + 0.25, yAt + 0.01, 1.2, 0.2, plain('attention'), size=8, align='l', color=INK_2)
     for s, c1, c2 in lanes:
-        lane_bar(s, yAt + 0.17, 0.3, Wqkv(s), 8.5, dash=True)
+        lane_bar(s, yAt + 0.17, 0.3, Wqkv(s), 8.5, dash=True, tag_=s)
     # readouts per token, labelled with the key set
     yR = 4.3
     bw, bg = 0.5, 0.04
@@ -106,13 +114,13 @@ def build():
             S.line(cx - (bw + bg), yR - 0.02, cx - 0.08, ySum + 0.08, lw=0.6, arrow=True)
             for k, kind in ((0, 'c'), (1, 'f')):
                 gx = cx + k * (bw + bg)
-                S.rect(gx - r, yG - r, 2 * r, 2 * r, fill=own[0], line=INK_2, lw=0.6,
+                S.rect(gx - r, yG - r, 2 * r, 2 * r, fill=own[0], line=INK, lw=1.3,
                        shape='ellipse', runs=[('g', 'i'), (kind, 'sup i'), (s, 'sub i')], size=7, z=5)
                 S.line(gx, yR - 0.02, gx, yG + r + 0.02, lw=0.6, arrow=True)
                 S.line(gx - 0.03, yG - r, cx + 0.04, ySum + 0.08, lw=0.6, arrow=True)
             S.line(cx, ySum - 0.1, cx, yWo + 0.27, lw=0.6, arrow=True)
         # one output projection per stream
-        lane_bar(s, yWo, 0.3, [('output projection  ', ''), ('W', 'i'), ('O', 'sup i'), (s, 'sub i')], 8, dash=True)
+        lane_bar(s, yWo, 0.3, [('output projection  ', ''), ('W', 'i'), ('O', 'sup i'), (s, 'sub i')], 8, dash=True, tag_=s)
     # Add & Norm after attention
     yA1 = 2.72
     S.rect(bx0 + 0.2, yA1, bx1 - bx0 - 0.4, 0.3, fill=GREY, line=None, runs=plain('add & norm'), size=8.5)
@@ -123,7 +131,7 @@ def build():
     yRt = 2.22
     pis = {'x': (0.61, 0.08, 0.27, 0.04), 'y': (0.04, 0.27, 0.61, 0.08)}
     for s, c1, c2 in lanes:
-        lane_bar(s, yRt, 0.3, [('router ', ''), ('G', 'i'), ('(' + s + ')', 'sup i')], 8.5, line=colour[s][1])
+        lane_bar(s, yRt, 0.3, [('router ', ''), ('G', 'i'), ('(' + s + ')', 'sup i')], 8.5, line=INK, lw=1.3)
         for cx in (c1, c2):
             S.line(cx, yA1 - 0.02, cx, yRt + 0.3, lw=0.6, arrow=True)
     for s, x0_ in (('x', bx0 + 0.05), ('y', bx1 - 0.44)):
@@ -137,6 +145,7 @@ def build():
     for i, fx in enumerate(ex):
         S.rect(fx, yE, 1.25, 0.32, fill=GREY, line=INK, lw=0.6, dash=True,
                runs=[('Exp ', ''), (str(i + 1), '')], size=8.5)
+        tag(fx + 1.25, yE, 'LM')
     for s, c1, c2 in lanes:
         rx = (c1 + c2) / 2
         for fx, p in zip(ex, pis[s]):
@@ -209,22 +218,27 @@ def build():
     # ================================================================ left column
     # legend
     lx0, ly0 = 0.4, 0.3
-    S.rect(lx0, ly0, 2.9, 1.52, fill='FFFFFF', line=INK, lw=0.8)
+    S.rect(lx0, ly0, 2.9, 1.95, fill='FFFFFF', line=INK, lw=0.8)
     S.text(lx0 + 0.1, ly0 + 0.04, 1.5, 0.22, plain('legend'), size=9, align='l')
     entries = [((LAV, LAV_D, False), [('stream ', ''), ('x', 'i'), (' (melody) token', '')]),
                ((TEAL, TEAL_D, False), [('stream ', ''), ('y', 'i'), (' (chord) token', '')]),
-               ((HARM, HARM_D, False), plain('harmonizer token')),
+               ((HARM, INK, 'new'), plain('harmonizer token')),
                (('FFFFFF', HARM_D, True), plain('masked harmonizer')),
-               (('FFFFFF', INK, True), [('copied from LM', ''), ('s', 'sub i')])]
-    for k, ((fill, line, dash), lab) in enumerate(entries):
+               (('FFFFFF', INK, 'tag'), [('copied from LM', ''), ('s', 'sub i'), (' (tag), fine-tuned', '')]),
+               (('FFFFFF', INK, 'new'), plain('new, trained from scratch'))]
+    for k, ((fill, line, kind), lab) in enumerate(entries):
         yy = ly0 + 0.34 + k * 0.23
-        if dash == 'l':
-            S.line(lx0 + 0.12, yy + 0.1, lx0 + 0.36, yy + 0.1, color=DASH, lw=0.6, dash=True)
+        if kind == 'tag':
+            S.rect(lx0 + 0.12, yy + 0.02, 0.3, 0.16, fill=fill, line=line, lw=0.7, dash=True)
+            S.rect(lx0 + 0.3, yy - 0.05, 0.22, 0.11, fill='FFFFFF', line=INK_2, lw=0.5, runs=plain('LM'), size=4, z=6)
+        elif kind == 'new':
+            S.rect(lx0 + 0.12, yy + 0.02, 0.3, 0.16, fill=fill, line=line, lw=1.3)
         else:
-            S.rect(lx0 + 0.12, yy + 0.02, 0.24, 0.16, fill=fill, line=line, lw=0.7, dash=bool(dash))
-        S.text(lx0 + 0.44, yy - 0.03, 2.4, 0.24, lab, size=7.5, align='l')
+            S.rect(lx0 + 0.12, yy + 0.02, 0.3, 0.16, fill=fill, line=line, lw=0.7, dash=bool(kind))
+        S.text(lx0 + 0.48, yy - 0.03, 2.4, 0.24, lab, size=7.5, align='l')
+    S.text(lx0 + 0.12, ly0 + 0.34 + 6 * 0.23 - 0.02, 2.7, 0.2, plain('new: gates, routers, harmonizer embeddings'), size=6.5, color=INK_2, align='l')
     # pretrained model, brief
-    px0, py0 = 0.4, 2.35
+    px0, py0 = 0.4, 2.55
     S.rect(px0, py0, 2.9, 2.0, fill='FFFFFF', line=INK, lw=0.8)
     S.text(px0 + 0.1, py0 + 0.04, 2.7, 0.22, [('pretrained LM', ''), ('s', 'sub i'), (' (one stream)', '')], size=8, align='l')
     S.text(px0 + 0.1, py0 + 0.26, 2.7, 0.18, [('one per stream; here LM', ''), ('x', 'sub i'), (' = LM', ''), ('y', 'sub i')], size=7, color=INK_2, align='l')
@@ -240,10 +254,8 @@ def build():
     S.text(px0 + 0.1, py0 + 0.85, 0.3, 0.2, [('×', ''), ('L', 'i')], size=7, color=INK_2, align='l')
     for yy in (py0 + 1.51, py0 + 1.19, py0 + 0.87):
         S.line(px0 + 1.6, yy - 0.02, px0 + 1.6, yy - 0.08, lw=0.5, arrow=True)
-    S.text(px0 + 0.1, py0 + 1.78, 2.7, 0.18, [('attention → ', ''), ('W', 'i'), ('s', 'sub i'), (';  FFN → every expert', '')], size=6.5, color=INK_2, align='l')
+    S.text(px0 + 0.1, py0 + 1.78, 2.7, 0.18, [('attention → ', ''), ('W', 'i'), ('s', 'sub i'), (', ', ''), ('W', 'i'), ('O', 'sup i'), ('s', 'sub i'), (';  FFN → every Exp', '')], size=6.5, color=INK_2, align='l')
     # arrows to the block: attention -> attention bar, FFN -> experts
-    S.line(px0 + 2.72, py0 + 1.31, bx0 - 0.02, yAt + 0.33, color=INK_2, lw=0.7, dash=True, arrow=True)
-    S.line(px0 + 2.72, py0 + 0.99, bx0 - 0.02, yE + 0.15, color=INK_2, lw=0.7, dash=True, arrow=True)
 
     # ================================================================ decoding (right column, stacked)
     dx0, dx1 = 12.15, 15.8
