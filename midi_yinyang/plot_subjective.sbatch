@@ -6,7 +6,9 @@
 #   RATINGS   the CSV (required)
 #   OUT       path without extension; default results/subjective
 #   EXCLUDE   rater ids to drop, space-separated (default: none)
-#   RMIN      inner edge of the radial axis, default 2
+#   DROP_CONSTANT  1 (default) drops raters whose every rating is one
+#             value; 0 keeps them
+#   RMIN      inner edge of the radial axis, default 3
 #
 # Example:
 #   sbatch --export=ALL,RATINGS=input/ratings.csv,EXCLUDE="azure-stoat-9403 violet-quail-2727" \
@@ -39,6 +41,7 @@ EXCLUDE="${EXCLUDE:-}"
 RMIN="${RMIN:-3}"
 PALETTE="${PALETTE:-family}"
 SQUASH="${SQUASH:-0.12}"
+DROP_CONSTANT="${DROP_CONSTANT:-1}"
 
 python subjective_spider.py --csv "$RATINGS" --out "$OUT" --rmin "$RMIN" --palette "$PALETTE" --squash "$SQUASH" \
-    ${EXCLUDE:+--exclude $EXCLUDE}
+    ${EXCLUDE:+--exclude $EXCLUDE} $([ "$DROP_CONSTANT" = 1 ] && echo --drop-constant)

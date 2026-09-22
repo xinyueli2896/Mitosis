@@ -20,10 +20,20 @@ and the mapping is not recoverable), then:
     independent), and an overall mean
   * demographics: raters kept, ratings per rater, age, gender and
     background counts, prompts covered
+  * PAIRED comparison of every system against ours (2026-09-22): a
+    rater hears all systems on one prompt, so each (rater, prompt) block
+    is a paired unit. Per axis and on the block's mean over axes, the
+    difference ours - system is tested with a two-sided Wilcoxon
+    signed-rank over blocks, with win / tie / loss counts; written to
+    {out}_paired.csv and printed. Also {out}_table.tex, the paper table:
+    mean per system and axis, + / - marking systems rated significantly
+    below / above ours (p < 0.05)
+  * --drop-constant drops raters whose EVERY rating is one value (a
+    straight-liner carries no comparison); who was dropped is printed
 
 Usage (via plot_subjective.sbatch):
   python subjective_spider.py --csv ratings.csv --out results/subjective \
-      --exclude azure-stoat-9403 violet-quail-2727
+      --exclude azure-stoat-9403 violet-quail-2727 --drop-constant
 """
 
 import argparse
@@ -89,6 +99,8 @@ def main():
     ap.add_argument('--palette', choices=['family', 'system'], default='family',
                     help='family: the E1 family colours; system: one colour '
                          'per system (SYSTEM_COLORS)')
+    ap.add_argument('--drop-constant', action='store_true',
+                    help='drop raters whose every rating is the same value')
     args = ap.parse_args()
 
     rows = list(csv.DictReader(open(args.csv, newline='')))
@@ -108,6 +120,16 @@ def main():
           f'{sorted(excluded)}; {len(lettered)} lettered-system rows from '
           f'{len({r["rater"] for r in lettered})} rater(s) (unmappable, '
           f'dropped); {len(rows)} kept')
+    if args.drop_constant:
+        vals = defaultdict(set)
+        for r in rows:
+            vals[r['rater']].update(r[a] for a, _ in AXES)
+        const = sorted(k for k, v in vals.items() if len(v) == 1)
+        n_before = len(rows)
+        rows = [r for r in rows if r['rater'] not in const]
+        print(f'--drop-constant: {len(const)} rater(s) with one value '
+              f'throughout dropped ({n_before - len(rows)} rows): '
+              + ', '.join(f'{k}={next(iter(vals[k]))}' for k in const))
 
     # ---- demographics ------------------------------------------------
     raters = {}
@@ -164,6 +186,89 @@ def main():
               ' '.join(f'{m:.2f}[{l:.2f},{h:.2f}]'[:11].rjust(11)
                        for m, l, h in zip(mean, lo, hi)) +
               f'   {mean.mean():.2f}')
+
+    # ---- paired comparison against ours -----------------------------
+    # unit = (rater, prompt) block; a block contributes to a pair when it
+    # holds a rating of ours AND of the other system.
+    from scipy.stats import wilcoxon
+    ours = SYSTEMS[0][0]
+    block = defaultdict(dict)           # (rater, prompt) -> system -> vec
+    for r in rows:
+        block[(r['rater'], r['prompt'])][r['system']] = np.array(
+            [float(r[a]) for a, _ in AXES])
+    cols = [lab for _a, lab in AXES] + ['Overall']
+    paired = {}                          # system -> [(d_mean, p, w, t, l, n)]
+    print(f'\nPAIRED vs {SYSTEMS[0][1]} (blocks = rater x prompt; '
+          f'Wilcoxon signed-rank, two-sided; w/t/l = blocks where ours '
+          f'is rated higher / equal / lower)')
+    print(f'{"system":28s} ' + ' '.join(f'{c[:14]:>21s}' for c in cols))
+    for sysid, disp, _fam, _ls in SYSTEMS[1:]:
+        pairs = [(b[ours], b[sysid]) for b in block.values()
+                 if ours in b and sysid in b]
+        if not pairs:
+            continue
+        A = np.array([a for a, _ in pairs]); B = np.array([b for _, b in pairs])
+        A = np.column_stack([A, A.mean(1)]); B = np.column_stack([B, B.mean(1)])
+        out = []
+        for j in range(A.shape[1]):
+            d = A[:, j] - B[:, j]
+            nz = d[d != 0]
+            p = float(wilcoxon(nz).pvalue) if len(nz) >= 5 else float('nan')
+            out.append((float(d.mean()), p, int((d > 0).sum()),
+                        int((d == 0).sum()), int((d < 0).sum()), len(d)))
+        paired[sysid] = out
+        print(f'{disp[:28]:28s} ' + ' '.join(
+            f'{dm:+.2f} p={p:.3f} {w:2d}/{t:2d}/{l:2d}'.rjust(21)
+            for dm, p, w, t, l, _n in out))
+    with open(f'{args.out}_paired.csv', 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['system', 'axis', 'n_blocks', 'mean_diff_ours_minus',
+                    'p_wilcoxon', 'ours_higher', 'tie', 'ours_lower'])
+        for sysid, out in paired.items():
+            for c, (dm, p, wn, t, l, n) in zip(cols, out):
+                w.writerow([sysid, c, n, f'{dm:.3f}', f'{p:.4f}', wn, t, l])
+    print(f'wrote {args.out}_paired.csv')
+
+    # paper table: mean per system and axis; +/- = rated significantly
+    # above / below ours (paired test, p < 0.05); ours and GT unmarked
+    with open(f'{args.out}_table.tex', 'w') as f:
+        n_r = len(raters)
+        f.write('\\begin{table}[t]\n')
+        f.write('\\caption{Listening test: mean rating (1--5) per system '
+                f'and axis over {n_r} raters and five prompts; each rater '
+                'heard every system on a prompt. $^{\\mathrm{+}}$/'
+                '$^{\\mathrm{-}}$: rated significantly above / below '
+                '\\emph{Duet (ours)} (two-sided Wilcoxon signed-rank over '
+                'rater--prompt pairs, $p<0.05$). Bold: best system per '
+                'axis, ground truth aside.}\n')
+        f.write('\\label{tab:listening}\n\\begin{center}\n\\footnotesize\n')
+        f.write('\\setlength{\\tabcolsep}{4pt}\n')
+        f.write('\\begin{tabular}{|l|' + 'c|' * len(cols) + '}\n\\hline\n')
+        f.write('\\textbf{System} & ' + ' & '.join(
+            '\\textbf{%s}' % c.replace('Melody-chord fit', 'Fit')
+            for c in cols) + ' \\\\\n\\hline\n')
+        order = [s for s in SYSTEMS if s[0] in stats]
+        best = {}
+        for j in range(len(cols)):
+            cand = [(np.append(stats[s][0], stats[s][0].mean())[j], s)
+                    for s, *_ in order if s != 'GT']
+            best[j] = max(cand)[1]
+        for sysid, disp, _fam, _ls in order:
+            mean = np.append(stats[sysid][0], stats[sysid][0].mean())
+            cells = []
+            for j, m in enumerate(mean):
+                cell = f'{m:.2f}'
+                if best[j] == sysid:
+                    cell = '\\textbf{%s}' % cell
+                if sysid in paired:
+                    dm, p = paired[sysid][j][:2]
+                    if p == p and p < 0.05:
+                        cell += '$^{\\mathrm{%s}}$' % ('-' if dm > 0 else '+')
+                cells.append(cell)
+            name = 'Duet (ours)' if sysid == ours else disp
+            f.write(f'{name} & ' + ' & '.join(cells) + ' \\\\\n')
+        f.write('\\hline\n\\end{tabular}\n\\end{center}\n\\end{table}\n')
+    print(f'wrote {args.out}_table.tex')
 
     # ---- spider chart -----------------------------------------------
     K = len(AXES)
