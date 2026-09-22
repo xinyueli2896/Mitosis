@@ -1,0 +1,100 @@
+% ---------------------------------------------------------------
+% Listening test subsection of the evaluation. Drafted 2026-09-22 from
+% ratings_7.csv through subjective_spider.py --drop-constant (17 raters
+% kept). EVERY NUMBER IS FROM THAT RUN, not remembered:
+%   demographics, per-system means      subjective_spider.py stdout
+%   paired differences and p-values     results/subjective_paired.csv
+%   the table                           paper/tables/listening_mos.tex
+%   the spider chart (optional figure)  figures/subjective_spider.pdf
+% Systems are named as in experiments.tex (single-stream finetuned /
+% scratch, Whole-Song-Gen, Anticipatory Music Transformer). The cascade
+% and the causal-attention arm were not in the listening test.
+%
+% FILTERING, stated in the text: 18 rows from a 14-15 Sept pilot used an
+% earlier page whose system codes A-G are not recoverable, dropped; four
+% raters gave one identical score to every clip on every axis (three
+% aged 10, none with musical training), dropped. Their removal changes
+% no p-value: a constant rater contributes only ties, which the
+% signed-rank test discards.
+%
+% PLACEHOLDERS [X] must not be guessed:
+%   - the exact wording of the five questions on the listening page
+%     (the page is not in the repo; the axis names are the CSV columns
+%     consistency / structure / fit / musicality / creativity);
+%   - what each clip contained: the five-bar prompt plus the continuation
+%     rendered with one piano/strings timbre pair for every system
+%     (render_piano_copies.py), and its length in bars;
+%   - whether the prompt was played to the rater before the
+%     continuation; whether the clip order was randomised per prompt;
+%   - how raters were recruited.
+% Preamble: amsmath only; no \paragraph headings.
+% ---------------------------------------------------------------
+\subsection{Listening test}
+\label{sec:listening}
+
+Objective metrics say how far a continuation sits from its reference;
+they do not say whether it is music. We therefore ran a listening test
+on the co-generation systems of Sec.~\ref{sec:systems}, with the
+ground-truth continuation as a reference item. Five held-out POP909
+songs were used, each cropped as in Sec.~\ref{sec:protocol}; for every
+song, each system's continuation and the ground truth were rendered
+with the same piano and string timbres for melody and chord, so that
+the clips differed only in the notes [X: clip length; prompt heard
+first; wording of the page]. A rater was assigned a song and heard all
+six clips of it in random order, rating each on five axes from $1$ to
+$5$: \emph{consistency} (does the continuation follow on from the
+prompt), \emph{structure} (is there phrasing and development over the
+clip rather than drift or repetition), \emph{melody--chord fit} (do the
+two streams belong together), \emph{musicality} and \emph{creativity}.
+Raters could take further songs.
+
+Excluding a pilot on an earlier version of the page, 21 people rated
+438 clips [X: recruitment]. We discarded four raters who gave one identical score to
+every clip on every axis, three of them ten years old and none with
+musical training; their removal changes no significance result below,
+since a constant rater contributes only ties. The remaining 17 raters
+(10 male, 7 female; ages 21--55, median 27) had \emph{some} musical
+training in 11 cases, \emph{none} in 4, and 2 were amateur musicians.
+They produced 372 ratings, 62 per system, between 6 and 30 per rater
+(median 30), and every song was rated by at least eleven raters.
+Because each rater heard every system on a song, a rater--song pair is
+a paired unit: we compare each system with \sys on the 62 pairs with
+a two-sided Wilcoxon signed-rank test, per axis and on the mean over
+axes.
+
+\input{tables/listening_mos}
+
+Table~\ref{tab:listening} gives the result. \sys is the highest-rated
+system on four of the five axes and overall ($3.81$), and the
+differences fall into three groups. Against the single-stream model
+trained from scratch ($2.99$) and Whole-Song-Gen ($3.35$) it is
+preferred on every axis ($p \le 0.04$ throughout, $p < 0.001$
+overall), by $0.83$ and $0.46$ points on average; the scratch model is
+rated lower in 47 of 62 pairs and higher in 10. Against the
+Anticipatory Music Transformer ($3.65$) the margin is $0.16$ overall
+and not significant ($p = 0.12$); the one axis that separates them is
+consistency with the prompt ($+0.31$, $p = 0.03$), the axis on which a
+general-purpose model trained on a different corpus would be expected
+to give ground. Against the single-stream model finetuned on POP909
+($3.71$) there is no difference on any axis: \sys leads by $0.10$
+overall ($p = 0.33$) and trails by $0.13$ on musicality ($p = 0.37$).
+Ground truth remains clearly above every system ($4.24$, $p \le 0.04$
+on every axis against \sys); the gap is smallest on consistency
+($0.26$) and largest on musicality ($0.61$).
+
+Two readings follow. First, the ordering of the listening test agrees
+with the objective metrics of Table~\ref{tab:e1}: the systems that sit
+farthest from the reference distributions are the ones raters marked
+down, and the two matched single-stream models bracket \sys from
+below, the finetuned one closely. Second, the margin of \sys over
+the two external systems is largest on consistency with the prompt
+($0.66$ and $0.31$) and smallest on musicality and creativity ($0.39$
+and $0.31$ against Whole-Song-Gen, $0.05$ on both against the
+Anticipatory Music Transformer), so what separates the systems in the
+ear is how the continuation relates to what came before rather than
+how good its material is on its own. This is what the two-stream
+construction is meant to buy: the same backbone, held to a shared
+clock and reading its partner, keeps the continuation attached to the
+prompt and the two streams attached to each other. What it does not
+buy is better material than a single-stream model of the same size
+finetuned on the same songs, and we do not claim it.
