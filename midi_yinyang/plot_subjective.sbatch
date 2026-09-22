@@ -8,7 +8,7 @@
 #   EXCLUDE   rater ids to drop, space-separated (default: none)
 #   DROP_CONSTANT  1 (default) drops raters whose every rating is one
 #             value; 0 keeps them
-#   RMIN      inner edge of the radial axis, default 3
+#   RMIN      inner edge of the radial axis, default 2.5
 #
 # Example:
 #   sbatch --export=ALL,RATINGS=input/ratings.csv,EXCLUDE="azure-stoat-9403 violet-quail-2727" \
@@ -38,7 +38,7 @@ mkdir -p /home/xinyue.li/logs results
 RATINGS="${RATINGS:?set RATINGS=<csv>}"
 OUT="${OUT:-results/subjective}"
 EXCLUDE="${EXCLUDE:-}"
-RMIN="${RMIN:-3}"
+RMIN="${RMIN:-2.5}"
 PALETTE="${PALETTE:-family}"
 SQUASH="${SQUASH:-0.12}"
 DROP_CONSTANT="${DROP_CONSTANT:-1}"
