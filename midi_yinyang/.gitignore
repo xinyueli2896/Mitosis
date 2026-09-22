@@ -9,3 +9,4 @@ tb_logs
 /test_results/
 /score_data/
 /input
+node_modules/

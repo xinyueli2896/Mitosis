@@ -25,7 +25,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fig_arch_pptx import Spec, write_pptx, write_preview, m, plain, INK, INK_2  # noqa: E402
+from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK, INK_2  # noqa: E402
 import fig_arch_pptx
 
 fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 15.5, 7.5
@@ -279,7 +279,7 @@ def main():
     ap.add_argument('--out', required=True)
     args = ap.parse_args()
     S = build()
-    write_pptx(S, args.out + '.pptx'); print('wrote', args.out + '.pptx')
+    write_pptx_js(S, args.out + '.pptx')
     write_preview(S, args.out + '.png'); print('wrote', args.out + '.png')
 
 

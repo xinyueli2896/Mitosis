@@ -406,6 +406,26 @@ def write_pptx(S, path):
     prs.save(path)
 
 
+def write_pptx_js(S, path):
+    """Build the .pptx with pptxgenjs (spec_to_pptx.js) instead of
+    python-pptx; PowerPoint opens pptxgenjs output reliably."""
+    import json
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = {'width': SLIDE_W, 'height': SLIDE_H, 'font': FONT, 'items': S.items}
+    tmp = path + '.spec.json'
+    with open(tmp, 'w') as f:
+        json.dump(spec, f)
+    env = dict(os.environ)
+    # pptxgenjs must be resolvable: `npm install pptxgenjs` next to this
+    # file, or point NODE_PATH at a node_modules that has it
+    local = os.path.join(here, 'node_modules')
+    if os.path.isdir(os.path.join(local, 'pptxgenjs')):
+        env['NODE_PATH'] = local + os.pathsep + env.get('NODE_PATH', '')
+    subprocess.run(['node', os.path.join(here, 'spec_to_pptx.js'), tmp, path], check=True, env=env)
+    os.remove(tmp)
+
+
 # ---------------------------------------------------------------- preview backend
 def runs_to_mathtext(runs):
     out = ''
