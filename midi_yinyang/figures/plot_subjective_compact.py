@@ -1,9 +1,12 @@
-"""Compact paper figure for the subjective evaluation: ONE panel,
-the five rating axes plus the overall mean along x, one marker per
-system per axis with its within-subject 95% CI, and a star under a
-system where the Holm-corrected paired t-test against ours is
-significant. Same data and statistics as plot_subjective_dots.py in a
-third of the height.
+"""Compact, one-column paper figure for the subjective evaluation: ONE
+panel, vertical. The five rating axes plus the overall mean are rows;
+the rating is the x axis; within a row one marker per system with its
+within-subject 95% CI, and a star to the right of a system where the
+Holm-corrected paired t-test against ours is significant. Colours are
+the objective-evaluation family palette of plot_e1_box (ours gold,
+internal baselines slate, external baselines maroon, not-ranked grey,
+ground truth ink, open marker), with marker shapes telling systems of
+one family apart.
 
 Run: python figures/plot_subjective_compact.py --csv ratings.csv
          --out figures/subjective_compact [--exclude ...] [--drop-constant]
@@ -21,22 +24,25 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
 from subjective_anova import AXES, SYSTEMS, load, matrix, holm  # noqa: E402
+from plot_e1_box import FAMILY_COLOR, INK, GRID, SURFACE, FS_TICK, FS_LABEL, FS_LEGEND  # noqa: E402
 
-XLAB = ['Prompt', 'Structure', 'Mel.\u2013chord', 'Musicality', 'Creativity', 'Overall']
-SHORT = {'Duet (alt commit)': 'Duet (ours)', 'S-finetune': 'Single-stream, ft.',
-         'AMT': 'Anticipatory MT', 'Whole-song': 'Whole-Song-Gen',
-         'S-scratch': 'Single-stream, scr.', 'GT': 'Ground truth'}
-# identity by colour AND marker (colour-blind safe: gold for ours, black for
-# ground truth, a blue and three greys for the baselines)
-STYLE = {'Duet (alt commit)': ('#C9A227', 'o', 'full'),
-         'S-finetune':        ('#0072B2', 's', 'full'),
-         'AMT':               ('#5A5A5A', '^', 'full'),
-         'Whole-song':        ('#8C8C8C', 'D', 'full'),
-         'S-scratch':         ('#B8B8B8', 'v', 'full'),
-         'GT':                ('#303030', 'o', 'none')}
-INK, INK_2, GRID = '#303030', '#737373', '#DADADA'
+ROWS = ['Prompt\nconsistency', 'Structure', 'Melody–chord\nconsistency', 'Musicality',
+        'Creativity', 'Overall']
+# system -> (display, family, marker); ground truth in ink with an open marker
+SYS = {'Duet (alt commit)': ('Duet (ours)', 'Ours', 'o'),
+       'S-finetune':        ('Single-stream, finetuned', 'Not ranked', 's'),
+       'S-scratch':         ('Single-stream, scratch', 'Internal baselines', 'v'),
+       'Whole-song':        ('Whole-Song-Gen', 'External baselines', 'D'),
+       'AMT':               ('Anticipatory MT', 'External baselines', '^'),
+       'GT':                ('Ground truth', 'GT', 'o')}
+
+
+def colour(s):
+    fam = SYS[s][1]
+    return INK if fam == 'GT' else FAMILY_COLOR[fam]
 
 
 def within_ci(Y, alpha=0.05):
@@ -57,44 +63,55 @@ def main():
     Ys, n = matrix(rows, 'block')
 
     plt.rcParams.update({
-        'font.family': 'serif', 'font.size': 7, 'axes.labelsize': 7,
-        'xtick.labelsize': 5.5, 'ytick.labelsize': 6.5, 'legend.fontsize': 6,
+        'font.family': 'serif', 'font.size': FS_LABEL, 'axes.labelsize': FS_LABEL,
+        'xtick.labelsize': FS_TICK, 'ytick.labelsize': FS_TICK, 'legend.fontsize': FS_LEGEND,
         'mathtext.fontset': 'stix', 'axes.linewidth': 0.6,
     })
-    fig, ax = plt.subplots(figsize=(3.39, 2.05))
+    fig, ax = plt.subplots(figsize=(3.39, 3.4))
+    fig.patch.set_facecolor(SURFACE); ax.set_facecolor(SURFACE)
     k = len(SYSTEMS)
+    # rows top to bottom; systems stacked within a row, ours on top
     off = (np.arange(k) - (k - 1) / 2) * 0.13
+    handles = {}
     for j, a in enumerate(AXES + ['overall']):
         Y = Ys[a]
         mean, ci = Y.mean(0), within_ci(Y)
         praw = np.array([stats.ttest_rel(Y[:, 0], Y[:, i]).pvalue for i in range(1, k)])
         sig = holm(praw) < 0.05
+        ybase = len(ROWS) - 1 - j
         for i, s in enumerate(SYSTEMS):
-            col, mk, fill = STYLE[s]
-            x = j + off[i]
-            ax.errorbar(x, mean[i], yerr=ci[i], fmt='none', ecolor=col, elinewidth=0.7,
-                        capsize=1.2, capthick=0.7, zorder=2)
-            ax.plot(x, mean[i], marker=mk, ms=3.6, mfc=col if fill == 'full' else 'white',
-                    mec=col, mew=0.8, ls='none', zorder=3, label=SHORT[s] if j == 0 else None)
+            disp, fam, mk = SYS[s]
+            col = colour(s)
+            y = ybase - off[i]
+            ax.errorbar(mean[i], y, xerr=ci[i], fmt='none', ecolor=col, elinewidth=0.8,
+                        capsize=1.3, capthick=0.8, zorder=2)
+            h, = ax.plot(mean[i], y, marker=mk, ms=3.8, mfc=SURFACE if fam == 'GT' else col,
+                         mec=col, mew=0.9, ls='none', zorder=3)
+            handles.setdefault(s, (h, disp))
             if i > 0 and sig[i - 1]:
-                ax.text(x, mean[i] - ci[i] - 0.06, '*', ha='center', va='top', fontsize=7,
+                ax.text(mean[i] + ci[i] + 0.05, y, '*', ha='left', va='center', fontsize=7.5,
                         color=INK, zorder=4)
-    ax.set_xticks(range(6))
-    ax.set_xticklabels(XLAB)
-    ax.set_ylim(2.35, 4.7)
-    ax.set_yticks([3, 4])
-    ax.set_ylabel('mean rating')
-    ax.grid(axis='y', color=GRID, lw=0.5, zorder=0)
-    for j in range(5):
-        ax.axvline(j + 0.5, color=GRID, lw=0.5, zorder=0)
+        if j < len(ROWS) - 1:
+            ax.axhline(ybase - 0.5, color=GRID, lw=0.6, zorder=0)
+    ax.set_yticks(range(len(ROWS)))
+    ax.set_yticklabels(ROWS[::-1], color=INK)
+    ax.set_ylim(-0.5, len(ROWS) - 0.5)
+    ax.set_xlim(2.5, 4.75)
+    ax.set_xticks([3, 4])
+    ax.set_xlabel('mean rating', color=INK)
+    ax.grid(axis='x', color=GRID, lw=0.6, zorder=0)
     for sp in ('top', 'right'):
         ax.spines[sp].set_visible(False)
-    ax.tick_params(length=2)
-    ax.legend(ncol=3, loc='lower center', bbox_to_anchor=(0.5, 1.0), frameon=False,
-              handletextpad=0.3, columnspacing=0.9, borderaxespad=0.2)
+    for sp in ('left', 'bottom'):
+        ax.spines[sp].set_color(INK)
+    ax.tick_params(length=2.5, colors=INK)
+    order = ['Duet (alt commit)', 'S-finetune', 'S-scratch', 'Whole-song', 'AMT', 'GT']
+    ax.legend([handles[s][0] for s in order], [handles[s][1] for s in order], ncol=2,
+              loc='lower center', bbox_to_anchor=(0.42, 1.0), frameon=False,
+              handletextpad=0.4, columnspacing=1.2, borderaxespad=0.2, labelcolor=INK)
     fig.tight_layout()
     for ext in ('pdf', 'png'):
-        fig.savefig(f'{args.out}.{ext}', dpi=300)
+        fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print('wrote', f'{args.out}.{ext}')
 
 
