@@ -21,12 +21,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
-fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 4.55
+fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 5.55
 from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK, INK_2  # noqa: E402
 
 LAV, LAV_D = 'B8BBEC', '8F93D9'
 TEAL, TEAL_D = 'B7DBD8', '7CBDB7'
 GREY, LIGHT = 'DEDEDE', 'F1F1F1'
+FILL = {'x': LAV, 'y': TEAL}
 HT = 'h̃'                       # h with combining tilde
 
 
@@ -36,7 +37,8 @@ def build():
     # lanes and rows (inches, y down)
     cx, cy = 1.35, 3.45                # lane centres, stream x / stream y
     bw, bh = 1.45, 0.32                # stream boxes
-    yOut, yAN, ySum, yExp, yRt, yIn = 0.5, 1.12, 1.78, 2.42, 3.2, 3.98
+    yTok = 0.4                          # the output tokens, x2 y2 ... xT yT
+    yOut, yAN, ySum, yExp, yRt, yIn = 1.48, 2.1, 2.76, 3.4, 4.18, 4.96
     ex = [0.85, 1.85, 2.95, 3.95]      # expert centres
     ew, eh = 0.86, 0.34
 
@@ -68,9 +70,9 @@ def build():
            size=7, align='r', color=INK_2)
     for i, c in enumerate(ex):
         S.rect(c - ew / 2, yExp, ew, eh, fill=GREY, line=INK, lw=lw,
-               runs=[('Expert ', ''), (str(i + 1), '')], size=9.5)
+               runs=[('MLP', ''), ('xxyy'[i], 'sub i')], size=9.5)
 
-    chosen = {'x': (0, 2), 'y': (1, 2)}      # top-2 per stream; expert 3 serves both
+    chosen = {'x': (0, 1), 'y': (1, 3)}      # top-2 per stream; the second MLP_x serves both
     for s, c, fill, dark in (('x', cx, LAV, LAV_D), ('y', cy, TEAL, TEAL_D)):
         # bottom: the attention sub-layer's output
         hbox(c, yIn, fill, HT, 'l', s)
@@ -101,6 +103,14 @@ def build():
         # output: the next block's input
         hbox(c, yOut, fill, 'h', 'l+1', s)
         arrow(c, yAN - 0.02, c, yOut + bh + 0.02)
+    # the two banks turn into the output tokens, one frame ahead of the input
+    tk = 0.42
+    tok = [('x', '2'), ('y', '2'), ('x', None), ('y', None), ('x', 'T'), ('y', 'T')]
+    tx = [0.65 + i * 0.7 for i in range(6)]
+    for (s, idx), x in zip(tok, tx):
+        lab = plain('\u2026') if idx is None else m(s, (idx, 'sub'))
+        S.rect(x - tk / 2, yTok, tk, tk, fill=FILL[s], line=INK, lw=lw, runs=lab, size=9.5)
+        S.line({'x': cx, 'y': cy}[s], yOut - 0.02, x, yTok + tk + 0.02, lw=0.7)
     return S
 
 

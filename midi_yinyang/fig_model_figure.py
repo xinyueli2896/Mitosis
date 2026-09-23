@@ -69,17 +69,19 @@ def build():
         dy = top_margin + H - b                          # bottom-aligned
         S.items += shifted(items, dx, dy)
         S.text(dx, top_margin + H + 0.12, PW, CAP_H, plain(cap), size=11, align='c')
-    # legend for the corner badges, in the empty space above panel (b)
+    # legend for the corner badges, one row, in the free space above panel (b)
     lx = 1 * (PW + GAP)
-    ly = top_margin + 0.55
-    lw_, lh = 4.0, 0.78
-    S.rect(lx + (PW - lw_) / 2, ly, lw_, lh, fill='FFFFFF', line=INK, lw=0.9)
-    for k, (glyph, txt) in enumerate((('\u2744\u2192\U0001F525',
-                                       'from the pretrained single-stream model, fine-tuned'),
-                                      ('\U0001F525', 'new component, trained from scratch'))):
-        yy = ly + 0.1 + k * 0.32
-        S.text(lx + (PW - lw_) / 2 + 0.1, yy, 0.6, 0.26, plain(glyph), size=10.5, align='l')
-        S.text(lx + (PW - lw_) / 2 + 0.72, yy, lw_ - 0.8, 0.26, plain(txt), size=8.5, align='l')
+    lw_, lh = 4.7, 0.4
+    b_top = top_margin + H - bottoms[1] + tops[1]        # panel (b)'s content top
+    ly = max(0.05, top_margin + (b_top - top_margin - lh) / 2)   # centred in the free space
+    assert ly + lh < b_top - 0.04, 'legend collides with panel (b)'
+    x = lx + (PW - lw_) / 2
+    S.rect(x, ly, lw_, lh, fill='FFFFFF', line=INK, lw=0.9)
+    S.text(x + 0.1, ly + 0.07, 0.6, 0.26, plain('\u2744\u2192\U0001F525'), size=10.5, align='l')
+    S.text(x + 0.72, ly + 0.07, 1.9, 0.26, plain('from the pretrained model, fine-tuned'),
+           size=8.5, align='l')
+    S.text(x + 2.75, ly + 0.07, 0.35, 0.26, plain('\U0001F525'), size=10.5, align='l')
+    S.text(x + 3.1, ly + 0.07, 1.55, 0.26, plain('new, trained from scratch'), size=8.5, align='l')
     return S
 
 
