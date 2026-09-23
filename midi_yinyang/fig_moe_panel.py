@@ -58,11 +58,8 @@ def build():
         """corner sign: snowflake->fire = initialised from the pretrained
         model and fine-tuned; fire = new component, trained from scratch"""
         glyph = '\u2744\u2192\U0001F525' if kind == 'pre' else '\U0001F525'
-        # a white sticker straddling the top-right corner, sized to the glyph, so
-        # the box outline never shows through the arrow
-        bw_ = 0.5 if kind == 'pre' else 0.24
-        S.rect(x + w - bw_ + 0.06, y - 0.12, bw_, 0.24, fill='FFFFFF', line=None,
-               runs=plain(glyph), size=9.5, align='c', z=6)
+        # just above the top-right corner, clear of the outline
+        S.text(x + w - 0.62, y - 0.2, 0.66, 0.24, plain(glyph), size=9.5, align='r', z=6)
 
     S.text(0.12, 0.05, 3.5, 0.28, [('b. Per-stream expert routing', 'b')], size=10.5, align='l')
 

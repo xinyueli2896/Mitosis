@@ -37,7 +37,7 @@ def build():
     cx = {'x': 1.2, 'y': 3.6}                # lane centres
     bw, bh = 1.36, 0.38                       # wide boxes
     # rows (top of box), y down
-    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.46, 0.94, 1.42, 2.02, 2.38, 3.7, 4.28, 4.85, 5.6
+    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.46, 0.94, 1.42, 1.94, 2.38, 3.7, 4.28, 4.85, 5.6
     tk, sq = 0.42, 0.3                       # token size, Q/K/V box size
     cw = 0.38                                # Cross box width
 
@@ -45,11 +45,8 @@ def build():
         """corner sign: snowflake->fire = initialised from the pretrained
         model and fine-tuned; fire = new component, trained from scratch"""
         glyph = '\u2744\u2192\U0001F525' if kind == 'pre' else '\U0001F525'
-        # a white sticker straddling the top-right corner, sized to the glyph, so
-        # the box outline never shows through the arrow
-        bw_ = 0.5 if kind == 'pre' else 0.24
-        S.rect(x + w - bw_ + 0.06, y - 0.12, bw_, 0.24, fill='FFFFFF', line=None,
-               runs=plain(glyph), size=9.5, align='c', z=6)
+        # just above the top-right corner, clear of the outline
+        S.text(x + w - 0.62, y - 0.2, 0.66, 0.24, plain(glyph), size=9.5, align='r', z=6)
 
     def wide(s, y, runs, fill=COMP, size=9.5, pre=False):
         S.rect(cx[s] - bw / 2, y, bw, bh, fill=fill, line=INK, lw=lw, runs=runs, size=size)
@@ -95,7 +92,6 @@ def build():
         # attention boxes
         S.rect(self_box[s][0], yA, bw, bh, fill=COMP, line=INK, lw=lw,
                runs=plain('Self Attn'), size=9.5)
-        mark(self_box[s][0], yA, bw)                 # the attention: pretrained, fine-tuned
         S.rect(cross_box[s][0], yA, cw, bh, fill=COMP, line=INK, lw=lw,
                runs=plain('Cross'), size=9.5)
         # gate on the cross readout, summed with the self readout
@@ -116,7 +112,7 @@ def build():
         arrow(c, yA - 0.02, c, gy + 0.12)
         # output projection, o, add & norm, skip
         arrow(c, gy - 0.12, c, yP + bh + 0.02)
-        wide(s, yP, plain('Output projection'), size=8.5)
+        wide(s, yP, plain('Output projection'), size=8.5, pre=True)
         arrow(c, yP - 0.02, c, yO + bh + 0.02)
         wide(s, yO, bank('o', 'l', s), fill=FILL[s])
         arrow(c, yO - 0.02, c, yAN + bh + 0.02)
