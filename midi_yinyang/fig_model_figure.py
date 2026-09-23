@@ -72,10 +72,10 @@ def build():
     # legend for the corner sign
     ly = top_margin + H + 0.12 + CAP_H + 0.06
     W = fig_arch_pptx.SLIDE_W
-    S.rect(W / 2 - 2.3, ly + 0.07, 0.09, 0.09, fill=INK, line=None, z=4)
-    S.text(W / 2 - 2.15, ly, 4.6, 0.22,
-           plain('component initialised from the pretrained single-stream model; '
-                 'unmarked components are new'), size=8.5, align='l', color=INK_2)
+    S.text(W / 2 - 3.0, ly, 6.0, 0.22,
+           plain('\u2744\u2192\U0001F525  initialised from the pretrained single-stream '
+                 'model, fine-tuned        \U0001F525  new component, trained from scratch'),
+           size=8.5, align='c', color=INK_2)
     return S
 
 

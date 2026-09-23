@@ -40,9 +40,11 @@ def build():
     tk, sq = 0.42, 0.3                       # token size, Q/K/V box size
     cw = 0.38                                # Cross box width
 
-    def mark(x, y, w):
-        """corner sign: this component is initialised from the pretrained model"""
-        S.rect(x + w - 0.14, y + 0.05, 0.09, 0.09, fill=INK, line=None, z=4)
+    def mark(x, y, w, kind='pre'):
+        """corner sign: snowflake->fire = initialised from the pretrained
+        model and fine-tuned; fire = new component, trained from scratch"""
+        glyph = '\u2744\u2192\U0001F525' if kind == 'pre' else '\U0001F525'
+        S.text(x + w - 0.45, y - 0.085, 0.5, 0.17, plain(glyph), size=6.5, align='r', z=6)   # badge straddling the top-right corner
 
     def wide(s, y, runs, fill='FFFFFF', size=9.5, pre=False):
         S.rect(cx[s] - bw / 2, y, bw, bh, fill=fill, line=INK, lw=lw, runs=runs, size=size)
@@ -91,11 +93,13 @@ def build():
         mark(self_box[s][0], yA, bw)
         S.rect(cross_box[s][0], yA, cw, bh, fill='FFFFFF', line=INK, lw=lw,
                runs=plain('Cross'), size=9.5)
+        mark(cross_box[s][0], yA, cw, kind='new')
         # gate on the cross readout, summed with the self readout
         ccx = (cross_box[s][0] + cross_box[s][1]) / 2
         gx0 = c + side[s] * -0.28 if False else (c + 0.3 if s == 'x' else c - 0.3 - 0.36)
         S.rect(gx0, yG - 0.02, 0.36, 0.3, fill='FFFFFF', line=INK, lw=lw, runs=plain('gate'),
                size=7.5)
+        mark(gx0, yG - 0.02, 0.36, kind='new')
         gy = yG + 0.13
         S.line(ccx, yA - 0.02, ccx, gy, lw=0.8)
         if s == 'x':

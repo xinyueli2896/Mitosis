@@ -52,9 +52,11 @@ def build():
     def arrow(x1, y1, x2, y2, **kw):
         S.line(x1, y1, x2, y2, lw=0.8, arrow=True, **kw)
 
-    def mark(x, y, w):
-        """corner sign: this component is initialised from the pretrained model"""
-        S.rect(x + w - 0.14, y + 0.05, 0.09, 0.09, fill=INK, line=None, z=4)
+    def mark(x, y, w, kind='pre'):
+        """corner sign: snowflake->fire = initialised from the pretrained
+        model and fine-tuned; fire = new component, trained from scratch"""
+        glyph = '\u2744\u2192\U0001F525' if kind == 'pre' else '\U0001F525'
+        S.text(x + w - 0.45, y - 0.085, 0.5, 0.17, plain(glyph), size=6.5, align='r', z=6)   # badge straddling the top-right corner
 
     S.text(0.12, 0.05, 3.5, 0.28, [('b. Per-stream expert routing', 'b')], size=10.5, align='l')
 
@@ -75,6 +77,7 @@ def build():
         # router
         S.rect(c - bw / 2, yRt, bw, bh, fill=fill, line=INK, lw=lw,
                runs=[('Top-2 Router', ''), (s, 'sub i')], size=9.5)
+        mark(c - bw / 2, yRt, bw, kind='new')
         arrow(c, yIn - 0.02, c, yRt + bh + 0.02)
         # router -> its two experts (the two streams' arrows cross)
         for i in chosen[s]:
