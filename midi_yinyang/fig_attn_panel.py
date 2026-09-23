@@ -44,7 +44,7 @@ def build():
     def mark(x, y, w, kind='pre'):
         """corner sign: snowflake->fire = initialised from the pretrained
         model and fine-tuned; fire = new component, trained from scratch"""
-        glyph = '❄→\U0001F525' if kind == 'pre' else '\U0001F525'
+        glyph = '\u2744\ufe0f\u2192\U0001F525' if kind == 'pre' else '\U0001F525'
         # inside the block, flush with its top-right corner; the label stays centred
         S.text(x + w - 0.66, y - 0.01, 0.66, 0.2, plain(glyph), size=8, align='r', z=6)
 

@@ -96,7 +96,7 @@ def build():
     assert ly + lh < b_top - 0.04, 'legend collides with panel (b)'
     x = dx_b + (xb0 + xb1) / 2 - lw_ / 2
     S.rect(x, ly, lw_, lh, fill='FFFFFF', line=INK, lw=1.3)
-    for k, (glyph, txt) in enumerate((('\u2744\u2192\U0001F525',
+    for k, (glyph, txt) in enumerate((('\u2744\ufe0f\u2192\U0001F525',
                                        'initialized from pretrained model, finetuned in ours'),
                                       ('\U0001F525', 'from scratch'))):
         yy = ly + 0.06 + k * 0.3
