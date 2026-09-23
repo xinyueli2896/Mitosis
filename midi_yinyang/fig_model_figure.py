@@ -35,9 +35,13 @@ def bounds(items):
         elif it['k'] in ('line', 'curve'):
             xs += [it['x1'], it['x2']]; ys += [it['y1'], it['y2']]
         elif it['k'] == 'text':
-            # text boxes are wider than their glyphs; count the aligned edge only
-            edge = {'l': it['x'], 'r': it['x'] + it['w'], 'c': it['x'] + it['w'] / 2}[it['align']]
-            xs += [edge]; ys += [it['y'], it['y'] + it['h']]
+            # text boxes are wider than their glyphs: estimate the glyph run
+            # from the longest line and anchor it at the aligned edge
+            txt = ''.join(t for t, _ in it['runs'])
+            est = max(len(ln) for ln in txt.split('\n')) * it['size'] * 0.5 / 72
+            a = {'l': it['x'], 'r': it['x'] + it['w'] - est,
+                 'c': it['x'] + it['w'] / 2 - est / 2}[it['align']]
+            xs += [a, a + est]; ys += [it['y'], it['y'] + it['h']]
         else:
             xs += [it['x'], it['x'] + it['w']]; ys += [it['y'], it['y'] + it['h']]
     return min(xs), max(xs), min(ys), max(ys)
