@@ -88,9 +88,6 @@ def build():
         plus(c, ySum)
         for k, i in enumerate(chosen[s]):
             arrow(ex[i], yExp - 0.02, c + (-0.07 if k == 0 else 0.07), ySum + 0.12)
-        S.text(c + (0.16 if s == 'x' else -0.16 - 0.5), ySum - 0.06, 0.5, 0.18,
-               m('π', (str(chosen[s][0] + 1) + ',' + str(chosen[s][1] + 1), 'sub')),
-               size=7.5, align='l' if s == 'x' else 'r', color=INK_2)
         # add & norm, with the skip from h-tilde around the sub-layer
         S.rect(c - bw / 2, yAN, bw, bh, fill=GREY, line=INK, lw=lw,
                runs=plain('Add & Norm'), size=9.5)
