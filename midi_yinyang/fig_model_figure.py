@@ -71,17 +71,16 @@ def build():
         S.text(dx, top_margin + H + 0.12, PW, CAP_H, plain(cap), size=11, align='c')
     # legend for the corner badges, one row, in the free space above panel (b)
     lx = 1 * (PW + GAP)
-    lw_, lh = 4.7, 0.4
+    lw_, lh = 4.75, 0.4
     b_top = top_margin + H - bottoms[1] + tops[1]        # panel (b)'s content top
     ly = max(0.05, top_margin + (b_top - top_margin - lh) / 2)   # centred in the free space
     assert ly + lh < b_top - 0.04, 'legend collides with panel (b)'
     x = lx + (PW - lw_) / 2
     S.rect(x, ly, lw_, lh, fill='FFFFFF', line=INK, lw=0.9)
     S.text(x + 0.1, ly + 0.07, 0.6, 0.26, plain('\u2744\u2192\U0001F525'), size=10.5, align='l')
-    S.text(x + 0.72, ly + 0.07, 2.0, 0.26, plain('pretrained, then fine-tuned'),
-           size=8.5, align='l')
-    S.text(x + 2.85, ly + 0.07, 0.35, 0.26, plain('\U0001F525'), size=10.5, align='l')
-    S.text(x + 3.2, ly + 0.07, 1.45, 0.26, plain('new, trained from scratch'), size=8.5, align='l')
+    S.text(x + 0.72, ly + 0.07, 1.8, 0.26, plain('pretrained, fine-tuned'), size=8, align='l')
+    S.text(x + 2.55, ly + 0.07, 0.35, 0.26, plain('\U0001F525'), size=10.5, align='l')
+    S.text(x + 2.9, ly + 0.07, 1.8, 0.26, plain('new, from scratch'), size=8, align='l')
     return S
 
 

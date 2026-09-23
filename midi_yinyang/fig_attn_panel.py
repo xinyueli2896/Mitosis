@@ -84,7 +84,7 @@ def build():
         c = cx[s]
         wide(s, yH, bank('h', 'l', s), fill=FILL[s])
         arrow(c, yH - 0.02, c, yL + bh + 0.02)
-        wide(s, yL, plain('Linear QKV'))
+        wide(s, yL, plain('Linear QKV'), pre=True)
         for x, lab in zip(qkv[s], 'QKV'):
             arrow(c, yL - 0.02, x, yQ + sq + 0.02)
             S.rect(x - sq / 2, yQ, sq, sq, fill='FFFFFF', line=INK, lw=lw, runs=m(lab), size=9.5)
