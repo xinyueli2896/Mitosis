@@ -45,7 +45,11 @@ def build():
         """corner sign: snowflake->fire = initialised from the pretrained
         model and fine-tuned; fire = new component, trained from scratch"""
         glyph = '\u2744\u2192\U0001F525' if kind == 'pre' else '\U0001F525'
-        S.text(x + w - 0.6, y - 0.12, 0.66, 0.24, plain(glyph), size=9.5, align='r', z=6)   # badge straddling the top-right corner
+        # a white sticker straddling the top-right corner, sized to the glyph, so
+        # the box outline never shows through the arrow
+        bw_ = 0.5 if kind == 'pre' else 0.24
+        S.rect(x + w - bw_ + 0.06, y - 0.12, bw_, 0.24, fill='FFFFFF', line=None,
+               runs=plain(glyph), size=9.5, align='c', z=6)
 
     def wide(s, y, runs, fill=COMP, size=9.5, pre=False):
         S.rect(cx[s] - bw / 2, y, bw, bh, fill=fill, line=INK, lw=lw, runs=runs, size=size)
