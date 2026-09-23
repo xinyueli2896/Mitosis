@@ -105,18 +105,25 @@ def build():
         arrow(c, yAN - 0.02, c, yOut + bh + 0.02)
     # the two banks turn into the output tokens, one frame ahead of the input:
     # translucent wedges from each bank up to the span of its stream's tokens
-    tk = 0.44
-    # the block's output: hidden states h_1 .. h_{T-1} of the next layer, interleaved
-    tok = [('x', '1'), ('y', '1'), ('x', None), ('y', None), ('x', 'T\u22121'), ('y', 'T\u22121')]
-    tx = [0.65 + i * 0.7 for i in range(6)]
-    for (s, idx), x in zip(tok, tx):
-        lab = plain('\u2026') if idx is None else [('h', 'b i'), (idx, 'sub i')]
-        S.rect(x - tk / 2, yTok, tk, tk, fill=FILL[s], line=INK, lw=lw, runs=lab, size=FS, z=2)
-    for s, c in (('x', cx), ('y', cy)):
-        xs = [x for (t, _), x in zip(tok, tx) if t == s]
+    # the block's output: many small unlabelled hidden-state boxes, blue and
+    # salmon alternating, an ellipsis in the middle standing for the rest
+    tkx, pitch, n_side, gap_mid = 0.2, 0.24, 8, 0.42
+    total = 2 * n_side * pitch - (pitch - tkx) + gap_mid
+    x_start = (cx + cy) / 2 - total / 2
+    yT2 = yTok + 0.12
+    xs_all = []
+    for k in range(2 * n_side):
+        x = x_start + k * pitch + (gap_mid if k >= n_side else 0)
+        st = 'xy'[k % 2]
+        S.rect(x, yT2, tkx, tkx, fill=FILL[st], line=INK, lw=lw, z=2)
+        xs_all.append((st, x))
+    xm = x_start + n_side * pitch - (pitch - tkx) / 2 + gap_mid / 2
+    S.text(xm - 0.2, yT2 - 0.02, 0.4, tkx + 0.04, plain('\u2026'), size=FS, align='c')
+    for st, c in (('x', cx), ('y', cy)):
+        xs = [x for t_, x in xs_all if t_ == st]
         S.poly([(c - bw / 2, yOut), (c + bw / 2, yOut),
-                (max(xs) + tk / 2, yTok + tk - 0.02), (min(xs) - tk / 2, yTok + tk - 0.02)],
-               fill=LINE[s], alpha=0.45, z=0)
+                (max(xs) + tkx, yT2 + tkx - 0.02), (min(xs), yT2 + tkx - 0.02)],
+               fill=LINE[st], alpha=0.45, z=0)
     return S
 
 

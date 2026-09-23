@@ -70,18 +70,29 @@ def build():
     S.text(0.12, 0.05, 3.5, 0.28, [('a. Dual-stream attention', 'b')], size=10.5, align='l')
 
     # ------------------------------------------------------------ tokens -> banks
-    # the block's input: hidden states h_1 .. h_{T-1} of both streams, interleaved
-    tok = [('x', '1'), ('y', '1'), ('x', None), ('y', None), ('x', 'T−1'), ('y', 'T−1')]
-    tx = [0.65 + i * 0.7 for i in range(6)]
-    for (s, idx), x in zip(tok, tx):
-        lab = plain('…') if idx is None else [('h', 'b i'), (idx, 'sub i')]
-        box(x - tk / 2, yT, tk, tk, lab, fill=FILL[s], z=2)
-    # translucent wedges (sketch): each stream's tokens gather into its bank
-    for s in 'xy':
-        xs = [x for (t, _), x in zip(tok, tx) if t == s]
-        S.poly([(cx[s] - bw / 2, yH + bh), (cx[s] + bw / 2, yH + bh),
-                (max(xs) + tk / 2, yT + 0.02), (min(xs) - tk / 2, yT + 0.02)],
-               fill=LINE[s], alpha=0.45, z=0)
+    # the block's input: many small unlabelled hidden-state boxes, blue and
+    # salmon alternating, an ellipsis in the middle standing for the rest
+    tkx = 0.2                                   # small box
+    pitch = 0.24
+    n_side = 8                                  # boxes on each side of the ellipsis
+    gap_mid = 0.42
+    total = 2 * n_side * pitch - (pitch - tkx) + gap_mid
+    x_start = (cx['x'] + cx['y']) / 2 - total / 2
+    xs_all = []
+    for k in range(2 * n_side):
+        x = x_start + k * pitch + (gap_mid if k >= n_side else 0)
+        st = 'xy'[k % 2]
+        yT2 = yT + (tk - tkx) / 2
+        box(x, yT2, tkx, tkx, None, fill=FILL[st], z=2)
+        xs_all.append((st, x))
+    xm = x_start + n_side * pitch - (pitch - tkx) / 2 + gap_mid / 2
+    S.text(xm - 0.2, yT + (tk - tkx) / 2 - 0.02, 0.4, tkx + 0.04, plain('\u2026'), size=FS, align='c')
+    # translucent wedges (sketch): each stream's boxes gather into its bank
+    for st in 'xy':
+        xs = [x for t_, x in xs_all if t_ == st]
+        S.poly([(cx[st] - bw / 2, yH + bh), (cx[st] + bw / 2, yH + bh),
+                (max(xs) + tkx, yT + (tk - tkx) / 2 + 0.02), (min(xs), yT + (tk - tkx) / 2 + 0.02)],
+               fill=LINE[st], alpha=0.45, z=0)
 
     # geometry of the projection boxes and attention boxes, per stream
     # Q on the OUTER side, K & V on the inner side, mirrored between streams
