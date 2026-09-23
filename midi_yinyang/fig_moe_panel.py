@@ -94,7 +94,7 @@ def build():
                runs=plain('Add & Norm'), size=FS)
         arrow(c, ySum - 0.12, c, yAN + bh + 0.02)
         side = -1 if s == 'x' else 1
-        sx = c + side * (bw / 2 + 0.28)
+        sx = c + side * (bw / 2 + 0.5)      # outside the expert-pool band
         S.line(c + side * bw / 2, yIn + bh / 2, sx, yIn + bh / 2, lw=AW)
         S.line(sx, yIn + bh / 2, sx, yAN + bh / 2, lw=AW)
         arrow(sx, yAN + bh / 2, c + side * (bw / 2 + 0.02), yAN + bh / 2)
