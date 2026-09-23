@@ -51,3 +51,8 @@ python subjective_spider.py --csv "$RATINGS" --out "$OUT" --rmin "$RMIN" --palet
 # with the rater-song pair and then the rater as subject -> {OUT}_anova.csv, {OUT}_posthoc.csv
 python subjective_anova.py --csv "$RATINGS" --out "$OUT" \
     ${EXCLUDE:+--exclude $EXCLUDE} $([ "$DROP_CONSTANT" = 1 ] && echo --drop-constant)
+
+# the ANOVA's companion figure: mean +/- within-subject 95% CI per system and axis,
+# post-hoc markers -> {OUT}_dots.pdf/.png
+python figures/plot_subjective_dots.py --csv "$RATINGS" --out "${OUT}_dots" \
+    ${EXCLUDE:+--exclude $EXCLUDE} $([ "$DROP_CONSTANT" = 1 ] && echo --drop-constant)
