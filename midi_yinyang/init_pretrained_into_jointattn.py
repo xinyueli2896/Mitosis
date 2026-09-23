@@ -142,10 +142,12 @@ def _map_global_key(src_key, src_val, moe_num_experts):
         layer = int(m.group(1))
         wb = m.group(2)
         if moe_num_experts > 1:
+            # full-copy pool: one copy per expert; low-rank-expert pool:
+            # the shared base (whichever keys the target has)
             return [
                 (f'global_layers.{layer}.ffn.fc1.{j}.{wb}', None)
                 for j in range(moe_num_experts)
-            ]
+            ] + [(f'global_layers.{layer}.ffn.fc1_base.{wb}', None)]
         # Dense fallback: nn.Sequential[Linear(0), GELU(1), Linear(2)]
         return [(f'global_layers.{layer}.ffn.0.{wb}', None)]
 
@@ -157,7 +159,7 @@ def _map_global_key(src_key, src_val, moe_num_experts):
             return [
                 (f'global_layers.{layer}.ffn.fc2.{j}.{wb}', None)
                 for j in range(moe_num_experts)
-            ]
+            ] + [(f'global_layers.{layer}.ffn.fc2_base.{wb}', None)]
         return [(f'global_layers.{layer}.ffn.2.{wb}', None)]
 
     m = _PER_LAYER_LN_FFN.match(src_key)

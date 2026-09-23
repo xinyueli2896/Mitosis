@@ -120,8 +120,46 @@ def _apply_rope(q, k, cos, sin):
 # Switch-style MoE FFN (shared between modalities)
 # ---------------------------------------------------------------------------
 
+class LowRankDelta(nn.Module):
+    """A rank-r update B A to a d_in x d_out linear map, applied as
+    h -> h A^T B^T (so it adds to the output of a Linear(d_in, d_out)).
+
+    B starts at zero, so at initialisation the delta is exactly zero and
+    the projection it corrects is the pretrained one; A gets the usual
+    Kaiming-uniform start so the gradient into B is not zero. Output is
+    scaled by alpha / r, the LoRA convention, so the learning rate does
+    not have to track the rank.
+    """
+
+    def __init__(self, d_in, rank, d_out=None, alpha=None):
+        super().__init__()
+        d_out = d_in if d_out is None else d_out
+        self.rank = int(rank)
+        self.A = nn.Parameter(torch.empty(self.rank, d_in))
+        self.B = nn.Parameter(torch.zeros(d_out, self.rank))
+        nn.init.kaiming_uniform_(self.A, a=math.sqrt(5))
+        self.scale = float(alpha if alpha is not None else self.rank) / self.rank
+
+    def forward(self, h):
+        return (h @ self.A.t()) @ self.B.t() * self.scale
+
+
 class SimpleMoEFFN(nn.Module):
     """Switch Transformer-style MoE FFN with top-k routing.
+
+    expert_lora_rank (2026-09-23): experts as LOW-RANK ADAPTATIONS of one
+    shared feed-forward network instead of E full copies. The pool holds
+    one base pair fc1_base/fc2_base (the pretrained FFN, fine-tuned unless
+    freeze_base) and per expert a rank-r delta on each of the two maps,
+
+        expert_e(x) = (W2 + B2_e A2_e) gelu((W1 + B1_e A1_e) x)
+
+    with B = 0 at init, so every expert starts as the pretrained FFN
+    exactly as the full-copy pool does, and the experts can only differ
+    by rank-r updates. Routing, top-k mixing and the balance loss are
+    unchanged. Parameters per layer: one FFN + 2 E r (d + d_ff) instead
+    of E FFNs. Presence of the ffn.lfc1.* keys in a checkpoint is the
+    flag; A's first dimension is the rank.
 
     Each expert is a 2-layer MLP (Linear -> GELU -> Linear), matching the
     dense FFN shape of the pretrained one-backbone so warm-start is a
@@ -179,12 +217,14 @@ class SimpleMoEFFN(nn.Module):
 
     def __init__(self, hidden_size, intermediate_size, num_experts, topk,
                  modality_bias=False, modality_gates=False,
-                 modality_hard_route=False):
+                 modality_hard_route=False, expert_lora_rank=0,
+                 freeze_base=False):
         super().__init__()
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
         self.num_experts = num_experts
         self.topk = topk
+        self.expert_lora_rank = int(expert_lora_rank)
         self.modality_gates = bool(modality_gates)
         self.modality_hard_route = bool(modality_hard_route)
         if self.modality_hard_route:
@@ -230,12 +270,26 @@ class SimpleMoEFFN(nn.Module):
         # Callers check this to know whether to pass modality_ids.
         self.needs_modality_ids = bool(
             modality_bias or modality_gates or modality_hard_route)
-        self.fc1 = nn.ModuleList(
-            [nn.Linear(hidden_size, intermediate_size) for _ in range(num_experts)]
-        )
-        self.fc2 = nn.ModuleList(
-            [nn.Linear(intermediate_size, hidden_size) for _ in range(num_experts)]
-        )
+        if self.expert_lora_rank > 0:
+            r = self.expert_lora_rank
+            self.fc1_base = nn.Linear(hidden_size, intermediate_size)
+            self.fc2_base = nn.Linear(intermediate_size, hidden_size)
+            self.lfc1 = nn.ModuleList(
+                [LowRankDelta(hidden_size, r, intermediate_size)
+                 for _ in range(num_experts)])
+            self.lfc2 = nn.ModuleList(
+                [LowRankDelta(intermediate_size, r, hidden_size)
+                 for _ in range(num_experts)])
+            if freeze_base:
+                for p in list(self.fc1_base.parameters()) + list(self.fc2_base.parameters()):
+                    p.requires_grad = False
+        else:
+            self.fc1 = nn.ModuleList(
+                [nn.Linear(hidden_size, intermediate_size) for _ in range(num_experts)]
+            )
+            self.fc2 = nn.ModuleList(
+                [nn.Linear(intermediate_size, hidden_size) for _ in range(num_experts)]
+            )
 
     def forward(self, x, modality_ids=None, aux_mask=None):
         """x: [B, L, H]. Returns (out, aux_loss).
@@ -315,8 +369,12 @@ class SimpleMoEFFN(nn.Module):
                 continue
             idx = mask.nonzero(as_tuple=False).squeeze(-1)
             x_e = x_flat[idx]
-            h = F.gelu(self.fc1[e](x_e))
-            y_e = self.fc2[e](h)
+            if self.expert_lora_rank > 0:
+                h = F.gelu(self.fc1_base(x_e) + self.lfc1[e](x_e))
+                y_e = self.fc2_base(h) + self.lfc2[e](h)
+            else:
+                h = F.gelu(self.fc1[e](x_e))
+                y_e = self.fc2[e](h)
             # weight = sum of top_vals for this expert (handles topk>1)
             w_e = (top_vals * (top_idx == e).float()).sum(dim=-1)[idx].unsqueeze(-1)
             out_flat.index_add_(0, idx, y_e * w_e)

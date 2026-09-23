@@ -179,6 +179,18 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
             break
     print(f'[load_model] cross_lora_rank={cross_lora_rank}'
           f'{" (cross-pair low-rank Q/K/V)" if cross_lora_rank else ""}')
+    # Low-rank experts over one shared FFN: the per-expert delta weights
+    # are real parameters, so their presence IS the flag and the A
+    # matrix's first dimension is the rank. Building the full-copy pool
+    # instead would leave every expert at random init (strict=False).
+    moe_expert_lora_rank = 0
+    for k in state_dict_keys:
+        if k.endswith('.ffn.lfc1.0.A'):
+            sd_tmp = ck['state_dict'] if 'state_dict' in ck else ck
+            moe_expert_lora_rank = int(sd_tmp[k].shape[0])
+            break
+    print(f'[load_model] moe_expert_lora_rank={moe_expert_lora_rank}'
+          f'{" (low-rank experts over one shared FFN)" if moe_expert_lora_rank else ""}')
     if diffusion_K is None:
         for key, name in (('k_emb_m.weight', 'k_emb_m'),
                           ('k_emb_c.weight', 'k_emb_c')):
@@ -213,6 +225,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         token_level_mask=token_level_mask,
         query_block=query_block,
         cross_lora_rank=cross_lora_rank,
+        moe_expert_lora_rank=moe_expert_lora_rank,
     )
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)

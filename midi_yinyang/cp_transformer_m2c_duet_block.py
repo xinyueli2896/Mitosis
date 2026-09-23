@@ -75,7 +75,7 @@ from cp_transformer_m2c_moe import (
     RoFormerSymbolicTransformer, FramedDataset, TRAIN_LENGTH, MAX_STEPS,
 )
 from cp_transformer_m2c_jointattn import (
-    _rope_freqs, _apply_rope, SimpleMoEFFN,
+    _rope_freqs, _apply_rope, SimpleMoEFFN, LowRankDelta,
 )
 from tasks import get_task, TASKS
 
@@ -97,28 +97,6 @@ def normalize_T_query(T_query):
 # ---------------------------------------------------------------------------
 # Per-layer 3-pass block (intra + cross + frame), 2 gates (gate_c, gate_f)
 # ---------------------------------------------------------------------------
-
-class LowRankDelta(nn.Module):
-    """A rank-r update B A to a d x d projection, applied as h -> h A^T B^T.
-
-    B starts at zero, so at initialisation the delta is exactly zero and
-    the projection it corrects is the pretrained one; A gets the usual
-    Kaiming-uniform start so the gradient into B is not zero. Output is
-    scaled by alpha / r, the LoRA convention, so the learning rate does
-    not have to track the rank.
-    """
-
-    def __init__(self, d, rank, alpha=None):
-        super().__init__()
-        self.rank = int(rank)
-        self.A = nn.Parameter(torch.empty(self.rank, d))
-        self.B = nn.Parameter(torch.zeros(d, self.rank))
-        nn.init.kaiming_uniform_(self.A, a=math.sqrt(5))
-        self.scale = float(alpha if alpha is not None else self.rank) / self.rank
-
-    def forward(self, h):
-        return (h @ self.A.t()) @ self.B.t() * self.scale
-
 
 class M2CDuetBlockLayer(nn.Module):
     """One transformer block, post-LN, with per-modality Q/K/V/O, three
@@ -162,7 +140,8 @@ class M2CDuetBlockLayer(nn.Module):
                  moe_num_experts, moe_topk, moe_intermediate_size,
                  dropout=0.0, gate_init_bias=-10.0,
                  moe_modality_bias=False, moe_modality_gates=False,
-                 moe_modality_hard_route=False, cross_lora_rank=0):
+                 moe_modality_hard_route=False, cross_lora_rank=0,
+                 moe_expert_lora_rank=0, moe_freeze_base_ffn=False):
         super().__init__()
         assert hidden_size % num_heads == 0
         self.hidden_size = hidden_size
@@ -215,7 +194,9 @@ class M2CDuetBlockLayer(nn.Module):
                                      topk=moe_topk,
                                      modality_bias=moe_modality_bias,
                                      modality_gates=moe_modality_gates,
-                                     modality_hard_route=moe_modality_hard_route)
+                                     modality_hard_route=moe_modality_hard_route,
+                                     expert_lora_rank=moe_expert_lora_rank,
+                                     freeze_base=moe_freeze_base_ffn)
         else:
             self.ffn = nn.Sequential(
                 nn.Linear(hidden_size, ffn_inter),
@@ -572,6 +553,7 @@ class M2CDuetBlockAttn(RoFormerSymbolicTransformer):
                  gate_init_bias=-10.0, query_loss_weight=1.0,
                  moe_modality_bias=False, moe_modality_gates=False,
                  moe_modality_hard_route=False, cross_lora_rank=0,
+                 moe_expert_lora_rank=0, moe_freeze_base_ffn=False,
                  **kwargs):
         super().__init__(
             *args,
@@ -604,10 +586,13 @@ class M2CDuetBlockAttn(RoFormerSymbolicTransformer):
                 moe_modality_gates=moe_modality_gates,
                 moe_modality_hard_route=moe_modality_hard_route,
                 cross_lora_rank=cross_lora_rank,
+                moe_expert_lora_rank=moe_expert_lora_rank,
+                moe_freeze_base_ffn=moe_freeze_base_ffn,
             )
             for _ in range(self.global_num_layers)
         ])
         self.cross_lora_rank = int(cross_lora_rank)
+        self.moe_expert_lora_rank = int(moe_expert_lora_rank)
 
         # Per-modality SOS offsets (matches intra-cross-attn).
         self.sos_offset_m = nn.Parameter(torch.zeros(self.hidden_size))

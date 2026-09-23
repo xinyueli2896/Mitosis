@@ -54,6 +54,10 @@ def main():
     ap.add_argument('--moe_num_experts', type=int, default=4)
     ap.add_argument('--moe_topk', type=int, default=2)
     ap.add_argument('--moe_intermediate_size', type=int, default=None)
+    ap.add_argument('--moe_expert_lora_rank', type=int, default=0,
+                    help='Low-rank experts over one shared FFN (see '
+                         'SimpleMoEFFN): the pretrained FFN is copied into '
+                         'the shared base once, the deltas start at B = 0.')
     ap.add_argument('--gate_init_bias', type=float, default=-10.0)
     ap.add_argument('--query_loss_weight', type=float, default=1.0)
     ap.add_argument('--diffusion_K', type=int, default=4,
@@ -93,6 +97,7 @@ def main():
         gate_init_bias=args.gate_init_bias,
         query_loss_weight=args.query_loss_weight,
         diffusion_K=args.diffusion_K,
+        moe_expert_lora_rank=args.moe_expert_lora_rank,
     )
     target_sd = net.state_dict()
     assert_vocab_matches(sd_src, target_sd)
@@ -129,12 +134,15 @@ def main():
         gate_init_bias=args.gate_init_bias,
         query_loss_weight=args.query_loss_weight,
         diffusion_K=args.diffusion_K,
+        moe_expert_lora_rank=args.moe_expert_lora_rank,
     ).state_dict()
     still_default = []
     for k in target_sd:
         if k.startswith('global_layers.') and torch.equal(target_sd[k], fresh[k]):
             still_default.append(k)
-    expected_default_substrings = ('gate_m.', 'gate_c.', 'gate_fm.', 'gate_fc.')
+    # (lfc1/lfc2: the low-rank expert deltas, B = 0 by design)
+    expected_default_substrings = ('gate_m.', 'gate_c.', 'gate_fm.', 'gate_fc.',
+                                   '.lfc1.', '.lfc2.')
     unexpected_default = [
         k for k in still_default
         if not any(s in k for s in expected_default_substrings)

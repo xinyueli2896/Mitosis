@@ -228,6 +228,15 @@
 #                           is then on its own scale and NOT comparable
 #                           across the A family; val_ar_loss_content
 #                           still is, and best_ar/ still tracks it.
+#   --export=ALL,MOE_EXPERT_LORA_RANK=r  low-rank experts: ONE shared
+#                           feed-forward network (the pretrained one,
+#                           fine-tuned) plus a rank-r delta per expert on
+#                           each of its two maps, instead of E full
+#                           copies. B = 0 at init so step 0 equals the
+#                           full-copy pool. Run dirs get an E<r> suffix.
+#                           MOE_FREEZE_BASE_FFN=1 keeps the shared FFN
+#                           at the pretrained weights and trains only the
+#                           deltas (plus everything outside the FFN).
 #   --export=ALL,CROSS_LORA_RANK=r   cross-pair low-rank Q/K/V: the two
 #                           cross-stream pathways get their own projections
 #                           W^{ab} = W^b + B A of rank r (B = 0 at init, so
@@ -344,14 +353,20 @@ PRETRAINED=ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt
 MOE_NUM_EXPERTS="${MOE_NUM_EXPERTS:-4}"
 MOE_TOPK="${MOE_TOPK:-2}"
 MOE_INTERMEDIATE_SIZE="${MOE_INTERMEDIATE_SIZE:-}"
+# Low-rank experts (E<r> suffix): one shared FFN plus a rank-r delta per
+# expert instead of E full copies; MOE_FREEZE_BASE_FFN=1 trains only the
+# deltas. 0 = full copies, the default.
+MOE_EXPERT_LORA_RANK="${MOE_EXPERT_LORA_RANK:-0}"
+MOE_FREEZE_BASE_FFN="${MOE_FREEZE_BASE_FFN:-0}"
 RUN_TAG="${RUN_TAG:-}"
 # Init ckpt path is K-dependent so different K values don't overwrite
 # each other (the k_emb_* tables have different shapes); non-default MoE
 # configs get their own suffix for the same reason.
 DIFFUSION_K="${DIFFUSION_K:-4}"
 MOE_SUFFIX=""
-if [[ "$MOE_NUM_EXPERTS" != "4" || "$MOE_TOPK" != "2" || -n "$MOE_INTERMEDIATE_SIZE" ]]; then
+if [[ "$MOE_NUM_EXPERTS" != "4" || "$MOE_TOPK" != "2" || -n "$MOE_INTERMEDIATE_SIZE" || "$MOE_EXPERT_LORA_RANK" != "0" ]]; then
     MOE_SUFFIX="_moe${MOE_NUM_EXPERTS}t${MOE_TOPK}${MOE_INTERMEDIATE_SIZE:+i$MOE_INTERMEDIATE_SIZE}"
+    [[ "$MOE_EXPERT_LORA_RANK" != "0" ]] && MOE_SUFFIX="${MOE_SUFFIX}e${MOE_EXPERT_LORA_RANK}"
 fi
 INIT_CKPT="ckpt/m2c_duet_block_diffusion_init_K${DIFFUSION_K}${MOE_SUFFIX}/m2c_duet_block_diffusion_init_K${DIFFUSION_K}${MOE_SUFFIX}.ckpt"
 
@@ -570,6 +585,7 @@ if [[ -z "${MODEL_ABBR:-}" ]]; then
     [[ "$FAM" == A8* && "$QUERY_BLOCK" != "4" ]] && MODEL_ABBR="${MODEL_ABBR}b${QUERY_BLOCK}"
     # same order as derive_model_abbr: the L suffix comes last
     [[ "$CROSS_LORA_RANK" != "0" ]] && MODEL_ABBR="${MODEL_ABBR}L${CROSS_LORA_RANK}"
+    [[ "$MOE_EXPERT_LORA_RANK" != "0" ]] && MODEL_ABBR="${MODEL_ABBR}E${MOE_EXPERT_LORA_RANK}"
 fi
 RUN_DIR="ckpt/m2c_duet_block_diffusion_${SCHEME_VERSION}_large_gnl12_${MODEL_ABBR}_${TASK}${MELCHORD_TAG}${RUN_TAG:+_$RUN_TAG}_batch_${GLOBAL_BATCH}_schedule"
 if [[ -z "$CKPT" && -f "$RUN_DIR/last.ckpt" ]]; then
@@ -612,7 +628,7 @@ fi
 echo "================================================================"
 echo "Job $SLURM_JOB_ID  node=$(hostname)"
 echo "Variant: m2c_duet_block_diffusion (A.3)  K=$DIFFUSION_K  moe_modality_bias=$MOE_MODALITY_BIAS  moe_modality_gates=$MOE_MODALITY_GATES  moe_modality_hard_route=$MOE_MODALITY_HARD_ROUTE  token_level_mask=$TOKEN_LEVEL_MASK  mask_revealed_query_loss=$MASK_REVEALED_QUERY_LOSS  query_pairs=$QUERY_PAIRS  query_block=$QUERY_BLOCK  decoy_corruption=$DECOY_CORRUPTION${DECOY_CORRUPTION:+ }$([[ "$DECOY_CORRUPTION" == "1" ]] && echo "bins=$DECOY_LAG_BINS residual=$DECOY_MASK_RESIDUAL")${MB_TAG:+  [$MB_TAG]}"
-echo "MoE: experts=$MOE_NUM_EXPERTS topk=$MOE_TOPK intermediate=${MOE_INTERMEDIATE_SIZE:-<default 3072/expert>}  RUN_TAG=${RUN_TAG:-<none>}"
+echo "MoE: experts=$MOE_NUM_EXPERTS topk=$MOE_TOPK intermediate=${MOE_INTERMEDIATE_SIZE:-<default 3072/expert>}  expert_lora_rank=$MOE_EXPERT_LORA_RANK freeze_base=$MOE_FREEZE_BASE_FFN  RUN_TAG=${RUN_TAG:-<none>}"
 echo "MODEL_ABBR=$MODEL_ABBR  ->  $RUN_DIR"
 echo "Task:    $TASK   (data max_polyphony: $MAX_POLYPHONY)"
 echo "Detected GPUs: $NGPUS   Per-GPU batch: $BATCH_SIZE   Global: $((BATCH_SIZE * NGPUS))"
@@ -645,6 +661,9 @@ if [[ -z "$CKPT" ]]; then
         INIT_EXTRA=()
         if [[ -n "$MOE_INTERMEDIATE_SIZE" ]]; then
             INIT_EXTRA+=(--moe_intermediate_size "$MOE_INTERMEDIATE_SIZE")
+        fi
+        if [[ "$MOE_EXPERT_LORA_RANK" != "0" ]]; then
+            INIT_EXTRA+=(--moe_expert_lora_rank "$MOE_EXPERT_LORA_RANK")
         fi
         python init_pretrained_into_duet_block_diffusion.py \
             --pretrained "$PRETRAINED" \
@@ -691,6 +710,10 @@ if [[ "$SLOT_SEES_PREV_FRAME" == "1" ]]; then
 fi
 if [[ "$CROSS_LORA_RANK" != "0" ]]; then
     EXTRA_TRAIN_ARGS+=(--cross_lora_rank "$CROSS_LORA_RANK")
+fi
+if [[ "$MOE_EXPERT_LORA_RANK" != "0" ]]; then
+    EXTRA_TRAIN_ARGS+=(--moe_expert_lora_rank "$MOE_EXPERT_LORA_RANK"
+                       --moe_freeze_base_ffn "$MOE_FREEZE_BASE_FFN")
 fi
 if [[ "$AGREE_HEAD" == "1" ]]; then
     EXTRA_TRAIN_ARGS+=(--agree_head
