@@ -62,7 +62,8 @@ if [[ -n "$CONDA_ENV" && "${CONDA_DEFAULT_ENV:-}" != "$CONDA_ENV" ]]; then
     conda activate "$CONDA_ENV"
 fi
 cd "$REPO_DIR/midi_yinyang"
-[[ -n "${SLURM_JOB_ID:-}" ]] && mkdir -p /home/xinyue.li/logs
+# the cluster log dir (its #SBATCH --output); nothing to do elsewhere
+mkdir -p /home/xinyue.li/logs 2>/dev/null || true
 
 : "${HF_REPO:?set HF_REPO=<user>/<repo>}"
 INCLUDE="${INCLUDE:-}"
