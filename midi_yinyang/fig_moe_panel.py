@@ -43,7 +43,9 @@ def build():
     ew, eh = 0.86, BH
 
     def hbox(c, y, fill, base, sup, s, sub=True):
-        runs = [(base, 'b i'), (sup, 'sup i')] + ([(s + ',1:T−1', 'sub i')] if sub else [])
+        # sub: True -> 's,1:T-1'; 'stream' -> just the stream letter; False -> none
+        tail = {True: [(s + ',1:T−1', 'sub i')], 'stream': [(s, 'sub i')], False: []}[sub]
+        runs = [(base, 'b i'), (sup, 'sup i')] + tail
         S.rect(c - bw / 2, y, bw, bh, fill=fill, line=INK, lw=lw, runs=runs, size=FS, z=2)
 
     def plus(px, py, r=0.1):
@@ -97,7 +99,7 @@ def build():
         S.line(sx, yIn + bh / 2, sx, yAN + bh / 2, lw=AW)
         arrow(sx, yAN + bh / 2, c + side * (bw / 2 + 0.02), yAN + bh / 2)
         # output: the next block's input
-        hbox(c, yOut, fill, 'h', '(l+1)', s, sub=False)
+        hbox(c, yOut, fill, 'h', '(l+1)', s, sub='stream')
         arrow(c, yAN - 0.02, c, yOut + bh + 0.02)
     # the two banks turn into the output tokens, one frame ahead of the input:
     # translucent wedges from each bank up to the span of its stream's tokens
