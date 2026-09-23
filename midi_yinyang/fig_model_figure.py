@@ -27,15 +27,20 @@ CAP_H = 0.32
 
 
 def bounds(items):
-    ys = []
+    """(xmin, xmax, ymin, ymax) of the drawn content"""
+    xs, ys = [], []
     for it in items:
         if it['k'] == 'poly':
-            ys += [p[1] for p in it['points']]
+            xs += [p[0] for p in it['points']]; ys += [p[1] for p in it['points']]
         elif it['k'] in ('line', 'curve'):
-            ys += [it['y1'], it['y2']]
+            xs += [it['x1'], it['x2']]; ys += [it['y1'], it['y2']]
+        elif it['k'] == 'text':
+            # text boxes are wider than their glyphs; count the aligned edge only
+            edge = {'l': it['x'], 'r': it['x'] + it['w'], 'c': it['x'] + it['w'] / 2}[it['align']]
+            xs += [edge]; ys += [it['y'], it['y'] + it['h']]
         else:
-            ys += [it['y'], it['y'] + it['h']]
-    return min(ys), max(ys)
+            xs += [it['x'], it['x'] + it['w']]; ys += [it['y'], it['y'] + it['h']]
+    return min(xs), max(xs), min(ys), max(ys)
 
 
 def shifted(items, dx, dy):
@@ -60,26 +65,32 @@ def build():
         items = [it for it in items if not (it['k'] == 'text' and it['runs'] and
                                             it['runs'][0][0][:3] in ('a. ', 'b. ', 'c. '))]
         parts.append((items, cap))
-    bottoms = [bounds(items)[1] for items, _ in parts]
-    tops = [bounds(items)[0] for items, _ in parts]
+    boxes = [bounds(items) for items, _ in parts]
+    tops = [b[2] for b in boxes]; bottoms = [b[3] for b in boxes]
+    widths = [b[1] - b[0] for b in boxes]
     H = max(b - t for b, t in zip(bottoms, tops))      # tallest panel's content height
     top_margin = 0.15
-    fig_arch_pptx.SLIDE_W = len(parts) * PW + (len(parts) - 1) * GAP
+    # no margin left or right: panels abut the slide edges, GAP between them
+    fig_arch_pptx.SLIDE_W = sum(widths) + (len(parts) - 1) * GAP
     fig_arch_pptx.SLIDE_H = top_margin + H + 0.12 + CAP_H + 0.1
 
     S = Spec()
-    for i, ((items, cap), b, t) in enumerate(zip(parts, bottoms, tops)):
-        dx = i * (PW + GAP)
+    dxs = []
+    x_cursor = 0.0
+    for i, ((items, cap), (x0, x1, t, b)) in enumerate(zip(parts, boxes)):
+        dx = x_cursor - x0
+        dxs.append((dx, x0, x1))
         dy = top_margin + H - b                          # bottom-aligned
         S.items += shifted(items, dx, dy)
-        S.text(dx, top_margin + H + 0.12, PW, CAP_H, plain(cap), size=11, align='c')
+        S.text(x_cursor, top_margin + H + 0.12, x1 - x0, CAP_H, plain(cap), size=11, align='c')
+        x_cursor += (x1 - x0) + GAP
     # legend for the corner badges, one row, in the free space above panel (b)
-    lx = 1 * (PW + GAP)
-    lw_, lh = 4.75, 0.4
+    dx_b, xb0, xb1 = dxs[1]
+    lw_, lh = min(4.75, xb1 - xb0), 0.4
     b_top = top_margin + H - bottoms[1] + tops[1]        # panel (b)'s content top
     ly = max(0.05, top_margin + (b_top - top_margin - lh) / 2)   # centred in the free space
     assert ly + lh < b_top - 0.04, 'legend collides with panel (b)'
-    x = lx + (PW - lw_) / 2
+    x = dx_b + (xb0 + xb1) / 2 - lw_ / 2
     S.rect(x, ly, lw_, lh, fill='FFFFFF', line=INK, lw=1.3)
     S.text(x + 0.1, ly + 0.07, 0.6, 0.26, plain('\u2744\u2192\U0001F525'), size=10.5, align='l')
     S.text(x + 0.72, ly + 0.07, 1.8, 0.26, plain('pretrained, fine-tuned'), size=8, align='l')
