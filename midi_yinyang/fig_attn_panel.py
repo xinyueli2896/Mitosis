@@ -22,7 +22,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
-fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.3
+fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.05
 from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain  # noqa: E402
 from fig_style import FILL, LINE, COMP, CROSS, GREY_L, INK, LW, AW  # noqa: E402
 
@@ -32,7 +32,7 @@ def build():
     cx = {'x': 1.3, 'y': 3.5}                # lane centres
     bw, bh = 1.9, 0.4                        # wide boxes span self + cross
     # rows (top of box), y down
-    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.42, 0.94, 1.58, 2.2, 2.66, 3.95, 4.53, 5.1, 5.85
+    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.42, 0.94, 1.58, 2.2, 2.66, 3.7, 4.28, 4.85, 5.6
     tk = 0.42                                # token size
     sw, cw = 0.92, 0.9                       # Self Attn and Cross Attn widths
     side = {'x': -1, 'y': 1}
@@ -133,11 +133,11 @@ def build():
     for s in 'xy':
         sd = side[s]                       # +1 outward for y, -1 outward for x
         scx, ccx = centre(self_box[s]), centre(cross_box[s])
-        # self: own Q and K&V, from their outer halves, into the Self Attn box
-        S.curve(centre(qbox[s]) + sd * 0.12, yQ - 0.02, scx + sd * 0.2, ya,
-                color=GREY_L, lw=AW, arrow=True)
-        S.curve(centre(kvbox[s]) + sd * 0.12, yQ - 0.02, scx - sd * 0.2, ya,
-                color=GREY_L, lw=AW, arrow=True)
+        # self: own Q and K&V, straight grey arrows into the Self Attn box (sketch)
+        S.line(centre(qbox[s]) + sd * 0.12, yQ - 0.02, scx + sd * 0.2, ya,
+               color=GREY_L, lw=AW, arrow=True)
+        S.line(centre(kvbox[s]) + sd * 0.12, yQ - 0.02, scx - sd * 0.2, ya,
+               color=GREY_L, lw=AW, arrow=True)
     for s in 'xy':
         sd, o = side[s], other[s]
         col = CROSS[s][1]
