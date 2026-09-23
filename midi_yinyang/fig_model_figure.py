@@ -61,7 +61,7 @@ def build():
     H = max(b - t for b, t in zip(bottoms, tops))      # tallest panel's content height
     top_margin = 0.15
     fig_arch_pptx.SLIDE_W = len(parts) * PW + (len(parts) - 1) * GAP
-    fig_arch_pptx.SLIDE_H = top_margin + H + 0.12 + CAP_H + 0.34
+    fig_arch_pptx.SLIDE_H = top_margin + H + 0.12 + CAP_H + 0.1
 
     S = Spec()
     for i, ((items, cap), b, t) in enumerate(zip(parts, bottoms, tops)):
@@ -69,13 +69,17 @@ def build():
         dy = top_margin + H - b                          # bottom-aligned
         S.items += shifted(items, dx, dy)
         S.text(dx, top_margin + H + 0.12, PW, CAP_H, plain(cap), size=11, align='c')
-    # legend for the corner sign
-    ly = top_margin + H + 0.12 + CAP_H + 0.06
-    W = fig_arch_pptx.SLIDE_W
-    S.text(W / 2 - 3.0, ly, 6.0, 0.22,
-           plain('\u2744\u2192\U0001F525  initialised from the pretrained single-stream '
-                 'model, fine-tuned        \U0001F525  new component, trained from scratch'),
-           size=8.5, align='c', color=INK_2)
+    # legend for the corner badges, in the empty space above panel (b)
+    lx = 1 * (PW + GAP)
+    ly = top_margin + 0.55
+    lw_, lh = 4.0, 0.78
+    S.rect(lx + (PW - lw_) / 2, ly, lw_, lh, fill='FFFFFF', line=INK, lw=0.9)
+    for k, (glyph, txt) in enumerate((('\u2744\u2192\U0001F525',
+                                       'from the pretrained single-stream model, fine-tuned'),
+                                      ('\U0001F525', 'new component, trained from scratch'))):
+        yy = ly + 0.1 + k * 0.32
+        S.text(lx + (PW - lw_) / 2 + 0.1, yy, 0.6, 0.26, plain(glyph), size=10.5, align='l')
+        S.text(lx + (PW - lw_) / 2 + 0.72, yy, lw_ - 0.8, 0.26, plain(txt), size=8.5, align='l')
     return S
 
 

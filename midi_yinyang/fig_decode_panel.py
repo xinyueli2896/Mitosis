@@ -57,7 +57,7 @@ def build():
         S.line(x1, y1, x2, y2, lw=0.8, arrow=True)
 
     def block(y):
-        S.rect(bx0, y, bx1 - bx0, bh, fill='FFFFFF', line=INK, lw=lw,
+        S.rect(bx0, y, bx1 - bx0, bh, fill='DEDEDE', line=INK, lw=lw,
                runs=[('Duet', ''), (', ', ''), ('L', 'i'), (' blocks', '')], size=9.5)
 
     def row_label(y, frame, step):

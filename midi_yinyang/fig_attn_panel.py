@@ -25,6 +25,7 @@ fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.1
 from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK  # noqa: E402
 
 LAV, TEAL = 'B8BBEC', 'B7DBD8'
+COMP = 'DEDEDE'                          # every model component
 LAV_L, TEAL_L = '8F93D9', '6FB5AE'      # the Q/K/V routing lines
 FILL = {'x': LAV, 'y': TEAL}
 LINE = {'x': LAV_L, 'y': TEAL_L}
@@ -44,9 +45,9 @@ def build():
         """corner sign: snowflake->fire = initialised from the pretrained
         model and fine-tuned; fire = new component, trained from scratch"""
         glyph = '\u2744\u2192\U0001F525' if kind == 'pre' else '\U0001F525'
-        S.text(x + w - 0.45, y - 0.085, 0.5, 0.17, plain(glyph), size=6.5, align='r', z=6)   # badge straddling the top-right corner
+        S.text(x + w - 0.6, y - 0.12, 0.66, 0.24, plain(glyph), size=9.5, align='r', z=6)   # badge straddling the top-right corner
 
-    def wide(s, y, runs, fill='FFFFFF', size=9.5, pre=False):
+    def wide(s, y, runs, fill=COMP, size=9.5, pre=False):
         S.rect(cx[s] - bw / 2, y, bw, bh, fill=fill, line=INK, lw=lw, runs=runs, size=size)
         if pre:
             mark(cx[s] - bw / 2, y, bw)
@@ -83,21 +84,20 @@ def build():
         c = cx[s]
         wide(s, yH, bank('h', 'l', s), fill=FILL[s])
         arrow(c, yH - 0.02, c, yL + bh + 0.02)
-        wide(s, yL, plain('Linear QKV'), pre=True)
+        wide(s, yL, plain('Linear QKV'))
         for x, lab in zip(qkv[s], 'QKV'):
             arrow(c, yL - 0.02, x, yQ + sq + 0.02)
             S.rect(x - sq / 2, yQ, sq, sq, fill='FFFFFF', line=INK, lw=lw, runs=m(lab), size=9.5)
         # attention boxes
-        S.rect(self_box[s][0], yA, bw, bh, fill='FFFFFF', line=INK, lw=lw,
+        S.rect(self_box[s][0], yA, bw, bh, fill=COMP, line=INK, lw=lw,
                runs=plain('Self Attn'), size=9.5)
-        mark(self_box[s][0], yA, bw)
-        S.rect(cross_box[s][0], yA, cw, bh, fill='FFFFFF', line=INK, lw=lw,
+        mark(self_box[s][0], yA, bw)                 # the attention: pretrained, fine-tuned
+        S.rect(cross_box[s][0], yA, cw, bh, fill=COMP, line=INK, lw=lw,
                runs=plain('Cross'), size=9.5)
-        mark(cross_box[s][0], yA, cw, kind='new')
         # gate on the cross readout, summed with the self readout
         ccx = (cross_box[s][0] + cross_box[s][1]) / 2
         gx0 = c + side[s] * -0.28 if False else (c + 0.3 if s == 'x' else c - 0.3 - 0.36)
-        S.rect(gx0, yG - 0.02, 0.36, 0.3, fill='FFFFFF', line=INK, lw=lw, runs=plain('gate'),
+        S.rect(gx0, yG - 0.02, 0.36, 0.3, fill=COMP, line=INK, lw=lw, runs=plain('gate'),
                size=7.5)
         mark(gx0, yG - 0.02, 0.36, kind='new')
         gy = yG + 0.13
@@ -112,11 +112,11 @@ def build():
         arrow(c, yA - 0.02, c, gy + 0.12)
         # output projection, o, add & norm, skip
         arrow(c, gy - 0.12, c, yP + bh + 0.02)
-        wide(s, yP, plain('Output projection'), size=8.5, pre=True)
+        wide(s, yP, plain('Output projection'), size=8.5)
         arrow(c, yP - 0.02, c, yO + bh + 0.02)
         wide(s, yO, bank('o', 'l', s), fill=FILL[s])
         arrow(c, yO - 0.02, c, yAN + bh + 0.02)
-        wide(s, yAN, plain('Add & Norm'), pre=True)
+        wide(s, yAN, plain('Add & Norm'))
         sx = c + side[s] * (bw / 2 + 0.3)
         S.line(c + side[s] * bw / 2, yH + bh / 2, sx, yH + bh / 2, lw=0.8)
         S.line(sx, yH + bh / 2, sx, yAN + bh / 2, lw=0.8)

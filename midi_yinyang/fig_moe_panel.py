@@ -26,7 +26,7 @@ from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK, INK
 
 LAV, LAV_D = 'B8BBEC', '8F93D9'
 TEAL, TEAL_D = 'B7DBD8', '7CBDB7'
-GREY, LIGHT = 'D9D9D9', 'EFEFEF'
+GREY, LIGHT = 'DEDEDE', 'F1F1F1'
 HT = 'h̃'                       # h with combining tilde
 
 
@@ -56,26 +56,26 @@ def build():
         """corner sign: snowflake->fire = initialised from the pretrained
         model and fine-tuned; fire = new component, trained from scratch"""
         glyph = '\u2744\u2192\U0001F525' if kind == 'pre' else '\U0001F525'
-        S.text(x + w - 0.45, y - 0.085, 0.5, 0.17, plain(glyph), size=6.5, align='r', z=6)   # badge straddling the top-right corner
+        S.text(x + w - 0.6, y - 0.12, 0.66, 0.24, plain(glyph), size=9.5, align='r', z=6)   # badge straddling the top-right corner
 
     S.text(0.12, 0.05, 3.5, 0.28, [('b. Per-stream expert routing', 'b')], size=10.5, align='l')
 
     # shared expert pool: one grey band, four experts, no stream subscripts
-    S.rect(ex[0] - ew / 2 - 0.12, yExp - 0.1, ex[-1] - ex[0] + ew + 0.24, eh + 0.2,
-           fill=LIGHT, line=None, z=0)
-    S.text(ex[-1] + ew / 2 - 1.5, yExp - 0.1 - 0.17, 1.5, 0.16, plain('shared pool, E = 4'),
+    px0, py0, pw = ex[0] - ew / 2 - 0.12, yExp - 0.1, ex[-1] - ex[0] + ew + 0.24
+    S.rect(px0, py0, pw, eh + 0.2, fill=LIGHT, line=None, z=0)
+    mark(px0, py0, pw)                    # the expert pool: replicated from the pretrained FFN
+    S.text(px0 + pw - 0.75 - 1.5, py0 - 0.17, 1.5, 0.16, plain('shared pool, E = 4'),
            size=7, align='r', color=INK_2)
     for i, c in enumerate(ex):
         S.rect(c - ew / 2, yExp, ew, eh, fill=GREY, line=INK, lw=lw,
                runs=[('Expert ', ''), (str(i + 1), '')], size=9.5)
-        mark(c - ew / 2, yExp, ew)          # replicated from the pretrained FFN
 
     chosen = {'x': (0, 2), 'y': (1, 2)}      # top-2 per stream; expert 3 serves both
     for s, c, fill, dark in (('x', cx, LAV, LAV_D), ('y', cy, TEAL, TEAL_D)):
         # bottom: the attention sub-layer's output
         hbox(c, yIn, fill, HT, 'l', s)
         # router
-        S.rect(c - bw / 2, yRt, bw, bh, fill=fill, line=INK, lw=lw,
+        S.rect(c - bw / 2, yRt, bw, bh, fill=GREY, line=INK, lw=lw,
                runs=[('Top-2 Router', ''), (s, 'sub i')], size=9.5)
         mark(c - bw / 2, yRt, bw, kind='new')
         arrow(c, yIn - 0.02, c, yRt + bh + 0.02)
@@ -90,9 +90,8 @@ def build():
                m('π', (str(chosen[s][0] + 1) + ',' + str(chosen[s][1] + 1), 'sub')),
                size=7.5, align='l' if s == 'x' else 'r', color=INK_2)
         # add & norm, with the skip from h-tilde around the sub-layer
-        S.rect(c - bw / 2, yAN, bw, bh, fill='FFFFFF', line=INK, lw=lw,
+        S.rect(c - bw / 2, yAN, bw, bh, fill=GREY, line=INK, lw=lw,
                runs=plain('Add & Norm'), size=9.5)
-        mark(c - bw / 2, yAN, bw)
         arrow(c, ySum - 0.12, c, yAN + bh + 0.02)
         side = -1 if s == 'x' else 1
         sx = c + side * (bw / 2 + 0.28)
