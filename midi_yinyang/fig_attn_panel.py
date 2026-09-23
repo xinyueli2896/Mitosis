@@ -1,0 +1,153 @@
+"""Panel a of the model figure: the dual-stream attention sub-layer,
+reproduced from the hand-made drawing of 2026-09-23 in the style of
+fig_moe_panel.py / fig_decode_panel.py (lavender = stream x, teal =
+stream y, black outlines, Cambria).
+
+Bottom up, per stream: the interleaved tokens gather into the stream's
+bank h^l -> Linear QKV -> Q, K, V -> Self Attn (own Q, K, V) and Cross
+(own Q; the OTHER stream's K, V, drawn in that stream's colour) -> the
+cross readout through a gate -> (+) with the self readout -> Output
+projection -> o^l -> Add & Norm, with the skip from h^l drawn around the
+outside. The drawing's content is kept as is; only the right-hand o box
+is relabelled o_y (the drawing said o_x twice).
+
+    python fig_attn_panel.py --out <path-without-extension>
+writes <out>.pptx (editable) and <out>.png (preview).
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fig_arch_pptx  # noqa: E402
+fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 5.85
+from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK  # noqa: E402
+
+LAV, TEAL = 'B8BBEC', 'B7DBD8'
+LAV_L, TEAL_L = 'A9ACE6', '9FCFCA'      # the Q/K/V routing lines
+FILL = {'x': LAV, 'y': TEAL}
+LINE = {'x': LAV_L, 'y': TEAL_L}
+
+
+def build():
+    S = Spec()
+    lw = 0.9
+    cx = {'x': 1.2, 'y': 3.6}                # lane centres
+    bw, bh = 1.3, 0.36                       # wide boxes
+    # rows (top of box), y down
+    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.46, 0.94, 1.42, 2.02, 2.38, 3.4, 3.98, 4.55, 5.3
+    tk, sq = 0.42, 0.3                       # token size, Q/K/V box size
+    cw = 0.4                                 # Cross box width
+
+    def wide(s, y, runs, fill='FFFFFF', size=9.5):
+        S.rect(cx[s] - bw / 2, y, bw, bh, fill=fill, line=INK, lw=lw, runs=runs, size=size)
+
+    def arrow(x1, y1, x2, y2, color=INK, lw_=0.8):
+        S.line(x1, y1, x2, y2, lw=lw_, arrow=True, color=color)
+
+    def bank(base, sup, s):
+        return [(base, 'b i'), (sup, 'sup i'), (s + ',1:T−1', 'sub i')]
+
+    def plus(px, py, r=0.1):
+        S.rect(px - r, py - r, 2 * r, 2 * r, fill='FFFFFF', line=INK, lw=lw, shape='ellipse', z=4)
+        S.line(px - 0.05, py, px + 0.05, py, lw=lw, z=5)
+        S.line(px, py - 0.05, px, py + 0.05, lw=lw, z=5)
+
+    S.text(0.12, 0.05, 3.5, 0.28, [('a. Dual-stream attention', 'b')], size=10.5, align='l')
+
+    # ------------------------------------------------------------ tokens -> banks
+    tok = [('x', '0'), ('y', '0'), ('x', '1'), ('y', '1'), ('x', '2'), ('y', '2')]
+    tx = [0.65 + i * 0.7 for i in range(6)]
+    for (s, idx), x in zip(tok, tx):
+        S.rect(x - tk / 2, yT, tk, tk, fill=FILL[s], line=INK, lw=lw, runs=m(s, (idx, 'sub')),
+               size=9.5)
+        S.line(x, yT - 0.02, cx[s], yH + bh + 0.02, lw=0.7)
+    # projections: geometry per stream
+    qkv = {s: [cx[s] - 0.45, cx[s], cx[s] + 0.45] for s in 'xy'}
+    side = {'x': -1, 'y': 1}
+    self_box = {s: (cx[s] - bw / 2, cx[s] + bw / 2) for s in 'xy'}
+    cross_box = {'x': (cx['x'] + bw / 2 + 0.08, cx['x'] + bw / 2 + 0.08 + cw),
+                 'y': (cx['y'] - bw / 2 - 0.08 - cw, cx['y'] - bw / 2 - 0.08)}
+    other = {'x': 'y', 'y': 'x'}
+
+    for s in 'xy':
+        c = cx[s]
+        wide(s, yH, bank('h', 'l', s), fill=FILL[s])
+        arrow(c, yH - 0.02, c, yL + bh + 0.02)
+        wide(s, yL, plain('Linear QKV'))
+        for x, lab in zip(qkv[s], 'QKV'):
+            arrow(c, yL - 0.02, x, yQ + sq + 0.02)
+            S.rect(x - sq / 2, yQ, sq, sq, fill='FFFFFF', line=INK, lw=lw, runs=m(lab), size=9.5)
+        # attention boxes
+        S.rect(self_box[s][0], yA, bw, bh, fill='FFFFFF', line=INK, lw=lw,
+               runs=plain('Self Attn'), size=9.5)
+        S.rect(cross_box[s][0], yA, cw, bh, fill='FFFFFF', line=INK, lw=lw,
+               runs=plain('Cross'), size=9.5)
+        # gate on the cross readout, summed with the self readout
+        ccx = (cross_box[s][0] + cross_box[s][1]) / 2
+        gx0 = c + side[s] * -0.28 if False else (c + 0.3 if s == 'x' else c - 0.3 - 0.36)
+        S.rect(gx0, yG - 0.02, 0.36, 0.3, fill='FFFFFF', line=INK, lw=lw, runs=plain('gate'),
+               size=7.5)
+        gy = yG + 0.13
+        S.line(ccx, yA - 0.02, ccx, gy, lw=0.8)
+        if s == 'x':
+            S.line(ccx, gy, gx0 + 0.36 + 0.02, gy, lw=0.8)
+            arrow(gx0 - 0.02, gy, c + 0.12, gy)
+        else:
+            S.line(ccx, gy, gx0 - 0.02, gy, lw=0.8)
+            arrow(gx0 + 0.36 + 0.02, gy, c - 0.12, gy)
+        plus(c, gy)
+        arrow(c, yA - 0.02, c, gy + 0.12)
+        # output projection, o, add & norm, skip
+        arrow(c, gy - 0.12, c, yP + bh + 0.02)
+        wide(s, yP, plain('Output projection'), size=9)
+        arrow(c, yP - 0.02, c, yO + bh + 0.02)
+        wide(s, yO, bank('o', 'l', s), fill=FILL[s])
+        arrow(c, yO - 0.02, c, yAN + bh + 0.02)
+        wide(s, yAN, plain('Add & Norm'))
+        sx = c + side[s] * (bw / 2 + 0.3)
+        S.line(c + side[s] * bw / 2, yH + bh / 2, sx, yH + bh / 2, lw=0.8)
+        S.line(sx, yH + bh / 2, sx, yAN + bh / 2, lw=0.8)
+        arrow(sx, yAN + bh / 2, c + side[s] * (bw / 2 + 0.02), yAN + bh / 2)
+
+    # ------------------------------------------------------------ Q/K/V routing
+    # Self Attn: own Q, K, V straight up. Cross: own Q, the other stream's
+    # K and V, in that stream's colour. Elbows at staggered heights.
+    ya = yA + bh + 0.02                      # arrow tips at the attention boxes' bottom
+    for s in 'xy':
+        col = LINE[s]
+        for x in qkv[s]:
+            arrow(x, yQ - 0.02, x, ya, color=col)
+    for s in 'xy':                           # cross box of stream s
+        o = other[s]
+        x0c, x1c = cross_box[s]
+        targets = [x0c + cw * 0.2, x0c + cw * 0.5, x0c + cw * 0.8]
+        # own Q
+        yr = yQ - 0.24
+        S.line(qkv[s][0], yQ - 0.02, qkv[s][0], yr, lw=0.8, color=LINE[s]) if False else None
+        qx = qkv[s][0]
+        S.line(qx + (0.06 if s == 'x' else -0.06), yQ - 0.02, qx + (0.06 if s == 'x' else -0.06), yr,
+               lw=0.8, color=LINE[s])
+        S.line(qx + (0.06 if s == 'x' else -0.06), yr, targets[0], yr, lw=0.8, color=LINE[s])
+        arrow(targets[0], yr, targets[0], ya, color=LINE[s])
+        # other stream's K and V
+        for k, (xk, yr2) in enumerate(((qkv[o][1], yQ - 0.4), (qkv[o][2], yQ - 0.56))):
+            xs = xk + (-0.06 if o == 'y' else 0.06)
+            S.line(xs, yQ - 0.02, xs, yr2, lw=0.8, color=LINE[o])
+            S.line(xs, yr2, targets[k + 1], yr2, lw=0.8, color=LINE[o])
+            arrow(targets[k + 1], yr2, targets[k + 1], ya, color=LINE[o])
+    return S
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--out', required=True, help='path without extension')
+    args = ap.parse_args()
+    S = build()
+    write_pptx_js(S, args.out + '.pptx'); print('wrote', args.out + '.pptx')
+    write_preview(S, args.out + '.png'); print('wrote', args.out + '.png')
+
+
+if __name__ == '__main__':
+    main()
