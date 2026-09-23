@@ -56,3 +56,7 @@ python subjective_anova.py --csv "$RATINGS" --out "$OUT" \
 # post-hoc markers -> {OUT}_dots.pdf/.png
 python figures/plot_subjective_dots.py --csv "$RATINGS" --out "${OUT}_dots" \
     ${EXCLUDE:+--exclude $EXCLUDE} $([ "$DROP_CONSTANT" = 1 ] && echo --drop-constant)
+
+# the same in one compact panel (the paper's figure) -> {OUT}_compact.pdf/.png
+python figures/plot_subjective_compact.py --csv "$RATINGS" --out "${OUT}_compact" \
+    ${EXCLUDE:+--exclude $EXCLUDE} $([ "$DROP_CONSTANT" = 1 ] && echo --drop-constant)
