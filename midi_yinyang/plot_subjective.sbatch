@@ -1,6 +1,7 @@
 #!/bin/bash
-# SLURM (CPU): the subjective-evaluation spider chart and the rater
-# demographics, from the listening page's ratings CSV.
+# SLURM (CPU): the subjective-evaluation spider chart, the rater
+# demographics, the paired tests and the repeated-measures ANOVA, from
+# the listening page's ratings CSV.
 #
 # Env knobs (--export=ALL,KEY=val):
 #   RATINGS   the CSV (required)
@@ -44,4 +45,9 @@ SQUASH="${SQUASH:-0.12}"
 DROP_CONSTANT="${DROP_CONSTANT:-1}"
 
 python subjective_spider.py --csv "$RATINGS" --out "$OUT" --rmin "$RMIN" --palette "$PALETTE" --squash "$SQUASH" \
+    ${EXCLUDE:+--exclude $EXCLUDE} $([ "$DROP_CONSTANT" = 1 ] && echo --drop-constant)
+
+# repeated-measures ANOVA over systems (per axis), Holm post-hoc against ours,
+# with the rater-song pair and then the rater as subject -> {OUT}_anova.csv, {OUT}_posthoc.csv
+python subjective_anova.py --csv "$RATINGS" --out "$OUT" \
     ${EXCLUDE:+--exclude $EXCLUDE} $([ "$DROP_CONSTANT" = 1 ] && echo --drop-constant)

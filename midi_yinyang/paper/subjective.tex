@@ -5,7 +5,11 @@
 % ratings_7.csv through subjective_spider.py --drop-constant (17 raters
 % kept), NOT remembered:
 %   demographics, per-system means      subjective_spider.py stdout
-%   paired differences and p-values     results/subjective_paired.csv
+%   repeated-measures ANOVA, post-hoc    subjective_anova.py ->
+%                                       results/subjective_anova.csv,
+%                                       results/subjective_posthoc.csv
+%   (the Wilcoxon paired tests of subjective_spider.py are kept in
+%    results/subjective_paired.csv but no longer reported)
 %   the spider chart (the reported form, 2026-09-23; the table
 %     paper/tables/listening_mos.tex is kept but not \input)
 %                                       figures/subjective_spider.pdf
@@ -64,12 +68,18 @@ female; age 21--55, median 27) report some musical training (11), none
 system, 6--30 per rater (median 30); each song is rated by 11--15
 raters.
 
-\textbf{Statistics.} Each rater rates every system on a song, so a
-rater--song pair is the unit of comparison. For each system and each
-axis, and for the mean over axes, the difference between the rating of
-\sys and the rating of the system on the same rater--song pair is
-tested with a two-sided Wilcoxon signed-rank test over the 62 pairs;
-tied pairs are discarded.
+\textbf{Statistics.} Each rater rates every system on a song, so the
+ratings form a complete repeated-measures design: the subject is a
+rater--song pair ($n = 62$), the within-subject factor is the system
+(six levels), and each cell holds one rating. For each axis, and for
+the mean over axes, a one-way repeated-measures analysis of variance
+(ANOVA) tests the effect of system, with Greenhouse--Geisser correction
+of the degrees of freedom and partial $\eta^2$ as effect size.
+Post hoc, \sys is compared with each other system by a paired
+$t$-test, Holm-corrected over the five comparisons of an axis. A rater
+contributes up to five pairs, which are not independent; the analysis
+is therefore repeated with the rater as subject ($n = 17$, a rater's
+songs averaged per system).
 
 \begin{figure}[t]
   \centering
@@ -81,31 +91,45 @@ tied pairs are discarded.
   \label{fig:subjective}
 \end{figure}
 
-\textbf{Results.} Fig.~\ref{fig:subjective} reports the means. \sys
-obtains the highest mean among the systems on consistency ($3.92$),
-structure ($3.85$), melody--chord fit ($3.94$) and creativity ($3.71$),
-and overall ($3.81$); the finetuned single-stream model obtains the
-highest mean on musicality ($3.77$ against $3.65$). Paired
-differences, \sys minus system, are as follows.
+\textbf{Results.} Fig.~\ref{fig:subjective} reports the means. The
+effect of system is significant on every axis: $F(5, 305)$ is $16.5$
+for consistency, $15.8$ for structure, $17.2$ for melody--chord fit,
+$19.6$ for musicality, $10.3$ for creativity and $23.1$ for the mean
+over axes, all $p < 10^{-7}$ after correction ($\varepsilon$ between
+$0.78$ and $0.88$), with partial $\eta^2$ from $0.15$ (creativity) to
+$0.27$ (overall). With the rater as subject the effect remains
+significant on every axis, $F(5, 80)$ from $5.5$ to $13.1$, $p \le
+0.004$, partial $\eta^2$ from $0.26$ to $0.45$. \sys obtains the
+highest mean among the systems on consistency ($3.92$), structure
+($3.85$), melody--chord fit ($3.94$), creativity ($3.71$) and overall
+($3.81$); the finetuned single-stream model obtains the highest mean on
+musicality ($3.77$ against $3.65$). Holm-corrected post-hoc
+differences, \sys minus system, over the 62 pairs:
 \begin{itemize}
-  \item Single-stream, scratch ($2.99$ overall): $+0.83$ overall,
-    $p < 0.001$; positive and significant on every axis
-    ($+0.71$ to $+0.95$, $p < 0.001$); \sys rated higher in 47 of 62
-    pairs and lower in 10.
-  \item Whole-Song-Gen ($3.35$): $+0.46$ overall, $p < 0.001$;
-    positive and significant on every axis, from $+0.31$ on creativity
-    ($p = 0.036$) to $+0.66$ on consistency ($p < 0.001$).
-  \item Anticipatory Music Transformer ($3.65$): $+0.16$ overall,
-    $p = 0.12$; significant on consistency only ($+0.31$, $p = 0.031$);
-    $+0.05$ on musicality and on creativity ($p > 0.6$).
-  \item Single-stream, finetuned ($3.71$): $+0.10$ overall,
-    $p = 0.33$; no axis is significant; the largest differences are
-    $+0.21$ on fit ($p = 0.10$) and $-0.13$ on musicality
-    ($p = 0.36$).
-  \item Ground truth ($4.24$): $-0.43$ overall, $p < 0.001$; negative
-    and significant on every axis, from $-0.26$ on consistency
-    ($p = 0.037$) to $-0.61$ on musicality ($p < 0.001$).
+  \item Single-stream, scratch ($2.99$ overall): $+0.83$ overall and
+    $+0.71$ to $+0.95$ per axis, all $p \le 0.001$.
+  \item Whole-Song-Gen ($3.35$): $+0.46$ overall ($p < 0.001$);
+    $+0.66$ on consistency ($p < 0.001$), $+0.47$ on structure
+    ($p = 0.007$), $+0.48$ on fit ($p = 0.011$), $+0.39$ on musicality
+    ($p = 0.021$); $+0.31$ on creativity is not significant
+    ($p = 0.094$).
+  \item Anticipatory Music Transformer ($3.65$): $+0.16$ overall
+    ($p = 0.35$); no axis is significant, the largest difference being
+    $+0.31$ on consistency ($p = 0.088$).
+  \item Single-stream, finetuned ($3.71$): $+0.10$ overall
+    ($p = 0.35$); no axis is significant; $-0.13$ on musicality
+    ($p = 0.70$).
+  \item Ground truth ($4.24$): $-0.43$ overall ($p < 0.001$);
+    $-0.40$ on structure ($p = 0.007$), $-0.45$ on fit ($p = 0.001$),
+    $-0.61$ on musicality ($p < 0.001$), $-0.40$ on creativity
+    ($p = 0.031$); $-0.26$ on consistency is not significant
+    ($p = 0.088$).
 \end{itemize}
+With the rater as subject, the differences to the scratch single-stream
+model remain significant on every axis ($p \le 0.045$) and to
+Whole-Song-Gen overall ($+0.42$, $p = 0.009$) and on consistency
+($p = 0.005$); the difference to ground truth does not reach
+significance on any axis at $n = 17$ ($-0.29$ overall, $p = 0.20$).
 The subjective ordering, ground truth, \sys, finetuned single-stream,
 Anticipatory Music Transformer, Whole-Song-Gen, scratch single-stream,
 agrees with the objective ordering of Table~\ref{tab:e1}. The
