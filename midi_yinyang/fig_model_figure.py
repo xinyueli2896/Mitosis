@@ -78,10 +78,10 @@ def build():
     x = lx + (PW - lw_) / 2
     S.rect(x, ly, lw_, lh, fill='FFFFFF', line=INK, lw=0.9)
     S.text(x + 0.1, ly + 0.07, 0.6, 0.26, plain('\u2744\u2192\U0001F525'), size=10.5, align='l')
-    S.text(x + 0.72, ly + 0.07, 1.9, 0.26, plain('from the pretrained model, fine-tuned'),
+    S.text(x + 0.72, ly + 0.07, 2.0, 0.26, plain('pretrained, then fine-tuned'),
            size=8.5, align='l')
-    S.text(x + 2.75, ly + 0.07, 0.35, 0.26, plain('\U0001F525'), size=10.5, align='l')
-    S.text(x + 3.1, ly + 0.07, 1.55, 0.26, plain('new, trained from scratch'), size=8.5, align='l')
+    S.text(x + 2.85, ly + 0.07, 0.35, 0.26, plain('\U0001F525'), size=10.5, align='l')
+    S.text(x + 3.2, ly + 0.07, 1.45, 0.26, plain('new, trained from scratch'), size=8.5, align='l')
     return S
 
 
