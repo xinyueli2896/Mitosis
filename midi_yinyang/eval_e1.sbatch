@@ -12,6 +12,9 @@
 #   A3    the model: duet block diffusion, K=4 refinement, co mode
 #   A3f   A3 + slot_sees_prev_frame (the mask fix; VARIANTS.md A.3f),
 #         same decoder and schedule as A3; the flag travels in the ckpt
+#   A3K1     refinement depth 1 on the A3 ckpt (masked seed + one draft round)
+#   A3ctcaTmix  the paper decode (A3ctcaT) with the follower's AR draft mixed
+#            into its denoised distribution, weight A3_CTC_FOLLOWER_MIX (0.5)
 #   A3K0, A3ctc, A3ctcc, A3ctc2, A3ctca   decode variants on the A3 ckpt (not in
 #         the default list): refinement depth 0; commit-then-condition
 #         with melody leading / chord leading / both passes / alternating
@@ -221,7 +224,7 @@ SYSTEMS="${SYSTEMS:-A1 A3 A3f S1 S-scratch P-mc P-cm WS}"
 # (happened 2026-09-10, job 225780). With generation on, 'all' would try
 # to generate every system, so keep it to score-only runs.
 if [[ "$SYSTEMS" == "all" ]]; then
-    SYSTEMS="A11aT A11K4 A1 A1cp8 A3 A3f A3fctcaT A3K0 A3ctc A3ctcc A3ctc2 A3ctca A3ctcaT A3c A3fc A3fcaT A3fcaTar A3fcK4 A10 A12 S1 S-scratch S0 P-mc P-cm WS WSf WSfv WSfv4 AMT"
+    SYSTEMS="A11aT A11K4 A1 A1cp8 A3 A3f A3fctcaT A3K0 A3K1 A3ctcaTmix A3ctc A3ctcc A3ctc2 A3ctca A3ctcaT A3c A3fc A3fcaT A3fcaTar A3fcK4 A10 A12 S1 S-scratch S0 P-mc P-cm WS WSf WSfv WSfv4 AMT"
 fi
 FORCE="${FORCE:-}"
 CKPT_A1="${CKPT_A1:-ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_melchord_cp4tar_batch_8_schedule}"
@@ -545,7 +548,7 @@ generate() {
             --temperature 1.0 --n-samples "$N_SAMPLES" \
             --max-polyphony "$cp" --skip-existing \
             --model-size large --moe-num-experts 4 --moe-topk 2 ;;
-    A3|A3f|A3fctcaT|A3K0|A3ctc|A3ctcc|A3ctc2|A3ctca|A3ctcaT|A3c|A3fc|A3fcaT|A3fcK4|A3fcaTar|A11aT|A11K4|A12)
+    A3|A3f|A3fctcaT|A3K0|A3K1|A3ctcaTmix|A3ctc|A3ctcc|A3ctc2|A3ctca|A3ctcaT|A3c|A3fc|A3fcaT|A3fcK4|A3fcaTar|A11aT|A11K4|A12)
         # Decode variants share the A3 checkpoint and differ only in the
         # env the decoder reads (A3_REFINE_STEPS / A3_SCHEDULE):
         #   A3K0    refinement depth 0: the AR head's draft is the output
@@ -579,6 +582,15 @@ generate() {
             A3ctc2)   denv=(A3_SCHEDULE=ctc2_m) ;;
             A3ctca)   denv=(A3_SCHEDULE=ctc_alt) ;;   # leader alternates per frame: symmetric in expectation
             A3ctcaT)  denv=(A3_SCHEDULE=ctc_alt A3_FINAL_TEMP=1.0 A3_TOP_P=1.0) ;;   # same, follower sampled at T=1, no nucleus cut (repetition check)
+            # the paper decode with the follower's own draft kept: its
+            # sub-tokens are sampled from a mixture of the denoised
+            # distribution and the AR draft distribution, weight
+            # A3_CTC_FOLLOWER_MIX (default 0.5) on the draft
+            A3ctcaTmix) denv=(A3_SCHEDULE=ctc_alt A3_FINAL_TEMP=1.0 A3_TOP_P=1.0
+                              A3_CTC_FOLLOWER_MIX="${A3_CTC_FOLLOWER_MIX:-0.5}"
+                              A3_CTC_MIX_MODE="${A3_CTC_MIX_MODE:-linear}") ;;
+            # refinement depth 1: one masked seed round, one draft round
+            A3K1)     denv=(A3_SCHEDULE=refine A3_REFINE_STEPS=1) ;;
             A3c|A3fc) denv=(A3_SCHEDULE="${A3C_SCHEDULE:-ctc_m}") ;;
             A3fcaT|A3fcaTar|A3fctcaT|A11aT) denv=(A3_SCHEDULE=ctc_alt A3_FINAL_TEMP=1.0 A3_TOP_P=1.0) ;;
             A11K4)    denv=(A3_SCHEDULE=refine) ;;

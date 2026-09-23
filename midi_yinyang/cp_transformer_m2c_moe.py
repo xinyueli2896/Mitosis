@@ -460,11 +460,27 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         max_subseq_len: int = 32,
         temperature: float = 1.0,
         token_type_id: int = 1,   # 0=melody, 1=chord
+        h_alt=None,
+        alt_weight: float = 0.0,
+        mix_mode: str = 'linear',
     ):
+        """Sample one frame's sub-tokens from the global hidden state h.
+
+        h_alt / alt_weight (2026-09-23, draft-and-denoise follower mix):
+        a SECOND conditioning vector decoded in lockstep on the same
+        sub-token prefix, its per-step distribution mixed into the
+        first's -- linear: (1-w) p_h + w p_alt; geo: softmax of the
+        weighted logits -- before nucleus filtering and sampling. Lets
+        the follower's denoised distribution keep a share of its own
+        autoregressive draft instead of discarding it. Off by default
+        (alt_weight 0 is byte-identical to the plain path).
+        """
         batch_size, _ = h.shape
         device = h.device
         y = torch.zeros((batch_size, 0), dtype=torch.long, device=device)
         emb = h[:, None, :]   # [B, 1, H]
+        use_alt = h_alt is not None and alt_weight > 0.0
+        emb_alt = h_alt[:, None, :] if use_alt else None
         eos_triggered = torch.zeros(batch_size, dtype=torch.bool, device=device)
 
         min_tokens_before_eos = (
@@ -520,31 +536,49 @@ class RoFormerSymbolicTransformer(L.LightningModule):
 
             valid[:, self.tokenizer.pad_token] = False
             logits = logits.masked_fill(~valid, float("-inf"))
+            if use_alt:
+                h_dec_alt = self.local_decoder(
+                    emb_alt, attention_mask=self.buffered_future_mask(emb_alt),
+                )[0]
+                logits_alt = self.final_decoder(h_dec_alt[:, -1]).masked_fill(
+                    ~valid, float("-inf"))
+
+            def _probs(temp):
+                # the per-step distribution at temperature temp, mixed with
+                # the second context when one is given
+                if not use_alt:
+                    return F.softmax(logits / temp, dim=-1)
+                w = float(alt_weight)
+                if mix_mode == 'geo':
+                    return F.softmax(((1.0 - w) * logits + w * logits_alt) / temp,
+                                     dim=-1)
+                return ((1.0 - w) * F.softmax(logits / temp, dim=-1)
+                        + w * F.softmax(logits_alt / temp, dim=-1))
 
             if temperature == 0:
-                y_next = logits.argmax(dim=-1, keepdim=True)
+                y_next = (logits.argmax(dim=-1, keepdim=True) if not use_alt
+                          else _probs(1.0).argmax(dim=-1, keepdim=True))
             else:
+                probs = _probs(temperature)
                 # Optional nucleus (top-p) filtering. Off unless the
                 # attribute is set (e.g. by an inference wrapper via
                 # A3_TOP_P); keeps only the smallest set of tokens whose
                 # cumulative probability exceeds top_p, cutting the long
                 # tail of low-probability junk that plain temperature
-                # sampling occasionally commits.
+                # sampling occasionally commits. Applied to the (mixed)
+                # probabilities; renormalising the kept mass is the same
+                # as the softmax over the kept logits.
                 top_p = getattr(self, 'sampling_top_p', None)
                 if top_p is not None and 0.0 < top_p < 1.0:
-                    sorted_logits, sorted_idx = torch.sort(
-                        logits, descending=True, dim=-1)
-                    sorted_probs = F.softmax(sorted_logits / temperature,
-                                              dim=-1)
+                    sorted_probs, sorted_idx = torch.sort(
+                        probs, descending=True, dim=-1)
                     cum = sorted_probs.cumsum(dim=-1)
                     # Drop tokens whose cumulative mass BEFORE them already
                     # exceeds top_p (always keeps the top-1 token).
                     drop = (cum - sorted_probs) > top_p
-                    sorted_logits = sorted_logits.masked_fill(
-                        drop, float('-inf'))
-                    logits = torch.full_like(logits, float('-inf')).scatter(
-                        -1, sorted_idx, sorted_logits)
-                probs = F.softmax(logits / temperature, dim=-1)
+                    sorted_probs = sorted_probs.masked_fill(drop, 0.0)
+                    probs = torch.zeros_like(probs).scatter(
+                        -1, sorted_idx, sorted_probs)
                 probs_sum = probs.sum(dim=-1, keepdim=True)
                 fallback = probs_sum.squeeze(-1) == 0
                 if fallback.any():
@@ -562,14 +596,11 @@ class RoFormerSymbolicTransformer(L.LightningModule):
             if torch.all(eos_triggered):
                 break
             type_ids = torch.full_like(y_next, token_type_id)
-            emb = torch.cat(
-                [
-                    emb,
-                    self.local_embedding(y_next)
-                    + self.token_type_embeddings(type_ids),
-                ],
-                dim=1,
-            )
+            step_emb = (self.local_embedding(y_next)
+                        + self.token_type_embeddings(type_ids))
+            emb = torch.cat([emb, step_emb], dim=1)
+            if use_alt:
+                emb_alt = torch.cat([emb_alt, step_emb], dim=1)
 
         if y.size(1) < max_subseq_len:
             pad_len = max_subseq_len - y.size(1)

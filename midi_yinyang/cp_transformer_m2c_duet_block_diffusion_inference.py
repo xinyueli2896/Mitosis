@@ -612,6 +612,17 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     # the draft in the committed history. A3_CTC_DENOISE_LEADER=0 reads
     # out the follower only and commits the draft as the leader.
     ctc_denoise_leader = _os.environ.get('A3_CTC_DENOISE_LEADER', '1') == '1'
+    # Follower draft mix (2026-09-23): the follower's own AR draft y* is
+    # sampled in the draft forward and then discarded. With
+    # A3_CTC_FOLLOWER_MIX=w in (0, 1] the follower is instead sampled
+    # from a per-sub-token mixture of its denoised distribution (given
+    # x*) and its draft distribution (the AR head's), weight w on the
+    # draft; A3_CTC_MIX_MODE=linear (mixture, default) or geo (weighted
+    # logits, a product of experts). w=0 is the plain path.
+    ctc_follower_mix = float(_os.environ.get('A3_CTC_FOLLOWER_MIX', '0'))
+    ctc_mix_mode = _os.environ.get('A3_CTC_MIX_MODE', 'linear')
+    assert 0.0 <= ctc_follower_mix <= 1.0, ctc_follower_mix
+    assert ctc_mix_mode in ('linear', 'geo'), ctc_mix_mode
     if schedule.startswith('ctc'):
         base, _, lead = schedule.partition('_')
         ctc_passes = 2 if base == 'ctc2' else 1
@@ -619,7 +630,8 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
         assert ctc_leader in ('m', 'c', 'alt'), schedule
         print(f'[gen] A3_SCHEDULE={schedule}: draft-and-denoise, '
               f'leader={ctc_leader}, passes={ctc_passes}, '
-              f'denoise_leader={int(ctc_denoise_leader)}')
+              f'denoise_leader={int(ctc_denoise_leader)}, '
+              f'follower_mix={ctc_follower_mix} ({ctc_mix_mode})')
     # A.4 decode schedule: feed the next round a PARTIALLY re-masked
     # draft -- the (r-1)/K lowest-confidence tokens replaced by the
     # frame mask id -- matching the graded corruption the token-level
@@ -731,6 +743,8 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                 h_in = torch.cat([h_clean_padded, slot_m, slot_c], dim=1)
                 h_global, _ = model._run_global_stack(h_in, T_query=T_query)
                 clean_len = h_clean.shape[1]
+                # the AR heads' contexts, kept for the follower draft mix
+                h_ar = {0: h_global[:, clean_len - 2], 1: h_global[:, clean_len - 1]}
                 cur = {0: m_tokens, 1: c_tokens}
                 if m_sampling:
                     cur[0] = model.local_sampling(h_global[:, clean_len - 2],
@@ -760,9 +774,11 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                     h_global, _ = model._run_global_stack(h_in, T_query=T_query)
                     # slot positions: melody at -2, chord at -1
                     h_pred = h_global[:, -2 if fo == 0 else -1]
-                    new_fo = model.local_sampling(h_pred, max_subseq_len=subseq_len,
-                                                  temperature=final_temperature,
-                                                  token_type_id=fo)
+                    new_fo = model.local_sampling(
+                        h_pred, max_subseq_len=subseq_len,
+                        temperature=final_temperature, token_type_id=fo,
+                        h_alt=h_ar[fo] if ctc_follower_mix > 0 else None,
+                        alt_weight=ctc_follower_mix, mix_mode=ctc_mix_mode)
                     if ctc_denoise_leader and sampling[ld]:
                         # the leader's slot denoises its draft in the same forward
                         h_lead = h_global[:, -2 if ld == 0 else -1]
