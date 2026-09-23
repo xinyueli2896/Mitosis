@@ -234,9 +234,10 @@
 #                           each of its two maps, instead of E full
 #                           copies. B = 0 at init so step 0 equals the
 #                           full-copy pool. Run dirs get an E<r> suffix.
-#                           MOE_FREEZE_BASE_FFN=1 keeps the shared FFN
-#                           at the pretrained weights and trains only the
-#                           deltas (plus everything outside the FFN).
+#                           The shared FFN stays FROZEN at the pretrained
+#                           weights (LoRA convention); MOE_FREEZE_BASE_FFN=0
+#                           fine-tunes it too. Attention projections, gates
+#                           and routers train as in every duet run.
 #   --export=ALL,CROSS_LORA_RANK=r   cross-pair low-rank Q/K/V: the two
 #                           cross-stream pathways get their own projections
 #                           W^{ab} = W^b + B A of rank r (B = 0 at init, so
@@ -353,11 +354,11 @@ PRETRAINED=ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00.fin.ckpt
 MOE_NUM_EXPERTS="${MOE_NUM_EXPERTS:-4}"
 MOE_TOPK="${MOE_TOPK:-2}"
 MOE_INTERMEDIATE_SIZE="${MOE_INTERMEDIATE_SIZE:-}"
-# Low-rank experts (E<r> suffix): one shared FFN plus a rank-r delta per
-# expert instead of E full copies; MOE_FREEZE_BASE_FFN=1 trains only the
-# deltas. 0 = full copies, the default.
+# Low-rank experts (E<r> suffix): the pretrained FFN, FROZEN, plus a
+# rank-r LoRA per expert instead of E full copies. MOE_FREEZE_BASE_FFN=0
+# fine-tunes the shared FFN as well. Rank 0 = full copies, the default.
 MOE_EXPERT_LORA_RANK="${MOE_EXPERT_LORA_RANK:-0}"
-MOE_FREEZE_BASE_FFN="${MOE_FREEZE_BASE_FFN:-0}"
+MOE_FREEZE_BASE_FFN="${MOE_FREEZE_BASE_FFN:-1}"
 RUN_TAG="${RUN_TAG:-}"
 # Init ckpt path is K-dependent so different K values don't overwrite
 # each other (the k_emb_* tables have different shapes); non-default MoE

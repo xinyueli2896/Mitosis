@@ -149,8 +149,9 @@ class SimpleMoEFFN(nn.Module):
 
     expert_lora_rank (2026-09-23): experts as LOW-RANK ADAPTATIONS of one
     shared feed-forward network instead of E full copies. The pool holds
-    one base pair fc1_base/fc2_base (the pretrained FFN, fine-tuned unless
-    freeze_base) and per expert a rank-r delta on each of the two maps,
+    one base pair fc1_base/fc2_base (the pretrained FFN, frozen when
+    freeze_base, the trainer's default) and per expert a rank-r delta on
+    each of the two maps,
 
         expert_e(x) = (W2 + B2_e A2_e) gelu((W1 + B1_e A1_e) x)
 

@@ -1993,11 +1993,11 @@ if __name__ == '__main__':
                              'SimpleMoEFFN) instead of E full copies. 0 = '
                              'full copies, the default. Orthogonal to the '
                              'family: the run name gets an E<r> suffix.')
-    parser.add_argument('--moe_freeze_base_ffn', type=int, default=0,
+    parser.add_argument('--moe_freeze_base_ffn', type=int, default=1,
                         help='With --moe_expert_lora_rank: keep the shared '
                              'base FFN at its pretrained weights and train '
-                             'only the per-expert deltas (1) or fine-tune '
-                             'the base too (0, default).')
+                             'only the per-expert deltas (1, default: the '
+                             'LoRA convention) or fine-tune the base too (0).')
     parser.add_argument('--agree_decoy_prob', type=float, default=0.5,
                         help='A.11: share of conditional-slot pairs whose '
                              'committed leader is swapped for a lagged frame.')
