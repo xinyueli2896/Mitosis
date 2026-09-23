@@ -48,48 +48,17 @@
 \subsection{Expert-routing ablation}
 \label{sec:abl_routing}
 
-Sec.~\ref{sec:permod_moe} routes every position with the router of its
-own stream and defers two questions to this section: what a single
-shared router keys on, and what the stream-specific routers do with the
-capacity this frees. We compare four feed-forward designs that differ
-only in how positions reach experts. \emph{Shared}: one $E \times d$
-router scores every position. \emph{Stream-specific} (\sys):
-$\mathbf{G}^{(x)}$ and $\mathbf{G}^{(y)}$ over one pool,
-Eq.~\eqref{eq:permod_router}. \emph{Hard-partitioned}: stream $x$ may
-reach only the first two experts and stream $y$ only the last two, the
-other pair's logits masked before the softmax, as in modality-specific
-expert designs~\cite{moma}; the balance term is computed within each
-pair, so the arm is not penalised for a load it cannot produce.
-\emph{Dense}: a single feed-forward layer of inner width $8d$, matching
-the activated compute of two $4d$ experts. The three routed arms have
-identical parameters and activated compute and share one warm start:
-the two stream-specific routers are initialised as the same matrix, so
-at step~0 the model \emph{is} the shared-router model, and the routers
-diverge only as their streams' gradients differ. [X: per-arm training
-budget.] Routing statistics below are read on a fixed held-out batch of
-two songs, 384 frames each, giving about 770 positions per stream per
-layer; a second independent batch reproduces every pattern reported.
-
-We first ask what a shared router separates. Its expert preferences
-differ strongly between the streams, with a mean $\ell_1$ distance of
-$0.59$ between the mean routing distributions of stream-$x$ and
-stream-$y$ positions (maximum $2$), which reads as modality
-specialisation. Two probes attribute it. Duplicating the melody token
-into the chord positions, so that the two streams carry identical
-content and only their stream identity differs, retains $0.41$ of the
-$0.59$: about $69\%$ of the separation is the mark that the per-stream
-projections $\mathbf{W}^V_s$, $\mathbf{W}^O_s$ leave on every hidden
-state, not the music. Exchanging the two streams' contents moves the
-expert preferences with the content in none of the eleven usable
-layers. A shared router thus spends its capacity relaying a distinction
-the architecture has already made explicit. Offering it that
-distinction for free, as a per-stream bias on its logits, changes
-nothing: the trained bias differs between the streams by at most
-$0.06$ logits and the router keeps reading the projections' mark. The
-separation has to be removed from the router's job, not offered to it,
-which is what Eq.~\eqref{eq:permod_router} does: within one stream
-the mark is a constant input, and a constant cannot rank two
-positions of that stream differently.
+We compare four feed-forward designs at equal parameters and activated
+compute, all from the same warm start: a \emph{shared} router scoring
+every position; \emph{stream-specific} routers over one pool (\sys,
+Eq.~\eqref{eq:permod_router}); a \emph{hard-partitioned} pool, each
+stream restricted to two experts with the balance term computed within
+its pair~\cite{moma}; and a \emph{dense} layer of inner width $8d$,
+matching the activated compute of two $4d$ experts. The two
+stream-specific routers start as one matrix, so at step~0 the model is
+the shared-router model. Routing statistics are read on a fixed
+held-out batch (about 770 positions per stream per layer); a second
+batch reproduces every pattern. [X: per-arm training budget.]
 
 % fig:routing -- (a) expert_purity.pdf, (b) content_probe.pdf
 \begin{figure}[t]
@@ -114,26 +83,22 @@ positions of that stream differently.
   \label{fig:routing}
 \end{figure}
 
-Fig.~\ref{fig:routing}(a) shows where the freed capacity goes. We
-measure the purity of an expert as the share of melody among the
-positions it wins in a layer. Under the shared router the partition is
-soft: nine of the 48 expert--layer cells are specialists at $90\%$ or
-beyond, and fourteen sit within $10$ points of the base rate. Under
-stream-specific routers the same pool becomes markedly more
-stream-selective, twelve specialist cells and two mixed ones, with the
-mean distance from the base rate rising from $22$ to $32$ points, and
-the split is learned rather than imposed: no expert was assigned to a
-stream, three layers pair a melody specialist with a chord specialist,
-and the remaining experts serve both streams. Fig.~\ref{fig:routing}(b)
-asks whether routing then follows the music. Inside each stream we
-split the frames into terciles of register and compare the terciles'
-mean routing distributions against a shuffle null (95th percentile of
-twenty permutations). For melody, both routers are near the ceiling,
-nine and ten layers of twelve; the shared router's content channel
-already served melody. For chord, the shared router clears the null in
-five layers and the stream-specific routers in nine: with one weight
-matrix, chord content competed with the stream mark and with melody
-structure for the same rows, and lost.
+A shared router separates the streams strongly (mean $\ell_1$
+distance $0.59$ of $2$ between the streams' mean routing distributions)
+but mostly by stream identity: with the melody token copied into the
+chord positions, so that only identity differs, $0.41$ remains, and
+swapping the streams' contents moves the expert preferences in none of
+the eleven usable layers. Offering the identity as a per-stream bias on
+the logits changes nothing (bias deltas at most $0.06$); removing it
+from the router's job does, which is what Eq.~\eqref{eq:permod_router}
+does. Fig.~\ref{fig:routing}(a) shows the result: expert purity, the
+share of melody among the positions an expert wins, rises from nine
+specialist cells of 48 to twelve, no expert being assigned to a stream,
+while some experts keep serving both. Fig.~\ref{fig:routing}(b) shows
+where the freed capacity goes: routing inside a stream follows the
+frame's register above a permutation null in nine chord layers of
+twelve against five for the shared router, while melody stays near the
+ceiling (ten against nine).
 
 % fig:load -- load_distribution.pdf
 \begin{figure}[t]
@@ -147,16 +112,16 @@ structure for the same rows, and lost.
   \label{fig:load}
 \end{figure}
 
-Separate routers could starve an expert that one stream stops using.
-They do not (Fig.~\ref{fig:load}). No expert is dead in either design,
-teacher-forced or free-running, and we summarise the graded version as
-deadliness, one minus the mean over layers of the smallest expert load
-relative to $1/E$: $0.25$ for both designs under teacher forcing, and
-$0.31$ against the shared router's $0.36$ when the model runs on its
-own output, where the shared router's loads also spread wider
-($\sigma = 0.085$ against $0.071$, minimum $0.10$ against $0.14$). The
-stream-specific routers stay closer to balanced exactly where a
-generator lives.
+Separate routers do not starve experts (Fig.~\ref{fig:load}): none is
+dead in either design, teacher-forced or free-running, and deadliness,
+one minus the mean smallest expert load relative to $1/E$, is $0.25$
+for both under teacher forcing and $0.31$ against the shared router's
+$0.36$ on the model's own output, where the stream-specific routers
+also keep loads closer to balanced ($\sigma = 0.071$ against $0.085$).
+Table~\ref{tab:routing_quality} reports generation quality for the
+four arms under the protocol of Sec.~\ref{sec:systems} [X: the
+hard-partitioned arm is the load-bearing contrast; the dense arm tells
+whether routing is load-bearing at all].
 
 % Generation-quality table: four arms on the E1 primary endpoints,
 % same prompts and decode settings, BASELINE = the shared arm
@@ -183,14 +148,3 @@ generator lives.
   \end{center}
 \end{table}
 
-Table~\ref{tab:routing_quality} reports generation quality for the
-four arms under the protocol of Sec.~\ref{sec:systems}. [X: The
-hard-partitioned arm is the load-bearing contrast: it gives each
-stream its own routing decision, as ours does, but forbids an expert
-from serving both streams. If ours is better, the experts that serve
-both streams do work a disjoint pool cannot express; if the two tie,
-cross-stream expert sharing is not load-bearing on this corpus and the
-mechanism result above stands on its own. The dense arm tells whether
-routing is load-bearing at all; a deficit confined to the stream
-grammar metrics would say that the experts carry the per-stream
-grammars.]
