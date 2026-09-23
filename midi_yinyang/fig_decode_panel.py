@@ -38,8 +38,8 @@ def build():
     S = Spec()
     lw = LW
     tk, pitch = 0.42, 0.5             # token size and column pitch
-    x0 = 0.72                         # first token column (left edge)
-    bx0, bx1, bh = 0.62, 3.82, BH     # the model box, same width in every row
+    x0 = 0.92                         # first token column (left edge)
+    bx0, bx1, bh = 0.82, 4.02, BH     # the model box, same width in every row
     rows_y = (0.44, 2.2, 3.96)        # top of each row
     yo, yb, yt = 0.0, 0.58, 1.14      # offsets within a row: outputs, block, tokens
 
@@ -61,11 +61,11 @@ def build():
                runs=[('Duet', ''), (', ', ''), ('L', 'i'), (' blocks', '')], size=FS)
 
     def row_label(y, frame, step):
-        # right-aligned, ending just left of the model box
-        S.text(0.0, y + yb - 0.02, bx0 - 0.08, 0.2, m(('t', 'i'), (' = ' + frame, 'r')),
-               size=9.5, align='r')
-        S.text(0.0, y + yb + 0.18, bx0 - 0.08, 0.2, plain(step), size=8.5, align='r',
-               color=INK_2)
+        # right-aligned, ending just left of the model box, at the box label size
+        S.text(0.0, y + yb - 0.06, bx0 - 0.08, 0.24, m(('t', 'i'), (' = ' + frame, 'r')),
+               size=FS, align='r')
+        S.text(0.0, y + yb + 0.2, bx0 - 0.08, 0.24, plain(step), size=FS, align='r',
+               color=INK)
 
     S.text(0.12, 0.05, 4.5, 0.28, [('c. Alternating-commit decoding', 'b')],
            size=10.5, align='l')
