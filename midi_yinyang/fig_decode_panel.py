@@ -80,8 +80,6 @@ def build():
     # the leader alone, from the autoregressive head of the token predicting x3
     arrow(col(2), y + yb - 0.02, col(2), y + yo + tk + 0.02)
     token(col(2), y + yo, 'x', sub('x', '3', star=True), shape='ellipse')
-    S.text(col(2) + tk / 2 + 0.1, y + yo + 0.05, 1.8, 0.26,
-           plain('draft of the leader,\nautoregressive head'), size=7.5, align='l', color=INK_2)
 
     # ---------------------------------------------------------- row 2: t = 3, refine
     y = rows_y[1]
@@ -97,8 +95,6 @@ def build():
     for i, s_ in ((4, 'x'), (5, 'y')):
         arrow(col(i), y + yb - 0.02, col(i), y + yo + tk + 0.02)
         token(col(i), y + yo, s_, sub(s_, '3'))
-    S.text(col(5) + tk / 2 + 0.1, y + yo + 0.05, 1.0, 0.26, plain('both slots,\ngiven x*'),
-           size=7.5, align='l', color=INK_2)
 
     # ---------------------------------------------------------- row 3: t = 4, draft
     y = rows_y[2]
@@ -111,8 +107,6 @@ def build():
     # roles swap: stream y leads frame 4, from the head of y3
     arrow(col(5), y + yb - 0.02, col(5), y + yo + tk + 0.02)
     token(col(5), y + yo, 'y', sub('y', '4', star=True), shape='ellipse')
-    S.text(col(5) + tk / 2 + 0.1, y + yo + 0.05, 1.0, 0.26, plain('roles swap\n…'),
-           size=7.5, align='l', color=INK_2)
     return S
 
 

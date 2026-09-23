@@ -67,8 +67,8 @@ def build():
     px0, py0, pw = ex[0] - ew / 2 - 0.12, yExp - 0.1, ex[-1] - ex[0] + ew + 0.24
     S.rect(px0, py0, pw, eh + 0.2, fill=LIGHT, line=None, z=0)
     mark(px0, py0, pw)                    # the expert pool: replicated from the pretrained FFN
-    S.text(px0 + pw - 0.95 - 1.5, py0 - 0.17, 1.5, 0.16, plain('shared pool, E = 4'),
-           size=7, align='r', color=INK_2)
+    S.text(px0 + pw - 0.95 - 1.8, py0 - 0.22, 1.8, 0.2, plain('shared pool, E = 4'),
+           size=9, align='r', color=INK_2)
     for i, c in enumerate(ex):
         S.rect(c - ew / 2, yExp, ew, eh, fill=GREY, line=INK, lw=lw,
                runs=[('MLP', ''), ('xxyy'[i], 'sub i')], size=FS)

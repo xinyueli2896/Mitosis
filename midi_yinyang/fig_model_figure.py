@@ -96,10 +96,10 @@ def build():
     assert ly + lh < b_top - 0.04, 'legend collides with panel (b)'
     x = dx_b + (xb0 + xb1) / 2 - lw_ / 2
     S.rect(x, ly, lw_, lh, fill='FFFFFF', line=INK, lw=1.3)
-    S.text(x + 0.1, ly + 0.07, 0.6, 0.26, plain('\u2744\u2192\U0001F525'), size=10.5, align='l')
-    S.text(x + 0.72, ly + 0.07, 1.8, 0.26, plain('pretrained, fine-tuned'), size=8, align='l')
-    S.text(x + 2.55, ly + 0.07, 0.35, 0.26, plain('\U0001F525'), size=10.5, align='l')
-    S.text(x + 2.9, ly + 0.07, 1.8, 0.26, plain('new, from scratch'), size=8, align='l')
+    S.text(x + 0.1, ly + 0.07, 0.6, 0.26, plain('\u2744\u2192\U0001F525'), size=11, align='l')
+    S.text(x + 0.74, ly + 0.07, 1.9, 0.26, plain('pretrained, fine-tuned'), size=10.5, align='l')
+    S.text(x + 2.75, ly + 0.07, 0.35, 0.26, plain('\U0001F525'), size=11, align='l')
+    S.text(x + 3.1, ly + 0.07, 1.6, 0.26, plain('new, from scratch'), size=10.5, align='l')
     return S
 
 
