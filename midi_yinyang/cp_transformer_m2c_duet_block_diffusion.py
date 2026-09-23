@@ -1655,8 +1655,12 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
 
 if __name__ == '__main__':
     from torch.utils.data import DataLoader
+    # lightning.pytorch, not the bare `lightning` package: the top-level
+    # module of lightning 2.x exposes Trainer but not `callbacks`, so
+    # `L.callbacks.ModelCheckpoint` raised AttributeError on a machine
+    # with a recent lightning and no pytorch_lightning shim.
     try:
-        import lightning as L
+        import lightning.pytorch as L
         from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
     except ImportError:
         import pytorch_lightning as L
@@ -2280,7 +2284,8 @@ if __name__ == '__main__':
     )
 
     if n_gpus > 1:
-        import pytorch_lightning.strategies as strategies
+        import importlib
+        strategies = importlib.import_module(L.__name__ + '.strategies')
         import datetime
         # 20 minutes, not 2 hours. This timeout is how long a rank
         # waits for its partners on a collective, so it is also how long
