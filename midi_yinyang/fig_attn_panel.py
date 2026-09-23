@@ -94,7 +94,7 @@ def build():
     for s in 'xy':
         c = cx[s]
         cfill, cline = CROSS[s]
-        wide(s, yH, bank('h', 'l', s), fill=FILL[s])
+        wide(s, yH, bank('h', '(l)', s), fill=FILL[s])
         arrow(c, yH - 0.02, c, yL + bh + 0.02)
         wide(s, yL, plain('Linear QKV'), pre=True)
         # Q and K & V (three arrows out of Linear QKV, as in the sketch)
@@ -124,7 +124,7 @@ def build():
         arrow(c, gy - 0.12, c, yP + bh + 0.02)
         wide(s, yP, plain('Output proj'), pre=True)
         arrow(c, yP - 0.02, c, yO + bh + 0.02)
-        wide(s, yO, bank('o', 'l', s), fill=FILL[s])
+        wide(s, yO, bank('o', '(l)', s), fill=FILL[s])
         arrow(c, yO - 0.02, c, yAN + bh + 0.02)
         wide(s, yAN, plain('Add & Norm'))
         skx = c + side[s] * (0.95 + 0.2)

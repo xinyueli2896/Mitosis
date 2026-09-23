@@ -76,7 +76,7 @@ def build():
     chosen = {'x': (0, 1), 'y': (1, 3)}      # top-2 per stream; the second MLP_x serves both
     for s, c, fill, dark in (('x', cx, LAV, LAV_D), ('y', cy, TEAL, TEAL_D)):
         # bottom: the attention sub-layer's output
-        hbox(c, yIn, fill, HT, 'l', s)
+        hbox(c, yIn, fill, HT, '(l)', s)
         # router
         S.rect(c - bw / 2, yRt, bw, bh, fill=GREY, line=INK, lw=lw,
                runs=[('Top-2 Router', ''), (s, 'sub i')], size=FS)
@@ -99,7 +99,7 @@ def build():
         S.line(sx, yIn + bh / 2, sx, yAN + bh / 2, lw=AW)
         arrow(sx, yAN + bh / 2, c + side * (bw / 2 + 0.02), yAN + bh / 2)
         # output: the next block's input
-        hbox(c, yOut, fill, 'h', 'l+1', s, sub=False)
+        hbox(c, yOut, fill, 'h', '(l+1)', s, sub=False)
         arrow(c, yAN - 0.02, c, yOut + bh + 0.02)
     # the two banks turn into the output tokens, one frame ahead of the input:
     # translucent wedges from each bank up to the span of its stream's tokens
