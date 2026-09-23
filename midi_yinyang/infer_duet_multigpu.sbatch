@@ -34,7 +34,10 @@
 #   MOE_NUM_EXPERTS / MOE_TOPK / MOE_INTERMEDIATE_SIZE   model shape;
 #                  default 4 / 2 / <unset> (Duet). The dense ablation arm
 #                  is 1 / 1 / 6144.
-#   PROMPT_LENGTH / GEN_LENGTH / N_SAMPLES   default 96 / 416 / 3 (E1)
+#   PROMPT_LENGTH / GEN_LENGTH / N_SAMPLES   default 80 / 416 / 3: the
+#                  paper protocol (E1_v5b): a five-bar prompt, 21 bars
+#                  of continuation, three samples. (eval_e1's own
+#                  default is 96; the v5 runs pass PROMPT_LENGTH=80.)
 #   A3_SCHEDULE / A3_REFINE_STEPS / A3_FINAL_TEMP / A3_TOP_P
 #                  decode; default ctc_alt / 4 / 1.0 / 1.0, the paper's
 #                  draft-and-denoise decode (eval_e1's A3ctcaT arm).
@@ -121,7 +124,7 @@ MAX_POLYPHONY="${MAX_POLYPHONY:-4}"
 MOE_NUM_EXPERTS="${MOE_NUM_EXPERTS:-4}"
 MOE_TOPK="${MOE_TOPK:-2}"
 MOE_INTERMEDIATE_SIZE="${MOE_INTERMEDIATE_SIZE:-}"
-PROMPT_LENGTH="${PROMPT_LENGTH:-96}"
+PROMPT_LENGTH="${PROMPT_LENGTH:-80}"
 GEN_LENGTH="${GEN_LENGTH:-416}"
 N_SAMPLES="${N_SAMPLES:-3}"
 MAX_SONGS="${MAX_SONGS:-}"
