@@ -57,7 +57,7 @@ def build():
     # shared expert pool: one grey band, four experts, no stream subscripts
     S.rect(ex[0] - ew / 2 - 0.12, yExp - 0.1, ex[-1] - ex[0] + ew + 0.24, eh + 0.2,
            fill=LIGHT, line=None, z=0)
-    S.text(ex[-1] + ew / 2 + 0.12 - 1.4, yExp - 0.1 - 0.17, 1.4, 0.16, plain('shared pool, E = 4'),
+    S.text(ex[-1] + ew / 2 - 1.5, yExp - 0.1 - 0.17, 1.5, 0.16, plain('shared pool, E = 4'),
            size=7, align='r', color=INK_2)
     for i, c in enumerate(ex):
         S.rect(c - ew / 2, yExp, ew, eh, fill=GREY, line=INK, lw=lw,
