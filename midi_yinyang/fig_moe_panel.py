@@ -61,8 +61,8 @@ def build():
         model and fine-tuned; fire = new component, trained from scratch"""
         glyph = '\u2744\u2192\U0001F525' if kind == 'pre' else '\U0001F525'
         # just above the top-right corner, clear of the outline
-        # flush with the top-right corner: right edge at x + w, bottom at y
-        S.text(x + w - 0.66, y - 0.22, 0.66, 0.22, plain(glyph), size=9.5, align='r', z=6)
+        # inside the block, flush with its top-right corner; the label stays centred
+        S.text(x + w - 0.66, y - 0.01, 0.66, 0.2, plain(glyph), size=8, align='r', z=6)
 
     S.text(0.12, 0.05, 3.5, 0.28, [('b. Per-stream expert routing', 'b')], size=10.5, align='l')
 
