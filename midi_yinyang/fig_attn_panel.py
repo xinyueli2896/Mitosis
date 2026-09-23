@@ -21,7 +21,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
-fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.0
+fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.1
 from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK  # noqa: E402
 
 LAV, TEAL = 'B8BBEC', 'B7DBD8'
@@ -36,7 +36,7 @@ def build():
     cx = {'x': 1.2, 'y': 3.6}                # lane centres
     bw, bh = 1.3, 0.36                       # wide boxes
     # rows (top of box), y down
-    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.46, 0.94, 1.42, 2.02, 2.38, 3.6, 4.18, 4.75, 5.5
+    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.46, 0.94, 1.42, 2.02, 2.38, 3.7, 4.28, 4.85, 5.6
     tk, sq = 0.42, 0.3                       # token size, Q/K/V box size
     cw = 0.4                                 # Cross box width
 
@@ -121,9 +121,11 @@ def build():
     for s in 'xy':
         for x in qkv[s]:
             arrow(x, yQ - 0.02, x, ya, color=LINE[s], lw_=rl)
+    # elbow heights below yQ; all must stay under yQ - ya (= 0.94 here)
     lvl = {('x', 'Q'): 0.14, ('y', 'Q'): 0.14,          # own Q: short, lowest
-           ('y', 'K'): 0.42, ('y', 'V'): 0.56,          # y's K, V -> Cross_x
-           ('x', 'K'): 0.72, ('x', 'V'): 0.86}          # x's K, V -> Cross_y
+           ('y', 'K'): 0.36, ('y', 'V'): 0.50,          # y's K, V -> Cross_x
+           ('x', 'K'): 0.64, ('x', 'V'): 0.78}          # x's K, V -> Cross_y
+    assert max(lvl.values()) < yQ - ya - 0.1
     for s in 'xy':                           # cross box of stream s
         o = other[s]
         x0c, x1c = cross_box[s]
