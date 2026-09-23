@@ -8,7 +8,7 @@ the interleaved tokens gather into the stream's bank h^l -> Linear QKV
 -> Q and K&V -> Self Attn (own Q, K&V, grey lines) and Cross Attn (own
 Q with the OTHER stream's K&V, in the cross path's colour) -> the cross
 readout through a gate -> (+) with the self readout -> Output proj ->
-o^l -> Add & Norm, skip from h^l around the outside. Badges: snowflake
+Add & Norm (skip from h^l around the outside) -> h-tilde^(l). Badges: snowflake
 -> fire on Linear QKV and Output proj (pretrained, fine-tuned), fire on
 the gates (new).
 
@@ -122,17 +122,17 @@ def build():
         # Self Attn: up, then across into (+)
         S.line(scx, yA - 0.02, scx, gy, lw=AW)
         arrow(scx, gy, c + (-0.12 if s == 'x' else 0.12), gy)
-        # output projection, o, add & norm, skip
+        # output projection -> add & norm (with the skip from h) -> h-tilde
         arrow(c, gy - 0.12, c, yP + bh + 0.02)
         wide(s, yP, plain('Output proj'), pre=True)
         arrow(c, yP - 0.02, c, yO + bh + 0.02)
-        wide(s, yO, bank('o', '(l)', s), fill=FILL[s])
+        wide(s, yO, plain('Add & Norm'))
         arrow(c, yO - 0.02, c, yAN + bh + 0.02)
-        wide(s, yAN, plain('Add & Norm'))
+        wide(s, yAN, bank('h\u0303', '(l)', s), fill=FILL[s])
         skx = c + side[s] * (0.95 + 0.2)
         S.line(c + side[s] * bw / 2, yH + bh / 2, skx, yH + bh / 2, lw=AW)
-        S.line(skx, yH + bh / 2, skx, yAN + bh / 2, lw=AW)
-        arrow(skx, yAN + bh / 2, c + side[s] * (bw / 2 + 0.02), yAN + bh / 2)
+        S.line(skx, yH + bh / 2, skx, yO + bh / 2, lw=AW)
+        arrow(skx, yO + bh / 2, c + side[s] * (bw / 2 + 0.02), yO + bh / 2)
 
     # ------------------------------------------------------------ routing
     # Curved arrows, as in the sketch. Self Attn: own Q and K&V, grey.
