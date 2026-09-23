@@ -1,0 +1,101 @@
+% Sections 2.1 and 2.3, made consistent with each other and with the
+% decode in cp_transformer_m2c_duet_block_diffusion_inference.py
+% (A3_SCHEDULE=ctc_alt, A3_CTC_DENOISE_LEADER=1):
+%   draft forward  -> AR heads give drafts of both components;
+%                     the leader's x*_t goes into its draft token,
+%                     the follower's is discarded, its token stays empty
+%   denoise forward-> both draft tokens read out: x_t, y_t
+%   commit, swap leader
+% Notation: d_t is the draft (= x*_t when x leads); the denoise step is
+% the product of two per-component distributions read out from one pass.
+
+\subsection{Problem Formulation}
+\label{sec:formulation}
+
+Let $x=(x_1,\ldots,x_T)$ and $y=(y_1,\ldots,y_T)$ be two co-occurring
+streams on a common frame grid, with $z_t=(x_t,y_t)$ denoting the
+time-aligned token pair at frame $t$. Aligned generation of $x$ and $y$
+seeks to model
+\begin{equation}
+    p(z_{1:T})
+    =
+    \prod_{t=1}^{T} p(x_t,y_t \mid z_{<t}),
+    \label{eq:joint_ar}
+\end{equation}
+where both components depend on the shared history $z_{<t}$. A standard
+autoregressive model further factorizes each frame as
+$p(x_t \mid z_{<t})\,p(y_t \mid z_{<t},x_t)$, or in the reverse order,
+making one stream condition on the other's already-generated token.
+
+The problem is therefore how to predict two time-aligned tokens jointly
+without fixing either stream as first. \sys interleaves the two
+streams: $x_t$ and $y_t$ are adjacent input tokens sharing rotary
+position $t$ and predict $x_{t+1}$ and $y_{t+1}$, respectively, so the
+next frame is predicted at two positions of one pass, from one history,
+rather than one component after the other. The per-frame joint
+distribution is realized through a \emph{draft-and-denoise} step,
+\begin{equation}
+p_\theta(z_t \mid z_{<t})
+=
+\sum_{d_t}
+\underbrace{p_\theta(d_t \mid z_{<t})}_{\text{draft}}\,
+\underbrace{p_\theta(x_t \mid z_{<t},d_t)\,p_\theta(y_t \mid z_{<t},d_t)}_{\text{denoise}},
+\label{eq:draft_denoise}
+\end{equation}
+where the draft $d_t$ is the leading stream's own next-frame prediction,
+$x^*_t$ or $y^*_t$, the leader alternating across frames, and the two
+denoise distributions are read out from one forward pass.
+
+% ... Section 2.2 unchanged ...
+
+\subsection{Joint Draft-and-Denoise Generation}
+\label{sec:generation}
+
+\sys computes both the draft and the denoise step of
+Eq.~\eqref{eq:draft_denoise} with the network of Sec.~\ref{sec:Duet}
+itself, one set of weights serving both as in
+Transfusion~\cite{transfusion}, through two \emph{draft tokens}, one
+per stream, appended after the history at the rotary position of frame
+$t$ (Fig.~\ref{fig:model}c). A draft token is a token of its own
+stream, embedded by that stream's frame encoder and passed through the
+same stack and frame decoder as the history; it holds a tentative
+value of its component of $z_t$, or a learned mask embedding when
+empty, reads its own history, the other stream's history through the
+cross-stream pass and the other draft token through the current-frame
+pass, and is read by no history position. In training, one frame per
+window is drawn at random and its draft tokens are filled as decoding
+will fill them: each either holds a draft sampled from the model's own
+autoregressive head or is left empty, covering both-filled, one-filled
+and both-empty; each draft token is supervised against the true $x_t$
+or $y_t$ alongside the autoregressive loss. Decoding uses the
+one-filled configuration. At step $t$, with $x$ leading, a first
+forward draws next-frame predictions of both components from the
+autoregressive heads; the leader's becomes the draft and is written
+into its draft token, the other is discarded and its draft token left
+empty,
+\begin{equation}
+    d_t = x_t^{*} \sim p_\theta(\,\cdot \mid z_{<t}).
+    \label{eq:draft}
+\end{equation}
+One \emph{denoise} forward then reads out both draft tokens, the
+follower given $d_t$ through the current-frame pass and the leader
+re-predicted from its own position, replacing the draft,
+\begin{equation}
+    x_t \sim p_\theta(\,\cdot \mid z_{<t},\, d_t),
+    \quad
+    y_t \sim p_\theta(\,\cdot \mid z_{<t},\, d_t),
+    \quad
+    z_{<t+1} = [z_{<t}, z_t],
+    \label{eq:denoise}
+\end{equation}
+and the roles swap, so $y$ leads at $t{+}1$:
+\begin{equation}
+    z_{<t}
+    \xrightarrow{\mathrm{draft}} d_t
+    \xrightarrow{\mathrm{denoise}} z_t
+    \xrightarrow{\mathrm{commit}} z_{<t+1}.
+    \label{eq:generation_summary}
+\end{equation}
+\sys is thus autoregressive across steps, produces both components of
+a step in one denoise forward, and alternates the leading stream, so
+neither is fixed as first.
