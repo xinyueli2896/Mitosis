@@ -24,7 +24,8 @@ Existing wrappers, by stage:
 |---|---|
 | preprocess | `preprocess_*.sbatch`, `combine_*.sbatch`, `build_*.sbatch` |
 | train | `train_duet_{rehearsal,prefix,block,block_diffusion,anticipatory}.sbatch`, `train_intra_cross_attn.sbatch`, `finetune_pop909.sbatch` |
-| inference | `infer_duet_{rehearsal,prefix,anticipatory,block_diffusion}.sbatch`, `infer_singlestream_e1.sbatch`, `infer_all_rwc.sbatch` |
+| inference | `infer_duet_{rehearsal,prefix,anticipatory,block_diffusion}.sbatch`, `infer_duet_multigpu.sbatch` (one ckpt, songs sharded over N GPUs), `infer_singlestream_e1.sbatch`, `infer_all_rwc.sbatch` |
+| transfer | `upload_hf.sbatch`, `download_hf.sbatch` (checkpoints and prompt sets to/from the Hub) |
 | evaluate | `eval_e1.sbatch`, `eval_e2.sbatch`, `eval_e3.sbatch`, `eval_yinyang.sbatch`, `eval_a2_rope_ablation.sbatch` |
 | diagnose | `diagnose_*.sbatch`, `check_*.sbatch`, `cp_capacity_check.sbatch` |
 
