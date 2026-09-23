@@ -40,8 +40,14 @@ def build():
     tk, sq = 0.42, 0.3                       # token size, Q/K/V box size
     cw = 0.38                                # Cross box width
 
-    def wide(s, y, runs, fill='FFFFFF', size=9.5):
+    def mark(x, y, w):
+        """corner sign: this component is initialised from the pretrained model"""
+        S.rect(x + w - 0.14, y + 0.05, 0.09, 0.09, fill=INK, line=None, z=4)
+
+    def wide(s, y, runs, fill='FFFFFF', size=9.5, pre=False):
         S.rect(cx[s] - bw / 2, y, bw, bh, fill=fill, line=INK, lw=lw, runs=runs, size=size)
+        if pre:
+            mark(cx[s] - bw / 2, y, bw)
 
     def arrow(x1, y1, x2, y2, color=INK, lw_=0.8):
         S.line(x1, y1, x2, y2, lw=lw_, arrow=True, color=color)
@@ -75,13 +81,14 @@ def build():
         c = cx[s]
         wide(s, yH, bank('h', 'l', s), fill=FILL[s])
         arrow(c, yH - 0.02, c, yL + bh + 0.02)
-        wide(s, yL, plain('Linear QKV'))
+        wide(s, yL, plain('Linear QKV'), pre=True)
         for x, lab in zip(qkv[s], 'QKV'):
             arrow(c, yL - 0.02, x, yQ + sq + 0.02)
             S.rect(x - sq / 2, yQ, sq, sq, fill='FFFFFF', line=INK, lw=lw, runs=m(lab), size=9.5)
         # attention boxes
         S.rect(self_box[s][0], yA, bw, bh, fill='FFFFFF', line=INK, lw=lw,
                runs=plain('Self Attn'), size=9.5)
+        mark(self_box[s][0], yA, bw)
         S.rect(cross_box[s][0], yA, cw, bh, fill='FFFFFF', line=INK, lw=lw,
                runs=plain('Cross'), size=9.5)
         # gate on the cross readout, summed with the self readout
@@ -101,11 +108,11 @@ def build():
         arrow(c, yA - 0.02, c, gy + 0.12)
         # output projection, o, add & norm, skip
         arrow(c, gy - 0.12, c, yP + bh + 0.02)
-        wide(s, yP, plain('Output projection'), size=8.5)
+        wide(s, yP, plain('Output projection'), size=8.5, pre=True)
         arrow(c, yP - 0.02, c, yO + bh + 0.02)
         wide(s, yO, bank('o', 'l', s), fill=FILL[s])
         arrow(c, yO - 0.02, c, yAN + bh + 0.02)
-        wide(s, yAN, plain('Add & Norm'))
+        wide(s, yAN, plain('Add & Norm'), pre=True)
         sx = c + side[s] * (bw / 2 + 0.3)
         S.line(c + side[s] * bw / 2, yH + bh / 2, sx, yH + bh / 2, lw=0.8)
         S.line(sx, yH + bh / 2, sx, yAN + bh / 2, lw=0.8)

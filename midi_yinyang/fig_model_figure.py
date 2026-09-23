@@ -16,7 +16,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
 import fig_attn_panel, fig_moe_panel, fig_decode_panel  # noqa: E402,E401
-from fig_arch_pptx import Spec, write_pptx_js, write_preview, plain  # noqa: E402
+from fig_arch_pptx import Spec, write_pptx_js, write_preview, plain, INK, INK_2  # noqa: E402
 
 GAP = 0.3
 PW = 4.8
@@ -61,7 +61,7 @@ def build():
     H = max(b - t for b, t in zip(bottoms, tops))      # tallest panel's content height
     top_margin = 0.15
     fig_arch_pptx.SLIDE_W = len(parts) * PW + (len(parts) - 1) * GAP
-    fig_arch_pptx.SLIDE_H = top_margin + H + 0.12 + CAP_H + 0.1
+    fig_arch_pptx.SLIDE_H = top_margin + H + 0.12 + CAP_H + 0.34
 
     S = Spec()
     for i, ((items, cap), b, t) in enumerate(zip(parts, bottoms, tops)):
@@ -69,6 +69,13 @@ def build():
         dy = top_margin + H - b                          # bottom-aligned
         S.items += shifted(items, dx, dy)
         S.text(dx, top_margin + H + 0.12, PW, CAP_H, plain(cap), size=11, align='c')
+    # legend for the corner sign
+    ly = top_margin + H + 0.12 + CAP_H + 0.06
+    W = fig_arch_pptx.SLIDE_W
+    S.rect(W / 2 - 2.3, ly + 0.07, 0.09, 0.09, fill=INK, line=None, z=4)
+    S.text(W / 2 - 2.15, ly, 4.6, 0.22,
+           plain('component initialised from the pretrained single-stream model; '
+                 'unmarked components are new'), size=8.5, align='l', color=INK_2)
     return S
 
 

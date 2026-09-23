@@ -52,6 +52,10 @@ def build():
     def arrow(x1, y1, x2, y2, **kw):
         S.line(x1, y1, x2, y2, lw=0.8, arrow=True, **kw)
 
+    def mark(x, y, w):
+        """corner sign: this component is initialised from the pretrained model"""
+        S.rect(x + w - 0.14, y + 0.05, 0.09, 0.09, fill=INK, line=None, z=4)
+
     S.text(0.12, 0.05, 3.5, 0.28, [('b. Per-stream expert routing', 'b')], size=10.5, align='l')
 
     # shared expert pool: one grey band, four experts, no stream subscripts
@@ -62,6 +66,7 @@ def build():
     for i, c in enumerate(ex):
         S.rect(c - ew / 2, yExp, ew, eh, fill=GREY, line=INK, lw=lw,
                runs=[('Expert ', ''), (str(i + 1), '')], size=9.5)
+        mark(c - ew / 2, yExp, ew)          # replicated from the pretrained FFN
 
     chosen = {'x': (0, 2), 'y': (1, 2)}      # top-2 per stream; expert 3 serves both
     for s, c, fill, dark in (('x', cx, LAV, LAV_D), ('y', cy, TEAL, TEAL_D)):
@@ -84,6 +89,7 @@ def build():
         # add & norm, with the skip from h-tilde around the sub-layer
         S.rect(c - bw / 2, yAN, bw, bh, fill='FFFFFF', line=INK, lw=lw,
                runs=plain('Add & Norm'), size=9.5)
+        mark(c - bw / 2, yAN, bw)
         arrow(c, ySum - 0.12, c, yAN + bh + 0.02)
         side = -1 if s == 'x' else 1
         sx = c + side * (bw / 2 + 0.28)
