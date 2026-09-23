@@ -72,20 +72,20 @@ def build():
     # ------------------------------------------------------------ tokens -> banks
     # the block's input: many small unlabelled hidden-state boxes, blue and
     # salmon alternating, an ellipsis in the middle standing for the rest
-    tkx = 0.2                                   # small box
-    pitch = 0.24
-    n_side = 8                                  # boxes on each side of the ellipsis
-    gap_mid = 0.42
-    total = 2 * n_side * pitch - (pitch - tkx) + gap_mid
+    tkx = 0.3                                   # small box
+    pitch = 0.36
+    n_left, n_right = 6, 2                      # boxes before and after the ellipsis
+    gap_mid = 0.45
+    total = (n_left + n_right) * pitch - (pitch - tkx) + gap_mid
     x_start = (cx['x'] + cx['y']) / 2 - total / 2
     xs_all = []
-    for k in range(2 * n_side):
-        x = x_start + k * pitch + (gap_mid if k >= n_side else 0)
+    for k in range(n_left + n_right):
+        x = x_start + k * pitch + (gap_mid if k >= n_left else 0)
         st = 'xy'[k % 2]
         yT2 = yT + (tk - tkx) / 2
         box(x, yT2, tkx, tkx, None, fill=FILL[st], z=2)
         xs_all.append((st, x))
-    xm = x_start + n_side * pitch - (pitch - tkx) / 2 + gap_mid / 2
+    xm = x_start + n_left * pitch - (pitch - tkx) / 2 + gap_mid / 2
     S.text(xm - 0.2, yT + (tk - tkx) / 2 - 0.02, 0.4, tkx + 0.04, plain('\u2026'), size=FS, align='c')
     # translucent wedges (sketch): each stream's boxes gather into its bank
     for st in 'xy':

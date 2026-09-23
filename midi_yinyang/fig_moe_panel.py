@@ -107,17 +107,17 @@ def build():
     # translucent wedges from each bank up to the span of its stream's tokens
     # the block's output: many small unlabelled hidden-state boxes, blue and
     # salmon alternating, an ellipsis in the middle standing for the rest
-    tkx, pitch, n_side, gap_mid = 0.2, 0.24, 8, 0.42
-    total = 2 * n_side * pitch - (pitch - tkx) + gap_mid
+    tkx, pitch, n_left, n_right, gap_mid = 0.3, 0.36, 6, 2, 0.45
+    total = (n_left + n_right) * pitch - (pitch - tkx) + gap_mid
     x_start = (cx + cy) / 2 - total / 2
-    yT2 = yTok + 0.12
+    yT2 = yTok + 0.07
     xs_all = []
-    for k in range(2 * n_side):
-        x = x_start + k * pitch + (gap_mid if k >= n_side else 0)
+    for k in range(n_left + n_right):
+        x = x_start + k * pitch + (gap_mid if k >= n_left else 0)
         st = 'xy'[k % 2]
         S.rect(x, yT2, tkx, tkx, fill=FILL[st], line=INK, lw=lw, z=2)
         xs_all.append((st, x))
-    xm = x_start + n_side * pitch - (pitch - tkx) / 2 + gap_mid / 2
+    xm = x_start + n_left * pitch - (pitch - tkx) / 2 + gap_mid / 2
     S.text(xm - 0.2, yT2 - 0.02, 0.4, tkx + 0.04, plain('\u2026'), size=FS, align='c')
     for st, c in (('x', cx), ('y', cy)):
         xs = [x for t_, x in xs_all if t_ == st]
