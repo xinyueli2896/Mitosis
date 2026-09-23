@@ -74,8 +74,9 @@ def build():
         S.line(x, yT - 0.02, cx[s], yH + bh + 0.02, lw=0.8, color=LINE[s])
 
     # geometry of the projection boxes and attention boxes, per stream
-    qbox = {s: (cx[s] - 0.85, 0.42) for s in 'xy'}            # Q: (x0, w)
-    kvbox = {s: (cx[s] - 0.3, 1.15) for s in 'xy'}            # K & V: (x0, w)
+    # Q on the OUTER side, K & V on the inner side, mirrored between streams
+    qbox = {'x': (cx['x'] - 0.85, 0.42), 'y': (cx['y'] + 0.85 - 0.42, 0.42)}     # (x0, w)
+    kvbox = {'x': (cx['x'] - 0.3, 1.15), 'y': (cx['y'] + 0.3 - 1.15, 1.15)}
     self_box = {'x': (cx['x'] - bw / 2, sw), 'y': (cx['y'] + bw / 2 - sw, sw)}
     cross_box = {'x': (cx['x'] + bw / 2 - cw, cw), 'y': (cx['y'] - bw / 2, cw)}
 
@@ -92,8 +93,8 @@ def build():
         qx0, qw = qbox[s]; kx0, kw = kvbox[s]
         box(qx0, yQ, qw, 0.34, m('Q'), fill=FILL[s])
         box(kx0, yQ, kw, 0.34, [('K', 'i'), (' & ', ''), ('V', 'i')], fill=FILL[s])
-        for x in (centre(qbox[s]), kx0 + kw * 0.3, kx0 + kw * 0.7):
-            arrow(c, yL - 0.02, x, yQ + 0.34 + 0.02)
+        for x in (centre(qbox[s]), kx0 + kw * 0.3, kx0 + kw * 0.7):   # three straight verticals
+            arrow(x, yL - 0.02, x, yQ + 0.34 + 0.02)
         # attention boxes
         sx0, _ = self_box[s]; cx0, _ = cross_box[s]
         box(sx0, yA, sw, bh, plain('Self Attn'), fill=FILL[s])
@@ -130,16 +131,21 @@ def build():
     # attention box bottom vertically.
     ya = yA + bh + 0.02
     for s in 'xy':
-        scx = centre(self_box[s])
-        for x, dx in ((centre(qbox[s]), -0.2), (centre(kvbox[s]), 0.2)):
-            S.curve(x, yQ - 0.02, scx + dx, ya, color=GREY_L, lw=AW, arrow=True)
+        sd = side[s]                       # +1 outward for y, -1 outward for x
+        scx, ccx = centre(self_box[s]), centre(cross_box[s])
+        # self: own Q and K&V, from their outer halves, into the Self Attn box
+        S.curve(centre(qbox[s]) + sd * 0.12, yQ - 0.02, scx + sd * 0.2, ya,
+                color=GREY_L, lw=AW, arrow=True)
+        S.curve(centre(kvbox[s]) + sd * 0.12, yQ - 0.02, scx - sd * 0.2, ya,
+                color=GREY_L, lw=AW, arrow=True)
     for s in 'xy':
-        o = other[s]
+        sd, o = side[s], other[s]
         col = CROSS[s][1]
         ccx = centre(cross_box[s])
-        S.curve(centre(qbox[s]) + side[s] * -0.12, yQ - 0.02, ccx - 0.2, ya,
+        # cross: own Q from its inner half; the OTHER stream's K&V from its inner half
+        S.curve(centre(qbox[s]) - sd * 0.12, yQ - 0.02, ccx + sd * 0.2, ya,
                 color=col, lw=AW, arrow=True, z=3)
-        S.curve(centre(kvbox[o]) + side[o] * -0.12, yQ - 0.02, ccx + 0.2, ya,
+        S.curve(centre(kvbox[o]) + sd * 0.12, yQ - 0.02, ccx - sd * 0.2, ya,
                 color=col, lw=AW, arrow=True, z=3)
     return S
 
