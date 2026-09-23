@@ -1,15 +1,16 @@
-"""Panel a of the model figure: the dual-stream attention sub-layer,
-reproduced from the hand-made drawing of 2026-09-23 in the style of
-fig_moe_panel.py / fig_decode_panel.py (lavender = stream x, teal =
-stream y, black outlines, Cambria).
+"""Panel a of the model figure: the dual-stream attention sub-layer, in
+the style of the hand sketch of 2026-09-23 (fig_style.py): blue x,
+salmon y, grey components, the x cross path green and the y cross path
+yellow, Q and K&V as two boxes, heavier outlines.
 
-Bottom up, per stream: the interleaved tokens gather into the stream's
-bank h^l -> Linear QKV -> Q, K, V -> Self Attn (own Q, K, V) and Cross
-(own Q; the OTHER stream's K, V, drawn in that stream's colour) -> the
-cross readout through a gate -> (+) with the self readout -> Output
-projection -> o^l -> Add & Norm, with the skip from h^l drawn around the
-outside. The drawing's content is kept as is; only the right-hand o box
-is relabelled o_y (the drawing said o_x twice).
+Content is unchanged from the earlier version. Bottom up, per stream:
+the interleaved tokens gather into the stream's bank h^l -> Linear QKV
+-> Q and K&V -> Self Attn (own Q, K&V, grey lines) and Cross Attn (own
+Q with the OTHER stream's K&V, in the cross path's colour) -> the cross
+readout through a gate -> (+) with the self readout -> Output proj ->
+o^l -> Add & Norm, skip from h^l around the outside. Badges: snowflake
+-> fire on Linear QKV and Output proj (pretrained, fine-tuned), fire on
+the gates (new).
 
     python fig_attn_panel.py --out <path-without-extension>
 writes <out>.pptx (editable) and <out>.png (preview).
@@ -21,140 +22,133 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
-fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.1
-from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK  # noqa: E402
-
-LAV, TEAL = 'B8BBEC', 'B7DBD8'
-COMP = 'DEDEDE'                          # every model component
-LAV_L, TEAL_L = '8F93D9', '6FB5AE'      # the Q/K/V routing lines
-FILL = {'x': LAV, 'y': TEAL}
-LINE = {'x': LAV_L, 'y': TEAL_L}
+fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.4
+from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain  # noqa: E402
+from fig_style import FILL, LINE, COMP, CROSS, GREY_L, INK, LW, AW  # noqa: E402
 
 
 def build():
     S = Spec()
-    lw = 0.9
-    cx = {'x': 1.2, 'y': 3.6}                # lane centres
-    bw, bh = 1.36, 0.38                       # wide boxes
+    cx = {'x': 1.3, 'y': 3.5}                # lane centres
+    bw, bh = 1.9, 0.4                        # wide boxes span self + cross
     # rows (top of box), y down
-    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.46, 0.94, 1.42, 1.94, 2.38, 3.7, 4.28, 4.85, 5.6
-    tk, sq = 0.42, 0.3                       # token size, Q/K/V box size
-    cw = 0.38                                # Cross box width
+    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.42, 0.94, 1.58, 2.2, 2.66, 4.1, 4.68, 5.25, 6.0
+    tk = 0.42                                # token size
+    sw, cw = 0.92, 0.9                       # Self Attn and Cross Attn widths
+    side = {'x': -1, 'y': 1}
+    other = {'x': 'y', 'y': 'x'}
 
     def mark(x, y, w, kind='pre'):
         """corner sign: snowflake->fire = initialised from the pretrained
         model and fine-tuned; fire = new component, trained from scratch"""
-        glyph = '\u2744\u2192\U0001F525' if kind == 'pre' else '\U0001F525'
-        # just above the top-right corner, clear of the outline
+        glyph = '❄→\U0001F525' if kind == 'pre' else '\U0001F525'
         S.text(x + w - 0.62, y - 0.2, 0.66, 0.24, plain(glyph), size=9.5, align='r', z=6)
 
+    def box(x, y, w, h, runs, fill=COMP, size=9.5, dash=False):
+        S.rect(x, y, w, h, fill=fill, line=INK, lw=LW, dash=dash, runs=runs, size=size)
+
     def wide(s, y, runs, fill=COMP, size=9.5, pre=False):
-        S.rect(cx[s] - bw / 2, y, bw, bh, fill=fill, line=INK, lw=lw, runs=runs, size=size)
+        box(cx[s] - bw / 2, y, bw, bh, runs, fill=fill, size=size)
         if pre:
             mark(cx[s] - bw / 2, y, bw)
 
-    def arrow(x1, y1, x2, y2, color=INK, lw_=0.8):
+    def arrow(x1, y1, x2, y2, color=INK, lw_=AW):
         S.line(x1, y1, x2, y2, lw=lw_, arrow=True, color=color)
 
     def bank(base, sup, s):
         return [(base, 'b i'), (sup, 'sup i'), (s + ',1:T−1', 'sub i')]
 
     def plus(px, py, r=0.1):
-        S.rect(px - r, py - r, 2 * r, 2 * r, fill='FFFFFF', line=INK, lw=lw, shape='ellipse', z=4)
-        S.line(px - 0.05, py, px + 0.05, py, lw=lw, z=5)
-        S.line(px, py - 0.05, px, py + 0.05, lw=lw, z=5)
+        S.rect(px - r, py - r, 2 * r, 2 * r, fill='FFFFFF', line=INK, lw=LW, shape='ellipse', z=4)
+        S.line(px - 0.05, py, px + 0.05, py, lw=LW, z=5)
+        S.line(px, py - 0.05, px, py + 0.05, lw=LW, z=5)
 
     S.text(0.12, 0.05, 3.5, 0.28, [('a. Dual-stream attention', 'b')], size=10.5, align='l')
 
     # ------------------------------------------------------------ tokens -> banks
-    tok = [('x', '1'), ('y', '1'), ('x', None), ('y', None), ('x', 'T\u22121'), ('y', 'T\u22121')]
+    tok = [('x', '1'), ('y', '1'), ('x', None), ('y', None), ('x', 'T−1'), ('y', 'T−1')]
     tx = [0.65 + i * 0.7 for i in range(6)]
     for (s, idx), x in zip(tok, tx):
-        lab = plain('\u2026') if idx is None else m(s, (idx, 'sub'))
-        S.rect(x - tk / 2, yT, tk, tk, fill=FILL[s], line=INK, lw=lw, runs=lab, size=9.5)
-        S.line(x, yT - 0.02, cx[s], yH + bh + 0.02, lw=0.7)
-    # projections: geometry per stream
-    qkv = {s: [cx[s] - 0.45, cx[s], cx[s] + 0.45] for s in 'xy'}
-    side = {'x': -1, 'y': 1}
-    self_box = {s: (cx[s] - bw / 2, cx[s] + bw / 2) for s in 'xy'}
-    cross_box = {'x': (cx['x'] + bw / 2 + 0.07, cx['x'] + bw / 2 + 0.07 + cw),
-                 'y': (cx['y'] - bw / 2 - 0.07 - cw, cx['y'] - bw / 2 - 0.07)}
-    other = {'x': 'y', 'y': 'x'}
+        lab = plain('…') if idx is None else m(s, (idx, 'sub'))
+        box(x - tk / 2, yT, tk, tk, lab, fill=FILL[s])
+        S.line(x, yT - 0.02, cx[s], yH + bh + 0.02, lw=0.8, color=LINE[s])
+
+    # geometry of the projection boxes and attention boxes, per stream
+    qbox = {s: (cx[s] - 0.85, 0.42) for s in 'xy'}            # Q: (x0, w)
+    kvbox = {s: (cx[s] - 0.3, 1.15) for s in 'xy'}            # K & V: (x0, w)
+    self_box = {'x': (cx['x'] - bw / 2, sw), 'y': (cx['y'] + bw / 2 - sw, sw)}
+    cross_box = {'x': (cx['x'] + bw / 2 - cw, cw), 'y': (cx['y'] - bw / 2, cw)}
+
+    def centre(b):
+        return b[0] + b[1] / 2
 
     for s in 'xy':
         c = cx[s]
+        cfill, cline = CROSS[s]
         wide(s, yH, bank('h', 'l', s), fill=FILL[s])
         arrow(c, yH - 0.02, c, yL + bh + 0.02)
         wide(s, yL, plain('Linear QKV'), pre=True)
-        for x, lab in zip(qkv[s], 'QKV'):
-            arrow(c, yL - 0.02, x, yQ + sq + 0.02)
-            S.rect(x - sq / 2, yQ, sq, sq, fill='FFFFFF', line=INK, lw=lw, runs=m(lab), size=9.5)
+        # Q and K & V (three arrows out of Linear QKV, as in the sketch)
+        qx0, qw = qbox[s]; kx0, kw = kvbox[s]
+        box(qx0, yQ, qw, 0.34, m('Q'), fill=FILL[s])
+        box(kx0, yQ, kw, 0.34, [('K', 'i'), (' & ', ''), ('V', 'i')], fill=FILL[s])
+        for x in (centre(qbox[s]), kx0 + kw * 0.3, kx0 + kw * 0.7):
+            arrow(c, yL - 0.02, x, yQ + 0.34 + 0.02)
         # attention boxes
-        S.rect(self_box[s][0], yA, bw, bh, fill=COMP, line=INK, lw=lw,
-               runs=plain('Self Attn'), size=9.5)
-        S.rect(cross_box[s][0], yA, cw, bh, fill=COMP, line=INK, lw=lw,
-               runs=plain('Cross'), size=9.5)
-        # gate on the cross readout, summed with the self readout
-        ccx = (cross_box[s][0] + cross_box[s][1]) / 2
-        gx0 = c + side[s] * -0.28 if False else (c + 0.3 if s == 'x' else c - 0.3 - 0.36)
-        S.rect(gx0, yG - 0.02, 0.36, 0.3, fill=COMP, line=INK, lw=lw, runs=plain('gate'),
-               size=7.5)
-        mark(gx0, yG - 0.02, 0.36, kind='new')
-        gy = yG + 0.13
-        S.line(ccx, yA - 0.02, ccx, gy, lw=0.8)
-        if s == 'x':
-            S.line(ccx, gy, gx0 + 0.36 + 0.02, gy, lw=0.8)
-            arrow(gx0 - 0.02, gy, c + 0.12, gy)
-        else:
-            S.line(ccx, gy, gx0 - 0.02, gy, lw=0.8)
-            arrow(gx0 + 0.36 + 0.02, gy, c - 0.12, gy)
+        sx0, _ = self_box[s]; cx0, _ = cross_box[s]
+        box(sx0, yA, sw, bh, plain('Self Attn'), fill=FILL[s])
+        box(cx0, yA, cw, bh, plain('Cross Attn'), fill=cfill)
+        scx, ccx = centre(self_box[s]), centre(cross_box[s])
+        # gate above Cross Attn, in the cross path's colour; (+) at the lane centre
+        gy = yG + 0.15
+        gw = 0.6
+        box(ccx - gw / 2, yG - 0.02, gw, 0.34, plain('Gate'), fill=cfill, size=9)
+        mark(ccx - gw / 2, yG - 0.02, gw, kind='new')
+        arrow(ccx, yA - 0.02, ccx, yG + 0.34)
         plus(c, gy)
-        arrow(c, yA - 0.02, c, gy + 0.12)
+        arrow(ccx - side[s] * gw / 2 * -1 if False else (ccx - gw / 2 - 0.02 if s == 'x' else ccx + gw / 2 + 0.02),
+              gy, c + (0.12 if s == 'x' else -0.12), gy)
+        # Self Attn: up, then across into (+)
+        S.line(scx, yA - 0.02, scx, gy, lw=AW)
+        arrow(scx, gy, c + (-0.12 if s == 'x' else 0.12), gy)
         # output projection, o, add & norm, skip
         arrow(c, gy - 0.12, c, yP + bh + 0.02)
-        wide(s, yP, plain('Output projection'), size=8.5, pre=True)
+        wide(s, yP, plain('Output proj'), pre=True)
         arrow(c, yP - 0.02, c, yO + bh + 0.02)
         wide(s, yO, bank('o', 'l', s), fill=FILL[s])
         arrow(c, yO - 0.02, c, yAN + bh + 0.02)
         wide(s, yAN, plain('Add & Norm'))
-        sx = c + side[s] * (bw / 2 + 0.3)
-        S.line(c + side[s] * bw / 2, yH + bh / 2, sx, yH + bh / 2, lw=0.8)
-        S.line(sx, yH + bh / 2, sx, yAN + bh / 2, lw=0.8)
-        arrow(sx, yAN + bh / 2, c + side[s] * (bw / 2 + 0.02), yAN + bh / 2)
+        skx = c + side[s] * (bw / 2 + 0.22)
+        S.line(c + side[s] * bw / 2, yH + bh / 2, skx, yH + bh / 2, lw=AW)
+        S.line(skx, yH + bh / 2, skx, yAN + bh / 2, lw=AW)
+        arrow(skx, yAN + bh / 2, c + side[s] * (bw / 2 + 0.02), yAN + bh / 2)
 
-    # ------------------------------------------------------------ Q/K/V routing
-    # Self Attn: own Q, K, V straight up. Cross: own Q, the other stream's
-    # K and V, in that stream's colour. Every routed line has its own
-    # elbow height and its own column, so no two share a segment; the
-    # remaining crossings are perpendicular.
-    ya = yA + bh + 0.02                      # arrow tips at the attention boxes' bottom
-    rl = 0.9
+    # ------------------------------------------------------------ routing
+    # Self Attn: own Q and K&V, grey. Cross Attn: own Q and the OTHER
+    # stream's K&V, in the cross path's colour. Elbows at distinct heights.
+    ya = yA + bh + 0.02
     for s in 'xy':
-        for x in qkv[s]:
-            arrow(x, yQ - 0.02, x, ya, color=LINE[s], lw_=rl)
-    # elbow heights below yQ; all must stay under yQ - ya (= 0.94 here)
-    lvl = {('x', 'Q'): 0.14, ('y', 'Q'): 0.14,          # own Q: short, lowest
-           ('y', 'K'): 0.36, ('y', 'V'): 0.50,          # y's K, V -> Cross_x
-           ('x', 'K'): 0.64, ('x', 'V'): 0.78}          # x's K, V -> Cross_y
-    assert max(lvl.values()) < yQ - ya - 0.1
-    for s in 'xy':                           # cross box of stream s
+        scx = centre(self_box[s])
+        for x, dx in ((centre(qbox[s]), -0.18), (centre(kvbox[s]), 0.18)):
+            arrow(x, yQ - 0.02, scx + dx, ya, color=GREY_L)
+    lvl = {'x': (0.28, 0.5), 'y': (0.7, 0.9)}       # (own Q, other K&V) elbow depth below yQ
+    assert max(max(v) for v in lvl.values()) < yQ - ya - 0.08
+    for s in 'xy':
         o = other[s]
-        x0c, x1c = cross_box[s]
-        targets = [x0c + cw * 0.2, x0c + cw * 0.5, x0c + cw * 0.8]
-        d = 0.07 if s == 'x' else -0.07     # leave the box beside the straight arrow
+        col = CROSS[s][1]
+        ccx = centre(cross_box[s])
         # own Q
-        qx = qkv[s][0] + d
-        yr = yQ - lvl[(s, 'Q')]
-        S.line(qx, yQ - 0.02, qx, yr, lw=rl, color=LINE[s])
-        S.line(qx, yr, targets[0], yr, lw=rl, color=LINE[s])
-        arrow(targets[0], yr, targets[0], ya, color=LINE[s], lw_=rl)
-        # the other stream's K and V
-        for k, key in enumerate('KV'):
-            xs = qkv[o][k + 1] - d
-            yr2 = yQ - lvl[(o, key)]
-            S.line(xs, yQ - 0.02, xs, yr2, lw=rl, color=LINE[o])
-            S.line(xs, yr2, targets[k + 1], yr2, lw=rl, color=LINE[o])
-            arrow(targets[k + 1], yr2, targets[k + 1], ya, color=LINE[o], lw_=rl)
+        qx = centre(qbox[s]) + side[s] * -0.12
+        yr = yQ - lvl[s][0]
+        S.line(qx, yQ - 0.02, qx, yr, lw=AW, color=col)
+        S.line(qx, yr, ccx - 0.2, yr, lw=AW, color=col)
+        arrow(ccx - 0.2, yr, ccx - 0.2, ya, color=col)
+        # the other stream's K & V
+        kx = centre(kvbox[o]) + side[o] * -0.12
+        yr2 = yQ - lvl[s][1]
+        S.line(kx, yQ - 0.02, kx, yr2, lw=AW, color=col)
+        S.line(kx, yr2, ccx + 0.2, yr2, lw=AW, color=col)
+        arrow(ccx + 0.2, yr2, ccx + 0.2, ya, color=col)
     return S
 
 

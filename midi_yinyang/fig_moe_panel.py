@@ -22,18 +22,18 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
 fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 5.55
-from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK, INK_2  # noqa: E402
+from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK_2  # noqa: E402
+from fig_style import FILL, LINE, COMP, POOL, INK, LW, AW  # noqa: E402
 
-LAV, LAV_D = 'B8BBEC', '8F93D9'
-TEAL, TEAL_D = 'B7DBD8', '7CBDB7'
-GREY, LIGHT = 'DEDEDE', 'F1F1F1'
-FILL = {'x': LAV, 'y': TEAL}
+LAV, LAV_D = FILL['x'], LINE['x']
+TEAL, TEAL_D = FILL['y'], LINE['y']
+GREY, LIGHT = COMP, POOL
 HT = 'h̃'                       # h with combining tilde
 
 
 def build():
     S = Spec()
-    lw = 0.9
+    lw = LW
     # lanes and rows (inches, y down)
     cx, cy = 1.35, 3.45                # lane centres, stream x / stream y
     bw, bh = 1.45, 0.32                # stream boxes
@@ -52,7 +52,7 @@ def build():
         S.line(px, py - 0.05, px, py + 0.05, lw=lw, z=5)
 
     def arrow(x1, y1, x2, y2, **kw):
-        S.line(x1, y1, x2, y2, lw=0.8, arrow=True, **kw)
+        S.line(x1, y1, x2, y2, lw=AW, arrow=True, **kw)
 
     def mark(x, y, w, kind='pre'):
         """corner sign: snowflake->fire = initialised from the pretrained
@@ -95,8 +95,8 @@ def build():
         arrow(c, ySum - 0.12, c, yAN + bh + 0.02)
         side = -1 if s == 'x' else 1
         sx = c + side * (bw / 2 + 0.28)
-        S.line(c + side * bw / 2, yIn + bh / 2, sx, yIn + bh / 2, lw=0.8)
-        S.line(sx, yIn + bh / 2, sx, yAN + bh / 2, lw=0.8)
+        S.line(c + side * bw / 2, yIn + bh / 2, sx, yIn + bh / 2, lw=AW)
+        S.line(sx, yIn + bh / 2, sx, yAN + bh / 2, lw=AW)
         arrow(sx, yAN + bh / 2, c + side * (bw / 2 + 0.02), yAN + bh / 2)
         # output: the next block's input
         hbox(c, yOut, fill, 'h', 'l+1', s)
@@ -108,7 +108,7 @@ def build():
     for (s, idx), x in zip(tok, tx):
         lab = plain('\u2026') if idx is None else m(s, (idx, 'sub'))
         S.rect(x - tk / 2, yTok, tk, tk, fill=FILL[s], line=INK, lw=lw, runs=lab, size=9.5)
-        S.line({'x': cx, 'y': cy}[s], yOut - 0.02, x, yTok + tk + 0.02, lw=0.7)
+        S.line({'x': cx, 'y': cy}[s], yOut - 0.02, x, yTok + tk + 0.02, lw=0.8, color=LINE[s])
     return S
 
 

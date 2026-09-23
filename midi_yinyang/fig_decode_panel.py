@@ -27,16 +27,15 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
 fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 5.3
-from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK, INK_2  # noqa: E402
+from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK_2  # noqa: E402
+from fig_style import FILL, COMP, INK, LW, AW  # noqa: E402
 
-LAV, TEAL = 'B8BBEC', 'B7DBD8'
-FILL = {'x': LAV, 'y': TEAL}
-SHADE = 'D9D9D9'                   # an empty slot
+SHADE = 'EAEAEA'                   # an empty slot
 
 
 def build():
     S = Spec()
-    lw = 0.9
+    lw = LW
     tk, pitch = 0.36, 0.45            # token size and column pitch
     x0 = 1.08                         # first token column (left edge)
     bx0, bx1, bh = 0.98, 3.86, 0.34   # the model box, same width in every row
@@ -54,10 +53,10 @@ def build():
         return m(base, ('*', 'sup'), (idx, 'sub')) if star else m(base, (idx, 'sub'))
 
     def arrow(x1, y1, x2, y2):
-        S.line(x1, y1, x2, y2, lw=0.8, arrow=True)
+        S.line(x1, y1, x2, y2, lw=AW, arrow=True)
 
     def block(y):
-        S.rect(bx0, y, bx1 - bx0, bh, fill='DEDEDE', line=INK, lw=lw,
+        S.rect(bx0, y, bx1 - bx0, bh, fill=COMP, line=INK, lw=lw,
                runs=[('Duet', ''), (', ', ''), ('L', 'i'), (' blocks', '')], size=9.5)
 
     def row_label(y, frame, step):

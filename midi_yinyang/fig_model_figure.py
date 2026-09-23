@@ -76,7 +76,7 @@ def build():
     ly = max(0.05, top_margin + (b_top - top_margin - lh) / 2)   # centred in the free space
     assert ly + lh < b_top - 0.04, 'legend collides with panel (b)'
     x = lx + (PW - lw_) / 2
-    S.rect(x, ly, lw_, lh, fill='FFFFFF', line=INK, lw=0.9)
+    S.rect(x, ly, lw_, lh, fill='FFFFFF', line=INK, lw=1.3)
     S.text(x + 0.1, ly + 0.07, 0.6, 0.26, plain('\u2744\u2192\U0001F525'), size=10.5, align='l')
     S.text(x + 0.72, ly + 0.07, 1.8, 0.26, plain('pretrained, fine-tuned'), size=8, align='l')
     S.text(x + 2.55, ly + 0.07, 0.35, 0.26, plain('\U0001F525'), size=10.5, align='l')
