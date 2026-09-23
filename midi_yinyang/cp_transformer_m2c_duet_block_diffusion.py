@@ -1655,16 +1655,19 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
 
 if __name__ == '__main__':
     from torch.utils.data import DataLoader
-    # lightning.pytorch, not the bare `lightning` package: the top-level
-    # module of lightning 2.x exposes Trainer but not `callbacks`, so
-    # `L.callbacks.ModelCheckpoint` raised AttributeError on a machine
-    # with a recent lightning and no pytorch_lightning shim.
+    # The Trainer must come from the SAME package as the model's base
+    # class: RoFormerSymbolicTransformer subclasses
+    # pytorch_lightning.LightningModule (cp_transformer_m2c_moe), and a
+    # lightning.pytorch Trainer refuses it ("must be a LightningModule").
+    # The bare `lightning` top-level module also lacks `callbacks` in
+    # 2.x. So pytorch_lightning first; lightning.pytorch only as a
+    # fallback for an env that ships the model's base from there.
     try:
-        import lightning.pytorch as L
-        from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
-    except ImportError:
         import pytorch_lightning as L
         from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
+    except ImportError:
+        import lightning.pytorch as L
+        from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 
     parser = argparse.ArgumentParser(
         description='Train M2CDuetBlockDiffusion (DuetBlock + discrete-diffusion '
