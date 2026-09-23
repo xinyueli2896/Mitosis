@@ -27,7 +27,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
-fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 5.7
+fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.45
 from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK_2  # noqa: E402
 from fig_style import FILL, COMP, INK, LW, AW, FS, BH  # noqa: E402
 
@@ -40,8 +40,10 @@ def build():
     tk, pitch = 0.42, 0.5             # token size and column pitch
     x0 = 0.92                         # first token column (left edge)
     bx0, bx1, bh = 0.82, 4.02, BH     # the model box, same width in every row
-    rows_y = (0.44, 2.2, 3.96)        # top of each row
-    yo, yb, yt = 0.0, 0.58, 1.14      # offsets within a row: outputs, block, tokens
+    # rows spaced so the panel is as tall as panel (a): 3 rows of 1.74 in at a
+    # pitch of 2.05 in (content height 5.84)
+    rows_y = (0.44, 2.49, 4.54)       # top of each row
+    yo, yb, yt = 0.0, 0.66, 1.32      # offsets within a row: outputs, block, tokens
 
     def col(i):
         return x0 + i * pitch + tk / 2
