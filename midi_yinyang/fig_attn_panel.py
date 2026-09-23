@@ -21,11 +21,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
-fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 5.85
+fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.0
 from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK  # noqa: E402
 
 LAV, TEAL = 'B8BBEC', 'B7DBD8'
-LAV_L, TEAL_L = 'A9ACE6', '9FCFCA'      # the Q/K/V routing lines
+LAV_L, TEAL_L = '8F93D9', '6FB5AE'      # the Q/K/V routing lines
 FILL = {'x': LAV, 'y': TEAL}
 LINE = {'x': LAV_L, 'y': TEAL_L}
 
@@ -36,7 +36,7 @@ def build():
     cx = {'x': 1.2, 'y': 3.6}                # lane centres
     bw, bh = 1.3, 0.36                       # wide boxes
     # rows (top of box), y down
-    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.46, 0.94, 1.42, 2.02, 2.38, 3.4, 3.98, 4.55, 5.3
+    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.46, 0.94, 1.42, 2.02, 2.38, 3.6, 4.18, 4.75, 5.5
     tk, sq = 0.42, 0.3                       # token size, Q/K/V box size
     cw = 0.4                                 # Cross box width
 
@@ -57,11 +57,11 @@ def build():
     S.text(0.12, 0.05, 3.5, 0.28, [('a. Dual-stream attention', 'b')], size=10.5, align='l')
 
     # ------------------------------------------------------------ tokens -> banks
-    tok = [('x', '0'), ('y', '0'), ('x', '1'), ('y', '1'), ('x', '2'), ('y', '2')]
+    tok = [('x', '1'), ('y', '1'), ('x', None), ('y', None), ('x', 'T\u22121'), ('y', 'T\u22121')]
     tx = [0.65 + i * 0.7 for i in range(6)]
     for (s, idx), x in zip(tok, tx):
-        S.rect(x - tk / 2, yT, tk, tk, fill=FILL[s], line=INK, lw=lw, runs=m(s, (idx, 'sub')),
-               size=9.5)
+        lab = plain('\u2026') if idx is None else m(s, (idx, 'sub'))
+        S.rect(x - tk / 2, yT, tk, tk, fill=FILL[s], line=INK, lw=lw, runs=lab, size=9.5)
         S.line(x, yT - 0.02, cx[s], yH + bh + 0.02, lw=0.7)
     # projections: geometry per stream
     qkv = {s: [cx[s] - 0.45, cx[s], cx[s] + 0.45] for s in 'xy'}
@@ -113,30 +113,35 @@ def build():
 
     # ------------------------------------------------------------ Q/K/V routing
     # Self Attn: own Q, K, V straight up. Cross: own Q, the other stream's
-    # K and V, in that stream's colour. Elbows at staggered heights.
+    # K and V, in that stream's colour. Every routed line has its own
+    # elbow height and its own column, so no two share a segment; the
+    # remaining crossings are perpendicular.
     ya = yA + bh + 0.02                      # arrow tips at the attention boxes' bottom
+    rl = 0.9
     for s in 'xy':
-        col = LINE[s]
         for x in qkv[s]:
-            arrow(x, yQ - 0.02, x, ya, color=col)
+            arrow(x, yQ - 0.02, x, ya, color=LINE[s], lw_=rl)
+    lvl = {('x', 'Q'): 0.14, ('y', 'Q'): 0.14,          # own Q: short, lowest
+           ('y', 'K'): 0.42, ('y', 'V'): 0.56,          # y's K, V -> Cross_x
+           ('x', 'K'): 0.72, ('x', 'V'): 0.86}          # x's K, V -> Cross_y
     for s in 'xy':                           # cross box of stream s
         o = other[s]
         x0c, x1c = cross_box[s]
         targets = [x0c + cw * 0.2, x0c + cw * 0.5, x0c + cw * 0.8]
+        d = 0.07 if s == 'x' else -0.07     # leave the box beside the straight arrow
         # own Q
-        yr = yQ - 0.24
-        S.line(qkv[s][0], yQ - 0.02, qkv[s][0], yr, lw=0.8, color=LINE[s]) if False else None
-        qx = qkv[s][0]
-        S.line(qx + (0.06 if s == 'x' else -0.06), yQ - 0.02, qx + (0.06 if s == 'x' else -0.06), yr,
-               lw=0.8, color=LINE[s])
-        S.line(qx + (0.06 if s == 'x' else -0.06), yr, targets[0], yr, lw=0.8, color=LINE[s])
-        arrow(targets[0], yr, targets[0], ya, color=LINE[s])
-        # other stream's K and V
-        for k, (xk, yr2) in enumerate(((qkv[o][1], yQ - 0.4), (qkv[o][2], yQ - 0.56))):
-            xs = xk + (-0.06 if o == 'y' else 0.06)
-            S.line(xs, yQ - 0.02, xs, yr2, lw=0.8, color=LINE[o])
-            S.line(xs, yr2, targets[k + 1], yr2, lw=0.8, color=LINE[o])
-            arrow(targets[k + 1], yr2, targets[k + 1], ya, color=LINE[o])
+        qx = qkv[s][0] + d
+        yr = yQ - lvl[(s, 'Q')]
+        S.line(qx, yQ - 0.02, qx, yr, lw=rl, color=LINE[s])
+        S.line(qx, yr, targets[0], yr, lw=rl, color=LINE[s])
+        arrow(targets[0], yr, targets[0], ya, color=LINE[s], lw_=rl)
+        # the other stream's K and V
+        for k, key in enumerate('KV'):
+            xs = qkv[o][k + 1] - d
+            yr2 = yQ - lvl[(o, key)]
+            S.line(xs, yQ - 0.02, xs, yr2, lw=rl, color=LINE[o])
+            S.line(xs, yr2, targets[k + 1], yr2, lw=rl, color=LINE[o])
+            arrow(targets[k + 1], yr2, targets[k + 1], ya, color=LINE[o], lw_=rl)
     return S
 
 
