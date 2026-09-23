@@ -6,8 +6,13 @@
 % kept), NOT remembered:
 %   demographics, per-system means      subjective_spider.py stdout
 %   paired differences and p-values     results/subjective_paired.csv
-%   the table                           paper/tables/listening_mos.tex
-%   the spider chart (optional figure)  figures/subjective_spider.pdf
+%   the spider chart (the reported form, 2026-09-23; the table
+%     paper/tables/listening_mos.tex is kept but not \input)
+%                                       figures/subjective_spider.pdf
+%   built by plot_subjective.sbatch with PALETTE=system, RMIN=2.5,
+%   SQUASH=0.12: the radial axis is PIECEWISE LINEAR -- [2.5, GT max]
+%   takes 88% of the radius and [GT max, 5] the remaining 12%. The
+%   caption must say so.
 % System names as in experiments.tex. The cascade and the causal-
 % attention arm were not rated.
 %
@@ -67,9 +72,17 @@ tested with a two-sided Wilcoxon signed-rank test over the 62 pairs;
 tied pairs are discarded. The bootstrap intervals reported with the
 means resample raters, since one rater's ratings are not independent.
 
-\input{tables/listening_mos}
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.9\columnwidth]{figures/subjective_spider.pdf}
+  \caption{Subjective evaluation: mean rating per system and axis over
+    17 raters and five songs (scale $1$--$5$). The radial axis starts at
+    $2.5$ and is compressed above the ground-truth maximum so that the
+    systems separate; tick labels give the original scale.}
+  \label{fig:subjective}
+\end{figure}
 
-\textbf{Results.} Table~\ref{tab:listening} reports the means. \sys
+\textbf{Results.} Fig.~\ref{fig:subjective} reports the means. \sys
 obtains the highest mean among the systems on consistency ($3.92$),
 structure ($3.85$), melody--chord fit ($3.94$) and creativity ($3.71$),
 and overall ($3.81$); the finetuned single-stream model obtains the
