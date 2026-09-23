@@ -22,7 +22,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
-fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.4
+fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.3
 from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain  # noqa: E402
 from fig_style import FILL, LINE, COMP, CROSS, GREY_L, INK, LW, AW  # noqa: E402
 
@@ -32,7 +32,7 @@ def build():
     cx = {'x': 1.3, 'y': 3.5}                # lane centres
     bw, bh = 1.9, 0.4                        # wide boxes span self + cross
     # rows (top of box), y down
-    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.42, 0.94, 1.58, 2.2, 2.66, 4.1, 4.68, 5.25, 6.0
+    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.42, 0.94, 1.58, 2.2, 2.66, 3.95, 4.53, 5.1, 5.85
     tk = 0.42                                # token size
     sw, cw = 0.92, 0.9                       # Self Attn and Cross Attn widths
     side = {'x': -1, 'y': 1}
@@ -124,31 +124,23 @@ def build():
         arrow(skx, yAN + bh / 2, c + side[s] * (bw / 2 + 0.02), yAN + bh / 2)
 
     # ------------------------------------------------------------ routing
-    # Self Attn: own Q and K&V, grey. Cross Attn: own Q and the OTHER
-    # stream's K&V, in the cross path's colour. Elbows at distinct heights.
+    # Curved arrows, as in the sketch. Self Attn: own Q and K&V, grey.
+    # Cross Attn: own Q and the OTHER stream's K&V, in the cross path's
+    # colour. Each arrow leaves its box top vertically and arrives at the
+    # attention box bottom vertically.
     ya = yA + bh + 0.02
     for s in 'xy':
         scx = centre(self_box[s])
-        for x, dx in ((centre(qbox[s]), -0.18), (centre(kvbox[s]), 0.18)):
-            arrow(x, yQ - 0.02, scx + dx, ya, color=GREY_L)
-    lvl = {'x': (0.28, 0.5), 'y': (0.7, 0.9)}       # (own Q, other K&V) elbow depth below yQ
-    assert max(max(v) for v in lvl.values()) < yQ - ya - 0.08
+        for x, dx in ((centre(qbox[s]), -0.2), (centre(kvbox[s]), 0.2)):
+            S.curve(x, yQ - 0.02, scx + dx, ya, color=GREY_L, lw=AW, arrow=True)
     for s in 'xy':
         o = other[s]
         col = CROSS[s][1]
         ccx = centre(cross_box[s])
-        # own Q
-        qx = centre(qbox[s]) + side[s] * -0.12
-        yr = yQ - lvl[s][0]
-        S.line(qx, yQ - 0.02, qx, yr, lw=AW, color=col)
-        S.line(qx, yr, ccx - 0.2, yr, lw=AW, color=col)
-        arrow(ccx - 0.2, yr, ccx - 0.2, ya, color=col)
-        # the other stream's K & V
-        kx = centre(kvbox[o]) + side[o] * -0.12
-        yr2 = yQ - lvl[s][1]
-        S.line(kx, yQ - 0.02, kx, yr2, lw=AW, color=col)
-        S.line(kx, yr2, ccx + 0.2, yr2, lw=AW, color=col)
-        arrow(ccx + 0.2, yr2, ccx + 0.2, ya, color=col)
+        S.curve(centre(qbox[s]) + side[s] * -0.12, yQ - 0.02, ccx - 0.2, ya,
+                color=col, lw=AW, arrow=True, z=3)
+        S.curve(centre(kvbox[o]) + side[o] * -0.12, yQ - 0.02, ccx + 0.2, ya,
+                color=col, lw=AW, arrow=True, z=3)
     return S
 
 

@@ -48,6 +48,20 @@ for (const it of items) {
       { x: it.x, y: it.y, w: it.w, h: it.h, margin: 0, isTextBox: true,
         align: { c: 'center', l: 'left', r: 'right' }[it.align],
         valign: it.valign === 't' ? 'top' : 'middle', fit: 'none', wrap: false });
+  } else if (it.k === 'curve') {
+    // custom geometry: one cubic Bezier with vertical tangents at both ends
+    const x = Math.min(it.x1, it.x2), y = Math.min(it.y1, it.y2);
+    const w = Math.max(Math.abs(it.x2 - it.x1), 0.004), h = Math.max(Math.abs(it.y2 - it.y1), 0.004);
+    const dy = (it.y2 - it.y1) * it.bend;
+    const pts = [{ x: it.x1 - x, y: it.y1 - y },
+                 { x: it.x2 - x, y: it.y2 - y,
+                   curve: { type: 'cubic', x1: it.x1 - x, y1: it.y1 - y + dy,
+                            x2: it.x2 - x, y2: it.y2 - y - dy } }];
+    const opts = { x: x, y: y, w: w, h: h, points: pts,
+                   fill: { color: 'FFFFFF', transparency: 100 },
+                   line: { color: it.color, width: it.lw } };
+    if (it.arrow) opts.line.endArrowType = 'triangle';
+    slide.addShape(pres.ShapeType.custGeom, opts);
   } else if (it.k === 'line') {
     const x = Math.min(it.x1, it.x2), y = Math.min(it.y1, it.y2);
     // never a zero-extent shape: PowerPoint rejects lines with w or h = 0

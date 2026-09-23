@@ -57,6 +57,13 @@ class Spec:
         self.items.append(dict(k='line', x1=x1, y1=y1, x2=x2, y2=y2, color=color, lw=lw,
                                dash=dash, arrow=arrow, z=z))
 
+    def curve(self, x1, y1, x2, y2, color=INK, lw=0.75, arrow=False, z=2, bend=0.5):
+        """A vertical S-curve from (x1, y1) to (x2, y2): a cubic Bezier whose
+        tangents are vertical at both ends; bend in (0, 1] sets how far
+        the control points sit along the vertical span."""
+        self.items.append(dict(k='curve', x1=x1, y1=y1, x2=x2, y2=y2, color=color, lw=lw,
+                               arrow=arrow, z=z, bend=bend))
+
     def node(self, cx, cy, r=0.11, label='+', size=9):
         self.rect(cx - r, cy - r, 2 * r, 2 * r, fill='FFFFFF', line=INK, lw=0.75,
                   runs=[(label, '')], size=size, shape='ellipse', z=4)
@@ -473,6 +480,16 @@ def write_preview(S, path):
             ax.text(xx, it['y'] + it['h'] / 2, runs_to_mathtext(it['runs']), ha=ha, va='center',
                     fontsize=it['size'], color=hexc(it['color']), zorder=it['z'], family='serif',
                     weight='bold' if it['bold'] else 'normal')
+        elif it['k'] == 'curve':
+            from matplotlib.path import Path
+            dy = (it['y2'] - it['y1']) * it['bend']
+            verts = [(it['x1'], it['y1']), (it['x1'], it['y1'] + dy), (it['x2'], it['y2'] - dy),
+                     (it['x2'], it['y2'])]
+            a = FancyArrowPatch(path=Path(verts, [Path.MOVETO, Path.CURVE4, Path.CURVE4,
+                                                  Path.CURVE4]),
+                                arrowstyle='-|>' if it['arrow'] else '-', mutation_scale=7,
+                                color=hexc(it['color']), lw=it['lw'], zorder=it['z'], fill=False)
+            ax.add_patch(a)
         elif it['k'] == 'line':
             a = FancyArrowPatch((it['x1'], it['y1']), (it['x2'], it['y2']),
                                 arrowstyle='-|>' if it['arrow'] else '-', mutation_scale=7,
