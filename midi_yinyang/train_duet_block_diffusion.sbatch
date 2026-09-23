@@ -293,6 +293,8 @@
 #                           default -- only use if you want to change K,
 #                           query_loss_weight, or other things that the
 #                           optimizer state has baked in assumptions about.
+#   --export=ALL,WANDB=0             TensorBoard logger instead of wandb
+#                           (a machine without a wandb login).
 #   --export=ALL,MAX_LR=...          override LR (else autoscale by NGPUS).
 #   --export=ALL,BATCH_SIZE=...      per-GPU batch size (default 4).
 #   --export=ALL,GATE_INIT_BIAS=-4   raise if gates stay at init.
@@ -318,9 +320,14 @@
 #SBATCH --time=12:00:00
 
 set -euo pipefail
-source ~/.bashrc
+# ~/.bashrc on another site may reference unset variables or return
+# early; it only serves to put conda on PATH, so its failure is not ours
+set +u; source ~/.bashrc 2>/dev/null || true; set -u
 
 CONDA_ENV="${CONDA_ENV:-mitosis}"
+# WANDB=0 logs to TensorBoard (tb_logs/) instead of Weights & Biases --
+# for a machine with no wandb login. Default 1 = the cluster's wandb.
+WANDB="${WANDB:-1}"
 # REPO_DIR / LOG_DIR: the cluster's paths by default; on another machine
 # run this file with bash and pass both (or REPO_DIR is derived from the
 # script's own location). SLURM_JOB_ID is 'local' off SLURM.
@@ -762,8 +769,8 @@ COMMON_ARGS=(
     --model_abbr "$MODEL_ABBR"
     --diffusion_K "$DIFFUSION_K"
     --checkpoint_path "$TRAIN_CKPT"
-    --wandb
 )
+[[ "$WANDB" == "1" ]] && COMMON_ARGS+=(--wandb)
 
 if [[ "$NGPUS" -le 1 ]]; then
     python cp_transformer_m2c_duet_block_diffusion.py \
