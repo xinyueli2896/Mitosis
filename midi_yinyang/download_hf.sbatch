@@ -48,11 +48,14 @@ if [[ -z "$REPO_DIR" ]]; then
 fi
 [[ -n "$REPO_DIR" && -d "$REPO_DIR/midi_yinyang" ]] || {
     echo "ERROR: no midi_yinyang/ under the submit/current directory; run from the repo root or set REPO_DIR"; exit 1; }
-# conda env: the cluster's `mitosis` by default; CONDA_ENV= (empty) skips
-# activation on a machine whose python already has the packages.
+# conda env (default mitosis): skipped when CONDA_ENV is empty or that env is already the
+# active one (a machine whose ~/.bashrc has no conda hook, run from an
+# activated shell); otherwise activated through the hook of the conda
+# on PATH, not ~/.bashrc, so 'conda init' is not required.
 CONDA_ENV="${CONDA_ENV-mitosis}"
-if [[ -n "$CONDA_ENV" ]] && command -v conda >/dev/null 2>&1; then
-    source ~/.bashrc
+if [[ -n "$CONDA_ENV" && "${CONDA_DEFAULT_ENV:-}" != "$CONDA_ENV" ]]; then
+    command -v conda >/dev/null 2>&1 || { echo "ERROR: conda not on PATH; activate the env yourself and pass CONDA_ENV="; exit 1; }
+    source "$(conda info --base)/etc/profile.d/conda.sh"
     conda activate "$CONDA_ENV"
 fi
 cd "$REPO_DIR/midi_yinyang"
