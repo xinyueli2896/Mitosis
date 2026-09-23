@@ -59,16 +59,18 @@ def build():
         model and fine-tuned; fire = new component, trained from scratch"""
         glyph = '\u2744\u2192\U0001F525' if kind == 'pre' else '\U0001F525'
         # just above the top-right corner, clear of the outline
-        S.text(x + w - 0.62, y - 0.2, 0.66, 0.24, plain(glyph), size=FS, align='r', z=6)
+        # inside the box, at its top-right corner
+        S.text(x + w - 0.66, y + 0.005, 0.62, 0.2, plain(glyph), size=8.5 if kind == 'pre' else 9,
+               align='r', z=6)
 
     S.text(0.12, 0.05, 3.5, 0.28, [('b. Per-stream expert routing', 'b')], size=10.5, align='l')
 
     # shared expert pool: one grey band, four experts, no stream subscripts
-    px0, py0, pw = ex[0] - ew / 2 - 0.12, yExp - 0.1, ex[-1] - ex[0] + ew + 0.24
-    S.rect(px0, py0, pw, eh + 0.2, fill=LIGHT, line=None, z=0)
+    px0, py0, pw = ex[0] - ew / 2 - 0.12, yExp - 0.26, ex[-1] - ex[0] + ew + 0.24
+    S.rect(px0, py0, pw, eh + 0.36, fill=LIGHT, line=None, z=0)
     mark(px0, py0, pw)                    # the expert pool: replicated from the pretrained FFN
-    S.text(px0 + pw - 0.95 - 1.5, py0 - 0.17, 1.5, 0.16, plain('shared pool, E = 4'),
-           size=7, align='r', color=INK_2)
+    S.text(px0 + 0.05, py0 + 0.02, 1.5, 0.16, plain('shared pool, E = 4'),
+           size=7, align='l', color=INK_2)
     for i, c in enumerate(ex):
         S.rect(c - ew / 2, yExp, ew, eh, fill=GREY, line=INK, lw=lw,
                runs=[('MLP', ''), ('xxyy'[i], 'sub i')], size=FS)

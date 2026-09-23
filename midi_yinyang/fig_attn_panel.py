@@ -45,15 +45,23 @@ def build():
         """corner sign: snowflake->fire = initialised from the pretrained
         model and fine-tuned; fire = new component, trained from scratch"""
         glyph = '❄→\U0001F525' if kind == 'pre' else '\U0001F525'
-        S.text(x + w - 0.62, y - 0.2, 0.66, 0.24, plain(glyph), size=9.5, align='r', z=6)
+        # inside the box, at its top-right corner
+        S.text(x + w - 0.66, y + 0.005, 0.62, 0.2, plain(glyph), size=8.5 if kind == 'pre' else 9,
+               align='r', z=6)
 
-    def box(x, y, w, h, runs, fill=COMP, size=FS, dash=False, z=1):
-        S.rect(x, y, w, h, fill=fill, line=INK, lw=LW, dash=dash, runs=runs, size=size, z=z)
+    def box(x, y, w, h, runs, fill=COMP, size=FS, dash=False, z=1, badge=None):
+        """badge='pre'/'new' puts the corner sign inside the top-right corner
+        and centres the label in the space left of it"""
+        if badge is None:
+            S.rect(x, y, w, h, fill=fill, line=INK, lw=LW, dash=dash, runs=runs, size=size, z=z)
+            return
+        S.rect(x, y, w, h, fill=fill, line=INK, lw=LW, dash=dash, z=z)
+        room = 0.44 if badge == 'pre' else 0.18
+        S.text(x + 0.02, y, w - room, h, runs, size=size, align='c', z=z + 1)
+        mark(x, y, w, kind=badge)
 
     def wide(s, y, runs, fill=COMP, size=FS, pre=False):
-        box(cx[s] - bw / 2, y, bw, bh, runs, fill=fill, size=size)
-        if pre:
-            mark(cx[s] - bw / 2, y, bw)
+        box(cx[s] - bw / 2, y, bw, bh, runs, fill=fill, size=size, badge='pre' if pre else None)
 
     def arrow(x1, y1, x2, y2, color=INK, lw_=AW):
         S.line(x1, y1, x2, y2, lw=lw_, arrow=True, color=color)
@@ -111,8 +119,7 @@ def build():
         # gate above Cross Attn, in the cross path's colour; (+) at the lane centre
         gy = yG + 0.17
         gw = 0.56
-        box(ccx - gw / 2, yG - 0.02, gw, 0.38, plain('Gate'), fill=cfill, size=FS - 0.5)
-        mark(ccx - gw / 2, yG - 0.02, gw, kind='new')
+        box(ccx - gw / 2, yG - 0.02, gw, 0.38, plain('Gate'), fill=cfill, size=FS - 0.5, badge='new')
         arrow(ccx, yA - 0.02, ccx, yG + 0.38)
         plus(c, gy)
         arrow(ccx - side[s] * gw / 2 * -1 if False else (ccx - gw / 2 - 0.02 if s == 'x' else ccx + gw / 2 + 0.02),
