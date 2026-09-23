@@ -34,11 +34,11 @@ def build():
     S = Spec()
     lw = 0.9
     cx = {'x': 1.2, 'y': 3.6}                # lane centres
-    bw, bh = 1.3, 0.36                       # wide boxes
+    bw, bh = 1.36, 0.38                       # wide boxes
     # rows (top of box), y down
     yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.46, 0.94, 1.42, 2.02, 2.38, 3.7, 4.28, 4.85, 5.6
     tk, sq = 0.42, 0.3                       # token size, Q/K/V box size
-    cw = 0.4                                 # Cross box width
+    cw = 0.38                                # Cross box width
 
     def wide(s, y, runs, fill='FFFFFF', size=9.5):
         S.rect(cx[s] - bw / 2, y, bw, bh, fill=fill, line=INK, lw=lw, runs=runs, size=size)
@@ -67,8 +67,8 @@ def build():
     qkv = {s: [cx[s] - 0.45, cx[s], cx[s] + 0.45] for s in 'xy'}
     side = {'x': -1, 'y': 1}
     self_box = {s: (cx[s] - bw / 2, cx[s] + bw / 2) for s in 'xy'}
-    cross_box = {'x': (cx['x'] + bw / 2 + 0.08, cx['x'] + bw / 2 + 0.08 + cw),
-                 'y': (cx['y'] - bw / 2 - 0.08 - cw, cx['y'] - bw / 2 - 0.08)}
+    cross_box = {'x': (cx['x'] + bw / 2 + 0.07, cx['x'] + bw / 2 + 0.07 + cw),
+                 'y': (cx['y'] - bw / 2 - 0.07 - cw, cx['y'] - bw / 2 - 0.07)}
     other = {'x': 'y', 'y': 'x'}
 
     for s in 'xy':
@@ -101,7 +101,7 @@ def build():
         arrow(c, yA - 0.02, c, gy + 0.12)
         # output projection, o, add & norm, skip
         arrow(c, gy - 0.12, c, yP + bh + 0.02)
-        wide(s, yP, plain('Output projection'), size=9)
+        wide(s, yP, plain('Output projection'), size=8.5)
         arrow(c, yP - 0.02, c, yO + bh + 0.02)
         wide(s, yO, bank('o', 'l', s), fill=FILL[s])
         arrow(c, yO - 0.02, c, yAN + bh + 0.02)
