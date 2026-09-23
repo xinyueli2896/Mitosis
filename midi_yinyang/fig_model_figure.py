@@ -100,7 +100,7 @@ def build():
                                        'initialized from pretrained model, finetuned in ours'),
                                       ('\U0001F525', 'from scratch'))):
         yy = ly + 0.06 + k * 0.3
-        S.text(x + 0.1, yy, 0.6, 0.26, plain(glyph), size=11, align='l')
+        S.text(x + 0.1, yy, 0.6, 0.26, plain(glyph), size=11, align='r')   # glyphs right-aligned
         S.text(x + 0.74, yy, lw_ - 0.8, 0.26, plain(txt), size=9.5, align='l')
     return S
 

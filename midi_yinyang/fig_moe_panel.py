@@ -61,7 +61,8 @@ def build():
         model and fine-tuned; fire = new component, trained from scratch"""
         glyph = '\u2744\u2192\U0001F525' if kind == 'pre' else '\U0001F525'
         # just above the top-right corner, clear of the outline
-        S.text(x + w - 0.62, y - 0.2, 0.66, 0.24, plain(glyph), size=FS, align='r', z=6)
+        # flush with the top-right corner: right edge at x + w, bottom at y
+        S.text(x + w - 0.66, y - 0.22, 0.66, 0.22, plain(glyph), size=9.5, align='r', z=6)
 
     S.text(0.12, 0.05, 3.5, 0.28, [('b. Per-stream expert routing', 'b')], size=10.5, align='l')
 
