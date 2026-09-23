@@ -1,0 +1,180 @@
+% ---------------------------------------------------------------
+% Compressed methodology (2026-09-23), corrected against the code:
+%   - full fine-tuning, no LoRA; gates and routers are the only new
+%     parameters
+%   - one projection set per stream; the four pathways differ by mask
+%   - cross-stream reading = two masked passes (earlier frames, current
+%     frame), each with a scalar gate; drawn as one Cross Attn + Gate
+%   - shared expert pool, per-stream top-k router, post-LN
+%   - alternating draft-and-denoise decoding: the denoise forward reads
+%     out BOTH appended positions (A3_CTC_DENOISE_LEADER=1)
+% Notation: \bm{h}^{(l)}_s with s in {x, y}; a, b only where source and
+% target are both needed (A_ab, M_ab). Needs \usepackage{bm}; the amsmath
+% equivalent is \boldsymbol. Figure: fig:model, panels (a) (b) (c).
+% ---------------------------------------------------------------
+
+Given two autoregressive models $\mathrm{LM}_x$ and $\mathrm{LM}_y$
+pretrained independently on streams $x$ and $y$, we construct an aligned
+Transformer, \emph{Duet}, that generates the two streams jointly
+(Fig.~\ref{fig:model}). Duet reuses the parameters of both models and
+learns their interaction from paired data, approximating a joint model
+over $z=[x,y]$. Sec.~\ref{sec:formulation} formulates joint temporal
+generation, Sec.~\ref{sec:duet} the architecture, and
+Sec.~\ref{sec:generation} the draft-and-denoise generation procedure.
+
+\subsection{Problem Formulation}
+\label{sec:formulation}
+
+Let $x=(x_1,\ldots,x_T)$ and $y=(y_1,\ldots,y_T)$ be temporally aligned
+streams and $z_t=(x_t,y_t)$ the joint variable at step $t$. A joint
+model factorizes as
+\begin{equation}
+    p(z_{1:T})
+    =
+    \prod_{t=1}^{T} p(x_t,y_t \mid x_{<t},y_{<t}).
+    \label{eq:joint_ar}
+\end{equation}
+A conventional autoregressive model must further serialize each step,
+\begin{equation}
+    p(x_t,y_t \mid z_{<t})
+    =
+    p(x_t \mid z_{<t})\,
+    p(y_t \mid z_{<t},x_t),
+    \label{eq:ordered_factorization}
+\end{equation}
+or in the reverse order, imposing an asymmetric dependency between two
+simultaneous streams. Duet instead treats $z_t$ as one temporal unit:
+it keeps the within-stream computation of $\mathrm{LM}_x$ and
+$\mathrm{LM}_y$, learns bidirectional interaction from paired data, and
+fixes no order within a step. In implementation the streams are
+serialized as $[x_1,y_1,x_2,y_2,\ldots]$ with $(x_t,y_t)$ sharing one
+rotary position, and prediction is shifted by one joint step, so
+$(x_t,y_t)$ predicts $(x_{t+1},y_{t+1})$; the interleaving imposes no
+order within $z_t$.
+
+\subsection{Duet: Aligned Transformer}
+\label{sec:duet}
+
+Each layer keeps one copy of the pretrained block per stream and aligns
+the two in both sub-layers: attention lets the streams read each other
+(Fig.~\ref{fig:model}a) and the feed-forward sub-layer routes both over
+a shared expert pool (Fig.~\ref{fig:model}b). All pretrained weights are
+fine-tuned; the gates and routers are the only new parameters.
+
+\textbf{Attention fusion}\quad Let $\bm{h}^{(l)}_s$, $s\in\{x,y\}$, be
+the streams' hidden states at layer $l$, and $(W^Q_s, W^K_s, W^V_s,
+W^O_s)$ the projections inherited from $\mathrm{LM}_s$. The information
+transferred from source stream $a$ to target stream $b$ is
+\begin{equation}
+    A_{ab}
+    =
+    \operatorname{softmax}
+    \left(
+        \frac{(\bm{h}_b W^Q_b)(\bm{h}_a W^K_a)^\top}{\sqrt{d}}
+        + M_{ab}
+    \right)
+    \bm{h}_a W^V_a,
+    \label{eq:duet_attn}
+\end{equation}
+with queries from the target and keys and values from the source, and
+$M_{ab}$ the additive attention mask, $0$ where a query frame may read
+a key frame and $-\infty$ elsewhere. $A_{xx}$ and $A_{yy}$ are the
+self-attention of $\mathrm{LM}_x$ and $\mathrm{LM}_y$ under their causal
+mask. The cross-stream term reads the partner in two masked passes, over
+earlier frames and over the current frame, each admitted by a scalar
+gate $g\in(0,1)$ computed from $\bm{h}_s$ (drawn as one Cross Attn and
+Gate in Fig.~\ref{fig:model}a); the current-frame pass is causal because
+under the shift neither position holds what it predicts. Writing
+$\bar{s}$ for the other stream,
+\begin{equation}
+    \bm{o}_s = W^O_s\bigl(A_{ss} + g_{s}\,A_{\bar{s}s}\bigr),
+    \qquad
+    \tilde{\bm{h}}_s = \mathrm{LN}(\bm{h}_s + \bm{o}_s).
+    \label{eq:gates}
+\end{equation}
+Gate biases start at $-10$, so at initialization each stream computes
+exactly its pretrained attention.
+
+\textbf{Mixture of Experts}\quad The feed-forward sub-layer is a pool of
+$E$ experts $\mathrm{MLP}_1,\ldots,\mathrm{MLP}_E$, each a copy of a
+pretrained feed-forward network, shared by both streams. Each stream
+scores the pool with its own router and mixes its top-$k$ experts,
+\begin{align}
+    \boldsymbol{\pi}_s
+    &= \operatorname{softmax}(G_s\,\tilde{\bm{h}}_s),
+    \notag \\
+    \bm{u}_s
+    &= \sum_{i\in\mathcal{T}_k(\boldsymbol{\pi}_s)}
+       \pi_{s,i}\,\mathrm{MLP}_i(\tilde{\bm{h}}_s),
+    \notag \\
+    \bm{h}^{(l+1)}_s
+    &= \mathrm{LN}(\tilde{\bm{h}}_s + \bm{u}_s),
+    \qquad s\in\{x,y\},
+    \label{eq:moe}
+\end{align}
+where $\mathcal{T}_k$ selects the $k$ largest routing weights, with the
+balancing term of~\cite{fedus2022switch}. No expert is assigned to a
+stream, so per-stream specialists and shared experts emerge rather than
+being imposed. We use $E=4$, $k=2$. In our setting $\mathrm{LM}_x$ and
+$\mathrm{LM}_y$ are the same pretrained symbolic-music Transformer, so
+every $\mathrm{MLP}_i$ starts as a copy of one feed-forward network.
+When the two streams come from genuinely distinct models, the pool can
+instead be seeded with the feed-forward networks of both, each followed
+by a lightweight adaptation layer, so that experts of either origin can
+be routed to either stream.
+
+\subsection{Joint Draft-and-Denoise Generation}
+\label{sec:generation}
+
+Duet generates autoregressively over $z_t$ (Fig.~\ref{fig:model}c). Two
+positions are appended after the history, one per stream, at the rotary
+position of frame $t$; each predicts its component of $z_t$ and reads
+the history and its partner, and no history position reads them. At
+step $t$ one stream leads: its \emph{draft} is sampled from the
+autoregressive head and written into its position, the other position
+left empty,
+\begin{equation}
+    x_t^{*} \sim p_\theta(\,\cdot \mid z_{<t}).
+    \label{eq:draft}
+\end{equation}
+One \emph{denoise} forward then updates both positions: the follower
+given the draft through the current-frame pass, and the leader
+re-sampled from its own position, replacing the draft,
+\begin{equation}
+    (x_t, y_t) \sim p_\theta(\,\cdot \mid z_{<t},\, x_t^{*}),
+    \qquad
+    z_{<t+1} = [z_{<t}, z_t],
+    \label{eq:denoise}
+\end{equation}
+and the roles swap, so $y$ leads at $t{+}1$:
+\begin{equation}
+    z_{<t}
+    \xrightarrow{\mathrm{draft}} x_t^{*}
+    \xrightarrow{\mathrm{denoise}} z_t
+    \xrightarrow{\mathrm{commit}} z_{<t+1}.
+    \label{eq:generation_summary}
+\end{equation}
+Training writes into the appended positions what decoding will, samples
+from the autoregressive heads, and supervises both on the true frame
+alongside the autoregressive loss. Duet is thus autoregressive across
+steps, produces both components of a step in one denoise forward, and
+alternates the leading stream, so neither is fixed as first.
+
+% ---------------------------------------------------------------
+% Caption for the three-panel model figure (figures/model_figure.pdf)
+% ---------------------------------------------------------------
+% \begin{figure*}[t]
+%   \centering
+%   \includegraphics[width=\textwidth]{figures/model_figure.pdf}
+%   \caption{\sys. (a)~Each block attends within a stream (Self Attn) and
+%   across streams (Cross Attn) with per-stream projections, a scalar
+%   gate admitting the cross readout. (b)~A router per stream selects two
+%   of four shared experts, copies of the pretrained feed-forward layer,
+%   named here by the stream they came to serve. (c)~Joint
+%   draft-and-denoise decoding: the leader's draft $x^*_t$ is sampled and
+%   written in, one denoise forward emits $x_t$ and $y_t$ together, and
+%   the roles swap at the next frame. Blue and salmon mark streams $x$
+%   and $y$; badges mark components initialized from the pretrained model
+%   and fine-tuned versus trained from scratch.}
+%   \label{fig:model}
+% \end{figure*}
