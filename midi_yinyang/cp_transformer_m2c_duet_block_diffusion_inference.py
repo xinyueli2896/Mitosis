@@ -235,6 +235,27 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
     if unexpected:
         print(f'[load_model] unexpected keys ({len(unexpected)}): {unexpected[:5]}'
               f'{"..." if len(unexpected) > 5 else ""}')
+    # A3_DISABLE_LORA=cross|expert|all (2026-09-23): decode a low-rank
+    # checkpoint with its deltas switched OFF, an exact ablation of what
+    # the adapters contribute. Zeroing B makes every delta identically
+    # zero: 'cross' returns the cross pathways to the per-stream
+    # projections, 'expert' returns every expert to the shared base FFN
+    # (the frozen pretrained one on a frozen-base run), 'all' does both.
+    _disable = _os.environ.get('A3_DISABLE_LORA', '').strip().lower()
+    if _disable:
+        assert _disable in ('cross', 'expert', 'all'), _disable
+        n_cross = n_exp = 0
+        with torch.no_grad():
+            for name, mod in net.named_modules():
+                if not hasattr(mod, 'B') or not hasattr(mod, 'A'):
+                    continue
+                is_expert = '.lfc1.' in name or '.lfc2.' in name
+                if _disable in ('cross', 'all') and not is_expert:
+                    mod.B.zero_(); n_cross += 1
+                if _disable in ('expert', 'all') and is_expert:
+                    mod.B.zero_(); n_exp += 1
+        print(f'[load_model] A3_DISABLE_LORA={_disable}: zeroed '
+              f'{n_cross} cross-pair and {n_exp} expert deltas')
     # Free-running routing statistics (env-activated, like the A3_*
     # decode knobs, so every driver that loads through here gets it
     # without CLI plumbing): accumulate every MoE routing decision this
