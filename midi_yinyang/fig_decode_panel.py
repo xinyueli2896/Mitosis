@@ -3,17 +3,18 @@ COMMIT, in the style of fig_moe_panel.py (lavender = stream x, teal =
 stream y, black outlines, Cambria). Layout follows the hand sketch of
 2026-09-23; content changed to alternating commit the same day:
 
-  row 1  t = 3, leader    x1 y1 x2 y2 -> Duet -> the leader x*3, sampled
-                          from the autoregressive head of the content
-                          token x2 (a circle above it)
-  row 2  t = 3, follower  x*3 is written into its appended slot (dashed,
+  row 1  t = 3, draft     x1 y1 x2 y2 -> Duet -> the leader's draft x*3,
+                          sampled from the autoregressive head of the
+                          content token x2 (a circle above it)
+  row 2  t = 3, denoise   x*3 is written into its appended slot (dashed,
                           stream-coloured); the partner's slot stays
                           EMPTY, drawn shaded and dashed with y*3; one
-                          forward reads out y3, conditioned on x*3
-                          through the within-frame pass; only the
-                          follower is read out
-  row 3  t = 4, leader    x3, y3 join the context and the roles swap:
-                          the leader is now y*4, from the head of y3
+                          forward reads out BOTH slots: x3 from the
+                          leader's slot (x* -> x) and y3 from the empty
+                          slot given x*3 (A3_CTC_DENOISE_LEADER=1)
+  row 3  t = 4, draft     x3, y3 join the context and the roles swap:
+                          the leader is now y, its draft y*4 from the
+                          head of y3
 The two appended slots are deliberately not named in the figure.
 
     python fig_decode_panel.py --out <path-without-extension>
@@ -69,7 +70,7 @@ def build():
 
     # ---------------------------------------------------------- row 1: t = 3, draft
     y = rows_y[0]
-    row_label(y, '3', 'leader')
+    row_label(y, '3', 'draft')
     for i, (s, idx) in enumerate((('x', '1'), ('y', '1'), ('x', '2'), ('y', '2'))):
         token(col(i), y + yt, s, sub(s, idx))
     arrow(col(1.5), y + yt - 0.02, col(1.5), y + yb + bh + 0.02)
@@ -78,11 +79,11 @@ def build():
     arrow(col(2), y + yb - 0.02, col(2), y + yo + tk + 0.02)
     token(col(2), y + yo, 'x', sub('x', '3', star=True), shape='ellipse')
     S.text(col(2) + tk / 2 + 0.1, y + yo + 0.05, 1.8, 0.26,
-           plain('leader, from the\nautoregressive head'), size=7.5, align='l', color=INK_2)
+           plain('draft of the leader,\nautoregressive head'), size=7.5, align='l', color=INK_2)
 
     # ---------------------------------------------------------- row 2: t = 3, refine
     y = rows_y[1]
-    row_label(y, '3', 'follower')
+    row_label(y, '3', 'denoise')
     for i, (s, idx) in enumerate((('x', '1'), ('y', '1'), ('x', '2'), ('y', '2'))):
         token(col(i), y + yt, s, sub(s, idx))
     # the two appended slots: the leader written into its own, the partner's empty
@@ -90,15 +91,16 @@ def build():
     token(col(5), y + yt, 'y', sub('y', '3', star=True), dash=True, fill=SHADE)
     arrow(col(2.5), y + yt - 0.02, col(2.5), y + yb + bh + 0.02)
     block(y + yb)
-    # only the follower is read out, conditioned on x*3
-    arrow(col(5), y + yb - 0.02, col(5), y + yo + tk + 0.02)
-    token(col(5), y + yo, 'y', sub('y', '3'))
-    S.text(col(5) + tk / 2 + 0.1, y + yo + 0.05, 1.0, 0.26, plain('follower,\ngiven x*'),
+    # both slots are read out: x3 denoised from its draft, y3 given x*3
+    for i, s_ in ((4, 'x'), (5, 'y')):
+        arrow(col(i), y + yb - 0.02, col(i), y + yo + tk + 0.02)
+        token(col(i), y + yo, s_, sub(s_, '3'))
+    S.text(col(5) + tk / 2 + 0.1, y + yo + 0.05, 1.0, 0.26, plain('both slots,\ngiven x*'),
            size=7.5, align='l', color=INK_2)
 
     # ---------------------------------------------------------- row 3: t = 4, draft
     y = rows_y[2]
-    row_label(y, '4', 'leader')
+    row_label(y, '4', 'draft')
     for i, (s, idx) in enumerate((('x', '1'), ('y', '1'), ('x', '2'), ('y', '2'),
                                   ('x', '3'), ('y', '3'))):
         token(col(i), y + yt, s, sub(s, idx))

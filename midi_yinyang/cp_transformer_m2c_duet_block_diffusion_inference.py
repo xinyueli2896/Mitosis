@@ -517,6 +517,12 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
       A3_FINAL_TEMP     float, same as final_temperature.
       A3_SCHEDULE       'refine' (default) or ctc_m / ctc_c / ctc_alt /
                         ctc2_*: commit-then-condition (see the code).
+      A3_CTC_DENOISE_LEADER  '1' (default): in the ctc denoise forward
+                        BOTH slots are read out -- the follower from its
+                        empty slot given the leader's draft, and the
+                        leader from its own slot, x* -> x. '0' keeps the
+                        draft as the leader's committed value (the
+                        pre-2026-09-23 behaviour).
 
     Returns (mel_frames, chord_frames), each a list of [B, subseq_len].
     """
@@ -586,13 +592,21 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     # little partner content; ctc removes the marginal step entirely.
     schedule = _os.environ.get('A3_SCHEDULE', 'refine')
     ctc_passes, ctc_leader = 0, None
+    # Draft-and-denoise (2026-09-23): the denoise forward reads out BOTH
+    # appended slots. The leader's slot holds its draft x* as committed
+    # content (k=0, the regime the query loss trains on) and emits x; the
+    # follower's slot is empty (k=K) and emits y given x*. Both replace
+    # the draft in the committed history. A3_CTC_DENOISE_LEADER=0 reads
+    # out the follower only and commits the draft as the leader.
+    ctc_denoise_leader = _os.environ.get('A3_CTC_DENOISE_LEADER', '1') == '1'
     if schedule.startswith('ctc'):
         base, _, lead = schedule.partition('_')
         ctc_passes = 2 if base == 'ctc2' else 1
         ctc_leader = lead or 'm'
         assert ctc_leader in ('m', 'c', 'alt'), schedule
-        print(f'[gen] A3_SCHEDULE={schedule}: commit-then-condition, '
-              f'leader={ctc_leader}, passes={ctc_passes}')
+        print(f'[gen] A3_SCHEDULE={schedule}: draft-and-denoise, '
+              f'leader={ctc_leader}, passes={ctc_passes}, '
+              f'denoise_leader={int(ctc_denoise_leader)}')
     # A.4 decode schedule: feed the next round a PARTIALLY re-masked
     # draft -- the (r-1)/K lowest-confidence tokens replaced by the
     # frame mask id -- matching the graded corruption the token-level
@@ -731,10 +745,18 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                                             K, K, fo, B)
                     h_in = torch.cat([h_clean_padded, slots[0], slots[1]], dim=1)
                     h_global, _ = model._run_global_stack(h_in, T_query=T_query)
+                    # slot positions: melody at -2, chord at -1
                     h_pred = h_global[:, -2 if fo == 0 else -1]
-                    cur[fo] = model.local_sampling(h_pred, max_subseq_len=subseq_len,
-                                                   temperature=final_temperature,
-                                                   token_type_id=fo)
+                    new_fo = model.local_sampling(h_pred, max_subseq_len=subseq_len,
+                                                  temperature=final_temperature,
+                                                  token_type_id=fo)
+                    if ctc_denoise_leader and sampling[ld]:
+                        # the leader's slot denoises its draft in the same forward
+                        h_lead = h_global[:, -2 if ld == 0 else -1]
+                        cur[ld] = model.local_sampling(h_lead, max_subseq_len=subseq_len,
+                                                       temperature=final_temperature,
+                                                       token_type_id=ld)
+                    cur[fo] = new_fo
                 last_m_tokens, last_c_tokens = cur[0], cur[1]
                 K_loop = -1        # skip the refinement loop below
             else:
