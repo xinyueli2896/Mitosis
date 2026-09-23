@@ -37,7 +37,7 @@ def build():
     # lanes and rows (inches, y down)
     cx, cy = 1.47, 3.33                # lane centres, stream x / stream y (as panel a)
     bw, bh = 1.58, BH                  # stream boxes
-    yTok = 0.4                          # the output tokens, x2 y2 ... xT yT
+    yTok = 0.82                         # the output tokens, x2 y2 ... xT yT, close above the banks
     yOut, yAN, ySum, yExp, yRt, yIn = 1.5, 2.16, 2.86, 3.5, 4.32, 5.1
     ex = [0.85, 1.85, 2.95, 3.95]      # expert centres
     ew, eh = 0.86, BH
