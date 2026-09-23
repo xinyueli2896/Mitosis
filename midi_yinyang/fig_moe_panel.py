@@ -42,9 +42,9 @@ def build():
     ex = [0.85, 1.85, 2.95, 3.95]      # expert centres
     ew, eh = 0.86, 0.34
 
-    def hbox(c, y, fill, base, sup, s):
-        runs = [(base, 'b i'), (sup, 'sup i'), (s + ',1:T−1', 'sub i')]
-        S.rect(c - bw / 2, y, bw, bh, fill=fill, line=INK, lw=lw, runs=runs, size=9.5)
+    def hbox(c, y, fill, base, sup, s, sub=True):
+        runs = [(base, 'b i'), (sup, 'sup i')] + ([(s + ',1:T−1', 'sub i')] if sub else [])
+        S.rect(c - bw / 2, y, bw, bh, fill=fill, line=INK, lw=lw, runs=runs, size=9.5, z=2)
 
     def plus(px, py, r=0.1):
         S.rect(px - r, py - r, 2 * r, 2 * r, fill='FFFFFF', line=INK, lw=lw, shape='ellipse', z=4)
@@ -99,16 +99,21 @@ def build():
         S.line(sx, yIn + bh / 2, sx, yAN + bh / 2, lw=AW)
         arrow(sx, yAN + bh / 2, c + side * (bw / 2 + 0.02), yAN + bh / 2)
         # output: the next block's input
-        hbox(c, yOut, fill, 'h', 'l+1', s)
+        hbox(c, yOut, fill, 'h', 'l+1', s, sub=False)
         arrow(c, yAN - 0.02, c, yOut + bh + 0.02)
-    # the two banks turn into the output tokens, one frame ahead of the input
+    # the two banks turn into the output tokens, one frame ahead of the input:
+    # translucent wedges from each bank up to the span of its stream's tokens
     tk = 0.42
     tok = [('x', '2'), ('y', '2'), ('x', None), ('y', None), ('x', 'T'), ('y', 'T')]
     tx = [0.65 + i * 0.7 for i in range(6)]
     for (s, idx), x in zip(tok, tx):
         lab = plain('\u2026') if idx is None else m(s, (idx, 'sub'))
-        S.rect(x - tk / 2, yTok, tk, tk, fill=FILL[s], line=INK, lw=lw, runs=lab, size=9.5)
-        S.line({'x': cx, 'y': cy}[s], yOut - 0.02, x, yTok + tk + 0.02, lw=0.8, color=LINE[s])
+        S.rect(x - tk / 2, yTok, tk, tk, fill=FILL[s], line=INK, lw=lw, runs=lab, size=9.5, z=2)
+    for s, c in (('x', cx), ('y', cy)):
+        xs = [x for (t, _), x in zip(tok, tx) if t == s]
+        S.poly([(c - bw / 2, yOut), (c + bw / 2, yOut),
+                (max(xs) + tk / 2, yTok + tk - 0.02), (min(xs) - tk / 2, yTok + tk - 0.02)],
+               fill=LINE[s], alpha=0.45, z=0)
     return S
 
 
