@@ -67,8 +67,9 @@ def build():
     S.text(0.12, 0.05, 3.5, 0.28, [('b. Per-stream expert routing', 'b')], size=10.5, align='l')
 
     # shared expert pool: one grey band, four experts, no stream subscripts
-    px0, py0, pw = ex[0] - ew / 2 - 0.12, yExp - 0.1, ex[-1] - ex[0] + ew + 0.24
-    S.rect(px0, py0, pw, eh + 0.2, fill=LIGHT, line=None, z=0)
+    # band with room above the experts for its corner badge
+    px0, py0, pw = ex[0] - ew / 2 - 0.14, yExp - 0.28, ex[-1] - ex[0] + ew + 0.28
+    S.rect(px0, py0, pw, eh + 0.4, fill=LIGHT, line=None, z=0)
     mark(px0, py0, pw)                    # the expert pool: replicated from the pretrained FFN
     for i, c in enumerate(ex):
         S.rect(c - ew / 2, yExp, ew, eh, fill=GREY, line=INK, lw=lw,
