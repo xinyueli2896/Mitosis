@@ -48,6 +48,16 @@ for (const it of items) {
       { x: it.x, y: it.y, w: it.w, h: it.h, margin: 0, isTextBox: true,
         align: { c: 'center', l: 'left', r: 'right' }[it.align],
         valign: it.valign === 't' ? 'top' : 'middle', fit: 'none', wrap: false });
+  } else if (it.k === 'poly') {
+    const xs = it.points.map(p => p[0]), ys = it.points.map(p => p[1]);
+    const x = Math.min(...xs), y = Math.min(...ys);
+    const w = Math.max(Math.max(...xs) - x, 0.004), h = Math.max(Math.max(...ys) - y, 0.004);
+    const pts = it.points.map(p => ({ x: p[0] - x, y: p[1] - y }));
+    pts.push({ close: true });
+    slide.addShape(pres.ShapeType.custGeom, {
+      x: x, y: y, w: w, h: h, points: pts,
+      fill: { color: it.fill, transparency: Math.round((1 - it.alpha) * 100) },
+    });
   } else if (it.k === 'curve') {
     // custom geometry: one cubic Bezier with vertical tangents at both ends
     const x = Math.min(it.x1, it.x2), y = Math.min(it.y1, it.y2);

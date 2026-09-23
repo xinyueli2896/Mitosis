@@ -29,7 +29,9 @@ CAP_H = 0.32
 def bounds(items):
     ys = []
     for it in items:
-        if it['k'] in ('line', 'curve'):
+        if it['k'] == 'poly':
+            ys += [p[1] for p in it['points']]
+        elif it['k'] in ('line', 'curve'):
             ys += [it['y1'], it['y2']]
         else:
             ys += [it['y'], it['y'] + it['h']]
@@ -40,7 +42,9 @@ def shifted(items, dx, dy):
     out = []
     for it in items:
         it = dict(it)
-        if it['k'] in ('line', 'curve'):
+        if it['k'] == 'poly':
+            it['points'] = [(px + dx, py + dy) for px, py in it['points']]
+        elif it['k'] in ('line', 'curve'):
             it['x1'] += dx; it['x2'] += dx; it['y1'] += dy; it['y2'] += dy
         else:
             it['x'] += dx; it['y'] += dy

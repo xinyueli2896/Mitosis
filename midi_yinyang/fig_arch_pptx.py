@@ -64,6 +64,10 @@ class Spec:
         self.items.append(dict(k='curve', x1=x1, y1=y1, x2=x2, y2=y2, color=color, lw=lw,
                                arrow=arrow, z=z, bend=bend))
 
+    def poly(self, points, fill, alpha=0.35, z=0):
+        """A filled translucent polygon without outline; points in inches."""
+        self.items.append(dict(k='poly', points=list(points), fill=fill, alpha=alpha, z=z))
+
     def node(self, cx, cy, r=0.11, label='+', size=9):
         self.rect(cx - r, cy - r, 2 * r, 2 * r, fill='FFFFFF', line=INK, lw=0.75,
                   runs=[(label, '')], size=size, shape='ellipse', z=4)
@@ -480,6 +484,10 @@ def write_preview(S, path):
             ax.text(xx, it['y'] + it['h'] / 2, runs_to_mathtext(it['runs']), ha=ha, va='center',
                     fontsize=it['size'], color=hexc(it['color']), zorder=it['z'], family='serif',
                     weight='bold' if it['bold'] else 'normal')
+        elif it['k'] == 'poly':
+            from matplotlib.patches import Polygon
+            ax.add_patch(Polygon(it['points'], closed=True, fc=hexc(it['fill']), ec='none',
+                                 alpha=it['alpha'], zorder=it['z']))
         elif it['k'] == 'curve':
             from matplotlib.path import Path
             dy = (it['y2'] - it['y1']) * it['bend']

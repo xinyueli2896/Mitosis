@@ -44,8 +44,8 @@ def build():
         glyph = '❄→\U0001F525' if kind == 'pre' else '\U0001F525'
         S.text(x + w - 0.62, y - 0.2, 0.66, 0.24, plain(glyph), size=9.5, align='r', z=6)
 
-    def box(x, y, w, h, runs, fill=COMP, size=9.5, dash=False):
-        S.rect(x, y, w, h, fill=fill, line=INK, lw=LW, dash=dash, runs=runs, size=size)
+    def box(x, y, w, h, runs, fill=COMP, size=9.5, dash=False, z=1):
+        S.rect(x, y, w, h, fill=fill, line=INK, lw=LW, dash=dash, runs=runs, size=size, z=z)
 
     def wide(s, y, runs, fill=COMP, size=9.5, pre=False):
         box(cx[s] - bw / 2, y, bw, bh, runs, fill=fill, size=size)
@@ -70,8 +70,13 @@ def build():
     tx = [0.65 + i * 0.7 for i in range(6)]
     for (s, idx), x in zip(tok, tx):
         lab = plain('…') if idx is None else m(s, (idx, 'sub'))
-        box(x - tk / 2, yT, tk, tk, lab, fill=FILL[s])
-        S.line(x, yT - 0.02, cx[s], yH + bh + 0.02, lw=0.8, color=LINE[s])
+        box(x - tk / 2, yT, tk, tk, lab, fill=FILL[s], z=2)
+    # translucent wedges (sketch): each stream's tokens gather into its bank
+    for s in 'xy':
+        xs = [x for (t, _), x in zip(tok, tx) if t == s]
+        S.poly([(cx[s] - bw / 2, yH + bh), (cx[s] + bw / 2, yH + bh),
+                (max(xs) + tk / 2, yT + 0.02), (min(xs) - tk / 2, yT + 0.02)],
+               fill=LINE[s], alpha=0.45, z=0)
 
     # geometry of the projection boxes and attention boxes, per stream
     # Q on the OUTER side, K & V on the inner side, mirrored between streams
