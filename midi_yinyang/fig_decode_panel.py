@@ -1,16 +1,20 @@
-"""Panel c of the model figure: decoding one frame, draft then refine,
-in the style of fig_moe_panel.py (lavender = stream x, teal = stream y,
-black outlines, Cambria). Content follows the hand sketch of 2026-09-23
-and Sec. 3.5 of the method (two passes per frame):
+"""Panel c of the model figure: decoding one frame by ALTERNATING
+COMMIT, in the style of fig_moe_panel.py (lavender = stream x, teal =
+stream y, black outlines, Cambria). Layout follows the hand sketch of
+2026-09-23; content changed to alternating commit the same day:
 
-  row 1  t = 3, draft    x1 y1 x2 y2 -> Duet -> drafts x~3, y~3 from the
-                         autoregressive heads of the two content tokens
-                         predicting frame 3 (drawn as circles above them)
-  row 2  t = 3, refine   the drafts are written into the two query tokens
-                         (dashed boxes, appended after the sequence); one
-                         forward emits the committed x3, y3 together
-  row 3  t = 4, draft    x3, y3 join the context; the next frame's drafts
-                         come from the content tokens x3, y3
+  row 1  t = 3, leader    x1 y1 x2 y2 -> Duet -> the leader x*3, sampled
+                          from the autoregressive head of the content
+                          token x2 (a circle above it)
+  row 2  t = 3, follower  x*3 is written into its appended slot (dashed,
+                          stream-coloured); the partner's slot stays
+                          EMPTY, drawn shaded and dashed with y*3; one
+                          forward reads out y3, conditioned on x*3
+                          through the within-frame pass; only the
+                          follower is read out
+  row 3  t = 4, leader    x3, y3 join the context and the roles swap:
+                          the leader is now y*4, from the head of y3
+The two appended slots are deliberately not named in the figure.
 
     python fig_decode_panel.py --out <path-without-extension>
 writes <out>.pptx (editable) and <out>.png (preview).
@@ -27,6 +31,7 @@ from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK, INK
 
 LAV, TEAL = 'B8BBEC', 'B7DBD8'
 FILL = {'x': LAV, 'y': TEAL}
+SHADE = 'D9D9D9'                   # an empty slot
 
 
 def build():
@@ -45,9 +50,8 @@ def build():
         S.rect(cx - tk / 2, y, tk, tk, fill=FILL[s] if fill is None else fill, line=INK,
                lw=lw, dash=dash, runs=lab, size=9, shape=shape)
 
-    def sub(base, idx, tilde=False):
-        b = base + ('̃' if tilde else '')
-        return m(b, (idx, 'sub'))
+    def sub(base, idx, star=False):
+        return m(base, ('*', 'sup'), (idx, 'sub')) if star else m(base, (idx, 'sub'))
 
     def arrow(x1, y1, x2, y2):
         S.line(x1, y1, x2, y2, lw=0.8, arrow=True)
@@ -61,52 +65,51 @@ def build():
                align='l')
         S.text(0.08, y + yb + 0.18, 0.85, 0.2, plain(step), size=8.5, align='l', color=INK_2)
 
-    S.text(0.12, 0.05, 4.5, 0.28, [('c. Decoding a frame: draft, then refine', 'b')],
+    S.text(0.12, 0.05, 4.5, 0.28, [('c. Alternating-commit decoding', 'b')],
            size=10.5, align='l')
 
     # ---------------------------------------------------------- row 1: t = 3, draft
     y = rows_y[0]
-    row_label(y, '3', 'draft')
+    row_label(y, '3', 'leader')
     for i, (s, idx) in enumerate((('x', '1'), ('y', '1'), ('x', '2'), ('y', '2'))):
         token(col(i), y + yt, s, sub(s, idx))
     arrow(col(1.5), y + yt - 0.02, col(1.5), y + yb + bh + 0.02)
     block(y + yb)
-    for i, s in ((2, 'x'), (3, 'y')):          # drafts above the tokens that predict frame 3
-        arrow(col(i), y + yb - 0.02, col(i), y + yo + tk + 0.02)
-        token(col(i), y + yo, s, sub(s, '3', tilde=True), shape='ellipse')
-    S.text(col(3) + tk / 2 + 0.1, y + yo + 0.05, 1.6, 0.26,
-           plain('drafts, from the\nautoregressive heads'), size=7.5, align='l', color=INK_2)
+    # the leader alone, from the autoregressive head of the token predicting x3
+    arrow(col(2), y + yb - 0.02, col(2), y + yo + tk + 0.02)
+    token(col(2), y + yo, 'x', sub('x', '3', star=True), shape='ellipse')
+    S.text(col(2) + tk / 2 + 0.1, y + yo + 0.05, 1.8, 0.26,
+           plain('leader, from the\nautoregressive head'), size=7.5, align='l', color=INK_2)
 
     # ---------------------------------------------------------- row 2: t = 3, refine
     y = rows_y[1]
-    row_label(y, '3', 'refine')
+    row_label(y, '3', 'follower')
     for i, (s, idx) in enumerate((('x', '1'), ('y', '1'), ('x', '2'), ('y', '2'))):
         token(col(i), y + yt, s, sub(s, idx))
-    for i, s in ((4, 'x'), (5, 'y')):          # query tokens holding the drafts
-        token(col(i), y + yt, s, sub(s, '3', tilde=True), dash=True, fill='FFFFFF')
-    S.text(col(4) - 0.5, y + yt + tk + 0.03, 1.9, 0.18, plain('query tokens'), size=7.5,
-           align='c', color=INK_2)
+    # the two appended slots: the leader written into its own, the partner's empty
+    token(col(4), y + yt, 'x', sub('x', '3', star=True), dash=True)
+    token(col(5), y + yt, 'y', sub('y', '3', star=True), dash=True, fill=SHADE)
     arrow(col(2.5), y + yt - 0.02, col(2.5), y + yb + bh + 0.02)
     block(y + yb)
-    for i, s in ((4, 'x'), (5, 'y')):          # committed frame, read out together
-        arrow(col(i), y + yb - 0.02, col(i), y + yo + tk + 0.02)
-        token(col(i), y + yo, s, sub(s, '3'))
-    S.text(col(5) + tk / 2 + 0.1, y + yo + 0.05, 1.0, 0.26, plain('committed\ntogether'),
+    # only the follower is read out, conditioned on x*3
+    arrow(col(5), y + yb - 0.02, col(5), y + yo + tk + 0.02)
+    token(col(5), y + yo, 'y', sub('y', '3'))
+    S.text(col(5) + tk / 2 + 0.1, y + yo + 0.05, 1.0, 0.26, plain('follower,\ngiven x*'),
            size=7.5, align='l', color=INK_2)
 
     # ---------------------------------------------------------- row 3: t = 4, draft
     y = rows_y[2]
-    row_label(y, '4', 'draft')
+    row_label(y, '4', 'leader')
     for i, (s, idx) in enumerate((('x', '1'), ('y', '1'), ('x', '2'), ('y', '2'),
                                   ('x', '3'), ('y', '3'))):
         token(col(i), y + yt, s, sub(s, idx))
     arrow(col(2.5), y + yt - 0.02, col(2.5), y + yb + bh + 0.02)
     block(y + yb)
-    for i, s in ((4, 'x'), (5, 'y')):
-        arrow(col(i), y + yb - 0.02, col(i), y + yo + tk + 0.02)
-        token(col(i), y + yo, s, sub(s, '4', tilde=True), shape='ellipse')
-    S.text(col(5) + tk / 2 + 0.1, y + yo + 0.05, 1.0, 0.26, plain('…'), size=11,
-           align='l', color=INK_2)
+    # roles swap: stream y leads frame 4, from the head of y3
+    arrow(col(5), y + yb - 0.02, col(5), y + yo + tk + 0.02)
+    token(col(5), y + yo, 'y', sub('y', '4', star=True), shape='ellipse')
+    S.text(col(5) + tk / 2 + 0.1, y + yo + 0.05, 1.0, 0.26, plain('roles swap\n…'),
+           size=7.5, align='l', color=INK_2)
     return S
 
 
