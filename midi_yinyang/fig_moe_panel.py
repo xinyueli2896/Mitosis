@@ -101,7 +101,7 @@ def build():
         S.line(sx, yIn + bh / 2, sx, yAN + bh / 2, lw=AW)
         arrow(sx, yAN + bh / 2, c + side * (bw / 2 + 0.02), yAN + bh / 2)
         # output: the next block's input
-        hbox(c, yOut, fill, 'h', '(l+1)', s, sub='stream')
+        hbox(c, yOut, fill, 'h', '(l+1)', s)
         arrow(c, yAN - 0.02, c, yOut + bh + 0.02)
     # the two banks turn into the output tokens, one frame ahead of the input:
     # translucent wedges from each bank up to the span of its stream's tokens
