@@ -71,23 +71,23 @@ def build():
         parts.append((items, cap))
     boxes = [bounds(items) for items, _ in parts]
     tops = [b[2] for b in boxes]; bottoms = [b[3] for b in boxes]
-    widths = [b[1] - b[0] for b in boxes]
     H = max(b - t for b, t in zip(bottoms, tops))      # tallest panel's content height
     top_margin = 0.15
-    # no margin left or right: panels abut the slide edges, GAP between them
-    fig_arch_pptx.SLIDE_W = sum(widths) + (len(parts) - 1) * GAP
+    # panels keep their fixed pitch (PW + GAP); the slide is then cut at
+    # panel (a)'s left content edge and panel (c)'s right content edge
+    left = 0 * (PW + GAP) + boxes[0][0]
+    right = (len(parts) - 1) * (PW + GAP) + boxes[-1][1]
+    fig_arch_pptx.SLIDE_W = right - left
     fig_arch_pptx.SLIDE_H = top_margin + H + 0.12 + CAP_H + 0.1
 
     S = Spec()
     dxs = []
-    x_cursor = 0.0
     for i, ((items, cap), (x0, x1, t, b)) in enumerate(zip(parts, boxes)):
-        dx = x_cursor - x0
+        dx = i * (PW + GAP) - left
         dxs.append((dx, x0, x1))
         dy = top_margin + H - b                          # bottom-aligned
         S.items += shifted(items, dx, dy)
-        S.text(x_cursor, top_margin + H + 0.12, x1 - x0, CAP_H, plain(cap), size=11, align='c')
-        x_cursor += (x1 - x0) + GAP
+        S.text(dx + x0, top_margin + H + 0.12, x1 - x0, CAP_H, plain(cap), size=11, align='c')
     # legend for the corner badges, one row, in the free space above panel (b)
     dx_b, xb0, xb1 = dxs[1]
     lw_, lh = min(4.75, xb1 - xb0), 0.4
