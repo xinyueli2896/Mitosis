@@ -60,11 +60,12 @@ def main():
     Ys, n = matrix(rows, 'block')
 
     plt.rcParams.update({
-        'font.family': 'serif', 'font.size': 7.5, 'axes.labelsize': 7.5,
-        'axes.titlesize': 8, 'xtick.labelsize': 7, 'ytick.labelsize': 7.5,
+        'font.family': 'serif', 'font.size': 8, 'axes.labelsize': 8,
+        'axes.titlesize': 8.5, 'xtick.labelsize': 7.5, 'ytick.labelsize': 7.5,
         'mathtext.fontset': 'stix', 'axes.linewidth': 0.6,
     })
-    fig, axes = plt.subplots(2, 3, figsize=(3.5, 3.1), sharex=True, sharey=True)
+    # one ICASSP column (3.39 in): three rows of two panels
+    fig, axes = plt.subplots(3, 2, figsize=(3.39, 4.6), sharex=True, sharey=True)
     order = list(range(len(SYSTEMS)))[::-1]              # ours at the top
     ypos = {s: i for i, s in zip(order, SYSTEMS)}
     for ax, a in zip(axes.ravel(), AXES + ['overall']):
@@ -90,16 +91,17 @@ def main():
         ax.set_xlim(2.5, 4.75)
         ax.set_xticks([3, 4])
         ax.set_yticks(list(ypos.values()))
-        ax.set_yticklabels([SHORT[s] for s in ypos], fontsize=6.5)
+        ax.set_yticklabels([SHORT[s] for s in ypos], fontsize=7)
         ax.tick_params(length=2)
         for sp in ('top', 'right'):
             ax.spines[sp].set_visible(False)
-    axes[1, 1].set_xlabel('mean rating', labelpad=2)
+    for ax in axes[2]:
+        ax.set_xlabel('mean rating', labelpad=2)
     fig.text(0.5, 0.005,
              f'within-subject 95% CI over {n} rater–song pairs\n'
              '* differs from ours (paired t, Holm-corrected, p < 0.05)',
-             ha='center', va='bottom', fontsize=6, color=INK_2, linespacing=1.3)
-    fig.tight_layout(rect=(0, 0.06, 1, 1), h_pad=0.6, w_pad=0.4)
+             ha='center', va='bottom', fontsize=6.5, color=INK_2, linespacing=1.3)
+    fig.tight_layout(rect=(0, 0.045, 1, 1), h_pad=0.7, w_pad=0.5)
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300)
         print('wrote', f'{args.out}.{ext}')
