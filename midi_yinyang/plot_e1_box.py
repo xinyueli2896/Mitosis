@@ -69,32 +69,38 @@ from matplotlib.patches import Rectangle
 # the other predicted by its harmonizer, leader alternating per frame,
 # follower at T=1, no nucleus cut). The refinement decode of the same
 # checkpoint (A3, K=4, T=0.9, top-p 0.95) is NOT reported any more and
-# is off the figures; it stays in the CSVs. "Duet w/o harmonizers" is
-# A1, a separate checkpoint trained without harmonizers and decoded
-# autoregressively.
+# is off the figures; it stays in the CSVs. "Duet w/o draft tokens" is
+# A1, a separate checkpoint trained without the draft-token pathway and
+# decoded autoregressively.
 #
 # Each member is (internal name, long label, short label). The short
 # label is used as soon as the figure has more than one column, where
 # nine two-line names would overlap into illegibility; the key below
 # then goes in the figure footnote, so nothing is left to guess.
 GROUPS = [
-    ('Ours', True, [
+    # ORDER AND RANKING (2026-09-23, by request): ours first, then the
+    # single-stream models scratch and finetuned, then the two external
+    # systems. No family is ranked any more: no best-system line, star
+    # or bold anywhere; every column is read against the reference
+    # level alone. "Duet w/o draft tokens" is A1, the checkpoint trained
+    # without the draft-token pathway and decoded autoregressively.
+    ('Ours', False, [
         # a second line starting with "w/o", a minus or a bracket is a
         # QUALIFIER: the wide layout draws it a point smaller, in grey
         ('A3ctcaT',   'Duet',                     'Duet'),
-        # the dense arm (2026-09-23): one FFN of width 6144 in place of
-        # the routed pool. The expert-adapter variants (A3L16E16,
-        # A3L16E16_nocross) are scored in the CSVs but left off every
-        # figure and table, by request.
+        # the dense arm: one FFN of width 6144 in place of the routed
+        # pool. The expert-adapter variants (A3L16E16, A3L16E16_nocross)
+        # are scored in the CSVs but left off every figure and table.
         ('D1',        'Duet\nw/o MoE (dense)',   'Duet dense'),
-        ('A1',        'Duet\nw/o harmonizers',    'Duet w/o H'),
+        ('A1',        'Duet\nw/o draft tokens',  'Duet w/o DT'),
     ]),
     # The cascade arms (P-mc, P-cm) left the figures 2026-09-17, by
     # request; they are still scored and sit in the CSVs.
-    ('Internal baselines', True, [
+    ('Internal baselines', False, [
         ('S-scratch', 'Single-stream\n(scratch)',   'SS–scr'),
+        ('S1',        'Single-stream\n(finetuned)', 'SS–ft'),
     ]),
-    ('External baselines', True, [
+    ('External baselines', False, [
         # WSfv4: the whole-song baseline with its chord track re-voiced
         # into our rendering and cut to four voices (wholesong_chord_map
         # APPLY=WSfv4 MAX_VOICES=4). The raw WSf differs from every
@@ -103,13 +109,6 @@ GROUPS = [
         # cp4 duet arms never see.
         ('WSfv4',     'Whole-Song Gen',             'WSG'),
         ('AMT',       'Anticipatory Music Transf.', 'AMT'),
-    ]),
-    # Held out of the ranking and placed last, by request. It is still
-    # plotted, and the best-of-the-rest line runs the full width, so a
-    # reader can see exactly where it lands relative to the field --
-    # which is the only reason to separate it rather than drop it.
-    ('Not ranked', False, [
-        ('S1',        'Single-stream\n(finetuned)', 'SS–ft'),
     ]),
 ]
 

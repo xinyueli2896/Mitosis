@@ -65,9 +65,11 @@
 #   TITLE     optional figure title
 #   QUALITY_TABLE=1 (default) also write the quality sheet as a LaTeX
 #             table, <OUT>_quality.tex: one row per system, one column
-#             per pooled metric, 95% interval under each value, best
-#             ranked system per column in bold, the reference split-half
-#             null as the last row (e1_quality_table.py).
+#             per pooled metric, 95% interval under each value, the
+#             reference split-half null as the last row
+#             (e1_quality_table.py). BOLD_BEST=1 bolds the best system
+#             per column (off by default since 2026-09-23: no best marks
+#             anywhere).
 #   MOTIF_SHARE=1 (default) also draw the motif-development shares,
 #             <OUT>_motif_share: per stream, one stacked bar per system
 #             of the continuation's interval n-grams by relation to the
@@ -166,6 +168,7 @@ if [[ -n "${BLOCKS// /}" ]]; then
             pc="${POOLED_CSV:-${CSV%_metrics.csv}_pooled.csv}"
             [[ -f "$pc" ]] && python e1_quality_table.py --pooled "$pc" \
                 --out "${OUT}_quality.tex" ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"} \
+                $([[ "${BOLD_BEST:-0}" == "1" ]] || echo --no-bold) \
                 || echo "[table] no $pc; quality table skipped"
         fi
         python plot_e1_box.py --csv "$CSV" --out "${OUT}_${b}" \

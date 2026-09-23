@@ -55,7 +55,9 @@ PARTS = {s: (d.split('\n', 1) + [''])[:2]
 
 def row_name(s, prev_base):
     base, qual = PARTS[s]
-    if qual and base == prev_base:
+    # only a true ablation qualifier ("w/o ...") nests under its base
+    # row; a bracketed variant such as "(finetuned)" keeps its full name
+    if qual and base == prev_base and qual.startswith('w/o'):
         return r'\hspace{1em}{\footnotesize ' + qual + '}'
     return NAMES[s]
 
@@ -94,6 +96,9 @@ def main():
     ap.add_argument('--ranked-only', action='store_true',
                     help='bold only among the ranked families, as on the '
                          'figure; default bolds the best of every system')
+    ap.add_argument('--no-bold', action='store_true',
+                    help='mark no best system at all (2026-09-23 default '
+                         'in plot_e1_box.sbatch, BOLD_BEST=0)')
     args = ap.parse_args()
 
     pooled = read_pooled(args.pooled)
@@ -127,7 +132,7 @@ def main():
     # printed precision are all bold -- picking one of three systems
     # that print 0.000 would be arbitrary.
     best = {}
-    for m, _ in metrics:
+    for m, _ in metrics if not args.no_bold else []:
         d = args.fmd_digits if m == 'fmd' else args.digits
         cands = [(round(pooled[m][s][0], d), s) for _f, ranked, rows in blocks
                  if ranked or not args.ranked_only
@@ -174,8 +179,8 @@ def main():
              r'reference)'
              + (r'; brackets: 95\% bootstrap interval over songs'
                 if args.ci != 'none' else '')
-             + r'. Bold: best per column'
-             + (' among the ranked systems' if args.ranked_only else '')
+             + ('' if args.no_bold else r'. Bold: best per column'
+                + (' among the ranked systems' if args.ranked_only else ''))
              + r'. The last row is the split-half null of the reference itself, '
              r'the value a perfect system scores at this sample size.}')
     L.append(r'\label{' + args.label + '}')
