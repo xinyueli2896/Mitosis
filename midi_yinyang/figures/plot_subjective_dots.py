@@ -94,13 +94,12 @@ def main():
         ax.tick_params(length=2)
         for sp in ('top', 'right'):
             ax.spines[sp].set_visible(False)
-    for ax in axes[1]:
-        ax.set_xlabel('mean rating', labelpad=2)
+    axes[1, 1].set_xlabel('mean rating', labelpad=2)
     fig.text(0.5, 0.005,
-             f'within-subject 95% CI over {n} rater–song pairs;  * differs from ours '
-             '(paired t, Holm-corrected, p < 0.05)',
-             ha='center', va='bottom', fontsize=6, color=INK_2)
-    fig.tight_layout(rect=(0, 0.03, 1, 1), h_pad=0.6, w_pad=0.4)
+             f'within-subject 95% CI over {n} rater–song pairs\n'
+             '* differs from ours (paired t, Holm-corrected, p < 0.05)',
+             ha='center', va='bottom', fontsize=6, color=INK_2, linespacing=1.3)
+    fig.tight_layout(rect=(0, 0.06, 1, 1), h_pad=0.6, w_pad=0.4)
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300)
         print('wrote', f'{args.out}.{ext}')
