@@ -34,13 +34,25 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plot_e1_box import GROUPS, read_pooled          # noqa: E402
 
-METRICS = [
-    ('fmd',     r'FMD'),
-    ('js_gc_a', r'$\mathrm{JS}_{\mathrm{GC}}^{\mathrm{mel}}$'),
-    ('js_gc_b', r'$\mathrm{JS}_{\mathrm{GC}}^{\mathrm{chd}}$'),
-    ('js_sc_a', r'$\mathrm{JS}_{\mathrm{SC}}^{\mathrm{mel}}$'),
-    ('js_sc_b', r'$\mathrm{JS}_{\mathrm{SC}}^{\mathrm{chd}}$'),
-]
+METRIC_SETS = {
+    # the groove / scale consistency sheet (plus FMD when scored)
+    'gcsc': [
+        ('fmd',     r'FMD'),
+        ('js_gc_a', r'$\mathrm{JS}_{\mathrm{GC}}^{\mathrm{mel}}$'),
+        ('js_gc_b', r'$\mathrm{JS}_{\mathrm{GC}}^{\mathrm{chd}}$'),
+        ('js_sc_a', r'$\mathrm{JS}_{\mathrm{SC}}^{\mathrm{mel}}$'),
+        ('js_sc_b', r'$\mathrm{JS}_{\mathrm{SC}}^{\mathrm{chd}}$'),
+    ],
+    # the stream-grammar divergences (H3), corpus-pooled
+    'h3': [
+        ('harmonic_rhythm_jsd', r'Harm.\ rhythm'),
+        ('onset_grid_jsd_a',    r'Onset grid, mel.'),
+        ('onset_grid_jsd_b',    r'Onset grid, chd.'),
+        ('duration_jsd_a',      r'Duration, mel.'),
+        ('duration_jsd_b',      r'Duration, chd.'),
+    ],
+}
+METRICS = METRIC_SETS['gcsc']
 
 # display names for the paper, one line each (the figure's two-line
 # labels joined)
@@ -99,6 +111,22 @@ def main():
     ap.add_argument('--no-bold', action='store_true',
                     help='mark no best system at all (2026-09-23 default '
                          'in plot_e1_box.sbatch, BOLD_BEST=0)')
+    ap.add_argument('--bold-exclude', default='',
+                    help='internal system names left out of the best-per-'
+                         'column contest (still printed), e.g. S1')
+    ap.add_argument('--metrics', choices=sorted(METRIC_SETS), default='gcsc',
+                    help='which pooled metrics form the columns: gcsc '
+                         '(default) or h3, the stream-grammar divergences')
+    ap.add_argument('--group-column', action='store_true',
+                    help='put the family (Ours / Internal baselines / '
+                         'External baselines) in a first column, printed '
+                         'on the first row of its block, instead of a '
+                         'header row per family: shorter table')
+    ap.add_argument('--per-sample', action='store_true',
+                    help='print the PER-SAMPLE pooled divergence, mean +- '
+                         'std over the sample indices (ps_mean/ps_std, '
+                         'eval_metrics 2026-09-23), instead of the '
+                         'song-mixed point estimate with its bootstrap CI')
     args = ap.parse_args()
 
     pooled = read_pooled(args.pooled)
@@ -110,6 +138,17 @@ def main():
     for k, v in pooled.items():
         if '_null_ref_split' in v:
             null[k] = v['_null_ref_split'][0]
+    METRICS = METRIC_SETS[args.metrics]
+    if args.per_sample:
+        # swap the per-sample mean / std into the (value, lo, hi) slots
+        # the rest of the script reads; the interval then prints as
+        # mean -+ std, and a CSV without the fields drops the cell
+        for m in list(pooled):
+            for s, rec in list(pooled[m].items()):
+                if s == '_null_ref_split' or len(rec) < 10:
+                    continue
+                mu, sd = rec[7], rec[8]
+                pooled[m][s] = (mu, mu - sd, mu + sd) + tuple(rec[3:])
     metrics = [(m, lab) for m, lab in METRICS if m in pooled]
     if not metrics:
         raise SystemExit('none of the quality metrics is in the pooled CSV')
@@ -132,11 +171,12 @@ def main():
     # printed precision are all bold -- picking one of three systems
     # that print 0.000 would be arbitrary.
     best = {}
+    bold_excl = {x for x in re.split(r'[,\s]+', args.bold_exclude) if x}
     for m, _ in metrics if not args.no_bold else []:
         d = args.fmd_digits if m == 'fmd' else args.digits
         cands = [(round(pooled[m][s][0], d), s) for _f, ranked, rows in blocks
                  if ranked or not args.ranked_only
-                 for s, _n in rows if s in pooled[m]
+                 for s, _n in rows if s in pooled[m] and s not in bold_excl
                  and not math.isnan(pooled[m][s][0])]
         if cands:
             lo = min(v for v, _s in cands)
@@ -160,7 +200,10 @@ def main():
         if s in best.get(m, ()):
             txt = r'\textbf{' + txt + '}'
         if args.ci == 'inline' and not math.isnan(rec[1]):
-            txt += r' {\scriptsize[' + fmt(rec[1], d) + ', ' + fmt(rec[2], d) + ']}'
+            if args.per_sample:
+                txt += r'$\pm$' + fmt(rec[2] - rec[0], d)
+            else:
+                txt += r' {\scriptsize[' + fmt(rec[1], d) + ', ' + fmt(rec[2], d) + ']}'
         return txt
 
     def interval(m, s):
@@ -170,43 +213,58 @@ def main():
         d = args.fmd_digits if m == 'fmd' else args.digits
         return r'{\scriptsize[' + fmt(rec[1], d) + ', ' + fmt(rec[2], d) + ']}'
 
-    ncol = len(metrics) + 1
+    ncol = len(metrics) + (2 if args.group_column else 1)
     L = []
     L.append(r'\begin{' + env + '}[t]')
     L.append(r'\centering')
     L.append(r'\caption{General quality: corpus-pooled divergence from the '
              r'ground-truth continuation ($\downarrow$, 0 is the '
              r'reference)'
-             + (r'; brackets: 95\% bootstrap interval over songs'
-                if args.ci != 'none' else '')
+             + ((r'; each sample index pooled over all songs against the '
+                 r'pooled reference, mean$\pm$std over the samples')
+                if args.per_sample else
+                (r'; brackets: 95\% bootstrap interval over songs'
+                 if args.ci != 'none' else ''))
              + ('' if args.no_bold else r'. Bold: best per column'
-                + (' among the ranked systems' if args.ranked_only else ''))
+                + (' among the ranked systems' if args.ranked_only else '')
+                + ((', ' + ', '.join(NAMES.get(x, x) for x in sorted(bold_excl))
+                    + ' excluded') if bold_excl else ''))
              + r'. The last row is the split-half null of the reference itself, '
              r'the value a perfect system scores at this sample size.}')
     L.append(r'\label{' + args.label + '}')
     L.append(r'\small')
     if args.span == 'column':
         L.append(r'\setlength{\tabcolsep}{3.5pt}')
-    L.append(r'\begin{tabular}{l' + 'c' * len(metrics) + '}')
+    lead = 'l' * (2 if args.group_column else 1)
+    L.append(r'\begin{tabular}{' + lead + 'c' * len(metrics) + '}')
     L.append(top)
-    L.append('System & ' + ' & '.join(lab for _m, lab in metrics) + r' \\')
+    L.append(('Group & ' if args.group_column else '') + 'System & '
+             + ' & '.join(lab for _m, lab in metrics) + r' \\')
     L.append(mid)
     for i, (family, ranked, rows) in enumerate(blocks):
         if i:
             L.append(mid)
-        L.append(r'\multicolumn{' + str(ncol) + r'}{l}{\textbf{'
-                 + family + r'}} \\')
+        if not args.group_column:
+            L.append(r'\multicolumn{' + str(ncol) + r'}{l}{\textbf{'
+                     + family + r'}} \\')
         prev_base = None
-        for s, _name in rows:
-            L.append(row_name(s, prev_base) + ' & '
+        for j, (s, _name) in enumerate(rows):
+            lead_cell = ''
+            if args.group_column:
+                # the family on its block's first row only; no multirow
+                # package needed, and the rule above the block does the rest
+                lead_cell = (r'\textbf{' + family + '}' if j == 0 else '') + ' & '
+            L.append(lead_cell + row_name(s, prev_base) + ' & '
                      + ' & '.join(value(m, s) for m, _ in metrics) + r' \\')
             prev_base = PARTS[s][0]
             if args.ci == 'stacked':
-                L.append(' & ' + ' & '.join(interval(m, s) for m, _ in metrics)
+                L.append((' & ' if args.group_column else '') + ' & '
+                         + ' & '.join(interval(m, s) for m, _ in metrics)
                          + r' \\')
     if null:
         L.append(mid)
-        L.append(r'\textit{reference split-half null} & '
+        L.append((' & ' if args.group_column else '')
+                 + r'\textit{reference split-half null} & '
                  + ' & '.join(fmt(null.get(m, float('nan')),
                                   args.fmd_digits if m == 'fmd' else args.digits)
                               for m, _ in metrics) + r' \\')

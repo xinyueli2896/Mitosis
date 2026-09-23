@@ -69,7 +69,16 @@
 #             reference split-half null as the last row
 #             (e1_quality_table.py). BOLD_BEST=1 bolds the best system
 #             per column (off by default since 2026-09-23: no best marks
-#             anywhere).
+#             anywhere); BOLD_EXCLUDE="S1" keeps named systems out of
+#             that contest. QUALITY_METRICS=h3 makes the columns the
+#             stream-grammar divergences (harmonic rhythm, onset grid,
+#             duration) instead of groove/scale consistency;
+#             GROUP_COLUMN=1 (default) puts the family in a first
+#             column instead of a header row per family.
+#             QUALITY_PER_SAMPLE=1 prints the per-sample pooled value
+#             (sample j of every song pooled against the pooled
+#             reference, mean +- std over j) instead of the song-mixed
+#             estimate with its bootstrap interval.
 #   MOTIF_SHARE=1 (default) also draw the motif-development shares,
 #             <OUT>_motif_share: per stream, one stacked bar per system
 #             of the continuation's interval n-grams by relation to the
@@ -169,6 +178,10 @@ if [[ -n "${BLOCKS// /}" ]]; then
             [[ -f "$pc" ]] && python e1_quality_table.py --pooled "$pc" \
                 --out "${OUT}_quality.tex" ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"} \
                 $([[ "${BOLD_BEST:-0}" == "1" ]] || echo --no-bold) \
+                ${BOLD_EXCLUDE:+--bold-exclude "$BOLD_EXCLUDE"} \
+                --metrics "${QUALITY_METRICS:-gcsc}" \
+                $([[ "${QUALITY_PER_SAMPLE:-0}" == "1" ]] && echo --per-sample) \
+                $([[ "${GROUP_COLUMN:-1}" == "1" ]] && echo --group-column) \
                 || echo "[table] no $pc; quality table skipped"
         fi
         python plot_e1_box.py --csv "$CSV" --out "${OUT}_${b}" \

@@ -1625,7 +1625,8 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None,
                        ci_lo=float('nan'), ci_hi=float('nan'),
                        boot_se=float('nan'),
                        n_songs=len(songs), n_obs=n_obs, n_boot=n_boot,
-                       boot_mode=boot_mode, weight=weight)
+                       boot_mode=boot_mode, weight=weight,
+                       ps_mean=float('nan'), ps_std=float('nan'), ps_n=0)
             recs.append(rec)
             if not songs:
                 line += '--'.ljust(width)
@@ -1642,6 +1643,29 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None,
             Gw = np.stack([_song_vector(v, by_song_w) for v in Gs])
             Rw = _norm_songs(R) if by_song_w else R
             rec['jsd'] = jsd(Gw.sum(axis=0), Rw.sum(axis=0))
+            # PER-SAMPLE pooled divergence (2026-09-23): sample j of
+            # every song pooled into one corpus histogram against the
+            # pooled reference, one divergence per sample index, then
+            # mean and std over the samples. Unlike the point estimate
+            # above, no song mixes its decodes before pooling, so the
+            # spread across j is the decode-to-decode variability of the
+            # corpus-level divergence.
+            n_smp = max(len(v) for v in Gs)
+            ds = []
+            for j in range(n_smp):
+                keep = [i for i, v in enumerate(Gs)
+                        if len(v) > j and float(np.sum(v[j])) > 0]
+                if len(keep) < 2:
+                    continue
+                Gj = np.stack([Gs[i][j] for i in keep])
+                Rj = R[keep]
+                if by_song_w:
+                    Gj, Rj = _norm_songs(Gj), _norm_songs(Rj)
+                ds.append(jsd(Gj.sum(axis=0), Rj.sum(axis=0)))
+            if ds:
+                rec['ps_mean'] = float(np.mean(ds))
+                rec['ps_std'] = float(np.std(ds, ddof=1)) if len(ds) > 1 else 0.0
+                rec['ps_n'] = len(ds)
             # What a perfect system would score at HALF this n: one half
             # of the reference against the other. A rough floor, and
             # the one the per-piece metrics need most -- ~93 pieces over
@@ -1669,14 +1693,27 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None,
                              jsd=null_by_key[k], ci_lo=float('nan'),
                              ci_hi=float('nan'), boot_se=float('nan'),
                              n_songs=0, n_obs=0, n_boot=0, boot_mode='none',
-                             weight=weight))
+                             weight=weight, ps_mean=float('nan'),
+                             ps_std=float('nan'), ps_n=0))
     # What each pooled histogram rests on, per metric: the whole case
     # for pooling is a claim about these counts, and they differ by
     # metric -- a melody with few onsets contributes few intervals
     # however many chord changes the same song has.
-    print('\nsongs / generated observations pooled')
+    print('\nPER-SAMPLE POOLED JSD: sample j of every song pooled against '
+          'the pooled reference,')
+    print('mean +- std over the sample indices (ps_mean / ps_std in the CSV)')
     print('metric'.ljust(26) + ''.join(s.ljust(width) for s in systems))
     by_key = {(r['metric'], r['system']): r for r in recs}
+    for k in keys:
+        line = k.ljust(26)
+        for sysname in systems:
+            r = by_key[(k, sysname)]
+            cell = ('--' if math.isnan(r['ps_mean'])
+                    else f'{r["ps_mean"]:.3f} +- {r["ps_std"]:.3f} (n={r["ps_n"]})')
+            line += cell.ljust(width)
+        print(line)
+    print('\nsongs / generated observations pooled')
+    print('metric'.ljust(26) + ''.join(s.ljust(width) for s in systems))
     for k in keys:
         line = k.ljust(26)
         for sysname in systems:
@@ -1688,7 +1725,8 @@ def pooled_summary(rows, task, n_boot=2000, out_csv=None,
             w = csv.DictWriter(f, fieldnames=['metric', 'system', 'jsd',
                                               'ci_lo', 'ci_hi', 'boot_se',
                                               'n_songs', 'n_obs', 'n_boot',
-                                              'boot_mode', 'weight'])
+                                              'boot_mode', 'weight',
+                                              'ps_mean', 'ps_std', 'ps_n'])
             w.writeheader()
             w.writerows(recs)
         print(f'\nwrote {len(recs)} pooled rows -> {out_csv}')

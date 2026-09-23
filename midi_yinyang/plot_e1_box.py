@@ -463,7 +463,10 @@ def read_pooled(path):
                 int(float(row.get('n_songs') or 0)),
                 int(float(row.get('n_obs') or 0)),
                 row.get('boot_mode') or 'songs',
-                row.get('weight') or 'note')
+                row.get('weight') or 'note',
+                # per-sample pooled divergence (absent in older CSVs)
+                num('ps_mean'), num('ps_std'),
+                int(float(row.get('ps_n') or 0)))
     return out
 
 
