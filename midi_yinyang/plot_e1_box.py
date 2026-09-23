@@ -82,6 +82,13 @@ GROUPS = [
         # a second line starting with "w/o", a minus or a bracket is a
         # QUALIFIER: the wide layout draws it a point smaller, in grey
         ('A3ctcaT',   'Duet',                     'Duet'),
+        # the expert-adapter variants (2026-09-23): experts as LoRA of
+        # the frozen pretrained FFN, with and without the cross-pair
+        # low-rank projections; and the dense arm, one FFN of width
+        # 6144 in place of the routed pool
+        ('A3L16E16_nocross', 'Duet\n(LoRA experts)',        'Duet LoRA-E'),
+        ('A3L16E16',  'Duet\n(LoRA experts + attn)',        'Duet LoRA-EA'),
+        ('D1',        'Duet\nw/o MoE (dense)',   'Duet dense'),
         ('A1',        'Duet\nw/o harmonizers',    'Duet w/o H'),
     ]),
     # The cascade arms (P-mc, P-cm) left the figures 2026-09-17, by
