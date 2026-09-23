@@ -106,10 +106,11 @@ def build():
     # the two banks turn into the output tokens, one frame ahead of the input:
     # translucent wedges from each bank up to the span of its stream's tokens
     tk = 0.44
-    tok = [('x', '2'), ('y', '2'), ('x', None), ('y', None), ('x', 'T'), ('y', 'T')]
+    # the block's output: hidden states h_1 .. h_{T-1} of the next layer, interleaved
+    tok = [('x', '1'), ('y', '1'), ('x', None), ('y', None), ('x', 'T\u22121'), ('y', 'T\u22121')]
     tx = [0.65 + i * 0.7 for i in range(6)]
     for (s, idx), x in zip(tok, tx):
-        lab = plain('\u2026') if idx is None else m(s, (idx, 'sub'))
+        lab = plain('\u2026') if idx is None else [('h', 'b i'), (idx, 'sub i')]
         S.rect(x - tk / 2, yTok, tk, tk, fill=FILL[s], line=INK, lw=lw, runs=lab, size=FS, z=2)
     for s, c in (('x', cx), ('y', cy)):
         xs = [x for (t, _), x in zip(tok, tx) if t == s]

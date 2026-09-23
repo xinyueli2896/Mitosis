@@ -70,10 +70,11 @@ def build():
     S.text(0.12, 0.05, 3.5, 0.28, [('a. Dual-stream attention', 'b')], size=10.5, align='l')
 
     # ------------------------------------------------------------ tokens -> banks
+    # the block's input: hidden states h_1 .. h_{T-1} of both streams, interleaved
     tok = [('x', '1'), ('y', '1'), ('x', None), ('y', None), ('x', 'T−1'), ('y', 'T−1')]
     tx = [0.65 + i * 0.7 for i in range(6)]
     for (s, idx), x in zip(tok, tx):
-        lab = plain('…') if idx is None else m(s, (idx, 'sub'))
+        lab = plain('…') if idx is None else [('h', 'b i'), (idx, 'sub i')]
         box(x - tk / 2, yT, tk, tk, lab, fill=FILL[s], z=2)
     # translucent wedges (sketch): each stream's tokens gather into its bank
     for s in 'xy':
