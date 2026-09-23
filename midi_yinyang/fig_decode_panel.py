@@ -26,9 +26,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
-fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 5.3
+fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 5.7
 from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK_2  # noqa: E402
-from fig_style import FILL, COMP, INK, LW, AW  # noqa: E402
+from fig_style import FILL, COMP, INK, LW, AW, FS, BH  # noqa: E402
 
 SHADE = 'EAEAEA'                   # an empty slot
 
@@ -36,18 +36,18 @@ SHADE = 'EAEAEA'                   # an empty slot
 def build():
     S = Spec()
     lw = LW
-    tk, pitch = 0.36, 0.45            # token size and column pitch
-    x0 = 1.08                         # first token column (left edge)
-    bx0, bx1, bh = 0.98, 3.86, 0.34   # the model box, same width in every row
-    rows_y = (0.44, 2.06, 3.68)        # top of each row
-    yo, yb, yt = 0.0, 0.52, 1.02      # offsets within a row: outputs, block, tokens
+    tk, pitch = 0.42, 0.5             # token size and column pitch
+    x0 = 1.0                          # first token column (left edge)
+    bx0, bx1, bh = 0.9, 4.1, BH       # the model box, same width in every row
+    rows_y = (0.44, 2.2, 3.96)        # top of each row
+    yo, yb, yt = 0.0, 0.58, 1.14      # offsets within a row: outputs, block, tokens
 
     def col(i):
         return x0 + i * pitch + tk / 2
 
     def token(cx, y, s, lab, dash=False, shape='rect', fill=None):
         S.rect(cx - tk / 2, y, tk, tk, fill=FILL[s] if fill is None else fill, line=INK,
-               lw=lw, dash=dash, runs=lab, size=9, shape=shape)
+               lw=lw, dash=dash, runs=lab, size=FS, shape=shape)
 
     def sub(base, idx, star=False):
         return m(base, ('*', 'sup'), (idx, 'sub')) if star else m(base, (idx, 'sub'))
@@ -57,7 +57,7 @@ def build():
 
     def block(y):
         S.rect(bx0, y, bx1 - bx0, bh, fill=COMP, line=INK, lw=lw,
-               runs=[('Duet', ''), (', ', ''), ('L', 'i'), (' blocks', '')], size=9.5)
+               runs=[('Duet', ''), (', ', ''), ('L', 'i'), (' blocks', '')], size=FS)
 
     def row_label(y, frame, step):
         S.text(0.08, y + yb - 0.02, 0.85, 0.2, m(('t', 'i'), (' = ' + frame, 'r')), size=9.5,

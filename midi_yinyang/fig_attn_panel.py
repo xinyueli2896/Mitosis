@@ -22,19 +22,22 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
-fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.05
+fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.4
 from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain  # noqa: E402
-from fig_style import FILL, LINE, COMP, CROSS, GREY_L, INK, LW, AW  # noqa: E402
+from fig_style import FILL, LINE, COMP, CROSS, GREY_L, INK, LW, AW, FS, BH  # noqa: E402
 
 
 def build():
     S = Spec()
-    cx = {'x': 1.3, 'y': 3.5}                # lane centres
-    bw, bh = 1.9, 0.4                        # wide boxes span self + cross
+    # geometry measured off the sketch (4.8 in panel): banks 1.58 wide with a
+    # 0.3 gap between lanes, the attention pair wider than the bank, boxes
+    # 0.4 tall, rows about 0.55 apart
+    cx = {'x': 1.47, 'y': 3.33}              # lane centres
+    bw, bh = 1.58, BH                        # wide boxes
     # rows (top of box), y down
-    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.42, 0.94, 1.58, 2.2, 2.66, 3.7, 4.28, 4.85, 5.6
-    tk = 0.42                                # token size
-    sw, cw = 0.92, 0.9                       # Self Attn and Cross Attn widths
+    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.4, 0.98, 1.58, 2.22, 2.72, 3.6, 4.28, 4.92, 5.8
+    tk = 0.44                                # token size
+    sw, cw = 0.82, 0.82                      # Self Attn and Cross Attn widths
     side = {'x': -1, 'y': 1}
     other = {'x': 'y', 'y': 'x'}
 
@@ -44,10 +47,10 @@ def build():
         glyph = '❄→\U0001F525' if kind == 'pre' else '\U0001F525'
         S.text(x + w - 0.62, y - 0.2, 0.66, 0.24, plain(glyph), size=9.5, align='r', z=6)
 
-    def box(x, y, w, h, runs, fill=COMP, size=9.5, dash=False, z=1):
+    def box(x, y, w, h, runs, fill=COMP, size=FS, dash=False, z=1):
         S.rect(x, y, w, h, fill=fill, line=INK, lw=LW, dash=dash, runs=runs, size=size, z=z)
 
-    def wide(s, y, runs, fill=COMP, size=9.5, pre=False):
+    def wide(s, y, runs, fill=COMP, size=FS, pre=False):
         box(cx[s] - bw / 2, y, bw, bh, runs, fill=fill, size=size)
         if pre:
             mark(cx[s] - bw / 2, y, bw)
@@ -80,10 +83,10 @@ def build():
 
     # geometry of the projection boxes and attention boxes, per stream
     # Q on the OUTER side, K & V on the inner side, mirrored between streams
-    qbox = {'x': (cx['x'] - 0.85, 0.42), 'y': (cx['y'] + 0.85 - 0.42, 0.42)}     # (x0, w)
-    kvbox = {'x': (cx['x'] - 0.3, 1.15), 'y': (cx['y'] + 0.3 - 1.15, 1.15)}
-    self_box = {'x': (cx['x'] - bw / 2, sw), 'y': (cx['y'] + bw / 2 - sw, sw)}
-    cross_box = {'x': (cx['x'] + bw / 2 - cw, cw), 'y': (cx['y'] - bw / 2, cw)}
+    qbox = {'x': (cx['x'] - 0.79, 0.38), 'y': (cx['y'] + 0.79 - 0.38, 0.38)}     # (x0, w)
+    kvbox = {'x': (cx['x'] - 0.25, 0.84), 'y': (cx['y'] + 0.25 - 0.84, 0.84)}
+    self_box = {'x': (cx['x'] - 0.95, sw), 'y': (cx['y'] + 0.95 - sw, sw)}      # outer, past the bank edge
+    cross_box = {'x': (cx['x'] + 0.07, cw), 'y': (cx['y'] - 0.07 - cw, cw)}      # inner
 
     def centre(b):
         return b[0] + b[1] / 2
@@ -96,21 +99,21 @@ def build():
         wide(s, yL, plain('Linear QKV'), pre=True)
         # Q and K & V (three arrows out of Linear QKV, as in the sketch)
         qx0, qw = qbox[s]; kx0, kw = kvbox[s]
-        box(qx0, yQ, qw, 0.34, m('Q'), fill=FILL[s])
-        box(kx0, yQ, kw, 0.34, [('K', 'i'), (' & ', ''), ('V', 'i')], fill=FILL[s])
+        box(qx0, yQ, qw, bh, m('Q'), fill=FILL[s])
+        box(kx0, yQ, kw, bh, [('K', 'i'), (' & ', ''), ('V', 'i')], fill=FILL[s])
         for x in (centre(qbox[s]), kx0 + kw * 0.3, kx0 + kw * 0.7):   # three straight verticals
-            arrow(x, yL - 0.02, x, yQ + 0.34 + 0.02)
+            arrow(x, yL - 0.02, x, yQ + bh + 0.02)
         # attention boxes
         sx0, _ = self_box[s]; cx0, _ = cross_box[s]
         box(sx0, yA, sw, bh, plain('Self Attn'), fill=FILL[s])
         box(cx0, yA, cw, bh, plain('Cross Attn'), fill=cfill)
         scx, ccx = centre(self_box[s]), centre(cross_box[s])
         # gate above Cross Attn, in the cross path's colour; (+) at the lane centre
-        gy = yG + 0.15
-        gw = 0.6
-        box(ccx - gw / 2, yG - 0.02, gw, 0.34, plain('Gate'), fill=cfill, size=9)
+        gy = yG + 0.17
+        gw = 0.56
+        box(ccx - gw / 2, yG - 0.02, gw, 0.38, plain('Gate'), fill=cfill, size=FS - 0.5)
         mark(ccx - gw / 2, yG - 0.02, gw, kind='new')
-        arrow(ccx, yA - 0.02, ccx, yG + 0.34)
+        arrow(ccx, yA - 0.02, ccx, yG + 0.38)
         plus(c, gy)
         arrow(ccx - side[s] * gw / 2 * -1 if False else (ccx - gw / 2 - 0.02 if s == 'x' else ccx + gw / 2 + 0.02),
               gy, c + (0.12 if s == 'x' else -0.12), gy)
@@ -124,7 +127,7 @@ def build():
         wide(s, yO, bank('o', 'l', s), fill=FILL[s])
         arrow(c, yO - 0.02, c, yAN + bh + 0.02)
         wide(s, yAN, plain('Add & Norm'))
-        skx = c + side[s] * (bw / 2 + 0.22)
+        skx = c + side[s] * (0.95 + 0.2)
         S.line(c + side[s] * bw / 2, yH + bh / 2, skx, yH + bh / 2, lw=AW)
         S.line(skx, yH + bh / 2, skx, yAN + bh / 2, lw=AW)
         arrow(skx, yAN + bh / 2, c + side[s] * (bw / 2 + 0.02), yAN + bh / 2)
