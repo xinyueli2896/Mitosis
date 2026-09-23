@@ -60,8 +60,8 @@
 #   MOE_NUM_EXPERTS=1,MOE_TOPK=1,MOE_INTERMEDIATE_SIZE=6144,SYSTEM=D1,OUT_ROOT=temp/E1_v5_dense \
 #       midi_yinyang/infer_duet_multigpu.sbatch
 # Machine without SLURM, 8 GPUs, checkpoint downloaded by download_hf.sbatch:
-#   CKPT=ckpt/<file>.ckpt MOE_NUM_EXPERTS=1 MOE_TOPK=1 MOE_INTERMEDIATE_SIZE=6144 \
-#   SYSTEM=D1 OUT_ROOT=temp/E1_v5_dense CONDA_ENV= \
+#   CKPT=midi_yinyang/ckpt/<file>.ckpt MOE_NUM_EXPERTS=1 MOE_TOPK=1 MOE_INTERMEDIATE_SIZE=6144 \
+#   SYSTEM=D1 OUT_ROOT=temp/E1_v5_dense GPU_IDS="0 1 2 3 4 5 6 7" \
 #       bash midi_yinyang/infer_duet_multigpu.sbatch 2>&1 | tee infer_dense.log
 
 #SBATCH --job-name=infer_duet_multigpu
@@ -97,6 +97,15 @@ if [[ -n "$CONDA_ENV" && "${CONDA_DEFAULT_ENV:-}" != "$CONDA_ENV" ]]; then
     source "$(conda info --base)/etc/profile.d/conda.sh"
     conda activate "$CONDA_ENV"
 fi
+# Path knobs are read relative to midi_yinyang/ like every other wrapper,
+# but one given relative to the directory the script was run from (the
+# repo root, say) is accepted too: it is made absolute before the cd.
+for var in CKPT MEL_FOLDER CHORD_FOLDER; do
+    v="${!var:-}"
+    if [[ -n "$v" && "$v" != /* && -e "$v" && ! -e "$REPO_DIR/midi_yinyang/$v" ]]; then
+        printf -v "$var" '%s' "$(cd "$(dirname "$v")" && pwd)/$(basename "$v")"
+    fi
+done
 cd "$REPO_DIR/midi_yinyang"
 # the cluster log dir (its #SBATCH --output); nothing to do elsewhere
 mkdir -p /home/xinyue.li/logs 2>/dev/null || true
