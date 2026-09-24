@@ -33,8 +33,9 @@ from plot_subjective_compact import SYS, colour, within_ci, ROW_AXES  # noqa: E4
 
 # one colour per system (2026-09-24): with no markers the two external
 # systems could not share the family maroon. Ours, the two single-stream
-# models and ground truth keep the family palette; AMT takes a violet.
-SYSTEM_COLOR = {'AMT': '#7b4fa8'}
+# models and ground truth keep the family palette; Whole-Song Gen keeps
+# the external maroon and AMT takes a green.
+SYSTEM_COLOR = {'AMT': '#2e8b57', 'Whole-song': '#b3243f'}
 
 AXIS_LABEL = {'consistency': 'Prompt\ncons.', 'fit': 'Mel.–chord\ncons.',
               'structure': 'Structure', 'musicality': 'Musicality',
