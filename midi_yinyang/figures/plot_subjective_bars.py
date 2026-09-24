@@ -31,8 +31,9 @@ from plot_e1_box import INK, GRID, SURFACE, FS_TICK, FS_LABEL, FS_LEGEND  # noqa
 from plot_subjective_compact import SYS, colour, within_ci, ROW_AXES, ROWS  # noqa: E402
 from plot_subjective_spider import SYSTEM_COLOR  # noqa: E402
 
-# bars left to right within a group, and the legend order
-ORDER = ['Duet (alt commit)', 'S-finetune', 'S-scratch', 'Whole-song', 'AMT', 'GT']
+# bars left to right within a group, and the legend order: ground truth
+# first as the reference, then ours, then the baselines
+ORDER = ['GT', 'Duet (alt commit)', 'S-finetune', 'S-scratch', 'Whole-song', 'AMT']
 
 
 def main():
@@ -42,7 +43,7 @@ def main():
     ap.add_argument('--exclude', nargs='*', default=[])
     ap.add_argument('--drop-constant', action='store_true')
     ap.add_argument('--width', type=float, default=3.39, help='figure width in inches')
-    ap.add_argument('--height', type=float, default=1.45, help='figure height in inches')
+    ap.add_argument('--height', type=float, default=1.15, help='figure height in inches')
     ap.add_argument('--ymin', type=float, default=2.5, help='bars start here (say so in the caption)')
     ap.add_argument('--ymax', type=float, default=4.85)
     args = ap.parse_args()
