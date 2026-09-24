@@ -32,7 +32,7 @@ from plot_e1_box import FAMILY_COLOR, INK, GRID, SURFACE, FS_TICK, FS_LABEL, FS_
 # row order of the paper's figure (2026-09-24): the two consistency axes
 # first, then structure, musicality, creativity, overall
 ROW_AXES = ['consistency', 'fit', 'structure', 'musicality', 'creativity', 'overall']
-ROWS = ['Prompt\nconsistency', 'Melody–chord\nconsistency', 'Structure', 'Musicality',
+ROWS = ['Prompt cons.', 'Mel.–chord cons.', 'Structure', 'Musicality',
         'Creativity', 'Overall']
 # system -> (display, family, marker); ground truth in ink with an open marker
 SYS = {'Duet (alt commit)': ('Duet (ours)', 'Ours', 'o'),
@@ -61,8 +61,8 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--exclude', nargs='*', default=[])
     ap.add_argument('--drop-constant', action='store_true')
-    ap.add_argument('--height', type=float, default=1.35, help='figure height in inches')
-    ap.add_argument('--width', type=float, default=2.5, help='figure width in inches')
+    ap.add_argument('--height', type=float, default=1.3, help='figure height in inches')
+    ap.add_argument('--width', type=float, default=3.39, help='figure width in inches')
     args = ap.parse_args()
     rows = load(args.csv, args.exclude, args.drop_constant)
     Ys, n = matrix(rows, 'block')
@@ -118,11 +118,11 @@ def main():
     order = ['Duet (alt commit)', 'S-finetune', 'S-scratch', 'Whole-song', 'AMT', 'GT']
     # figure-level legend, centred on the full width above the axes so no
     # entry is clipped; the layout below leaves it the top 14% of the height
-    fig.legend([handles[s][0] for s in order], [handles[s][1] for s in order], ncol=3,
+    fig.legend([handles[s][0] for s in order], [handles[s][1] for s in order], ncol=6,
                loc='upper center', bbox_to_anchor=(0.5, 1.0), frameon=False,
                fontsize=FS_LEGEND - 3, handletextpad=0.3, columnspacing=0.7,
                borderaxespad=0.1, handlelength=1.2, labelcolor=INK)
-    fig.tight_layout(pad=0.2, rect=[0, 0, 1, 0.845])
+    fig.tight_layout(pad=0.2, rect=[0, 0, 1, 0.9])
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print('wrote', f'{args.out}.{ext}')
