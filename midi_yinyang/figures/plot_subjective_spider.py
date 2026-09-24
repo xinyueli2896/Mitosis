@@ -144,7 +144,7 @@ def main():
         # no vertex markers; significance is stated in the text
         ax.plot(ang_c, m, color=col, lw=0.9, zorder=3)
         handles[s] = Line2D([0], [0], color=col, lw=1.4, label=disp)
-    leg_order = ['Duet (alt commit)', 'S-finetune', 'S-scratch', 'Whole-song', 'AMT', 'GT']
+    leg_order = ['Duet (alt commit)', 'S-scratch', 'S-finetune', 'Whole-song', 'AMT', 'GT']
     fig.legend([handles[s] for s in leg_order], [handles[s].get_label() for s in leg_order],
                ncol=3, loc='lower center', bbox_to_anchor=(0.5, 0.0), frameon=False,
                fontsize=FS_LEGEND - 2.5, handletextpad=0.4, columnspacing=0.9,

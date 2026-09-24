@@ -123,7 +123,7 @@ def main():
     for sp in ('left', 'bottom'):
         ax.spines[sp].set_color(INK)
     ax.tick_params(length=1.6, width=0.3, colors=INK)
-    order = ['Duet (alt commit)', 'S-finetune', 'S-scratch', 'Whole-song', 'AMT', 'GT']
+    order = ['Duet (alt commit)', 'S-scratch', 'S-finetune', 'Whole-song', 'AMT', 'GT']
     # figure-level legend, centred on the full width above the axes so no
     # entry is clipped; the layout below leaves it the top 14% of the height
     fig.legend([handles[s][0] for s in order], [handles[s][1] for s in order], ncol=6,

@@ -35,7 +35,7 @@ from plot_subjective_spider import SYSTEM_COLOR, AXIS_LABEL  # noqa: E402
 
 # bars left to right within a group, and the legend order: ground truth
 # first as the reference, then ours, then the baselines
-ORDER = ['GT', 'Duet (alt commit)', 'S-finetune', 'S-scratch', 'Whole-song', 'AMT']
+ORDER = ['GT', 'Duet (alt commit)', 'S-scratch', 'S-finetune', 'Whole-song', 'AMT']
 
 
 def main():
