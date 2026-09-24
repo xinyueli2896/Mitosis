@@ -31,11 +31,11 @@ from subjective_anova import SYSTEMS, load, matrix, holm  # noqa: E402
 from plot_e1_box import INK, GRID, SURFACE, FS_TICK, FS_LABEL, FS_LEGEND  # noqa: E402
 from plot_subjective_compact import SYS, colour, within_ci, ROW_AXES  # noqa: E402
 
-# one colour per system (2026-09-24): with no markers the two external
-# systems could not share the family maroon. Ours, the two single-stream
-# models and ground truth keep the family palette; Whole-Song Gen keeps
-# the external maroon and AMT takes a green.
-SYSTEM_COLOR = {'AMT': '#2e8b57', 'Whole-song': '#b3243f'}
+# one colour per system: the shared palette of plot_e1_box.SYSTEM_COLOR,
+# reached through plot_subjective_compact.colour (2026-09-24: the second
+# member of each family is a lighter shade of the family colour, so the
+# earlier green for AMT is gone). Overrides, if any, go here.
+SYSTEM_COLOR = {}
 
 AXIS_LABEL = {'consistency': 'Prompt\ncons.', 'fit': 'Mel.–chord\ncons.',
               'structure': 'Structure', 'musicality': 'Musicality',

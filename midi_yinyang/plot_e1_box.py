@@ -93,14 +93,14 @@ GROUPS = [
         # the dense arm: one FFN of width 6144 in place of the routed
         # pool. The expert-adapter variants (A3L16E16, A3L16E16_nocross)
         # are scored in the CSVs but left off every figure and table.
-        ('D1',        'Duet\nw/o MoE (dense)',   'Duet dense'),
-        ('A1',        'Duet\nw/o draft tokens',  'Duet w/o DT'),
+        ('D1',        'Duet\nw/o MoE (dense)',   'Duet\ndense'),
+        ('A1',        'Duet\nw/o draft tokens',  'Duet\nw/o DT'),
     ]),
     # The cascade arms (P-mc, P-cm) left the figures 2026-09-17, by
     # request; they are still scored and sit in the CSVs.
     ('Internal baselines', True, [
-        ('S-scratch', 'Single-stream\n(scratch)',   'SS–scr'),
-        ('S1',        'Single-stream\n(finetuned)', 'SS–ft'),
+        ('S-scratch', 'Single-stream\n(scratch)',   'SS\nscr.'),
+        ('S1',        'Single-stream\n(finetuned)', 'SS\nft.'),
     ]),
     ('External baselines', True, [
         # WSfv4: the whole-song baseline with its chord track re-voiced
@@ -138,7 +138,20 @@ PALETTE = {
     'slate':  '#3b7dd8',    # was #70798c
     'grey':   '#9a9186',    # was #a39c8f
 }
-SYSTEM_COLOR = {}
+# Per-system shades within the family hue (2026-09-24, by request): the
+# flagship keeps the family colour, its ablations a darker and a lighter
+# shade of it, the second member of each baseline family a lighter shade.
+# With --names none the legend names every system by its swatch and the
+# x axis carries no names at all.
+SYSTEM_COLOR = {
+    'A3ctcaT':   PALETTE['gold'],
+    'D1':        '#b87d00',        # darker gold
+    'A1':        '#f9cf6b',        # lighter gold
+    'S-scratch': PALETTE['slate'],
+    'S1':        '#93b9ea',        # lighter slate
+    'WSfv4':     PALETTE['maroon'],
+    'AMT':       '#e0788c',        # lighter maroon
+}
 FAMILY_COLOR = {
     'Ours':                PALETTE['gold'],
     'Internal baselines':  PALETTE['slate'],
@@ -877,6 +890,14 @@ def main():
                         'unless a value above 5 is given')
     p.add_argument('--panel-height', type=float, default=1.35, help='inches')
     p.add_argument('--title', default='')
+    p.add_argument('--names', choices=['long', 'short', 'none'], default='long',
+                   help='--orient v only: long (default) writes the full '
+                        'names under the bottom panels, vertical when there '
+                        'is more than one column; short writes the two-line '
+                        'short codes horizontally, which keeps the figure '
+                        'one column wide without a name column; none writes '
+                        'no names on the axis and lists every system by its '
+                        'colour swatch in the legend instead')
     p.add_argument('--orient', choices=['h', 'v'], default='h',
                    help="h (default): wide layout, four metrics side by "
                         "side across both columns, systems down the "
@@ -1066,10 +1087,15 @@ def main():
     nrows = math.ceil(n / ncols)
     # Below the panels: vertical system names (~1.5 in at 7 pt for the
     # longest) and the legend.
+    short_names = args.names == 'short'
+    # below the panels: vertical full names need ~1.5 in; two-line short
+    # codes ~0.35 in; none leaves the legend alone, which then also lists
+    # the systems (~0.85 in)
+    extra = (0.95 if args.names == 'none' else
+             1.0 if short_names else (2.25 if ncols > 1 else 1.6))
     fig, axgrid = plt.subplots(
         nrows, ncols, squeeze=False,
-        figsize=(args.width, args.panel_height * nrows
-                 + (2.25 if ncols > 1 else 1.6)))
+        figsize=(args.width, args.panel_height * nrows + extra))
     fig.patch.set_facecolor(SURFACE)
 
     # ~10 characters per inch at 7.5pt; 0 means "use the y-axis label".
@@ -1113,7 +1139,18 @@ def main():
     # instead of width nine times, and keeps the FULL names: a key of
     # invented abbreviations is a second thing for a reader to hold.
     compact = ncols > 1
-    if compact:
+    if args.names == 'none':
+        pass                                  # the legend names the systems
+    elif short_names:
+        # --names short (2026-09-24, by request): the two-line short
+        # codes horizontal under each column, so the panels keep the
+        # full column width and the figure loses the name column
+        for bottom in bottoms:
+            bottom.set_xticklabels([sh for _lg, sh in labels],
+                                   fontsize=FS_TICK - (1.5 if ncols > 1 else 0.5),
+                                   color=INK, linespacing=0.95)
+            bottom.tick_params(axis='x', pad=1.5)
+    elif compact:
         shown = [lg.replace('\n', ' ') for lg, _sh in labels]
         for bottom in bottoms:
             bottom.set_xticklabels(shown, fontsize=FS_TICK, color=INK,
@@ -1188,7 +1225,14 @@ def main():
                    label='mean; whiskers 1.5 IQR, outliers omitted'),
         ]
     labels_ = [h.get_label() for h in handles]
-    if compact:
+    if args.names == 'none':
+        # one swatch per system, in its own shade, full name on one line
+        for s, d, _sh, f, _r in order:
+            c = color_of(s, f)
+            handles.append(Rectangle((0, 0), 1, 1, facecolor=lighten(c),
+                                     edgecolor=c, lw=0.8))
+            labels_.append(d.replace('\n', ' '))
+    elif compact:
         # one legend entry per family. If members carry their own
         # colours (SYSTEM_COLOR) the swatch is those side by side;
         # otherwise a single swatch in the family colour.

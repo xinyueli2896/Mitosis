@@ -56,6 +56,10 @@
 #             every item but the first); no column, no placeholder.
 #             EXCLUDE_SYSTEMS=A3
 #             drops Duet (refine) and keeps Duet (alt. commit).
+#   NAMES     long (default) or short: with ORIENT=v and more than one
+#             panel per row, short writes the two-line short codes
+#             horizontally under the columns instead of turning the full
+#             names vertical, so the one-column sheet keeps its width
 #   ORIENT    h (default): wide layout, four panels per row, systems on
 #             the y-axis, use with figure*; v: one-column layout
 #   WIDTH     box-sheet width in inches for ORIENT=v (default 3.4, one
@@ -144,6 +148,7 @@ PER_SONG="${PER_SONG:-0}"
 POOLED_CSV="${POOLED_CSV:-}"
 WIDTH="${WIDTH:-3.4}"
 ORIENT="${ORIENT:-h}"
+NAMES="${NAMES:-long}"   # long | short | none
 UBR_WIDTH="${UBR_WIDTH:-7.0}"
 TITLE="${TITLE:-}"
 EXCLUDE_SYSTEMS="${EXCLUDE_SYSTEMS:-}"
@@ -185,7 +190,7 @@ if [[ -n "${BLOCKS// /}" ]]; then
                 || echo "[table] no $pc; quality table skipped"
         fi
         python plot_e1_box.py --csv "$CSV" --out "${OUT}_${b}" \
-            --block "$b" ${NCOLS:+--ncols "$NCOLS"} --width "$WIDTH" --orient "$ORIENT" \
+            --block "$b" ${NCOLS:+--ncols "$NCOLS"} --width "$WIDTH" --orient "$ORIENT" --names "$NAMES" \
             $([[ "$DELTAS_ONLY" == "1" ]] && echo --deltas-only) \
             $([[ "$PER_SONG" == "1" ]] && echo --per-song) \
             ${POOLED_CSV:+--pooled-csv "$POOLED_CSV"} \
@@ -193,7 +198,7 @@ if [[ -n "${BLOCKS// /}" ]]; then
             ${TITLE:+--title "$TITLE"}
     done
 else
-    python plot_e1_box.py --csv "$CSV" --out "$OUT" --width "$WIDTH" --orient "$ORIENT" \
+    python plot_e1_box.py --csv "$CSV" --out "$OUT" --width "$WIDTH" --orient "$ORIENT" --names "$NAMES" \
         ${NCOLS:+--ncols "$NCOLS"} ${METRICS:+--metrics "$METRICS"} \
         ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"} \
         ${TITLE:+--title "$TITLE"}

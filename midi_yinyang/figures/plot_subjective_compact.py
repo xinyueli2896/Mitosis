@@ -27,7 +27,13 @@ import matplotlib.pyplot as plt
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 from subjective_anova import AXES, SYSTEMS, load, matrix, holm  # noqa: E402
-from plot_e1_box import FAMILY_COLOR, INK, GRID, SURFACE, FS_TICK, FS_LABEL, FS_LEGEND  # noqa: E402
+from plot_e1_box import FAMILY_COLOR, SYSTEM_COLOR, INK, GRID, SURFACE, FS_TICK, FS_LABEL, FS_LEGEND  # noqa: E402
+
+# the listening-test ids of the systems in the objective sheets, so both
+# figure families share one palette (plot_e1_box.SYSTEM_COLOR: the
+# flagship in the family colour, the other members in shades of it)
+E1_ID = {'Duet (alt commit)': 'A3ctcaT', 'S-finetune': 'S1', 'S-scratch': 'S-scratch',
+         'Whole-song': 'WSfv4', 'AMT': 'AMT'}
 
 # row order of the paper's figure (2026-09-24): the two consistency axes
 # first, then structure, musicality, creativity, overall
@@ -45,7 +51,9 @@ SYS = {'Duet (alt commit)': ('Duet (ours)', 'Ours', 'o'),
 
 def colour(s):
     fam = SYS[s][1]
-    return INK if fam == 'GT' else FAMILY_COLOR[fam]
+    if fam == 'GT':
+        return INK
+    return SYSTEM_COLOR.get(E1_ID.get(s, ''), FAMILY_COLOR[fam])
 
 
 def within_ci(Y, alpha=0.05):
