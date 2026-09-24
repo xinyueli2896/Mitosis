@@ -1129,6 +1129,9 @@ def main():
             # the tick labels do not take half the panel's width
             ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(3))
             ax.tick_params(axis='y', labelsize=FS_TICK - 1.0, pad=1.5)
+        elif args.names == 'none':
+            # the one-column sheet: y tick numbers a point smaller
+            ax.tick_params(axis='y', labelsize=FS_TICK - 1.0)
         used.append((idx // ncols, idx % ncols, ax))
     for r in range(nrows):
         for c in range(ncols):
