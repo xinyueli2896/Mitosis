@@ -539,12 +539,12 @@ def _finish_axes(ax, metric, order, title_chars, letter, caption):
     ax.xaxis.grid(False)
     ax.set_axisbelow(True)
     if letter and title_chars is None and SHORT_TITLES:
-        # letter and short name as ONE bold run in the top margin, so
+        # letter and short name as ONE regular run in the top margin, so
         # style, size and baseline are identical; wrapped to the panel
         # width with continuation lines indented under the name (axes
         # positions are not final before tight_layout: use the grid's
         # column width, less the tick-label margin)
-        fs = FS_LETTER - 0.5
+        fs = FS_LETTER - 1.5
         ncols_ = ax.get_subplotspec().get_gridspec().ncols
         width_pt = ax.figure.get_figwidth() / ncols_ * 0.88 * 72
         per_line = max(10, int(width_pt / (fs * 0.6)))
@@ -553,7 +553,7 @@ def _finish_axes(ax, metric, order, title_chars, letter, caption):
             per_line, subsequent_indent='    '))
         ax.annotate(txt, xy=(0.0, 1.0), xycoords='axes fraction',
                     xytext=(0, 2), textcoords='offset points',
-                    ha='left', va='bottom', fontsize=fs, weight='bold',
+                    ha='left', va='bottom', fontsize=fs,
                     color=INK, linespacing=1.0)
     elif letter and title_chars is None:
         # no title above the panel: the letter goes into that margin,
