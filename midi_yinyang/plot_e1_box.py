@@ -1263,8 +1263,8 @@ def main():
     # Two legend columns fit a 3.4 in figure at 7 pt; three would not.
     fig.legend(handles=handles, labels=labels_, loc='lower center',
                ncol=2 if args.width < 5 else 3, frameon=False,
-               # the system-swatch legend (--names none) two points smaller
-               fontsize=FS_LEGEND - (2.0 if args.names == 'none' else 0.0),
+               # the system-swatch legend (--names none) one point smaller
+               fontsize=FS_LEGEND - (1.0 if args.names == 'none' else 0.0),
                labelcolor=INK,
                handlelength=1.6, handletextpad=0.5, columnspacing=1.2,
                handler_map={tuple: HandlerTuple(ndivide=None, pad=0.25)},
@@ -1274,7 +1274,7 @@ def main():
 
     # The legend's share of the height, so it never overlaps the names.
     n_leg = math.ceil(len(handles) / (2 if args.width < 5 else 3))
-    row_h = 0.115 if args.names == 'none' else 0.15
+    row_h = 0.13 if args.names == 'none' else 0.15
     leg_frac = (row_h * n_leg + 0.06) / fig.get_figheight()
     fig.tight_layout(rect=(0, leg_frac, 1, 1.0), h_pad=1.0,
                      w_pad=0.4 if ncols >= 3 else 0.8)
