@@ -33,9 +33,9 @@ ROWS = ['Prompt\nconsistency', 'Structure', 'Melody–chord\nconsistency', 'Musi
         'Creativity', 'Overall']
 # system -> (display, family, marker); ground truth in ink with an open marker
 SYS = {'Duet (alt commit)': ('Duet (ours)', 'Ours', 'o'),
-       'S-finetune':        ('Single-stream, finetuned', 'Not ranked', 's'),
-       'S-scratch':         ('Single-stream, scratch', 'Internal baselines', 'v'),
-       'Whole-song':        ('Whole-Song-Gen', 'External baselines', 'D'),
+       'S-finetune':        ('SS finetuned', 'Not ranked', 's'),
+       'S-scratch':         ('SS scratch', 'Internal baselines', 'v'),
+       'Whole-song':        ('Whole-Song Gen', 'External baselines', 'D'),
        'AMT':               ('Anticipatory MT', 'External baselines', '^'),
        'GT':                ('Ground truth', 'GT', 'o')}
 
@@ -58,6 +58,7 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--exclude', nargs='*', default=[])
     ap.add_argument('--drop-constant', action='store_true')
+    ap.add_argument('--height', type=float, default=2.3, help='figure height in inches')
     args = ap.parse_args()
     rows = load(args.csv, args.exclude, args.drop_constant)
     Ys, n = matrix(rows, 'block')
@@ -67,11 +68,11 @@ def main():
         'xtick.labelsize': FS_TICK, 'ytick.labelsize': FS_TICK, 'legend.fontsize': FS_LEGEND,
         'mathtext.fontset': 'stix', 'axes.linewidth': 0.6,
     })
-    fig, ax = plt.subplots(figsize=(3.39, 3.4))
+    fig, ax = plt.subplots(figsize=(3.39, args.height))
     fig.patch.set_facecolor(SURFACE); ax.set_facecolor(SURFACE)
     k = len(SYSTEMS)
     # rows top to bottom; systems stacked within a row, ours on top
-    off = (np.arange(k) - (k - 1) / 2) * 0.13
+    off = (np.arange(k) - (k - 1) / 2) * 0.11
     handles = {}
     for j, a in enumerate(AXES + ['overall']):
         Y = Ys[a]
@@ -106,10 +107,13 @@ def main():
         ax.spines[sp].set_color(INK)
     ax.tick_params(length=2.5, colors=INK)
     order = ['Duet (alt commit)', 'S-finetune', 'S-scratch', 'Whole-song', 'AMT', 'GT']
-    ax.legend([handles[s][0] for s in order], [handles[s][1] for s in order], ncol=2,
-              loc='lower center', bbox_to_anchor=(0.42, 1.0), frameon=False,
-              handletextpad=0.4, columnspacing=1.2, borderaxespad=0.2, labelcolor=INK)
-    fig.tight_layout()
+    # figure-level legend, centred on the full width above the axes so no
+    # entry is clipped; the layout below leaves it the top 14% of the height
+    fig.legend([handles[s][0] for s in order], [handles[s][1] for s in order], ncol=3,
+               loc='upper center', bbox_to_anchor=(0.5, 1.0), frameon=False,
+               fontsize=FS_LEGEND - 0.5, handletextpad=0.3, columnspacing=0.8,
+               borderaxespad=0.1, handlelength=1.2, labelcolor=INK)
+    fig.tight_layout(pad=0.3, rect=[0, 0, 1, 0.86])
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print('wrote', f'{args.out}.{ext}')
