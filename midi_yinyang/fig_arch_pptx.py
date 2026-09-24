@@ -30,8 +30,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 BLUE, BLUE_L = '4589E3', 'CDDBF1'
 RED, RED_L = 'BF2847', 'EDCCD3'
 GOLD, GOLD_L = 'F0A500', 'FCE8B1'
-INK, INK_2, GREY_L, PANEL = '000000', '000000', 'C3DDE4', 'E1EAEC'   # black type
-LINE_INK = '6F7C80'                 # default colour of lines and arrows: Phantom
+INK, INK_2, GREY_L, PANEL = '303030', '737373', 'D9D9D9', 'EDECE9'
+LINE_INK = '3A3A3A'                 # default colour of lines and arrows (fig_style.INK)
 FONT = 'Times New Roman'
 SLIDE_W, SLIDE_H = 14.79, 8.91
 
