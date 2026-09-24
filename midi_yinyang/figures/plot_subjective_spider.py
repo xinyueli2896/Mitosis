@@ -54,6 +54,8 @@ def main():
     ap.add_argument('--interval', choices=['fill', 'bars', 'both'], default='fill',
                     help='how the CI is drawn: a translucent ring (fill), a radial '
                          'bar with caps on every spoke (bars), or both')
+    ap.add_argument('--gt-alpha-scale', type=float, default=0.5,
+                    help='ground truth ring opacity relative to the others')
     ap.add_argument('--ring-edges', action='store_true',
                     help='trace the inner and outer edge of every ring with a thin '
                          'dotted line in the system colour')
@@ -121,9 +123,11 @@ def main():
         # rings overlap
         ringed = args.rings_for is None or s in args.rings_for
         if args.interval in ('fill', 'both') and ringed:
+            a = args.alpha if args.interval == 'fill' else args.alpha * 0.45
+            if fam == 'GT':
+                a *= args.gt_alpha_scale      # ink-black ring: lighter grey
             ax.fill(np.concatenate([ang_c, ang_c[::-1]]), np.concatenate([hi, lo[::-1]]),
-                    color=col, alpha=args.alpha if args.interval == 'fill' else args.alpha * 0.45,
-                    lw=0, zorder=2)
+                    color=col, alpha=a, lw=0, zorder=2)
             if args.ring_edges:
                 for edge in (lo, hi):
                     ax.plot(ang_c, edge, color=col, lw=0.45, ls=(0, (1.5, 1.5)), zorder=2.5)
