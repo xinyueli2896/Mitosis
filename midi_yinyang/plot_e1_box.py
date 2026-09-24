@@ -78,13 +78,15 @@ from matplotlib.patches import Rectangle
 # nine two-line names would overlap into illegibility; the key below
 # then goes in the figure footnote, so nothing is left to guess.
 GROUPS = [
-    # ORDER AND RANKING (2026-09-23, by request): ours first, then the
-    # single-stream models scratch and finetuned, then the two external
-    # systems. No family is ranked any more: no best-system line, star
-    # or bold anywhere; every column is read against the reference
-    # level alone. "Duet w/o draft tokens" is A1, the checkpoint trained
-    # without the draft-token pathway and decoded autoregressively.
-    ('Ours', False, [
+    # ORDER (2026-09-23, by request): ours first, then the single-stream
+    # models scratch and finetuned, then the two external systems.
+    # RANKING (2026-09-24, by request): the best system is marked again
+    # (solid line at its mean, star at the row end), over every family
+    # except the members of UNRANKED below -- the single-stream finetuned
+    # model, which is not ranked in the tables either. "Duet w/o draft
+    # tokens" is A1, the checkpoint trained without the draft-token
+    # pathway and decoded autoregressively.
+    ('Ours', True, [
         # a second line starting with "w/o", a minus or a bracket is a
         # QUALIFIER: the wide layout draws it a point smaller, in grey
         ('A3ctcaT',   'Duet',                     'Duet'),
@@ -96,11 +98,11 @@ GROUPS = [
     ]),
     # The cascade arms (P-mc, P-cm) left the figures 2026-09-17, by
     # request; they are still scored and sit in the CSVs.
-    ('Internal baselines', False, [
+    ('Internal baselines', True, [
         ('S-scratch', 'Single-stream\n(scratch)',   'SS–scr'),
         ('S1',        'Single-stream\n(finetuned)', 'SS–ft'),
     ]),
-    ('External baselines', False, [
+    ('External baselines', True, [
         # WSfv4: the whole-song baseline with its chord track re-voiced
         # into our rendering and cut to four voices (wholesong_chord_map
         # APPLY=WSfv4 MAX_VOICES=4). The raw WSf differs from every
@@ -111,6 +113,11 @@ GROUPS = [
         ('AMT',       'Anticipatory Music Transf.', 'AMT'),
     ]),
 ]
+# systems drawn but left out of the best-of comparison whatever their
+# family says: the finetuned single-stream model starts from the same
+# pretrained weights as ours but sees the task with no architectural
+# change, so it is reported, not ranked (the tables star it likewise)
+UNRANKED = {'S1'}
 
 # Palette (2026-09-17, by request): four of the six swatches carry the
 # FAMILIES -- the two darkest (near-black, navy) are kept off the boxes
@@ -972,7 +979,7 @@ def main():
     for m in metrics:
         present |= set(src.get(m, {}))
     excluded = {x for x in re.split(r'[,\s]+', args.exclude) if x}   # commas OR spaces: sbatch --export splits on commas
-    order = [(s, d, sh, g, ranked)
+    order = [(s, d, sh, g, ranked and s not in UNRANKED)
              for g, ranked, members in GROUPS for s, d, sh in members
              if s not in excluded]
     if excluded:
