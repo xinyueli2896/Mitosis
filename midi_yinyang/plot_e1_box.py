@@ -139,14 +139,16 @@ PALETTE = {
     'grey':   '#9a9186',    # was #a39c8f
 }
 # Per-system shades within the family hue (2026-09-24, by request): the
-# flagship keeps the family colour, its ablations a darker and a lighter
-# shade of it, the second member of each baseline family a lighter shade.
+# flagship keeps the family colour and its ablations two lighter shades
+# of it, in the order of the sheet; each baseline family likewise runs
+# from its darker to its lighter member.
 # With --names none the legend names every system by its swatch and the
 # x axis carries no names at all.
 SYSTEM_COLOR = {
+    # ours: darkest to lightest in the order of the sheet
     'A3ctcaT':   PALETTE['gold'],
-    'D1':        '#b87d00',        # darker gold
-    'A1':        '#f9cf6b',        # lighter gold
+    'D1':        '#f7c452',        # lighter gold
+    'A1':        '#fbdc95',        # lighter still
     'S-scratch': PALETTE['slate'],
     'S1':        '#93b9ea',        # lighter slate
     'WSfv4':     '#e0788c',        # lighter maroon
