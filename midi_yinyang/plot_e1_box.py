@@ -152,8 +152,8 @@ SYSTEM_COLOR = {
     'A1':        '#fbdc95',        # lighter still
     'S-scratch': PALETTE['slate'],
     'S1':        '#93b9ea',        # lighter slate
-    'WSfv4':     '#e0788c',        # lighter maroon
-    'AMT':       PALETTE['maroon'],
+    'WSfv4':     PALETTE['maroon'],
+    'AMT':       '#e0788c',        # lighter maroon
 }
 FAMILY_COLOR = {
     'Ours':                PALETTE['gold'],
