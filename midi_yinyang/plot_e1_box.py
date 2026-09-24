@@ -1099,7 +1099,7 @@ def main():
     # below the panels: vertical full names need ~1.5 in; two-line short
     # codes ~0.35 in; none leaves the legend alone, which then also lists
     # the systems (~0.85 in)
-    extra = (0.95 if args.names == 'none' else
+    extra = (0.8 if args.names == 'none' else
              1.0 if short_names else (2.25 if ncols > 1 else 1.6))
     fig, axgrid = plt.subplots(
         nrows, ncols, squeeze=False,
@@ -1263,7 +1263,9 @@ def main():
     # Two legend columns fit a 3.4 in figure at 7 pt; three would not.
     fig.legend(handles=handles, labels=labels_, loc='lower center',
                ncol=2 if args.width < 5 else 3, frameon=False,
-               fontsize=FS_LEGEND, labelcolor=INK,
+               # the system-swatch legend (--names none) two points smaller
+               fontsize=FS_LEGEND - (2.0 if args.names == 'none' else 0.0),
+               labelcolor=INK,
                handlelength=1.6, handletextpad=0.5, columnspacing=1.2,
                handler_map={tuple: HandlerTuple(ndivide=None, pad=0.25)},
                bbox_to_anchor=(0.5, 0.004))
@@ -1272,7 +1274,8 @@ def main():
 
     # The legend's share of the height, so it never overlaps the names.
     n_leg = math.ceil(len(handles) / (2 if args.width < 5 else 3))
-    leg_frac = (0.15 * n_leg + 0.06) / fig.get_figheight()
+    row_h = 0.115 if args.names == 'none' else 0.15
+    leg_frac = (row_h * n_leg + 0.06) / fig.get_figheight()
     fig.tight_layout(rect=(0, leg_frac, 1, 1.0), h_pad=1.0,
                      w_pad=0.4 if ncols >= 3 else 0.8)
     for ext in ('pdf', 'png'):
