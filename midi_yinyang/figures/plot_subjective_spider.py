@@ -54,6 +54,12 @@ def main():
     ap.add_argument('--interval', choices=['fill', 'bars', 'both'], default='fill',
                     help='how the CI is drawn: a translucent ring (fill), a radial '
                          'bar with caps on every spoke (bars), or both')
+    ap.add_argument('--ring-edges', action='store_true',
+                    help='trace the inner and outer edge of every ring with a thin '
+                         'dotted line in the system colour')
+    ap.add_argument('--rings-for', nargs='*', default=None,
+                    help='system ids that get a ring (default all); the rest are '
+                         'drawn as lines only, e.g. "Duet (alt commit)" GT')
     ap.add_argument('--knee', type=float, default=4.5,
                     help='rating above which the radius is squeezed')
     ap.add_argument('--squash', type=float, default=0.1,
@@ -113,10 +119,14 @@ def main():
         # the within-subject CI: a ring between the two polygons and/or a
         # radial bar with caps on every spoke, which stays readable where
         # rings overlap
-        if args.interval in ('fill', 'both'):
+        ringed = args.rings_for is None or s in args.rings_for
+        if args.interval in ('fill', 'both') and ringed:
             ax.fill(np.concatenate([ang_c, ang_c[::-1]]), np.concatenate([hi, lo[::-1]]),
                     color=col, alpha=args.alpha if args.interval == 'fill' else args.alpha * 0.45,
                     lw=0, zorder=2)
+            if args.ring_edges:
+                for edge in (lo, hi):
+                    ax.plot(ang_c, edge, color=col, lw=0.45, ls=(0, (1.5, 1.5)), zorder=2.5)
         if args.interval in ('bars', 'both'):
             cap = 0.045                      # cap half-width, radians (fixed)
             for j in range(K):
