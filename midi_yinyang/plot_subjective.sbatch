@@ -65,3 +65,8 @@ python figures/plot_subjective_compact.py --csv "$RATINGS" --out "${OUT}_compact
 # filled vertex = differs from ours (Holm) -> {OUT}_spider_ci.pdf/.png
 python figures/plot_subjective_spider.py --csv "$RATINGS" --out "${OUT}_spider_ci" \
     ${EXCLUDE:+--exclude $EXCLUDE} $([ "$DROP_CONSTANT" = 1 ] && echo --drop-constant)
+
+# and as a grouped bar chart: one bar per system and axis, the within-subject
+# 95% CI as an error bar on the bar -> {OUT}_bars.pdf/.png
+python figures/plot_subjective_bars.py --csv "$RATINGS" --out "${OUT}_bars" \
+    ${EXCLUDE:+--exclude $EXCLUDE} $([ "$DROP_CONSTANT" = 1 ] && echo --drop-constant)
