@@ -51,6 +51,9 @@ def main():
     ap.add_argument('--rmin', type=float, default=2.5, help='centre of the chart')
     ap.add_argument('--width', type=float, default=3.39)
     ap.add_argument('--alpha', type=float, default=0.18, help='band opacity')
+    ap.add_argument('--interval', choices=['fill', 'bars', 'both'], default='both',
+                    help='how the CI is drawn: a translucent ring (fill), a radial '
+                         'bar with caps on every spoke (bars), or both')
     ap.add_argument('--knee', type=float, default=4.5,
                     help='rating above which the radius is squeezed')
     ap.add_argument('--squash', type=float, default=0.1,
@@ -107,9 +110,22 @@ def main():
         m = r(np.concatenate([mean[i], mean[i][:1]]))
         lo = r(np.concatenate([mean[i] - ci[i], (mean[i] - ci[i])[:1]]))
         hi = r(np.concatenate([mean[i] + ci[i], (mean[i] + ci[i])[:1]]))
-        # the within-subject CI as a ring between the two polygons
-        ax.fill(np.concatenate([ang_c, ang_c[::-1]]), np.concatenate([hi, lo[::-1]]),
-                color=col, alpha=args.alpha, lw=0, zorder=2)
+        # the within-subject CI: a ring between the two polygons and/or a
+        # radial bar with caps on every spoke, which stays readable where
+        # rings overlap
+        if args.interval in ('fill', 'both'):
+            ax.fill(np.concatenate([ang_c, ang_c[::-1]]), np.concatenate([hi, lo[::-1]]),
+                    color=col, alpha=args.alpha if args.interval == 'fill' else args.alpha * 0.45,
+                    lw=0, zorder=2)
+        if args.interval in ('bars', 'both'):
+            cap = 0.045                      # cap half-width, radians (fixed)
+            for j in range(K):
+                ax.plot([ang[j], ang[j]], [lo[j], hi[j]], color=col, lw=0.9,
+                        solid_capstyle='butt', zorder=3)
+                for rr in (lo[j], hi[j]):
+                    # a cap is a short arc at fixed radius and fixed angle
+                    th = np.linspace(ang[j] - cap, ang[j] + cap, 5)
+                    ax.plot(th, np.full_like(th, rr), color=col, lw=0.9, zorder=3)
         # colour alone tells the systems apart (2026-09-24, by request):
         # no vertex markers; significance is stated in the text
         ax.plot(ang_c, m, color=col, lw=0.9, zorder=3)
