@@ -498,10 +498,10 @@ def read_pooled(path):
 # letter at the letter's size (--short-titles): the caption then need
 # not list the panels.
 SHORT_TITLE = {
-    'pc_jsd_prompt_a_delta':    'Tonal drift, melody',
-    'onset_sim_prompt_a_delta': 'Rhythmic placement, melody',
-    'pc_jsd_prompt_b_delta':    'Tonal drift, chord',
-    'onset_sim_prompt_b_delta': 'Rhythmic placement, chord',
+    'pc_jsd_prompt_a_delta':    'Pitch JSD, melody',
+    'onset_sim_prompt_a_delta': 'Onset sim., melody',
+    'pc_jsd_prompt_b_delta':    'Pitch JSD, chord',
+    'onset_sim_prompt_b_delta': 'Onset sim., chord',
     'ctnctr_delta':             'Chord-tone ratio',
     'pcs_delta':                'Pitch consonance',
     'mctd_delta':               'Tonal distance',
