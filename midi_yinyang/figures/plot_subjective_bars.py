@@ -28,8 +28,8 @@ sys.path.insert(0, _ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from subjective_anova import SYSTEMS, load, matrix  # noqa: E402
 from plot_e1_box import INK, GRID, SURFACE, FS_TICK, FS_LABEL, FS_LEGEND  # noqa: E402
-from plot_subjective_compact import SYS, colour, within_ci, ROW_AXES, ROWS  # noqa: E402
-from plot_subjective_spider import SYSTEM_COLOR  # noqa: E402
+from plot_subjective_compact import SYS, colour, within_ci, ROW_AXES  # noqa: E402
+from plot_subjective_spider import SYSTEM_COLOR, AXIS_LABEL  # noqa: E402
 
 # bars left to right within a group, and the legend order: ground truth
 # first as the reference, then ours, then the baselines
@@ -82,7 +82,8 @@ def main():
         handles.append(Patch(facecolor=SURFACE if open_bar else col, edgecolor=col,
                              linewidth=0.5, label=disp))
     ax.set_xticks(x)
-    ax.set_xticklabels(ROWS, color=INK)
+    # two-line axis labels (the spider chart's), so the row stays short
+    ax.set_xticklabels([AXIS_LABEL[a] for a in ROW_AXES], color=INK, linespacing=0.95)
     ax.set_xlim(-0.55, K - 0.45)
     ax.set_ylim(args.ymin, args.ymax)
     ax.set_yticks([3, 3.5, 4, 4.5])
