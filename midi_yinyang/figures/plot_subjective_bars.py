@@ -30,8 +30,8 @@ sys.path.insert(0, _ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from subjective_anova import SYSTEMS, load, matrix, holm  # noqa: E402
 from plot_e1_box import INK, GRID, SURFACE, FS_TICK, FS_LABEL, FS_LEGEND  # noqa: E402
-from plot_subjective_compact import SYS, colour, within_ci, ROW_AXES, ROWS  # noqa: E402
-from plot_subjective_spider import SYSTEM_COLOR  # noqa: E402
+from plot_subjective_compact import SYS, colour, within_ci, ROW_AXES  # noqa: E402
+from plot_subjective_spider import SYSTEM_COLOR, AXIS_LABEL  # noqa: E402
 
 # bars left to right within a group, and the legend order: ground truth
 # first as the reference, then ours, then the baselines
@@ -73,8 +73,7 @@ def main():
 
     plt.rcParams.update({
         'font.family': 'serif', 'font.size': FS_LABEL + args.fs, 'axes.labelsize': FS_LABEL + args.fs,
-        # the six one-line metric names only fit a column at one point less
-        'xtick.labelsize': FS_TICK + args.fs - 1, 'ytick.labelsize': FS_TICK + args.fs,
+        'xtick.labelsize': FS_TICK + args.fs, 'ytick.labelsize': FS_TICK + args.fs,
         'legend.fontsize': FS_LEGEND + args.fs, 'mathtext.fontset': 'stix', 'axes.linewidth': 0.3,
     })
     fig, ax = plt.subplots(figsize=(args.width, args.height))
@@ -101,11 +100,8 @@ def main():
                 ax.text(xx, yy + 0.02, '*', ha='center', va='bottom', color=INK,
                         fontsize=FS_LABEL + args.fs, zorder=4, clip_on=False)
     ax.set_xticks(x)
-    ax.set_xticklabels(ROWS, color=INK)
-    # the long second name needs room: the first label is right-aligned to
-    # its group's right edge instead of centred under it
-    labs = ax.get_xticklabels()
-    labs[0].set_ha('right'); labs[0].set_x(group_w / 2)
+    # the two consistency names on two lines (the spider chart's labels)
+    ax.set_xticklabels([AXIS_LABEL[a] for a in ROW_AXES], color=INK, linespacing=0.95)
     ax.set_xlim(-0.5, K - 0.5)
     ax.set_ylim(args.ymin, args.ymax)
     ax.set_yticks([3, 3.5, 4, 4.5])
