@@ -6,8 +6,8 @@ Morning Mist for the translucent expert band, Phantom for outlines,
 arrows and cross-attention lines, black type. Changing a value here
 restyles all three panels."""
 
-BLUE, BLUE_L = 'C3DDE4', 'C3DDE4'        # stream x: Breeze (fill and wedge)
-RED, RED_L = 'F0D3C8', 'F0D3C8'          # stream y: Air-Kiss (fill and wedge)
+BLUE, BLUE_L = 'D2E4EE', 'D2E4EE'        # stream x (fill and wedge)
+RED, RED_L = 'F4CBBE', 'F4CBBE'          # stream y (fill and wedge)
 FILL = {'x': BLUE, 'y': RED}
 LINE = {'x': BLUE_L, 'y': RED_L}
 COMP = 'F4F4F4'                          # model components: white, a touch grey
