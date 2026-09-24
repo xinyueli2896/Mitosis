@@ -61,17 +61,18 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--exclude', nargs='*', default=[])
     ap.add_argument('--drop-constant', action='store_true')
-    ap.add_argument('--height', type=float, default=2.3, help='figure height in inches')
+    ap.add_argument('--height', type=float, default=2.0, help='figure height in inches')
+    ap.add_argument('--width', type=float, default=3.0, help='figure width in inches')
     args = ap.parse_args()
     rows = load(args.csv, args.exclude, args.drop_constant)
     Ys, n = matrix(rows, 'block')
 
     plt.rcParams.update({
-        'font.family': 'serif', 'font.size': FS_LABEL, 'axes.labelsize': FS_LABEL,
-        'xtick.labelsize': FS_TICK, 'ytick.labelsize': FS_TICK, 'legend.fontsize': FS_LEGEND,
-        'mathtext.fontset': 'stix', 'axes.linewidth': 0.6,
+        'font.family': 'serif', 'font.size': FS_LABEL - 1, 'axes.labelsize': FS_LABEL - 1,
+        'xtick.labelsize': FS_TICK - 1, 'ytick.labelsize': FS_TICK - 1, 'legend.fontsize': FS_LEGEND - 1,
+        'mathtext.fontset': 'stix', 'axes.linewidth': 0.45,
     })
-    fig, ax = plt.subplots(figsize=(3.39, args.height))
+    fig, ax = plt.subplots(figsize=(args.width, args.height))
     fig.patch.set_facecolor(SURFACE); ax.set_facecolor(SURFACE)
     k = len(SYSTEMS)
     # rows top to bottom; systems stacked within a row, ours on top
@@ -87,39 +88,39 @@ def main():
             disp, fam, mk = SYS[s]
             col = colour(s)
             y = ybase - off[i]
-            ax.errorbar(mean[i], y, xerr=ci[i], fmt='none', ecolor=col, elinewidth=0.8,
-                        capsize=1.3, capthick=0.8, zorder=2)
+            ax.errorbar(mean[i], y, xerr=ci[i], fmt='none', ecolor=col, elinewidth=0.55,
+                        capsize=1.0, capthick=0.55, zorder=2)
             # significance is carried by the marker fill (2026-09-24): a
             # system whose ratings differ from ours (Holm-corrected paired
             # t, p < 0.05) is drawn filled, one that does not is drawn open;
             # ours is always filled. No star, so nothing sits on the plot.
             filled = (i == 0) or bool(sig[i - 1])
-            h, = ax.plot(mean[i], y, marker=mk, ms=3.8, mfc=col if filled else SURFACE,
-                         mec=col, mew=0.9, ls='none', zorder=3)
+            h, = ax.plot(mean[i], y, marker=mk, ms=3.2, mfc=col if filled else SURFACE,
+                         mec=col, mew=0.7, ls='none', zorder=3)
             if s not in handles:
                 # legend handle: always the filled form of the marker
-                hl, = ax.plot([], [], marker=mk, ms=3.8, mfc=col, mec=col, mew=0.9, ls='none')
+                hl, = ax.plot([], [], marker=mk, ms=3.2, mfc=col, mec=col, mew=0.7, ls='none')
                 handles[s] = (hl, disp)
         if j < len(ROWS) - 1:
-            ax.axhline(ybase - 0.5, color=GRID, lw=0.6, zorder=0)
+            ax.axhline(ybase - 0.5, color=GRID, lw=0.45, zorder=0)
     ax.set_yticks(range(len(ROWS)))
     ax.set_yticklabels(ROWS[::-1], color=INK)
     ax.set_ylim(-0.5, len(ROWS) - 0.5)
     ax.set_xlim(2.5, 4.75)
     ax.set_xticks([3, 4])
     ax.set_xlabel('mean rating', color=INK)
-    ax.grid(axis='x', color=GRID, lw=0.6, zorder=0)
+    ax.grid(axis='x', color=GRID, lw=0.45, zorder=0)
     for sp in ('top', 'right'):
         ax.spines[sp].set_visible(False)
     for sp in ('left', 'bottom'):
         ax.spines[sp].set_color(INK)
-    ax.tick_params(length=2.5, colors=INK)
+    ax.tick_params(length=2.0, width=0.45, colors=INK)
     order = ['Duet (alt commit)', 'S-finetune', 'S-scratch', 'Whole-song', 'AMT', 'GT']
     # figure-level legend, centred on the full width above the axes so no
     # entry is clipped; the layout below leaves it the top 14% of the height
     fig.legend([handles[s][0] for s in order], [handles[s][1] for s in order], ncol=3,
                loc='upper center', bbox_to_anchor=(0.5, 1.0), frameon=False,
-               fontsize=FS_LEGEND - 0.5, handletextpad=0.3, columnspacing=0.8,
+               fontsize=FS_LEGEND - 1, handletextpad=0.3, columnspacing=0.7,
                borderaxespad=0.1, handlelength=1.2, labelcolor=INK)
     fig.tight_layout(pad=0.3, rect=[0, 0, 1, 0.86])
     for ext in ('pdf', 'png'):
