@@ -50,7 +50,8 @@ def build(stretch=0.0):
         """corner sign as pictures: snowflake -> fire = initialised from the
         pretrained model and fine-tuned; fire = new, trained from scratch.
         Inside the block, top-right corner; the label stays centred."""
-        badge(S, x + w - 0.035, y + 0.02, kind, h=0.11)
+        # twice the earlier size, sitting on the block's top-right corner
+        badge(S, x + w + 0.09, y - 0.1, kind, h=0.22)
 
     def box(x, y, w, h, runs, fill=COMP, size=FS, dash=False, z=1):
         S.rect(x, y, w, h, fill=fill, line=INK, lw=LW, dash=dash, runs=runs, size=size, z=z)

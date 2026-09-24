@@ -65,7 +65,8 @@ def build(stretch=0.0):
         """corner sign as pictures: snowflake -> fire = initialised from the
         pretrained model and fine-tuned; fire = new, trained from scratch.
         Inside the block, top-right corner; the label stays centred."""
-        badge(S, x + w - 0.035, y + 0.02, kind, h=0.11)
+        # twice the earlier size, sitting on the block's top-right corner
+        badge(S, x + w + 0.09, y - 0.1, kind, h=0.22)
 
     S.text(0.12, 0.05, 3.5, 0.28, [('b. Per-stream expert routing', 'b')], size=10.5, align='l')
 

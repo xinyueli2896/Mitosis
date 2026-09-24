@@ -88,13 +88,19 @@ def badge(S, x_right, y_top, kind, h=0.15, z=6):
     top at y_top: 'pre' = snowflake -> fire (initialised from the pretrained
     model, fine-tuned), 'new' = fire (trained from scratch). Returns its
     left edge."""
-    gap, arrow_len = 0.03, 0.11
+    gap, arrow_len = 0.035 * h / 0.15, 0.55 * h
     w_f = h * ICON['fire'][1]
     x = x_right - w_f
     S.image(x, y_top, w_f, h, ICON['fire'][0], z=z)
     if kind == 'pre':
         x -= gap + arrow_len
-        S.line(x, y_top + h / 2, x + arrow_len, y_top + h / 2, lw=0.9, arrow=True, z=z)
+        # a thin shaft with a SMALL filled head (a polygon, so its size is
+        # ours to set: the shape arrowheads of pptxgenjs cannot be scaled)
+        ym = y_top + h / 2
+        head = 0.22 * h
+        S.line(x, ym, x + arrow_len - head * 0.8, ym, lw=0.8 * h / 0.15, z=z)
+        S.poly([(x + arrow_len, ym), (x + arrow_len - head, ym - head * 0.5),
+                (x + arrow_len - head, ym + head * 0.5)], fill=INK, alpha=1.0, z=z)
         w_s = h * ICON['snow'][1]
         x -= gap + w_s
         S.image(x, y_top, w_s, h, ICON['snow'][0], z=z)

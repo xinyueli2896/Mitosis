@@ -27,7 +27,7 @@ GAP = 0.42                      # between the content boxes of neighbouring pane
 MARGIN = 0.1                    # slide edge to content
 CAP_H = 0.3                     # caption row
 CAP_GAP = 0.1                   # content bottom to caption
-LEG_H, LEG_GAP = 0.62, 0.16     # legend box height, and its gap to panel (b)'s content
+LEG_H, LEG_GAP = 0.7, 0.16      # legend box height, and its gap to panel (b)'s content
 # (module, caption, number of row gaps the stretch is spread over)
 PANELS = [(fig_attn_panel, '(a) Dual-stream Attention', 8),
           (fig_moe_panel, '(b) Dual-stream MoE', 6),
@@ -103,12 +103,12 @@ def build():
         if i == 1:
             # the badge legend, as wide as the column, its top on the common top line
             lx, lw_ = cursor, x1 - x0
-            S.rect(lx, top, lw_, LEG_H, fill='FFFFFF', line=INK, lw=1.3)
+            S.rect(lx, top, lw_, LEG_H, fill='FFFFFF', line=INK, lw=1.0)
             for k, (kind, txt) in enumerate((('pre', 'initialized from pretrained model, finetuned in ours'),
                                              ('new', 'from scratch'))):
-                yy = top + 0.08 + k * 0.28
-                badge(S, lx + 0.66, yy + 0.02, kind, h=0.16)          # right-aligned at one edge
-                S.text(lx + 0.76, yy, lw_ - 0.8, 0.22, plain(txt), size=9, align='l')
+                yy = top + 0.07 + k * 0.3
+                badge(S, lx + 0.86, yy, kind, h=0.22)                  # same size as the corner badges
+                S.text(lx + 0.98, yy - 0.01, lw_ - 1.0, 0.24, plain(txt), size=9.5, align='l')
             assert top + LEG_H + LEG_GAP <= top + H - (b - t) + 0.02, 'legend collides with panel (b)'
         cursor += (x1 - x0) + GAP
     fig_arch_pptx.SLIDE_W = cursor - GAP + MARGIN
