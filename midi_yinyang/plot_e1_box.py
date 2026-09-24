@@ -223,6 +223,7 @@ SURFACE = '#ffffff'          # white ground
 INK = PALETTE['black']       # text, spines, medians, the reference line
 INK_2 = '#5a5754'            # secondary text (slate now carries a family)
 MUTED = PALETTE['grey']      # placeholders, the noise-floor line
+HOLLOW = '#b5afa8'           # the hollow best-of-all star: a quiet grey outline
 GRID = '#e8e6e2'             # horizontal rules behind the boxes
 
 # Type sizes, in points. 7 pt is the floor for a one-column figure in a
@@ -735,8 +736,8 @@ def draw_panel(ax, metric, per_song, order, present, title_chars=0,
         if bo is not None and (best is None or bo[0] != best[0]):
             opos = next(i for i, o in enumerate(order) if o[0] == bo[0])
             ax.plot([opos], [hi - 0.05 * (hi - lo)], marker='*', markersize=6.5,
-                    markerfacecolor=SURFACE, markeredgecolor=INK_2,
-                    markeredgewidth=0.7, lw=0, clip_on=False, zorder=7)
+                    markerfacecolor=SURFACE, markeredgecolor=HOLLOW,
+                    markeredgewidth=0.6, lw=0, clip_on=False, zorder=7)
     _finish_axes(ax, metric, order, title_chars, letter, '')
     return labels
 
@@ -1309,7 +1310,7 @@ def main():
         if args.best_overall:
             handles.insert(2, Line2D([0], [0], color='none', marker='*',
                                      markersize=6.5, markerfacecolor=SURFACE,
-                                     markeredgecolor=INK_2, markeredgewidth=0.7,
+                                     markeredgecolor=HOLLOW, markeredgewidth=0.6,
                                      label='best of all columns (mean)'))
     labels_ = [h.get_label() for h in handles]
     if args.names == 'none':
