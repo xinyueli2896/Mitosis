@@ -31,7 +31,7 @@ fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.45
 from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK_2  # noqa: E402
 from fig_style import FILL, COMP, INK, LW, AW, FS, BH  # noqa: E402
 
-SHADE = 'EAEAEA'                   # an empty slot
+SHADE = 'FFF7E6'                   # an empty slot: Vanilla Cream
 
 
 def build(stretch=0.0):

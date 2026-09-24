@@ -66,7 +66,8 @@ def build(stretch=0.0):
     # shared expert pool: one grey band, four experts, no stream subscripts
     # band with room above the experts for its corner badge
     px0, py0, pw = ex[0] - ew / 2 - 0.14, yExp - 0.28, ex[-1] - ex[0] + ew + 0.28
-    S.rect(px0, py0, pw, eh + 0.4, fill=LIGHT, line=None, z=0)
+    S.poly([(px0, py0), (px0 + pw, py0), (px0 + pw, py0 + eh + 0.4), (px0, py0 + eh + 0.4)],
+           fill=LIGHT, alpha=0.28, z=0)                 # Misty Sky, translucent
     for i, c in enumerate(ex):
         S.rect(c - ew / 2, yExp, ew, eh, fill=GREY, line=INK, lw=lw,
                runs=[('MLP', ''), ('xxyy'[i], 'sub i')], size=FS)

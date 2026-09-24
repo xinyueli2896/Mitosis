@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 BLUE, BLUE_L = '4589E3', 'CDDBF1'
 RED, RED_L = 'BF2847', 'EDCCD3'
 GOLD, GOLD_L = 'F0A500', 'FCE8B1'
-INK, INK_2, GREY_L, PANEL = '303030', '737373', 'D9D9D9', 'EDECE9'
+INK, INK_2, GREY_L, PANEL = '2D3A47', '2D3A47', 'A9B7C6', 'FFF7E6'   # Midnight Lagoon type
 FONT = 'Times New Roman'
 SLIDE_W, SLIDE_H = 14.79, 8.91
 
