@@ -89,12 +89,17 @@ def main():
             y = ybase - off[i]
             ax.errorbar(mean[i], y, xerr=ci[i], fmt='none', ecolor=col, elinewidth=0.8,
                         capsize=1.3, capthick=0.8, zorder=2)
-            h, = ax.plot(mean[i], y, marker=mk, ms=3.8, mfc=SURFACE if fam == 'GT' else col,
+            # significance is carried by the marker fill (2026-09-24): a
+            # system whose ratings differ from ours (Holm-corrected paired
+            # t, p < 0.05) is drawn filled, one that does not is drawn open;
+            # ours is always filled. No star, so nothing sits on the plot.
+            filled = (i == 0) or bool(sig[i - 1])
+            h, = ax.plot(mean[i], y, marker=mk, ms=3.8, mfc=col if filled else SURFACE,
                          mec=col, mew=0.9, ls='none', zorder=3)
-            handles.setdefault(s, (h, disp))
-            if i > 0 and sig[i - 1]:
-                ax.text(mean[i] + ci[i] + 0.05, y, '*', ha='left', va='center', fontsize=7.5,
-                        color=INK, zorder=4)
+            if s not in handles:
+                # legend handle: always the filled form of the marker
+                hl, = ax.plot([], [], marker=mk, ms=3.8, mfc=col, mec=col, mew=0.9, ls='none')
+                handles[s] = (hl, disp)
         if j < len(ROWS) - 1:
             ax.axhline(ybase - 0.5, color=GRID, lw=0.6, zorder=0)
     ax.set_yticks(range(len(ROWS)))
