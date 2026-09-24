@@ -99,6 +99,10 @@ def main():
     ap.add_argument('--palette', choices=['family', 'system'], default='family',
                     help='family: the E1 family colours; system: one colour '
                          'per system (SYSTEM_COLORS)')
+    ap.add_argument('--bands', action='store_true',
+                    help='shade each system\'s 95%% rater-bootstrap interval as a '
+                         'translucent band around its polygon (the interval the '
+                         'table prints); the mean fill of ours is then dropped')
     ap.add_argument('--drop-constant', action='store_true',
                     help='drop raters whose every rating is the same value')
     args = ap.parse_args()
@@ -314,7 +318,15 @@ def main():
             col = GT_COLOR if fam == 'GT' else FAMILY_COLOR[fam]
         v = rmap(np.concatenate([mean, mean[:1]]))
         ax.plot(ang_c, v, color=col, lw=1.1, ls=ls, zorder=3)
-        if fam == 'Ours':
+        if args.bands:
+            # the 95% rater-bootstrap interval as a ring between the lower
+            # and upper polygons, one translucent band per system
+            lo_v = rmap(np.concatenate([stats[sysid][1], stats[sysid][1][:1]]))
+            hi_v = rmap(np.concatenate([stats[sysid][2], stats[sysid][2][:1]]))
+            ax.fill(np.concatenate([ang_c, ang_c[::-1]]),
+                    np.concatenate([hi_v, lo_v[::-1]]),
+                    color=col, alpha=0.13, lw=0, zorder=2)
+        elif fam == 'Ours':
             # only our polygon is filled: five stacked fills greyed the
             # whole interior
             ax.fill(ang_c, v, color=col, alpha=0.12, lw=0, zorder=2)
