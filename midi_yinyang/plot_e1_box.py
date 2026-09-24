@@ -626,7 +626,7 @@ def best_ranked(metric, per_song, order, present):
 
 
 def draw_panel(ax, metric, per_song, order, present, title_chars=0,
-               letter=''):
+               letter='', overall=False):
     ref = ref_level(metric)
     positions, data, colors, labels = [], [], [], []
     missing = []
@@ -726,6 +726,17 @@ def draw_panel(ax, metric, per_song, order, present, title_chars=0,
         ax.plot([bpos], [hi - 0.05 * (hi - lo)], marker='*', markersize=6.5,
                 markerfacecolor=color_of(bs, bfamily), markeredgecolor=INK,
                 markeredgewidth=0.5, lw=0, clip_on=False, zorder=7)
+    if overall:
+        # --best-overall: the best of EVERY column, ranked or not, as a
+        # hollow grey star; skipped when it is the ranked winner already
+        bo = best_ranked(metric, per_song,
+                         [(s_, d_, sh_, g_, True) for s_, d_, sh_, g_, _r in order],
+                         present)
+        if bo is not None and (best is None or bo[0] != best[0]):
+            opos = next(i for i, o in enumerate(order) if o[0] == bo[0])
+            ax.plot([opos], [hi - 0.05 * (hi - lo)], marker='*', markersize=6.5,
+                    markerfacecolor=SURFACE, markeredgecolor=INK_2,
+                    markeredgewidth=0.7, lw=0, clip_on=False, zorder=7)
     _finish_axes(ax, metric, order, title_chars, letter, '')
     return labels
 
@@ -894,6 +905,10 @@ def main():
                    help='sheet-specific ranked set (internal names, '
                         'space-separated): only these compete for the '
                         'best-of line and star; overrides the family flags')
+    p.add_argument('--best-overall', action='store_true',
+                   help='also mark the best of ALL columns, ranked or not, '
+                        'with a hollow grey star (no line); omitted when '
+                        'it is the ranked winner')
     p.add_argument('--divider-after', default='',
                    help='draw a dashed vertical rule after this system '
                         '(internal name) on every panel, e.g. between the '
@@ -1166,7 +1181,7 @@ def main():
                                        letter=letter)
         else:
             labels = draw_panel(ax, m, per_song, order, present, title_chars,
-                                letter=letter)
+                                letter=letter, overall=args.best_overall)
         if ncols >= 3:
             # narrow panels: three y ticks at most, a point smaller, so
             # the tick labels do not take half the panel's width
@@ -1291,6 +1306,11 @@ def main():
                    markeredgewidth=0.7,
                    label='mean; whiskers 1.5 IQR'),
         ]
+        if args.best_overall:
+            handles.insert(2, Line2D([0], [0], color='none', marker='*',
+                                     markersize=6.5, markerfacecolor=SURFACE,
+                                     markeredgecolor=INK_2, markeredgewidth=0.7,
+                                     label='best of all columns (mean)'))
     labels_ = [h.get_label() for h in handles]
     if args.names == 'none':
         # one swatch per system, in its own shade, full name on one line
@@ -1361,6 +1381,9 @@ def _print_numbers(metrics, order, per_song, pooled, pooled_mode, present):
         for m in metrics:
             b = best_ranked(m, per_song, order, present)
             won = f'  best(ranked): {b[0]} mean {b[3]:+.4f}' if b else ''
+            bo = best_ranked(m, per_song, [(s_, d_, sh_, g_, True) for s_, d_, sh_, g_, _r in order], present)
+            if bo:
+                won += f'  best(all): {bo[0]} mean {bo[3]:+.4f}'
             r = ref_level(m)
             rtxt = 'no reference level' if r is None else f'ref {r:.0f}'
             print(f'  {m}  [{rtxt}]{won}')

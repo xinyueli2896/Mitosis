@@ -68,6 +68,8 @@
 #             only these compete for the best-of line and star
 #   DIVIDER_AFTER  internal name after which a dashed vertical rule is
 #             drawn on every panel, e.g. DIVIDER_AFTER=S1
+#   BEST_OVERALL=1  also mark the best of ALL columns with a hollow grey
+#             star (the solid star stays the best RANKED one)
 #   ORIENT    h (default): wide layout, four panels per row, systems on
 #             the y-axis, use with figure*; v: one-column layout
 #   WIDTH     box-sheet width in inches for ORIENT=v (default 3.4, one
@@ -161,6 +163,7 @@ NO_TITLES="${NO_TITLES:-0}"
 ORDER="${ORDER:-}"          # sheet-specific column order, internal names, space-separated
 RANKED="${RANKED-}"         # sheet-specific ranked set; unset = family flags
 DIVIDER_AFTER="${DIVIDER_AFTER:-}"
+BEST_OVERALL="${BEST_OVERALL:-0}"
 PANEL_HEIGHT="${PANEL_HEIGHT:-1.35}"
 UBR_WIDTH="${UBR_WIDTH:-7.0}"
 TITLE="${TITLE:-}"
@@ -205,7 +208,7 @@ if [[ -n "${BLOCKS// /}" ]]; then
         python plot_e1_box.py --csv "$CSV" --out "${OUT}_${b}" \
             --block "$b" ${NCOLS:+--ncols "$NCOLS"} --width "$WIDTH" --orient "$ORIENT" --names "$NAMES" --panel-height "$PANEL_HEIGHT" \
             $([[ "$NO_TITLES" == "1" ]] && echo --no-titles) \
-            ${ORDER:+--order "$ORDER"} ${RANKED:+--ranked "$RANKED"} ${DIVIDER_AFTER:+--divider-after "$DIVIDER_AFTER"} \
+            ${ORDER:+--order "$ORDER"} ${RANKED:+--ranked "$RANKED"} ${DIVIDER_AFTER:+--divider-after "$DIVIDER_AFTER"} $([[ "$BEST_OVERALL" == "1" ]] && echo --best-overall) \
             $([[ "$DELTAS_ONLY" == "1" ]] && echo --deltas-only) \
             $([[ "$PER_SONG" == "1" ]] && echo --per-song) \
             ${POOLED_CSV:+--pooled-csv "$POOLED_CSV"} \
