@@ -3,7 +3,8 @@ statistics as the dot plot (subjective_anova): per axis, the mean
 rating of every system over the complete rater-song blocks, a shaded
 ring for its within-subject 95% CI (Cousineau-Morey), and a filled
 vertex where the Holm-corrected paired t-test against ours is
-significant, open where it is not. Six axes: the five rating axes and
+significant, open where it is not -- markers dropped 2026-09-24, colour
+alone tells the systems apart. Six axes: the five rating axes and
 the overall mean. Same palette and markers as plot_subjective_compact.
 
 Run: python figures/plot_subjective_spider.py --csv ratings.csv
@@ -29,6 +30,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from subjective_anova import SYSTEMS, load, matrix, holm  # noqa: E402
 from plot_e1_box import INK, GRID, SURFACE, FS_TICK, FS_LABEL, FS_LEGEND  # noqa: E402
 from plot_subjective_compact import SYS, colour, within_ci, ROW_AXES  # noqa: E402
+
+# one colour per system (2026-09-24): with no markers the two external
+# systems could not share the family maroon. Ours, the two single-stream
+# models and ground truth keep the family palette; AMT takes a violet.
+SYSTEM_COLOR = {'AMT': '#7b4fa8'}
 
 AXIS_LABEL = {'consistency': 'Prompt\ncons.', 'fit': 'Mel.–chord\ncons.',
               'structure': 'Structure', 'musicality': 'Musicality',
@@ -87,25 +93,22 @@ def main():
     for s in order:
         i = SYSTEMS.index(s)
         disp, fam, mk = SYS[s]
-        col = colour(s)
+        col = SYSTEM_COLOR.get(s, colour(s))
         m = r(np.concatenate([mean[i], mean[i][:1]]))
         lo = r(np.concatenate([mean[i] - ci[i], (mean[i] - ci[i])[:1]]))
         hi = r(np.concatenate([mean[i] + ci[i], (mean[i] + ci[i])[:1]]))
         # the within-subject CI as a ring between the two polygons
         ax.fill(np.concatenate([ang_c, ang_c[::-1]]), np.concatenate([hi, lo[::-1]]),
                 color=col, alpha=args.alpha, lw=0, zorder=2)
-        ax.plot(ang_c, m, color=col, lw=0.8, zorder=3)
-        # vertices: filled where the system differs from ours (Holm, p<.05)
-        for j in range(K):
-            ax.plot(ang[j], m[j], marker=mk, ms=2.6, mfc=col if sig[i, j] else SURFACE,
-                    mec=col, mew=0.6, ls='none', zorder=4)
-        handles[s] = Line2D([0], [0], color=col, lw=0.8, marker=mk, ms=2.6,
-                            mfc=col, mec=col, mew=0.6, label=disp)
+        # colour alone tells the systems apart (2026-09-24, by request):
+        # no vertex markers; significance is stated in the text
+        ax.plot(ang_c, m, color=col, lw=0.9, zorder=3)
+        handles[s] = Line2D([0], [0], color=col, lw=1.4, label=disp)
     leg_order = ['Duet (alt commit)', 'S-finetune', 'S-scratch', 'Whole-song', 'AMT', 'GT']
     fig.legend([handles[s] for s in leg_order], [handles[s].get_label() for s in leg_order],
                ncol=3, loc='lower center', bbox_to_anchor=(0.5, 0.0), frameon=False,
                fontsize=FS_LEGEND - 2.5, handletextpad=0.4, columnspacing=0.9,
-               handlelength=1.6, labelcolor=INK)
+               handlelength=1.4, labelcolor=INK)
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print('wrote', f'{args.out}.{ext}')
