@@ -110,7 +110,7 @@ GROUPS = [
         # uncapped WSfv holds the fifth note of a seventh chord that the
         # cp4 duet arms never see.
         ('WSfv4',     'Whole-Song Gen',             'WSG'),
-        ('AMT',       'Anticipatory Music Transf.', 'AMT'),
+        ('AMT',       'AMT',                        'AMT'),
     ]),
 ]
 # systems drawn but left out of the best-of comparison whatever their
