@@ -53,6 +53,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.colors
+import matplotlib.ticker
 from matplotlib.legend_handler import HandlerTuple
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
@@ -500,7 +501,9 @@ def _finish_axes(ax, metric, order, title_chars, letter, caption):
     or right spine. The panel letter is bold in the corner, the caption
     after it.
     """
-    if title_chars:
+    if title_chars is None:
+        pass                        # --no-titles: the caption names the panels
+    elif title_chars:
         ax.set_title('\n'.join(textwrap.wrap(label_for(metric), title_chars)),
                      fontsize=FS_TITLE, color=INK, pad=3)
     else:
@@ -892,6 +895,9 @@ def main():
                         'unless a value above 5 is given')
     p.add_argument('--panel-height', type=float, default=1.35, help='inches')
     p.add_argument('--title', default='')
+    p.add_argument('--no-titles', action='store_true',
+                   help='--orient v: no metric name on the panels, only the '
+                        'letters; the caption names them')
     p.add_argument('--names', choices=['long', 'short', 'none'], default='long',
                    help='--orient v only: long (default) writes the full '
                         'names under the bottom panels, vertical when there '
@@ -1100,8 +1106,10 @@ def main():
         figsize=(args.width, args.panel_height * nrows + extra))
     fig.patch.set_facecolor(SURFACE)
 
-    # ~10 characters per inch at 7.5pt; 0 means "use the y-axis label".
-    title_chars = int(args.width / ncols * 10) if ncols > 1 else 0
+    # ~10 characters per inch at 7.5pt; 0 means "use the y-axis label";
+    # None means no metric name on the panel at all (--no-titles)
+    title_chars = (None if args.no_titles else
+                   int(args.width / ncols * 10) if ncols > 1 else 0)
     labels = None
     used = []
     for idx, m in enumerate(metrics):
@@ -1116,6 +1124,11 @@ def main():
         else:
             labels = draw_panel(ax, m, per_song, order, present, title_chars,
                                 letter=letter)
+        if ncols >= 3:
+            # narrow panels: three y ticks at most, a point smaller, so
+            # the tick labels do not take half the panel's width
+            ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(3))
+            ax.tick_params(axis='y', labelsize=FS_TICK - 1.0, pad=1.5)
         used.append((idx // ncols, idx % ncols, ax))
     for r in range(nrows):
         for c in range(ncols):
@@ -1260,7 +1273,8 @@ def main():
     # The legend's share of the height, so it never overlaps the names.
     n_leg = math.ceil(len(handles) / (2 if args.width < 5 else 3))
     leg_frac = (0.15 * n_leg + 0.06) / fig.get_figheight()
-    fig.tight_layout(rect=(0, leg_frac, 1, 1.0), h_pad=1.0, w_pad=0.8)
+    fig.tight_layout(rect=(0, leg_frac, 1, 1.0), h_pad=1.0,
+                     w_pad=0.4 if ncols >= 3 else 0.8)
     for ext in ('pdf', 'png'):
         path = f'{args.out}.{ext}'
         fig.savefig(path, dpi=300, facecolor=SURFACE)
