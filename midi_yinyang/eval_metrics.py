@@ -1741,6 +1741,11 @@ def score_pair(gen_paths, ref_paths, args):
     ga, gb = gen_a.slice(lo, hi), gen_b.slice(lo, hi)
     ra, rb = ref_a.slice(lo, hi), ref_b.slice(lo, hi)
     row = {}
+    if getattr(args, 'pooled_only', False):
+        # only the count vectors for the corpus-pooled divergences: the
+        # per-song blocks are skipped, which is most of the wall-clock
+        row['_pooled'] = _pooled_hists(ga, gb, ra, rb, args.task)
+        return row
     row.update(h3_metrics(ga, gb, ra, rb, args.task))
     row.update(h2_metrics(ga, gb, ra, rb, args.task))
     row.update(h1_metrics(ga, gb, ra, rb, args.task))
@@ -1861,6 +1866,12 @@ def main():
                         'effect, which is far larger than the system '
                         'effect, so it is much more powerful than '
                         'comparing the two marginal means.')
+    p.add_argument('--pooled-only', action='store_true',
+                   help='compute ONLY the corpus-pooled divergences '
+                        '(--pooled-out): the per-song metric blocks, the '
+                        'per-song CSV and the paired summary are skipped. '
+                        'For rescoring the pooled sheet alone after a '
+                        'change to it, e.g. the per-sample pooling.')
     p.add_argument('--pooled-out', default=None,
                    help='CSV for the corpus-pooled JSD table: one row per '
                         '(metric, system) with the pooled value, its '
@@ -1929,6 +1940,11 @@ def main():
         for k in ('H3', 'H2', 'H1'):
             pass
 
+    if args.pooled_only:
+        pooled_summary(rows, args.task, n_boot=args.pooled_boot,
+                       out_csv=args.pooled_out, boot_mode=args.pooled_boot_mode,
+                       weight=args.pooled_weight)
+        return
     if args.out:
         keys = ['system', 'mode', 'song', 'sample'] + [
             k for h in CSV_GROUPS for k in H_GROUPS[h]]
