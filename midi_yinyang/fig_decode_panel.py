@@ -34,7 +34,9 @@ from fig_style import FILL, COMP, INK, LW, AW, FS, BH  # noqa: E402
 SHADE = 'EAEAEA'                   # an empty slot
 
 
-def build():
+def build(stretch=0.0):
+    """stretch: extra inches added to the two gaps between rows, from the
+    bottom row upward (the combiner uses it to match panel heights)"""
     S = Spec()
     lw = LW
     tk, pitch = 0.42, 0.5             # token size and column pitch
@@ -42,7 +44,7 @@ def build():
     bx0, bx1, bh = 0.82, 4.02, BH     # the model box, same width in every row
     # rows spaced so the panel is as tall as panel (a): 3 rows of 1.74 in at a
     # pitch of 2.05 in (content height 5.84)
-    rows_y = (0.44, 2.49, 4.54)       # top of each row
+    rows_y = tuple(v - (2 - i) * stretch for i, v in enumerate((0.44, 2.49, 4.54)))
     yo, yb, yt = 0.0, 0.66, 1.32      # offsets within a row: outputs, block, tokens
 
     def col(i):

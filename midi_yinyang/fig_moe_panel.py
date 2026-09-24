@@ -22,7 +22,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
 fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.0
-from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK_2  # noqa: E402
+from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK_2, badge  # noqa: E402
 from fig_style import FILL, LINE, COMP, POOL, INK, LW, AW, FS, BH  # noqa: E402
 
 LAV, LAV_D = FILL['x'], LINE['x']
@@ -31,14 +31,19 @@ GREY, LIGHT = COMP, POOL
 HT = 'h̃'                       # h with combining tilde
 
 
-def build():
+def build(stretch=0.0):
+    """stretch: extra inches added to every gap between the seven rows,
+    from the input row upward (the combiner uses it to make the panels
+    the same height)"""
     S = Spec()
     lw = LW
     # lanes and rows (inches, y down)
     cx, cy = 1.47, 3.33                # lane centres, stream x / stream y (as panel a)
     bw, bh = 1.58, BH                  # stream boxes
-    yTok = 0.82                         # the output tokens, x2 y2 ... xT yT, close above the banks
-    yOut, yAN, ySum, yExp, yRt, yIn = 1.5, 2.16, 2.86, 3.5, 4.32, 5.1
+    # rows, bottom up: input h-tilde, router, experts, sum, add&norm,
+    # output h, output tokens
+    yIn, yRt, yExp, ySum, yAN, yOut, yTok = (
+        v - k * stretch for k, v in enumerate((5.1, 4.32, 3.5, 2.86, 2.16, 1.5, 0.82)))
     ex = [0.85, 1.85, 2.95, 3.95]      # expert centres
     ew, eh = 0.86, BH
 
@@ -57,12 +62,10 @@ def build():
         S.line(x1, y1, x2, y2, lw=AW, arrow=True, **kw)
 
     def mark(x, y, w, kind='pre'):
-        """corner sign: snowflake->fire = initialised from the pretrained
-        model and fine-tuned; fire = new component, trained from scratch"""
-        glyph = '\u2744\ufe0f\u2192\U0001F525' if kind == 'pre' else '\U0001F525'
-        # just above the top-right corner, clear of the outline
-        # inside the block, flush with its top-right corner; the label stays centred
-        S.text(x + w - 0.66, y - 0.01, 0.66, 0.2, plain(glyph), size=8, align='r', z=6)
+        """corner sign as pictures: snowflake -> fire = initialised from the
+        pretrained model and fine-tuned; fire = new, trained from scratch.
+        Inside the block, top-right corner; the label stays centred."""
+        badge(S, x + w - 0.035, y + 0.02, kind, h=0.11)
 
     S.text(0.12, 0.05, 3.5, 0.28, [('b. Per-stream expert routing', 'b')], size=10.5, align='l')
 

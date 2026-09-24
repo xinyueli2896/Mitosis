@@ -1,9 +1,14 @@
-"""The model figure: panels a, b, c side by side, bottom-aligned, with
-the captions under each panel:
+"""The model figure: panels a, b, c side by side with the captions under
+each panel:
   (a) Dual-stream Attention   (b) Dual-stream MoE   (c) Dual-stream Decoding Process
 Each panel is built by its own script (fig_attn_panel, fig_moe_panel,
-fig_decode_panel); this one drops their top titles, offsets the items
-and adds the captions. Edit a panel in its script; rebuild here.
+fig_decode_panel); this one drops their top titles, packs them
+horizontally at a fixed gap between their CONTENT boxes, stretches
+each panel's row spacing so all three span the same height (tops and
+bottoms aligned), and adds the captions and the badge legend. The
+legend sits at the top of panel (b)'s column, its top on the common
+top line, so the column reads as one unit. Edit a panel in its script;
+rebuild here.
 
     python fig_model_figure.py --out <path-without-extension>
 writes <out>.pptx (editable) and <out>.png (preview).
@@ -16,14 +21,17 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
 import fig_attn_panel, fig_moe_panel, fig_decode_panel  # noqa: E402,E401
-from fig_arch_pptx import Spec, write_pptx_js, write_preview, plain, INK, INK_2  # noqa: E402
+from fig_arch_pptx import Spec, write_pptx_js, write_preview, plain, badge, INK  # noqa: E402
 
-GAP = 0.3
-PW = 4.8
-PANELS = [(fig_attn_panel, '(a) Dual-stream Attention'),
-          (fig_moe_panel, '(b) Dual-stream MoE'),
-          (fig_decode_panel, '(c) Dual-stream Decoding Process')]
-CAP_H = 0.32
+GAP = 0.42                      # between the content boxes of neighbouring panels
+MARGIN = 0.1                    # slide edge to content
+CAP_H = 0.3                     # caption row
+CAP_GAP = 0.1                   # content bottom to caption
+LEG_H, LEG_GAP = 0.62, 0.16     # legend box height, and its gap to panel (b)'s content
+# (module, caption, number of row gaps the stretch is spread over)
+PANELS = [(fig_attn_panel, '(a) Dual-stream Attention', 8),
+          (fig_moe_panel, '(b) Dual-stream MoE', 6),
+          (fig_decode_panel, '(c) Dual-stream Decoding Process', 2)]
 
 
 def bounds(items):
@@ -61,47 +69,50 @@ def shifted(items, dx, dy):
     return out
 
 
+def panel_items(mod, stretch):
+    items = mod.build(stretch=stretch).items
+    # drop the panel's own top title ("a. ...", "b. ...", "c. ...")
+    return [it for it in items if not (it['k'] == 'text' and it['runs'] and
+                                       it['runs'][0][0][:3] in ('a. ', 'b. ', 'c. '))]
+
+
 def build():
-    parts = []
-    for mod, cap in PANELS:
-        items = mod.build().items
-        # drop the panel's own top title ("a. ...", "b. ...", "c. ...")
-        items = [it for it in items if not (it['k'] == 'text' and it['runs'] and
-                                            it['runs'][0][0][:3] in ('a. ', 'b. ', 'c. '))]
-        parts.append((items, cap))
-    boxes = [bounds(items) for items, _ in parts]
-    tops = [b[2] for b in boxes]; bottoms = [b[3] for b in boxes]
-    H = max(b - t for b, t in zip(bottoms, tops))      # tallest panel's content height
-    top_margin = 0.15
-    # panels keep their fixed pitch (PW + GAP); the slide is then cut at
-    # panel (a)'s left content edge and panel (c)'s right content edge
-    left = 0 * (PW + GAP) + boxes[0][0]
-    right = (len(parts) - 1) * (PW + GAP) + boxes[-1][1]
-    fig_arch_pptx.SLIDE_W = right - left
-    fig_arch_pptx.SLIDE_H = top_margin + H + 0.12 + CAP_H + 0.1
+    # pass 1: natural heights
+    nat = [bounds(panel_items(mod, 0.0)) for mod, _c, _n in PANELS]
+    heights = [b[3] - b[2] for b in nat]
+    # panel (b) also carries the legend above its content
+    need = [heights[0], heights[1] + LEG_H + LEG_GAP, heights[2]]
+    H = max(need)
+    # pass 2: stretch every panel's rows so its column spans H exactly
+    parts, boxes = [], []
+    for (mod, cap, n_gaps), nd in zip(PANELS, need):
+        stretch = (H - nd) / n_gaps
+        items = panel_items(mod, stretch)
+        parts.append((items, cap)); boxes.append(bounds(items))
+    for (x0, x1, t, b), nd, h0 in zip(boxes, need, heights):
+        assert abs((b - t) - (H - (nd - h0))) < 0.02, 'stretch did not land on the common height'
 
     S = Spec()
-    dxs = []
+    top = MARGIN
+    cursor = MARGIN
     for i, ((items, cap), (x0, x1, t, b)) in enumerate(zip(parts, boxes)):
-        dx = i * (PW + GAP) - left
-        dxs.append((dx, x0, x1))
-        dy = top_margin + H - b                          # bottom-aligned
+        dx = cursor - x0
+        dy = top + H - b                                   # bottom on the common line
         S.items += shifted(items, dx, dy)
-        S.text(dx + x0, top_margin + H + 0.12, x1 - x0, CAP_H, plain(cap), size=11, align='c')
-    # legend for the corner badges, one row, in the free space above panel (b)
-    dx_b, xb0, xb1 = dxs[1]
-    lw_, lh = 3.5, 0.68                                  # two rows
-    b_top = top_margin + H - bottoms[1] + tops[1]        # panel (b)'s content top
-    ly = max(0.05, top_margin + (b_top - top_margin - lh) / 2)   # centred in the free space
-    assert ly + lh < b_top - 0.04, 'legend collides with panel (b)'
-    x = dx_b + (xb0 + xb1) / 2 - lw_ / 2
-    S.rect(x, ly, lw_, lh, fill='FFFFFF', line=INK, lw=1.3)
-    for k, (glyph, txt) in enumerate((('\u2744\ufe0f\u2192\U0001F525',
-                                       'initialized from pretrained model, finetuned in ours'),
-                                      ('\U0001F525', 'from scratch'))):
-        yy = ly + 0.06 + k * 0.3
-        S.text(x + 0.1, yy, 0.6, 0.26, plain(glyph), size=11, align='r')   # glyphs right-aligned
-        S.text(x + 0.74, yy, lw_ - 0.8, 0.26, plain(txt), size=9.5, align='l')
+        S.text(cursor, top + H + CAP_GAP, x1 - x0, CAP_H, plain(cap), size=11, align='c')
+        if i == 1:
+            # the badge legend, as wide as the column, its top on the common top line
+            lx, lw_ = cursor, x1 - x0
+            S.rect(lx, top, lw_, LEG_H, fill='FFFFFF', line=INK, lw=1.3)
+            for k, (kind, txt) in enumerate((('pre', 'initialized from pretrained model, finetuned in ours'),
+                                             ('new', 'from scratch'))):
+                yy = top + 0.08 + k * 0.28
+                badge(S, lx + 0.66, yy + 0.02, kind, h=0.16)          # right-aligned at one edge
+                S.text(lx + 0.76, yy, lw_ - 0.8, 0.22, plain(txt), size=9, align='l')
+            assert top + LEG_H + LEG_GAP <= top + H - (b - t) + 0.02, 'legend collides with panel (b)'
+        cursor += (x1 - x0) + GAP
+    fig_arch_pptx.SLIDE_W = cursor - GAP + MARGIN
+    fig_arch_pptx.SLIDE_H = top + H + CAP_GAP + CAP_H + MARGIN
     return S
 
 

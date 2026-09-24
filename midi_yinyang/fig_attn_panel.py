@@ -23,11 +23,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
 fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.4
-from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain  # noqa: E402
+from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, badge  # noqa: E402
 from fig_style import FILL, LINE, COMP, CROSS, GREY_L, INK, LW, AW, FS, BH  # noqa: E402
 
 
-def build():
+def build(stretch=0.0):
+    """stretch: extra inches added to every gap between the nine rows,
+    from the token row upward (the combiner uses it to make the panels
+    the same height)"""
     S = Spec()
     # geometry measured off the sketch (4.8 in panel): banks 1.58 wide with a
     # 0.3 gap between lanes, the attention pair wider than the bank, boxes
@@ -35,18 +38,19 @@ def build():
     cx = {'x': 1.47, 'y': 3.33}              # lane centres
     bw, bh = 1.58, BH                        # wide boxes
     # rows (top of box), y down
-    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = 0.4, 0.98, 1.58, 2.22, 2.72, 3.6, 4.28, 4.92, 5.8
+    yAN, yO, yP, yG, yA, yQ, yL, yH, yT = (
+        v - k * stretch for k, v in
+        zip(range(8, -1, -1), (0.4, 0.98, 1.58, 2.22, 2.72, 3.6, 4.28, 4.92, 5.8)))
     tk = 0.44                                # token size
     sw, cw = 0.82, 0.82                      # Self Attn and Cross Attn widths
     side = {'x': -1, 'y': 1}
     other = {'x': 'y', 'y': 'x'}
 
     def mark(x, y, w, kind='pre'):
-        """corner sign: snowflake->fire = initialised from the pretrained
-        model and fine-tuned; fire = new component, trained from scratch"""
-        glyph = '\u2744\ufe0f\u2192\U0001F525' if kind == 'pre' else '\U0001F525'
-        # inside the block, flush with its top-right corner; the label stays centred
-        S.text(x + w - 0.66, y - 0.01, 0.66, 0.2, plain(glyph), size=8, align='r', z=6)
+        """corner sign as pictures: snowflake -> fire = initialised from the
+        pretrained model and fine-tuned; fire = new, trained from scratch.
+        Inside the block, top-right corner; the label stays centred."""
+        badge(S, x + w - 0.035, y + 0.02, kind, h=0.11)
 
     def box(x, y, w, h, runs, fill=COMP, size=FS, dash=False, z=1):
         S.rect(x, y, w, h, fill=fill, line=INK, lw=LW, dash=dash, runs=runs, size=size, z=z)

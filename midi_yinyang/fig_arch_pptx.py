@@ -68,9 +68,37 @@ class Spec:
         """A filled translucent polygon without outline; points in inches."""
         self.items.append(dict(k='poly', points=list(points), fill=fill, alpha=alpha, z=z))
 
+    def image(self, x, y, w, h, path, z=5):
+        """A picture (PNG with alpha) placed in the box (x, y, w, h)."""
+        self.items.append(dict(k='image', x=x, y=y, w=w, h=h, path=os.path.abspath(path), z=z))
+
     def node(self, cx, cy, r=0.11, label='+', size=9):
         self.rect(cx - r, cy - r, 2 * r, 2 * r, fill='FFFFFF', line=INK, lw=0.75,
                   runs=[(label, '')], size=size, shape='ellipse', z=4)
+
+
+# ---------------------------------------------------------------- provenance badges
+ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'figures', 'icons')
+ICON = {'fire': (os.path.join(ICON_DIR, 'fire.png'), 503 / 585),
+        'snow': (os.path.join(ICON_DIR, 'snowflake.png'), 548 / 626)}   # (path, w/h)
+
+
+def badge(S, x_right, y_top, kind, h=0.15, z=6):
+    """The provenance badge as pictures, right-aligned at x_right with its
+    top at y_top: 'pre' = snowflake -> fire (initialised from the pretrained
+    model, fine-tuned), 'new' = fire (trained from scratch). Returns its
+    left edge."""
+    gap, arrow_len = 0.03, 0.11
+    w_f = h * ICON['fire'][1]
+    x = x_right - w_f
+    S.image(x, y_top, w_f, h, ICON['fire'][0], z=z)
+    if kind == 'pre':
+        x -= gap + arrow_len
+        S.line(x, y_top + h / 2, x + arrow_len, y_top + h / 2, lw=0.9, arrow=True, z=z)
+        w_s = h * ICON['snow'][1]
+        x -= gap + w_s
+        S.image(x, y_top, w_s, h, ICON['snow'][0], z=z)
+    return x
 
 
 # runs: list of (text, flags) with flags among 'i' (italic), 'sup', 'sub', 'b' (bold)
@@ -404,6 +432,9 @@ def write_pptx(S, path):
                                           Inches(it['h']))
             set_runs(tb.text_frame, it['runs'], it['size'], it['color'], it['align'],
                      bold=it['bold'], valign=it['valign'])
+        elif it['k'] == 'image':
+            slide.shapes.add_picture(it['path'], Inches(it['x']), Inches(it['y']),
+                                     Inches(it['w']), Inches(it['h']))
         elif it['k'] == 'line':
             c = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(it['x1']), Inches(it['y1']),
                                            Inches(it['x2']), Inches(it['y2']))
@@ -484,6 +515,10 @@ def write_preview(S, path):
             ax.text(xx, it['y'] + it['h'] / 2, runs_to_mathtext(it['runs']), ha=ha, va='center',
                     fontsize=it['size'], color=hexc(it['color']), zorder=it['z'], family='serif',
                     weight='bold' if it['bold'] else 'normal')
+        elif it['k'] == 'image':
+            img = plt.imread(it['path'])
+            ax.imshow(img, extent=(it['x'], it['x'] + it['w'], it['y'] + it['h'], it['y']),
+                      zorder=it['z'], aspect='auto', interpolation='bilinear')
         elif it['k'] == 'poly':
             from matplotlib.patches import Polygon
             ax.add_patch(Polygon(it['points'], closed=True, fc=hexc(it['fill']), ec='none',

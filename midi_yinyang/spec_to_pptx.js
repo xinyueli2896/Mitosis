@@ -48,6 +48,8 @@ for (const it of items) {
       { x: it.x, y: it.y, w: it.w, h: it.h, margin: 0, isTextBox: true,
         align: { c: 'center', l: 'left', r: 'right' }[it.align],
         valign: it.valign === 't' ? 'top' : 'middle', fit: 'none', wrap: false });
+  } else if (it.k === 'image') {
+    slide.addImage({ path: it.path, x: it.x, y: it.y, w: it.w, h: it.h });
   } else if (it.k === 'poly') {
     const xs = it.points.map(p => p[0]), ys = it.points.map(p => p[1]);
     const x = Math.min(...xs), y = Math.min(...ys);
