@@ -538,27 +538,30 @@ def _finish_axes(ax, metric, order, title_chars, letter, caption):
     ax.yaxis.grid(True, color=GRID, lw=0.5, zorder=0)
     ax.xaxis.grid(False)
     ax.set_axisbelow(True)
-    if letter and title_chars is None:
+    if letter and title_chars is None and SHORT_TITLES:
+        # letter and short name as ONE bold run in the top margin, so
+        # style, size and baseline are identical; wrapped to the panel
+        # width with continuation lines indented under the name (axes
+        # positions are not final before tight_layout: use the grid's
+        # column width, less the tick-label margin)
+        fs = FS_LETTER - 0.5
+        ncols_ = ax.get_subplotspec().get_gridspec().ncols
+        width_pt = ax.figure.get_figwidth() / ncols_ * 0.88 * 72
+        per_line = max(10, int(width_pt / (fs * 0.6)))
+        txt = '\n'.join(textwrap.wrap(
+            letter + '  ' + SHORT_TITLE.get(metric, label_for(metric)),
+            per_line, subsequent_indent='    '))
+        ax.annotate(txt, xy=(0.0, 1.0), xycoords='axes fraction',
+                    xytext=(0, 2), textcoords='offset points',
+                    ha='left', va='bottom', fontsize=fs, weight='bold',
+                    color=INK, linespacing=1.0)
+    elif letter and title_chars is None:
         # no title above the panel: the letter goes into that margin,
         # clear of a star in the first column
         ax.annotate(letter, xy=(0.0, 1.0), xycoords='axes fraction',
                     xytext=(0, 2), textcoords='offset points',
                     ha='left', va='bottom', fontsize=FS_LETTER, weight='bold',
                     color=INK)
-        if SHORT_TITLES:
-            # the short name follows the letter on the same line, same size
-            # wrapped to the panel: ~4.7 pt per character at the letter size
-            # (axes positions are not final before tight_layout: use the
-            # grid's column width, less the tick-label margin)
-            ncols_ = ax.get_subplotspec().get_gridspec().ncols
-            width_pt = ax.figure.get_figwidth() / ncols_ * 0.82 * 72
-            per_line = max(8, int((width_pt - FS_LETTER * 1.3) / (FS_LETTER * 0.55)))
-            txt = '\n'.join(textwrap.wrap(SHORT_TITLE.get(metric, label_for(metric)),
-                                         per_line))
-            ax.annotate(txt, xy=(0.0, 1.0), xycoords='axes fraction',
-                        xytext=(FS_LETTER * 1.3, 2), textcoords='offset points',
-                        ha='left', va='bottom', fontsize=FS_LETTER, color=INK,
-                        linespacing=1.0)
     elif letter:
         ax.annotate(letter, xy=(0.012, 0.97), xycoords='axes fraction',
                     ha='left', va='top', fontsize=FS_LETTER, weight='bold',
