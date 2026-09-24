@@ -22,7 +22,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
 fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.0
-from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK_2, badge  # noqa: E402
+from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK_2  # noqa: E402
 from fig_style import FILL, LINE, COMP, POOL, INK, LW, AW, FS, BH  # noqa: E402
 
 LAV, LAV_D = FILL['x'], LINE['x']
@@ -61,20 +61,12 @@ def build(stretch=0.0):
     def arrow(x1, y1, x2, y2, **kw):
         S.line(x1, y1, x2, y2, lw=AW, arrow=True, **kw)
 
-    def mark(x, y, w, kind='pre'):
-        """corner sign as pictures: snowflake -> fire = initialised from the
-        pretrained model and fine-tuned; fire = new, trained from scratch.
-        Inside the block, top-right corner; the label stays centred."""
-        # twice the earlier size, sitting on the block's top-right corner
-        badge(S, x + w + 0.09, y - 0.1, kind, h=0.22)
-
     S.text(0.12, 0.05, 3.5, 0.28, [('b. Per-stream expert routing', 'b')], size=10.5, align='l')
 
     # shared expert pool: one grey band, four experts, no stream subscripts
     # band with room above the experts for its corner badge
     px0, py0, pw = ex[0] - ew / 2 - 0.14, yExp - 0.28, ex[-1] - ex[0] + ew + 0.28
     S.rect(px0, py0, pw, eh + 0.4, fill=LIGHT, line=None, z=0)
-    mark(px0, py0, pw)                    # the expert pool: replicated from the pretrained FFN
     for i, c in enumerate(ex):
         S.rect(c - ew / 2, yExp, ew, eh, fill=GREY, line=INK, lw=lw,
                runs=[('MLP', ''), ('xxyy'[i], 'sub i')], size=FS)
@@ -84,9 +76,9 @@ def build(stretch=0.0):
         # bottom: the attention sub-layer's output
         hbox(c, yIn, fill, HT, '(l)', s)
         # router
-        S.rect(c - bw / 2, yRt, bw, bh, fill=GREY, line=INK, lw=lw,
+        # dashed outline: new parameters, trained from scratch (legend)
+        S.rect(c - bw / 2, yRt, bw, bh, fill=GREY, line=INK, lw=lw, dash=True,
                runs=[('Top-2 Router', ''), (s, 'sub i')], size=FS)
-        mark(c - bw / 2, yRt, bw, kind='new')
         arrow(c, yIn - 0.02, c, yRt + bh + 0.02)
         # router -> its two experts (the two streams' arrows cross)
         for i in chosen[s]:

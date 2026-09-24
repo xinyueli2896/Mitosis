@@ -23,7 +23,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
 fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.4
-from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, badge  # noqa: E402
+from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain  # noqa: E402
 from fig_style import FILL, LINE, COMP, CROSS, GREY_L, INK, LW, AW, FS, BH  # noqa: E402
 
 
@@ -46,20 +46,13 @@ def build(stretch=0.0):
     side = {'x': -1, 'y': 1}
     other = {'x': 'y', 'y': 'x'}
 
-    def mark(x, y, w, kind='pre'):
-        """corner sign as pictures: snowflake -> fire = initialised from the
-        pretrained model and fine-tuned; fire = new, trained from scratch.
-        Inside the block, top-right corner; the label stays centred."""
-        # twice the earlier size, sitting on the block's top-right corner
-        badge(S, x + w + 0.09, y - 0.1, kind, h=0.22)
-
     def box(x, y, w, h, runs, fill=COMP, size=FS, dash=False, z=1):
         S.rect(x, y, w, h, fill=fill, line=INK, lw=LW, dash=dash, runs=runs, size=size, z=z)
 
     def wide(s, y, runs, fill=COMP, size=FS, pre=False):
+        # provenance by outline (2026-09-24): solid = initialised from the
+        # pretrained model and fine-tuned; dashed = new, trained from scratch
         box(cx[s] - bw / 2, y, bw, bh, runs, fill=fill, size=size)
-        if pre:
-            mark(cx[s] - bw / 2, y, bw)
 
     def arrow(x1, y1, x2, y2, color=INK, lw_=AW):
         S.line(x1, y1, x2, y2, lw=lw_, arrow=True, color=color)
@@ -129,8 +122,8 @@ def build(stretch=0.0):
         # gate above Cross Attn, in the cross path's colour; (+) at the lane centre
         gy = yG + 0.17
         gw = 0.56
-        box(ccx - gw / 2, yG - 0.02, gw, 0.38, plain('Gate'), fill=cfill, size=FS - 0.5)
-        mark(ccx - gw / 2, yG - 0.02, gw, kind='new')
+        box(ccx - gw / 2, yG - 0.02, gw, 0.38, plain('Gate'), fill=cfill, size=FS - 0.5,
+            dash=True)                                     # new parameters
         arrow(ccx, yA - 0.02, ccx, yG + 0.38)
         plus(c, gy)
         arrow(ccx - side[s] * gw / 2 * -1 if False else (ccx - gw / 2 - 0.02 if s == 'x' else ccx + gw / 2 + 0.02),

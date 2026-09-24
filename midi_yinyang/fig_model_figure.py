@@ -21,13 +21,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
 import fig_attn_panel, fig_moe_panel, fig_decode_panel  # noqa: E402,E401
-from fig_arch_pptx import Spec, write_pptx_js, write_preview, plain, badge, INK  # noqa: E402
+from fig_arch_pptx import Spec, write_pptx_js, write_preview, plain, INK  # noqa: E402
+from fig_style import COMP, LW  # noqa: E402
 
 GAP = 0.42                      # between the content boxes of neighbouring panels
 MARGIN = 0.1                    # slide edge to content
 CAP_H = 0.3                     # caption row
 CAP_GAP = 0.1                   # content bottom to caption
-LEG_H, LEG_GAP = 0.7, 0.16      # legend box height, and its gap to panel (b)'s content
+LEG_H, LEG_GAP = 0.66, 0.16     # legend box height, and its gap to panel (b)'s content
 # (module, caption, number of row gaps the stretch is spread over)
 PANELS = [(fig_attn_panel, '(a) Dual-stream Attention', 8),
           (fig_moe_panel, '(b) Dual-stream MoE', 6),
@@ -103,12 +104,13 @@ def build():
         if i == 1:
             # the badge legend, as wide as the column, its top on the common top line
             lx, lw_ = cursor, x1 - x0
+            # provenance legend: a sample block per outline style
             S.rect(lx, top, lw_, LEG_H, fill='FFFFFF', line=INK, lw=1.0)
-            for k, (kind, txt) in enumerate((('pre', 'initialized from pretrained model, finetuned in ours'),
-                                             ('new', 'from scratch'))):
-                yy = top + 0.07 + k * 0.3
-                badge(S, lx + 0.86, yy, kind, h=0.22)                  # same size as the corner badges
-                S.text(lx + 0.98, yy - 0.01, lw_ - 1.0, 0.24, plain(txt), size=9.5, align='l')
+            for k, (dash, txt) in enumerate(((False, 'initialized from pretrained model, finetuned in ours'),
+                                             (True, 'new parameters, trained from scratch'))):
+                yy = top + 0.09 + k * 0.3
+                S.rect(lx + 0.16, yy, 0.5, 0.22, fill=COMP, line=INK, lw=LW, dash=dash)
+                S.text(lx + 0.78, yy - 0.01, lw_ - 0.9, 0.24, plain(txt), size=9.5, align='l')
             assert top + LEG_H + LEG_GAP <= top + H - (b - t) + 0.02, 'legend collides with panel (b)'
         cursor += (x1 - x0) + GAP
     fig_arch_pptx.SLIDE_W = cursor - GAP + MARGIN
