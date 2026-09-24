@@ -61,7 +61,7 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--exclude', nargs='*', default=[])
     ap.add_argument('--drop-constant', action='store_true')
-    ap.add_argument('--height', type=float, default=1.7, help='figure height in inches')
+    ap.add_argument('--height', type=float, default=1.35, help='figure height in inches')
     ap.add_argument('--width', type=float, default=2.5, help='figure width in inches')
     args = ap.parse_args()
     rows = load(args.csv, args.exclude, args.drop_constant)
@@ -76,7 +76,7 @@ def main():
     fig.patch.set_facecolor(SURFACE); ax.set_facecolor(SURFACE)
     k = len(SYSTEMS)
     # rows top to bottom; systems stacked within a row, ours on top
-    off = (np.arange(k) - (k - 1) / 2) * 0.105
+    off = (np.arange(k) - (k - 1) / 2) * 0.095
     handles = {}
     for j, a in enumerate(ROW_AXES):
         Y = Ys[a]
@@ -122,7 +122,7 @@ def main():
                loc='upper center', bbox_to_anchor=(0.5, 1.0), frameon=False,
                fontsize=FS_LEGEND - 3, handletextpad=0.3, columnspacing=0.7,
                borderaxespad=0.1, handlelength=1.2, labelcolor=INK)
-    fig.tight_layout(pad=0.2, rect=[0, 0, 1, 0.885])
+    fig.tight_layout(pad=0.2, rect=[0, 0, 1, 0.845])
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print('wrote', f'{args.out}.{ext}')
