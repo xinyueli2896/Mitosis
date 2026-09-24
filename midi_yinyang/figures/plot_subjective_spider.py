@@ -51,7 +51,7 @@ def main():
     ap.add_argument('--rmin', type=float, default=2.5, help='centre of the chart')
     ap.add_argument('--width', type=float, default=3.39)
     ap.add_argument('--alpha', type=float, default=0.18, help='band opacity')
-    ap.add_argument('--interval', choices=['fill', 'bars', 'both'], default='both',
+    ap.add_argument('--interval', choices=['fill', 'bars', 'both'], default='fill',
                     help='how the CI is drawn: a translucent ring (fill), a radial '
                          'bar with caps on every spoke (bars), or both')
     ap.add_argument('--knee', type=float, default=4.5,
