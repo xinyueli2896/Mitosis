@@ -60,3 +60,8 @@ python figures/plot_subjective_dots.py --csv "$RATINGS" --out "${OUT}_dots" \
 # the same in one compact panel (the paper's figure) -> {OUT}_compact.pdf/.png
 python figures/plot_subjective_compact.py --csv "$RATINGS" --out "${OUT}_compact" \
     ${EXCLUDE:+--exclude $EXCLUDE} $([ "$DROP_CONSTANT" = 1 ] && echo --drop-constant)
+
+# the same statistics as a spider chart: shaded within-subject CI rings,
+# filled vertex = differs from ours (Holm) -> {OUT}_spider_ci.pdf/.png
+python figures/plot_subjective_spider.py --csv "$RATINGS" --out "${OUT}_spider_ci" \
+    ${EXCLUDE:+--exclude $EXCLUDE} $([ "$DROP_CONSTANT" = 1 ] && echo --drop-constant)
