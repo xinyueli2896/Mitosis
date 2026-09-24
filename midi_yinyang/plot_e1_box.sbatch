@@ -62,6 +62,8 @@
 #             names vertical, so the one-column sheet keeps its width
 #   NO_TITLES=1  no metric name on the panels (ORIENT=v); the caption
 #             names the lettered panels
+#   SHORT_TITLES=1  a short metric name beside each panel letter, at the
+#             letter's size (implies NO_TITLES=1)
 #   PANEL_HEIGHT  inches per panel row for ORIENT=v (default 1.35)
 #   ORDER     sheet-specific column order, internal names SPACE-separated
 #   RANKED    sheet-specific ranked set (SPACE-separated internal names):
@@ -164,6 +166,7 @@ WIDTH="${WIDTH:-3.4}"
 ORIENT="${ORIENT:-h}"
 NAMES="${NAMES:-long}"   # long | short | none
 NO_TITLES="${NO_TITLES:-0}"
+SHORT_TITLES="${SHORT_TITLES:-0}"
 ORDER="${ORDER:-}"          # sheet-specific column order, internal names, space-separated
 RANKED="${RANKED-}"         # sheet-specific ranked set; unset = family flags
 DIVIDER_AFTER="${DIVIDER_AFTER:-}"
@@ -199,7 +202,7 @@ if [[ -n "${BLOCKS// /}" && "${MERGE_BLOCKS:-0}" == "1" ]]; then
     echo "--- merged: $BLOCKS ---"
     python plot_e1_box.py --csv "$CSV" --out "${OUT}_$(echo $BLOCKS | tr ' ' '_')" \
         --block "$BLOCKS" ${NCOLS:+--ncols "$NCOLS"} --width "$WIDTH" --orient "$ORIENT" --names "$NAMES" --panel-height "$PANEL_HEIGHT" \
-        $([[ "$NO_TITLES" == "1" ]] && echo --no-titles) \
+        $([[ "$NO_TITLES" == "1" ]] && echo --no-titles) $([[ "$SHORT_TITLES" == "1" ]] && echo --short-titles) \
         ${ORDER:+--order "$ORDER"} ${RANKED:+--ranked "$RANKED"} ${DIVIDER_AFTER:+--divider-after "$DIVIDER_AFTER"} $([[ "$BEST_OVERALL" == "1" ]] && echo --best-overall) \
         $([[ "$DELTAS_ONLY" == "1" ]] && echo --deltas-only) \
         $([[ "$PER_SONG" == "1" ]] && echo --per-song) \
@@ -224,7 +227,7 @@ elif [[ -n "${BLOCKS// /}" ]]; then
         fi
         python plot_e1_box.py --csv "$CSV" --out "${OUT}_${b}" \
             --block "$b" ${NCOLS:+--ncols "$NCOLS"} --width "$WIDTH" --orient "$ORIENT" --names "$NAMES" --panel-height "$PANEL_HEIGHT" \
-            $([[ "$NO_TITLES" == "1" ]] && echo --no-titles) \
+            $([[ "$NO_TITLES" == "1" ]] && echo --no-titles) $([[ "$SHORT_TITLES" == "1" ]] && echo --short-titles) \
             ${ORDER:+--order "$ORDER"} ${RANKED:+--ranked "$RANKED"} ${DIVIDER_AFTER:+--divider-after "$DIVIDER_AFTER"} $([[ "$BEST_OVERALL" == "1" ]] && echo --best-overall) \
             $([[ "$DELTAS_ONLY" == "1" ]] && echo --deltas-only) \
             $([[ "$PER_SONG" == "1" ]] && echo --per-song) \
@@ -234,7 +237,7 @@ elif [[ -n "${BLOCKS// /}" ]]; then
     done
 else
     python plot_e1_box.py --csv "$CSV" --out "$OUT" --width "$WIDTH" --orient "$ORIENT" --names "$NAMES" --panel-height "$PANEL_HEIGHT" \
-            $([[ "$NO_TITLES" == "1" ]] && echo --no-titles) \
+            $([[ "$NO_TITLES" == "1" ]] && echo --no-titles) $([[ "$SHORT_TITLES" == "1" ]] && echo --short-titles) \
         ${NCOLS:+--ncols "$NCOLS"} ${METRICS:+--metrics "$METRICS"} \
         ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"} \
         ${TITLE:+--title "$TITLE"}

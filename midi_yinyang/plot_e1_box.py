@@ -494,6 +494,22 @@ def read_pooled(path):
     return out
 
 
+# Short panel names in the paper's own words, drawn beside the panel
+# letter at the letter's size (--short-titles): the caption then need
+# not list the panels.
+SHORT_TITLE = {
+    'pc_jsd_prompt_a_delta':    'Tonal drift, melody',
+    'onset_sim_prompt_a_delta': 'Rhythmic placement, melody',
+    'pc_jsd_prompt_b_delta':    'Tonal drift, chord',
+    'onset_sim_prompt_b_delta': 'Rhythmic placement, chord',
+    'ctnctr_delta':             'Chord-tone ratio',
+    'pcs_delta':                'Pitch consonance',
+    'mctd_delta':               'Tonal distance',
+    'coupling_delta':           'Coupling',
+}
+SHORT_TITLES = False           # set by main from --short-titles
+
+
 def _finish_axes(ax, metric, order, title_chars, letter, caption):
     """Axis furniture shared by both panel kinds.
 
@@ -529,6 +545,20 @@ def _finish_axes(ax, metric, order, title_chars, letter, caption):
                     xytext=(0, 2), textcoords='offset points',
                     ha='left', va='bottom', fontsize=FS_LETTER, weight='bold',
                     color=INK)
+        if SHORT_TITLES:
+            # the short name follows the letter on the same line, same size
+            # wrapped to the panel: ~4.7 pt per character at the letter size
+            # (axes positions are not final before tight_layout: use the
+            # grid's column width, less the tick-label margin)
+            ncols_ = ax.get_subplotspec().get_gridspec().ncols
+            width_pt = ax.figure.get_figwidth() / ncols_ * 0.82 * 72
+            per_line = max(8, int((width_pt - FS_LETTER * 1.3) / (FS_LETTER * 0.55)))
+            txt = '\n'.join(textwrap.wrap(SHORT_TITLE.get(metric, label_for(metric)),
+                                         per_line))
+            ax.annotate(txt, xy=(0.0, 1.0), xycoords='axes fraction',
+                        xytext=(FS_LETTER * 1.3, 2), textcoords='offset points',
+                        ha='left', va='bottom', fontsize=FS_LETTER, color=INK,
+                        linespacing=1.0)
     elif letter:
         ax.annotate(letter, xy=(0.012, 0.97), xycoords='axes fraction',
                     ha='left', va='top', fontsize=FS_LETTER, weight='bold',
@@ -930,6 +960,9 @@ def main():
                         'unless a value above 5 is given')
     p.add_argument('--panel-height', type=float, default=1.35, help='inches')
     p.add_argument('--title', default='')
+    p.add_argument('--short-titles', action='store_true',
+                   help='--orient v: a short metric name beside the panel '
+                        'letter, at the letter size (implies --no-titles)')
     p.add_argument('--no-titles', action='store_true',
                    help='--orient v: no metric name on the panels, only the '
                         'letters; the caption names them')
@@ -1177,6 +1210,10 @@ def main():
 
     # ~10 characters per inch at 7.5pt; 0 means "use the y-axis label";
     # None means no metric name on the panel at all (--no-titles)
+    global SHORT_TITLES
+    SHORT_TITLES = args.short_titles
+    if args.short_titles:
+        args.no_titles = True
     title_chars = (None if args.no_titles else
                    int(args.width / ncols * 10) if ncols > 1 else 0)
     labels = None
