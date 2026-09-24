@@ -51,6 +51,12 @@ def main():
     ap.add_argument('--rmin', type=float, default=2.5, help='centre of the chart')
     ap.add_argument('--width', type=float, default=3.39)
     ap.add_argument('--alpha', type=float, default=0.18, help='band opacity')
+    ap.add_argument('--knee', type=float, default=4.5,
+                    help='rating above which the radius is squeezed')
+    ap.add_argument('--squash', type=float, default=0.1,
+                    help='share of the radius given to [knee, 5]; the rest goes '
+                         'to [rmin, knee], where the ratings actually sit. Tick '
+                         'labels keep the original scale (say so in the caption)')
     args = ap.parse_args()
     rows = load(args.csv, args.exclude, args.drop_constant)
     Ys, n = matrix(rows, 'block')
@@ -76,10 +82,13 @@ def main():
     fig.patch.set_facecolor(SURFACE); ax.set_facecolor(SURFACE)
     ax.set_theta_offset(np.pi / 2); ax.set_theta_direction(-1)
 
-    def r(v):                            # rating -> radius
-        return (np.asarray(v, float) - args.rmin) / (5.0 - args.rmin)
-    ax.set_ylim(0, r(5.0))
-    ticks = [t for t in (3, 3.5, 4, 4.5) if t > args.rmin]
+    def r(v):                            # rating -> radius, piecewise linear
+        v = np.asarray(v, float)
+        lo = (v - args.rmin) / (args.knee - args.rmin) * (1 - args.squash)
+        hi = (1 - args.squash) + (v - args.knee) / (5.0 - args.knee) * args.squash
+        return np.where(v <= args.knee, lo, hi)
+    ax.set_ylim(0, 1.0)
+    ticks = [t for t in (3, 3.5, 4, 4.5, 5) if t > args.rmin]
     ax.set_yticks(list(r(ticks)))
     ax.set_yticklabels([f'{t:g}' for t in ticks], fontsize=FS_TICK - 3, color=INK)
     ax.set_rlabel_position(180 / K)
