@@ -521,7 +521,14 @@ def _finish_axes(ax, metric, order, title_chars, letter, caption):
     ax.yaxis.grid(True, color=GRID, lw=0.5, zorder=0)
     ax.xaxis.grid(False)
     ax.set_axisbelow(True)
-    if letter:
+    if letter and title_chars is None:
+        # no title above the panel: the letter goes into that margin,
+        # clear of a star in the first column
+        ax.annotate(letter, xy=(0.0, 1.0), xycoords='axes fraction',
+                    xytext=(0, 2), textcoords='offset points',
+                    ha='left', va='bottom', fontsize=FS_LETTER, weight='bold',
+                    color=INK)
+    elif letter:
         ax.annotate(letter, xy=(0.012, 0.97), xycoords='axes fraction',
                     ha='left', va='top', fontsize=FS_LETTER, weight='bold',
                     color=INK)
@@ -879,6 +886,18 @@ def main():
     p.add_argument('--pooled-csv', default=None,
                    help='pooled CSV; default is --csv with _metrics.csv '
                         'swapped for _pooled.csv')
+    p.add_argument('--order', default='',
+                   help='sheet-specific column order, internal names '
+                        'space-separated; unnamed systems follow in '
+                        'registry order')
+    p.add_argument('--ranked', default=None,
+                   help='sheet-specific ranked set (internal names, '
+                        'space-separated): only these compete for the '
+                        'best-of line and star; overrides the family flags')
+    p.add_argument('--divider-after', default='',
+                   help='draw a dashed vertical rule after this system '
+                        '(internal name) on every panel, e.g. between the '
+                        'ranked and the unranked columns')
     p.add_argument('--exclude', default='',
                    help='comma-separated internal system names to leave '
                         'off the figure entirely (no column, no '
@@ -1014,6 +1033,30 @@ def main():
     if excluded:
         print(f'[exclude] left off the figure: {" ".join(sorted(excluded))}',
               file=sys.stderr)
+    _split = lambda v: [x for x in re.split(r'[,\s]+', v or '') if x]
+    if args.order:
+        # a sheet-specific column order (internal names); anything not
+        # named keeps its registry order after the named ones
+        want = _split(args.order)
+        by_name = {o[0]: o for o in order}
+        bad = [w for w in want if w not in by_name]
+        if bad:
+            raise SystemExit(f'--order: unknown or excluded system(s) {" ".join(bad)}')
+        order = [by_name[w] for w in want] + [o for o in order if o[0] not in want]
+    if args.ranked is not None:
+        # a sheet-specific ranked set, overriding the family flags and
+        # UNRANKED: only these compete for the best-of line and star
+        rk = set(_split(args.ranked))
+        bad = rk - {o[0] for o in order}
+        if bad:
+            raise SystemExit(f'--ranked: unknown or excluded system(s) {" ".join(sorted(bad))}')
+        order = [(s, d, sh, g, s in rk) for s, d, sh, g, _r in order]
+    divider_at = None
+    if args.divider_after:
+        names_ = [o[0] for o in order]
+        if args.divider_after not in names_:
+            raise SystemExit(f'--divider-after: {args.divider_after} is not on the figure')
+        divider_at = names_.index(args.divider_after) + 0.5
     known = {s for s, _, _, _, _ in order} | excluded
     extra = sorted(present - known)
     if extra:
@@ -1134,6 +1177,10 @@ def main():
             # three or four of them, not a ladder
             ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(4))
             ax.tick_params(axis='y', labelsize=FS_TICK - 1.0)
+        if divider_at is not None:
+            # a dashed rule between the ranked systems and the rest
+            ax.axvline(divider_at, color=INK_2, lw=0.6, ls=(0, (3, 2.5)),
+                       zorder=1)
         used.append((idx // ncols, idx % ncols, ax))
     for r in range(nrows):
         for c in range(ncols):
@@ -1242,7 +1289,7 @@ def main():
             Line2D([0], [0], color=INK, lw=0, marker='D', markersize=2.8,
                    markerfacecolor=SURFACE, markeredgecolor=INK,
                    markeredgewidth=0.7,
-                   label='mean; whiskers 1.5 IQR, outliers omitted'),
+                   label='mean; whiskers 1.5 IQR'),
         ]
     labels_ = [h.get_label() for h in handles]
     if args.names == 'none':
