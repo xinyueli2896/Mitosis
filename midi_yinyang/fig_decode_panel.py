@@ -31,7 +31,7 @@ fig_arch_pptx.SLIDE_W, fig_arch_pptx.SLIDE_H = 4.8, 6.45
 from fig_arch_pptx import Spec, write_pptx_js, write_preview, m, plain, INK_2  # noqa: E402
 from fig_style import FILL, COMP, INK, LW, AW, FS, BH  # noqa: E402
 
-SHADE = 'D7C7BD'                   # an empty slot: the component tan
+SHADE = 'F4F4F4'                   # an empty slot: the component near-white
 
 
 def build(stretch=0.0):
@@ -68,8 +68,7 @@ def build(stretch=0.0):
         # right-aligned, ending just left of the model box, at the box label size
         S.text(0.0, y + yb - 0.06, bx0 - 0.08, 0.24, m(('t', 'i'), (' = ' + frame, 'r')),
                size=FS, align='r')
-        S.text(0.0, y + yb + 0.2, bx0 - 0.08, 0.24, plain(step), size=FS, align='r',
-               color=INK)
+        S.text(0.0, y + yb + 0.2, bx0 - 0.08, 0.24, plain(step), size=FS, align='r')
 
     S.text(0.12, 0.05, 4.5, 0.28, [('c. Alternating-commit decoding', 'b')],
            size=10.5, align='l')

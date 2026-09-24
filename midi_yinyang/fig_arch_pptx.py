@@ -30,7 +30,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 BLUE, BLUE_L = '4589E3', 'CDDBF1'
 RED, RED_L = 'BF2847', 'EDCCD3'
 GOLD, GOLD_L = 'F0A500', 'FCE8B1'
-INK, INK_2, GREY_L, PANEL = '6F7C80', '6F7C80', 'C3DDE4', 'E1EAEC'   # Phantom type
+INK, INK_2, GREY_L, PANEL = '000000', '000000', 'C3DDE4', 'E1EAEC'   # black type
+LINE_INK = '6F7C80'                 # default colour of lines and arrows: Phantom
 FONT = 'Times New Roman'
 SLIDE_W, SLIDE_H = 14.79, 8.91
 
@@ -53,11 +54,11 @@ class Spec:
         self.items.append(dict(k='text', x=x, y=y, w=w, h=h, runs=runs, size=size, align=align,
                                color=color, bold=bold, z=z, valign=valign))
 
-    def line(self, x1, y1, x2, y2, color=INK, lw=0.75, dash=False, arrow=False, z=2):
+    def line(self, x1, y1, x2, y2, color=LINE_INK, lw=0.75, dash=False, arrow=False, z=2):
         self.items.append(dict(k='line', x1=x1, y1=y1, x2=x2, y2=y2, color=color, lw=lw,
                                dash=dash, arrow=arrow, z=z))
 
-    def curve(self, x1, y1, x2, y2, color=INK, lw=0.75, arrow=False, z=2, bend=0.5):
+    def curve(self, x1, y1, x2, y2, color=LINE_INK, lw=0.75, arrow=False, z=2, bend=0.5):
         """A vertical S-curve from (x1, y1) to (x2, y2): a cubic Bezier whose
         tangents are vertical at both ends; bend in (0, 1] sets how far
         the control points sit along the vertical span."""

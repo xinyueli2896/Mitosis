@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fig_arch_pptx  # noqa: E402
 import fig_attn_panel, fig_moe_panel, fig_decode_panel  # noqa: E402,E401
 from fig_arch_pptx import Spec, write_pptx_js, write_preview, plain, INK  # noqa: E402
-from fig_style import COMP, LW  # noqa: E402
+from fig_style import COMP, LW, INK as LINE_INK  # noqa: E402
 
 GAP = 0.42                      # between the content boxes of neighbouring panels
 MARGIN = 0.1                    # slide edge to content
@@ -105,11 +105,11 @@ def build():
             # the badge legend, as wide as the column, its top on the common top line
             lx, lw_ = cursor, x1 - x0
             # provenance legend: a sample block per outline style
-            S.rect(lx, top, lw_, LEG_H, fill='FFFFFF', line=INK, lw=1.0)
+            S.rect(lx, top, lw_, LEG_H, fill='FFFFFF', line=LINE_INK, lw=1.0)
             for k, (dash, txt) in enumerate(((False, 'initialized from pretrained model, finetuned in ours'),
                                              (True, 'new parameters, trained from scratch'))):
                 yy = top + 0.09 + k * 0.3
-                S.rect(lx + 0.16, yy, 0.5, 0.22, fill=COMP, line=INK, lw=LW, dash=dash)
+                S.rect(lx + 0.16, yy, 0.5, 0.22, fill=COMP, line=LINE_INK, lw=LW, dash=dash)
                 S.text(lx + 0.78, yy - 0.01, lw_ - 0.9, 0.24, plain(txt), size=9.5, align='l')
             assert top + LEG_H + LEG_GAP <= top + H - (b - t) + 0.02, 'legend collides with panel (b)'
         cursor += (x1 - x0) + GAP
