@@ -1,9 +1,6 @@
-% refs.bib -- keys used by abstract.tex / introduction.tex.
-% Entries marked VERIFY were written from memory without access to the
-% paper: check authors, venue and identifiers before submission.
-% arXiv identifiers are given where the work has no archival venue.
+% refs.bib -- every key cited in the paper, nothing else.
 
-% ---- cross-modal: the two distances -------------------------------------
+% ---- cross-modal alignment ----------------------------------------------
 
 @inproceedings{clip,
   author    = {Alec Radford and Jong Wook Kim and Chris Hallacy and Aditya Ramesh and Gabriel Goh and Sandhini Agarwal and Girish Sastry and Amanda Askell and Pamela Mishkin and Jack Clark and Gretchen Krueger and Ilya Sutskever},
@@ -19,21 +16,43 @@
   year      = {2022}
 }
 
-@inproceedings{tts,
-  author    = {Jonathan Shen and Ruoming Pang and Ron J. Weiss and Mike Schuster and Navdeep Jaitly and Zongheng Yang and Zhifeng Chen and Yu Zhang and Yuxuan Wang and RJ Skerry-Ryan and Rif A. Saurous and Yannis Agiomyrgiannakis and Yonghui Wu},
-  title     = {Natural {TTS} Synthesis by Conditioning {WaveNet} on Mel Spectrogram Predictions},
-  booktitle = {Proc. ICASSP},
-  year      = {2018}
+% ---- models that emit both streams --------------------------------------
+
+@article{chameleon,
+  author    = {{Chameleon Team}},
+  title     = {Chameleon: Mixed-Modal Early-Fusion Foundation Models},
+  journal   = {arXiv preprint arXiv:2405.09818},
+  year      = {2024}
 }
 
-@inproceedings{asr,
-  author    = {William Chan and Navdeep Jaitly and Quoc V. Le and Oriol Vinyals},
-  title     = {Listen, Attend and Spell: A Neural Network for Large Vocabulary Conversational Speech Recognition},
-  booktitle = {Proc. ICASSP},
-  year      = {2016}
+@inproceedings{transfusion,
+  author    = {Chunting Zhou and Lili Yu and Arun Babu and Kushal Tirumala and Michihiro Yasunaga and Leonid Shamis and Jacob Kahn and Xuezhe Ma and Luke Zettlemoyer and Omer Levy},
+  title     = {Transfusion: Predict the Next Token and Diffuse Images with One Multi-Modal Model},
+  booktitle = {Proc. ICLR},
+  year      = {2025}
 }
 
-% ---- synchronous joint production ---------------------------------------
+@article{bagel,
+  author    = {Chaorui Deng and Deyao Zhu and Kunchang Li and Chenhui Gou and Feng Li and Zeyu Wang and Shu Zhang and Guang Shi and Haoqi Fan and others},
+  title     = {Emerging Properties in Unified Multimodal Pretraining},
+  journal   = {arXiv preprint arXiv:2505.14683},
+  year      = {2025}
+}
+
+@article{mot,
+  author    = {Weixin Liang and Lili Yu and Liang Luo and Srinivasan Iyer and Ning Dong and Chunting Zhou and Gargi Ghosh and Mike Lewis and Wen-tau Yih and Luke Zettlemoyer and Xi Victoria Lin},
+  title     = {Mixture-of-Transformers: A Sparse and Scalable Architecture for Multi-Modal Foundation Models},
+  journal   = {Transactions on Machine Learning Research},
+  year      = {2025},
+  note      = {arXiv:2411.04996}
+}
+
+@article{moma,
+  author    = {Xi Victoria Lin and Akshat Shrivastava and Liang Luo and Srinivasan Iyer and Mike Lewis and Gargi Ghosh and Luke Zettlemoyer and Armen Aghajanyan},
+  title     = {{MoMa}: Efficient Early-Fusion Pre-training with Mixture of Modality-Aware Experts},
+  journal   = {arXiv preprint arXiv:2407.21770},
+  year      = {2024}
+}
 
 @article{moshi,
   author    = {Alexandre D{\'e}fossez and Laurent Mazar{\'e} and Manu Orsini and Am{\'e}lie Royer and Patrick P{\'e}rez and Herv{\'e} J{\'e}gou and Edouard Grave and Neil Zeghidour},
@@ -46,22 +65,6 @@
   author    = {Ludan Ruan and Yiyang Ma and Huan Yang and Huiguo He and Bei Liu and Jianlong Fu and Nicholas Jing Yuan and Qin Jin and Baining Guo},
   title     = {{MM-Diffusion}: Learning Multi-Modal Diffusion Models for Joint Audio and Video Generation},
   booktitle = {Proc. CVPR},
-  year      = {2023}
-}
-
-@article{audiopalm,
-  author    = {Paul K. Rubenstein and Chulayuth Asawaroengchai and Duc Dung Nguyen and Ankur Bapna and Zal{\'a}n Borsos and F{\'e}lix de Chaumont Quitry and Peter Chen and Dalia El Badawy and Wei Han and Eugene Kharitonov and Hannah Muckenhirn and Dirk Padfield and James Qin and Danny Rozenberg and Tara Sainath and Johan Schalkwyk and Matt Sharifi and Michelle Tadmor Ramanovich and Marco Tagliasacchi and Alexandru Tudor and Mihajlo Velimirovi{\'c} and Damien Vincent and Jiahui Yu and Yongqiang Wang and Vicky Zayats and Neil Zeghidour and Yu Zhang and Zhishuai Zhang and Lukas Zilka and Christian Frank},
-  title     = {{AudioPaLM}: A Large Language Model That Can Speak and Listen},
-  journal   = {arXiv preprint arXiv:2306.12925},
-  year      = {2023}
-}
-
-% ---- other production formats cited in the introduction ------------------
-
-@inproceedings{musicgen,
-  author    = {Jade Copet and Felix Kreuk and Itai Gat and Tal Remez and David Kant and Gabriel Synnaeve and Yossi Adi and Alexandre D{\'e}fossez},
-  title     = {Simple and Controllable Music Generation},
-  booktitle = {Proc. NeurIPS},
   year      = {2023}
 }
 
@@ -79,111 +82,20 @@
   year      = {2024}
 }
 
-% ---- unified multimodal models: shared trunk ----------------------------
+% ---- model merging and mixture of experts -------------------------------
 
-@article{chameleon,
-  author    = {{Chameleon Team}},
-  title     = {Chameleon: Mixed-Modal Early-Fusion Foundation Models},
-  journal   = {arXiv preprint arXiv:2405.09818},
-  year      = {2024}
-}
-
-@inproceedings{transfusion,
-  author    = {Chunting Zhou and Lili Yu and Arun Babu and Kushal Tirumala and Michihiro Yasunaga and Leonid Shamis and Jacob Kahn and Xuezhe Ma and Luke Zettlemoyer and Omer Levy},
-  title     = {Transfusion: Predict the Next Token and Diffuse Images with One Multi-Modal Model},
+@inproceedings{upcycling,
+  author    = {Aran Komatsuzaki and Joan Puigcerver and James Lee-Thorp and Carlos Riquelme Ruiz and Basil Mustafa and Joshua Ainslie and Yi Tay and Mostafa Dehghani and Neil Houlsby},
+  title     = {Sparse Upcycling: Training Mixture-of-Experts from Dense Checkpoints},
   booktitle = {Proc. ICLR},
-  year      = {2025}
-}
-
-% VERIFY: author list and arXiv identifier (NVIDIA, October 2025).
-@article{ualm,
-  author    = {{NVIDIA}},
-  title     = {{UALM}: Unified Audio Language Model for Understanding, Generation and Reasoning},
-  journal   = {arXiv preprint},
-  year      = {2025},
-  note      = {VERIFY authors and arXiv id}
-}
-
-% ---- unified multimodal models: per-modality weights --------------------
-
-@article{mot,
-  author    = {Weixin Liang and Lili Yu and Liang Luo and Srinivasan Iyer and Ning Dong and Chunting Zhou and Gargi Ghosh and Mike Lewis and Wen-tau Yih and Luke Zettlemoyer and Xi Victoria Lin},
-  title     = {Mixture-of-Transformers: A Sparse and Scalable Architecture for Multi-Modal Foundation Models},
-  journal   = {Transactions on Machine Learning Research},
-  year      = {2025},
-  note      = {arXiv:2411.04996}
-}
-
-@article{bagel,
-  author    = {Chaorui Deng and Deyao Zhu and Kunchang Li and Chenhui Gou and Feng Li and Zeyu Wang and Shu Zhang and Guang Shi and Haoqi Fan and others},
-  title     = {Emerging Properties in Unified Multimodal Pretraining},
-  journal   = {arXiv preprint arXiv:2505.14683},
-  year      = {2025}
-}
-
-@article{moma,
-  author    = {Xi Victoria Lin and Akshat Shrivastava and Liang Luo and Srinivasan Iyer and Mike Lewis and Gargi Ghosh and Luke Zettlemoyer and Armen Aghajanyan},
-  title     = {{MoMa}: Efficient Early-Fusion Pre-training with Mixture of Modality-Aware Experts},
-  journal   = {arXiv preprint arXiv:2407.21770},
-  year      = {2024}
-}
-
-% ---- symbolic music: fully shared generators ----------------------------
-
-@inproceedings{cp_transformer,
-  author    = {Wen-Yi Hsiao and Jen-Yu Liu and Yin-Cheng Yeh and Yi-Hsuan Yang},
-  title     = {Compound Word Transformer: Learning to Compose Full-Song Music over Dynamic Directed Hypergraphs},
-  booktitle = {Proc. AAAI},
-  year      = {2021}
-}
-
-@inproceedings{compose_embellish,
-  author    = {Shih-Lun Wu and Yi-Hsuan Yang},
-  title     = {Compose \& Embellish: Well-Structured Piano Performance Generation via a Two-Stage Approach},
-  booktitle = {Proc. ICASSP},
   year      = {2023}
 }
 
-@inproceedings{whole_song,
-  author    = {Ziyu Wang and Lejun Min and Gus Xia},
-  title     = {Whole-Song Hierarchical Generation of Symbolic Music Using Cascaded Diffusion Models},
-  booktitle = {Proc. ICLR},
+@inproceedings{btx,
+  author    = {Sainbayar Sukhbaatar and Olga Golovneva and Vasu Sharma and Hu Xu and Xi Victoria Lin and Baptiste Rozi{\`e}re and Jacob Kahn and Daniel Li and Wen-tau Yih and Jason Weston and Xian Li},
+  title     = {Branch-Train-MiX: Mixing Expert {LLMs} into a Mixture-of-Experts {LLM}},
+  booktitle = {Proc. Conf. on Language Modeling (COLM)},
   year      = {2024}
-}
-
-@article{mmm,
-  author    = {Jeff Ens and Philippe Pasquier},
-  title     = {{MMM}: Exploring Conditional Multi-Track Music Generation with the Transformer},
-  journal   = {arXiv preprint arXiv:2008.06048},
-  year      = {2020}
-}
-
-% ---- symbolic music: one stream given the other -------------------------
-
-@article{yeh2021,
-  author    = {Yin-Cheng Yeh and Wen-Yi Hsiao and Satoru Fukayama and Tetsuro Kitahara and Benjamin Genchel and Hao-Min Liu and Hao-Wen Dong and Yian Chen and Terence Leong and Yi-Hsuan Yang},
-  title     = {Automatic Melody Harmonization with Triad Chords: A Comparative Study},
-  journal   = {Journal of New Music Research},
-  volume    = {50},
-  number    = {1},
-  pages     = {37--51},
-  year      = {2021}
-}
-
-% VERIFY: venue (arXiv:2010.13468; check for the archival version).
-@article{sun2021,
-  author    = {Chung-En Sun and Yi-Wei Chen and Hung-Shin Lee and Yen-Hsing Chen and Hsin-Min Wang},
-  title     = {Melody Harmonization Using Orderless {NADE}, Chord Balancing, and Blocked {Gibbs} Sampling},
-  journal   = {arXiv preprint arXiv:2010.13468},
-  year      = {2021},
-  note      = {VERIFY venue}
-}
-
-@inproceedings{surprisenet,
-  author    = {Yi-Wei Chen and Hung-Shin Lee and Yen-Hsing Chen and Hsin-Min Wang},
-  title     = {{SurpriseNet}: Melody Harmonization Conditioning on User-Controlled Surprise Contours},
-  booktitle = {Proc. ISMIR},
-  year      = {2021}
 }
 
 @article{fedus2022switch,
@@ -196,6 +108,32 @@
   year    = {2022}
 }
 
+% ---- symbolic music -----------------------------------------------------
+
+@inproceedings{whole_song,
+  author    = {Ziyu Wang and Lejun Min and Gus Xia},
+  title     = {Whole-Song Hierarchical Generation of Symbolic Music Using Cascaded Diffusion Models},
+  booktitle = {Proc. ICLR},
+  year      = {2024}
+}
+
+@article{yeh2021,
+  author    = {Yin-Cheng Yeh and Wen-Yi Hsiao and Satoru Fukayama and Tetsuro Kitahara and Benjamin Genchel and Hao-Min Liu and Hao-Wen Dong and Yian Chen and Terence Leong and Yi-Hsuan Yang},
+  title     = {Automatic Melody Harmonization with Triad Chords: A Comparative Study},
+  journal   = {Journal of New Music Research},
+  volume    = {50},
+  number    = {1},
+  pages     = {37--51},
+  year      = {2021}
+}
+
+@article{sun2021,
+  author    = {Chung-En Sun and Yi-Wei Chen and Hung-Shin Lee and Yen-Hsing Chen and Hsin-Min Wang},
+  title     = {Melody Harmonization Using Orderless {NADE}, Chord Balancing, and Blocked {Gibbs} Sampling},
+  journal   = {arXiv preprint arXiv:2010.13468},
+  year      = {2020}
+}
+
 @article{anticipatory,
   author  = {John Thickstun and David Hall and Chris Donahue and Percy Liang},
   title   = {Anticipatory Music Transformer},
@@ -205,28 +143,19 @@
 }
 
 @inproceedings{pop909,
-  author    = {Ziyu Wang and Ke Chen and Junyan Jiang and Yiyi Zhang and
-               Maoran Xu and Shuqi Dai and Xianbin Gu and Gus Xia},
-  title     = {{POP909}: A Pop-Song Dataset for Music Arrangement
-               Generation},
-  booktitle = {ISMIR},
+  author    = {Ziyu Wang and Ke Chen and Junyan Jiang and Yiyi Zhang and Maoran Xu and Shuqi Dai and Xianbin Gu and Gus Xia},
+  title     = {{POP909}: A Pop-Song Dataset for Music Arrangement Generation},
+  booktitle = {Proc. ISMIR},
   year      = {2020}
 }
 
 @inproceedings{yinyang,
-  author    = {Junyan Jiang and Daniel Chin and Liwei Lin and
-               Xuanjie Liu and Gus Xia},
-  title     = {Versatile Symbolic Music-for-Music Modeling via
-               Function Alignment},
-  booktitle = {Proc. Int. Society for Music Information Retrieval Conf.
-               (ISMIR)},
-  address   = {Daejeon, South Korea},
+  author    = {Junyan Jiang and Daniel Chin and Liwei Lin and Xuanjie Liu and Gus Xia},
+  title     = {Versatile Symbolic Music-for-Music Modeling via Function Alignment},
+  booktitle = {Proc. ISMIR},
   year      = {2025}
 }
-% VERIFY the yinyang entry's title, authors and venue against the pdf:
-% it was reconstructed from the id in EXPERIMENTS.md without web access.
 
-% VERIFY against the dataset page and the form the yinyang paper uses.
 @misc{lamd,
   author       = {Alex Lev},
   title        = {{Los Angeles MIDI Dataset}: SOTA kilo-scale MIDI dataset for MIR and Music AI purposes},
@@ -234,12 +163,53 @@
   year         = {2023}
 }
 
-@article{beat,
-  author  = {Lekai Qian and Haoyu Gu and Jingwei Zhao and Ziyu Wang},
-  title   = {{BEAT}: Tokenizing and Generating Symbolic Music by Uniform
-             Temporal Steps},
-  journal = {arXiv:2604.19532},
-  year    = {2026},
-  note    = {VERIFY venue -- the pdf uses a conference template but the
-             extracted text does not name one}
+% ---- backbone and statistics --------------------------------------------
+
+@article{roformer,
+  author  = {Jianlin Su and Murtadha Ahmed and Yu Lu and Shengfeng Pan and Wen Bo and Yunfeng Liu},
+  title   = {{RoFormer}: Enhanced Transformer with Rotary Position Embedding},
+  journal = {Neurocomputing},
+  volume  = {568},
+  pages   = {127063},
+  year    = {2024}
+}
+
+@article{greenhouse1959methods,
+  author  = {Samuel W. Greenhouse and Seymour Geisser},
+  title   = {On Methods in the Analysis of Profile Data},
+  journal = {Psychometrika},
+  volume  = {24},
+  number  = {2},
+  pages   = {95--112},
+  year    = {1959}
+}
+
+@article{holm1979simple,
+  author  = {Sture Holm},
+  title   = {A Simple Sequentially Rejective Multiple Test Procedure},
+  journal = {Scandinavian Journal of Statistics},
+  volume  = {6},
+  number  = {2},
+  pages   = {65--70},
+  year    = {1979}
+}
+
+@article{cousineau2005confidence,
+  author  = {Denis Cousineau},
+  title   = {Confidence Intervals in Within-Subject Designs: A Simpler Solution to {Loftus} and {Masson}'s Method},
+  journal = {Tutorials in Quantitative Methods for Psychology},
+  volume  = {1},
+  number  = {1},
+  pages   = {42--45},
+  year    = {2005}
+}
+
+@article{morey2008confidence,
+  author  = {Richard D. Morey},
+  title   = {Confidence Intervals from Normalized Data: A Correction to {Cousineau} (2005)},
+  journal = {Tutorials in Quantitative Methods for Psychology},
+  volume  = {4},
+  number  = {2},
+  pages   = {61--64},
+  year    = {2008}
 }

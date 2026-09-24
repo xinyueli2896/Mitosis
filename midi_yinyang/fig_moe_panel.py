@@ -70,7 +70,7 @@ def build(stretch=0.0):
            fill=LIGHT, alpha=0.28, z=0)                 # Misty Sky, translucent
     for i, c in enumerate(ex):
         S.rect(c - ew / 2, yExp, ew, eh, fill=GREY, line=INK, lw=lw,
-               runs=[('MLP', ''), ('xxyy'[i], 'sub i')], size=FS)
+               runs=[('MLP', ''), (str(i + 1), 'sub')], size=FS)
 
     chosen = {'x': (0, 1), 'y': (1, 3)}      # top-2 per stream; the second MLP_x serves both
     for s, c, fill, dark in (('x', cx, LAV, LAV_D), ('y', cy, TEAL, TEAL_D)):

@@ -1,0 +1,539 @@
+% Template for ICASSP-2026 paper; to be used with:
+%          spconf.sty  - ICASSP/ICIP LaTeX style file, and
+%          IEEEbib.bst - IEEE bibliography style file.
+% --------------------------------------------------------------------------
+\documentclass{article}
+\usepackage{spconf,amsmath,graphicx,hyperref}
+\usepackage{xcolor}
+\usepackage{xspace}
+\usepackage{bm}
+
+\newcommand{\xinyue}[1]{\textcolor{purple}{[#1]}}
+\newcommand{\ziyu}[1]{\textcolor{blue}{[#1]}}
+
+% ---- system name: change here, changes everywhere ------------------
+\newcommand{\sys}{\textsc{Duet}\xspace}
+
+\title{Duet: Coordinating Pretrained Language Models for Joint Generation of Melody and Harmony}
+
+% Three authors, two affiliations
+\name{Xinyue Li$^{1}$ \qquad
+      Gus Xia$^{1}$ \qquad
+      Ziyu Wang$^{1,2}$}
+
+\address{
+    $^{1}$Computing and Mathematical Sciences Division, MBZUAI, Abu Dhabi, UAE \\
+    $^{2}$Courant Institute, New York University, New York, United States \\
+    \texttt{xinyue.li@mbzuai.ac.ae, gus.xia@mbzuai.ac.ae, ziyu.wang@nyu.edu}
+}
+
+\begin{document}
+\ninept
+%
+\maketitle
+%
+\begin{abstract}
+Generating two streams together requires each to remain coherent
+while accounting for the other at every step. This calls for both
+communication and coordination. We introduce \sys, a framework that
+enables two pretrained autoregressive models to generate time-aligned
+outputs jointly, with each stream informed by the other at every step.
+We evaluate \sys on melody--chord generation, where the streams share
+a symbolic representation but serve distinct musical roles. This
+enables direct comparison with a single model that generates both
+under shared weights. Initialized from the same pretrained music
+backbone, \sys outperforms the backbone trained from scratch and
+achieves subjective ratings comparable to its finetuned single-stream
+counterpart, while remaining competitive with external systems. These
+findings suggest that coordinated generation can be learned by
+composing pretrained models, extending their capabilities beyond
+independent generation.
+\end{abstract}
+%
+\begin{keywords}
+Multi-stream joint generation, symbolic music generation, model alignment
+\end{keywords}
+%
+
+\section{Introduction}
+\label{sec:intro}
+
+Intelligent behavior often depends on information streams that evolve
+together: speech combines text and audio, music coordinates melody
+with chords, and embodied behavior links perception with action.
+Multimodal models learn relationships between these streams to
+interpret their content, for example by answering questions about
+images or music, or to generate one stream from another, as in
+text-to-speech synthesis. We focus on \emph{coordination}: generating
+multiple streams that influence one another and remain consistent as
+they unfold. Here, each stream contributes to a shared outcome, rather
+than serving primarily as a condition for generating the other.
+
+We study the coordination of independently pretrained language models
+by combining two autoregressive models into a single joint generator.
+The aim is to let both streams use information from one another while
+retaining their pretrained capabilities. This formulation is
+particularly relevant when single-stream corpora are abundant but
+paired data are scarce: pretraining supplies the individual
+capabilities, while paired data support learning their coordination.
+More broadly, it provides a setting for studying the composition of
+specialized models into a coherent generative system.
+
+We propose \sys, a framework that integrates two pretrained
+autoregressive Transformers into a single model for frame-by-frame
+co-generation. It combines stream-specific attention, a shared
+mixture-of-experts layer, and draft-and-denoise decoding to exchange
+information between streams and coordinate their outputs at each step.
+
+We evaluate \sys on melody--chord generation, where the melody and
+chord streams are interdependent and share a symbolic representation.
+This provides a controlled testbed for comparison with a single model
+that generates both streams under shared weights. Both streams in
+\sys are initialized from the same pretrained music backbone and
+adapted on paired melody--chord data. \sys outperforms the backbone
+trained from scratch and achieves subjective ratings comparable to
+its finetuned single-stream counterpart, while remaining competitive
+with external systems. These results support adapting pretrained
+models for coordinated generation with limited paired data.
+
+\section{Related Work}
+\label{sec:related}
+
+\textbf{Cross-modal alignment.} Shared embeddings and cross-attention
+align modalities for contextual tasks~\cite{clip,flamingo}; conditional
+models fix a direction between aligned streams~\cite{yeh2021,sun2021,whole_song}.
+Models that emit both streams settle the coupling in advance: unified
+models share all weights and learn it through large-scale joint
+pretraining~\cite{chameleon,transfusion,bagel}, Mixture-of-Transformers
+and MoMa give each modality its own parameters under one global
+attention~\cite{mot,moma}, lock-step models such as Moshi~\cite{moshi}
+fix an order within each step, and joint diffusion or shared-latent
+coupling~\cite{mmdiffusion,codi,seeing_hearing} acts on whole clips.
+
+\textbf{Model merging and mixture of experts.} Sparse upcycling
+initializes every expert from one pretrained feed-forward
+layer~\cite{upcycling}, and Branch-Train-MiX merges separately trained
+experts under a learned router~\cite{btx}; both serve one output stream.
+\sys upcycles its pool the same way but learns stream-specific routers
+over experts no stream owns, with per-stream attention, for two streams
+that must agree at every step.
+
+\section{Methodology}
+\label{sec:method}
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=0.94\linewidth]{figures/arch.pdf}
+    \caption{\sys. (a)~Each block attends within a stream (Self Attn)
+    and across streams (Cross Attn) with per-stream projections, a
+    scalar gate admitting the cross readout. (b)~A router per stream
+    selects two of four shared experts, copies of the pretrained
+    feed-forward layer. (c)~Joint draft-and-denoise decoding: the
+    leader's draft $x^*_t$ is sampled and written in, one denoise
+    forward emits $x_t$ and $y_t$ together, and the roles swap at the
+    next frame.}
+    \label{fig:model}
+\end{figure*}
+
+Given autoregressive models $\mathrm{LM}_x$ and $\mathrm{LM}_y$
+pretrained independently on streams $x$ and $y$, \sys integrates
+them into a joint generator that learns their temporal and semantic
+coordination (Fig.~\ref{fig:model}). Stream-specific attention and
+routing over shared experts balance specialization with cross-stream
+interaction, while draft-and-denoise decoding coordinates each
+output pair without fixing either stream as first.
+
+\subsection{Problem Formulation}
+\label{sec:formulation}
+
+Let $x=(x_1,\ldots,x_T)$ and $y=(y_1,\ldots,y_T)$ be two co-occurring
+streams on a common frame grid, with $z_t=(x_t,y_t)$ denoting the
+time-aligned token pair at frame $t$. Aligned generation of $x$ and $y$
+seeks to model
+\begin{equation}
+    p(z_{1:T})
+    =
+    \prod_{t=1}^{T} p(x_t,y_t \mid z_{<t}),
+    \label{eq:joint_ar}
+\end{equation}
+where both components depend on the shared history $z_{<t}$. A standard
+autoregressive model further factorizes each frame as
+$p(x_t \mid z_{<t})\,p(y_t \mid z_{<t},x_t)$, or in the reverse order,
+making one stream condition on the other's already-generated token.
+
+The problem is therefore how to predict two time-aligned tokens jointly
+without fixing either stream as first. \sys interleaves the two
+streams: $x_t$ and $y_t$ share rotary position $t$ and predict
+$x_{t+1}$ and $y_{t+1}$ respectively, so the next frame is predicted at
+two positions of one pass, from one history, rather than one component
+after the other. Lastly, the within-frame joint distribution is
+realized through a \emph{draft-and-denoise} step,
+\begin{equation}
+p_\theta(z_t \mid z_{<t})
+=
+\sum_{d_t}
+\underbrace{p_\theta(d_t \mid z_{<t})}_{\text{draft}}\,
+\underbrace{p_\theta(x_t \mid z_{<t},d_t)\,p_\theta(y_t \mid z_{<t},d_t)}_{\text{denoise}},
+\label{eq:draft_denoise}
+\end{equation}
+where the draft $d_t$ is the leading stream's own next-frame prediction,
+$x^*_t$ or $y^*_t$, the leader alternating across frames, and the two
+denoise distributions are read out from one forward pass.
+
+\subsection{Transformer Architecture for Joint Generation}
+\label{sec:Duet}
+
+In this section, we discuss important architectural designs in \sys.
+Each layer keeps one copy of the pretrained block per stream and aligns
+the two in both sub-layers: attention lets the streams read each other
+(Fig.~\ref{fig:model}a) and the feed-forward sub-layer routes both over
+a shared expert pool (Fig.~\ref{fig:model}b). The attention projections
+and the experts are initialized from the pretrained block and
+finetuned; the gates and routers are the new parameters.
+
+\textbf{Stream-specific attention}\quad Let $\bm{h}^{(l)}_x, \bm{h}^{(l)}_y$ be
+the two streams' representations at layer $l$, and $(W^Q_s, W^K_s,
+W^V_s, W^O_s)$ the projections inherited from $\mathrm{LM}_s$. The
+information transferred from source stream $a$ to target stream $b$,
+$a,b\in\{x,y\}$, is
+\begin{equation}
+    A_{ab}
+    =
+    \operatorname{softmax}
+    \left(
+        \frac{(\bm{h}_b W^Q_b)(\bm{h}_a W^K_a)^\top}{\sqrt{d_k}}
+        + M_{ab}
+    \right)
+    \bm{h}_a W^V_a,
+    \label{eq:Duet_attn}
+\end{equation}
+with queries from the target and keys and values from the source, $d_k$
+the head dimension, and $M_{ab}$ a causal mask over frames. $A_{xx}$
+and $A_{yy}$ are the self-attention of $\mathrm{LM}_x$ and
+$\mathrm{LM}_y$. The cross-stream term reads the partner over earlier
+frames and over the current frame, and is combined with the
+self-attention through a trainable scalar gate $g_{ab}\in(0,1)$
+computed from $\bm{h}_b$, one per direction ($g_{xy}$ and $g_{yx}$);
+the current-frame pass is causal because under the shift neither
+position holds what it predicts. Then
+\begin{equation}
+    \bm{o}_b = \bigl(A_{bb} + g_{ab}\,A_{ab}\bigr)\,W^O_b,
+    \qquad
+    \tilde{\bm{h}}_b = \mathrm{LN}(\bm{h}_b + \bm{o}_b).
+    \label{eq:gates}
+\end{equation}
+
+\textbf{Shared expert routing in Mixture-of-Experts}\quad
+After attention, the feed-forward sub-layer routes both streams
+over a shared pool of $E$ experts
+$\mathrm{MLP}_1,\ldots,\mathrm{MLP}_E$
+(Fig.~\ref{fig:model}b). Each stream scores the pool with its own
+router $\boldsymbol{\pi}_s$ and mixes its top-$k$ experts,
+\begin{align}
+    \boldsymbol{\pi}_s
+    &= \operatorname{softmax}(\tilde{\bm{h}}_s G_s),
+    \notag \\
+    \bm{u}_s
+    &= \sum_{i\in\mathcal{T}_k(\boldsymbol{\pi}_s)}
+       \pi_{s,i}\,\mathrm{MLP}_i(\tilde{\bm{h}}_s),
+    \notag \\
+    \bm{h}^{(l+1)}_s
+    &= \mathrm{LN}(\tilde{\bm{h}}_s + \bm{u}_s),
+    \qquad s\in\{x,y\},
+    \label{eq:moe}
+\end{align}
+where $\mathcal{T}_k$ selects the $k$ largest routing weights, with
+the balancing term of~\cite{fedus2022switch}. No expert is assigned
+to a stream, so per-stream specialists and shared experts emerge
+rather than being imposed. We use $E=4$, $k=2$.
+
+In our experiments $\mathrm{LM}_x$ and $\mathrm{LM}_y$ are the same
+pretrained symbolic-music Transformer, so at each layer every expert
+starts as a copy of that model's feed-forward network and the four
+specialize only through training. When $\mathrm{LM}_x$ and
+$\mathrm{LM}_y$ are distinct models with compatible layer structures,
+the pool can instead hold the feed-forward networks of both; either
+way every expert stays reachable from both routers.
+
+\subsection{Joint Draft-and-Denoise Generation}
+\label{sec:generation}
+
+The architecture of Sec.~\ref{sec:Duet} shares the history but
+predicts the two components of a frame without seeing each other's
+current output. Draft-and-denoise (Eq.~\eqref{eq:draft_denoise})
+couples them through a shared draft, refining the frame with the same
+network in the spirit of Transfusion's pause-and-denoise
+step~\cite{transfusion}, without a separate denoiser.
+
+Two \emph{draft tokens}, one per stream, are appended after the
+history at rotary position $t$ (Fig.~\ref{fig:model}c). Each carries a
+draft through its stream's frame encoder, or a learned mask embedding
+when empty, attends to both histories and to each other, and is never
+attended to by history tokens. In training, one frame per window is
+chosen at random, its draft tokens filled with model drafts or left
+masked, and both are supervised against the true frame alongside the
+autoregressive loss. At inference, with $x$ leading at frame $t$, a
+first pass predicts both components from the history; only the
+leader's is kept and written into its draft token,
+$d_t = x^*_t \sim p_\theta(\cdot \mid z_{<t})$, while the follower's
+token stays masked. One \emph{denoise} pass then reads out both
+components at the draft-token positions, the follower conditioned on
+$d_t$ through same-frame attention and the leader re-predicted in place
+of its draft, $x_t, y_t \sim p_\theta(\cdot \mid z_{<t}, d_t)$. The
+pair is committed, $z_{<t+1} = [z_{<t}, z_t]$, and the leader
+alternates at the next frame, so generation stays autoregressive
+across frames while both components of a frame come from one pass.
+
+\section{Experimental Setup}
+\label{sec:setup_exp}
+
+\subsection{Pretrained backbone}
+\label{sec:backbone_training}
+
+Our backbone is the foundation model of~\cite{yinyang}, a
+RoFormer~\cite{roformer} with a local encoder that embeds each
+sixteenth-note frame, a 12-layer causal decoder of width $d=768$ over
+frames, and a local decoder that emits the next frame's notes. It was
+pretrained on 357{,}279 files of the Los Angeles MIDI
+dataset~\cite{lamd} with all tracks merged into one frame sequence, a
+note's track kept only in its program token; we therefore call it
+single-stream. \sys copies it into both streams.
+
+\subsection{Training data and training}
+\label{sec:data}
+
+We train on POP909~\cite{pop909}, 909 pop songs with a lead melody and
+chord annotations; the melody is stream $x$ and the chords, rendered as
+a bass note plus up to four upper tones, stream $y$. Every tenth song
+is held out (92 after dropping three whose prompt window has no
+chords), leaving about 800 for training, far less than the pretraining
+corpus, which is why we adapt rather than train from scratch.
+
+\sys keeps the backbone's 12 layers and width, with $E=4$ experts,
+$k=2$ active per position and expert width $d_f=4d$. The experts are
+initialized as copies of the pretrained feed-forward layer and the
+gates at bias $-10$, so training starts from the backbone run
+independently on each stream. We train on 384-frame windows with AdamW
+and a one-cycle schedule for 15{,}000 steps at a global batch of 128
+on 8 GPUs.
+
+\subsection{Baselines}
+\label{sec:baselines}
+
+\textbf{Same-backbone} baselines run the backbone as a single stream
+over the merged melody and chord sequence, distinguished only by
+program tokens, either finetuned on POP909 or trained on it from
+scratch; they share \sys's backbone, tokenization and data and isolate
+the two-stream construction. \textbf{External} baselines are
+Whole-Song Gen~\cite{whole_song}, a hierarchical diffusion model over
+form, counterpoint and lead sheet, and the Anticipatory Music
+Transformer (AMT)~\cite{anticipatory}, an event-based model that
+co-generates both streams but was trained on other data, so it is an
+out-of-domain reference rather than a matched opponent.
+
+\section{Evaluation}
+\label{sec:eval}
+
+\subsection{Objective evaluation}
+\label{sec:objective}
+
+Every system continues the same five-bar prompts of the 92 held-out
+POP909 songs to the training length, three samples per song. We
+report three groups of metrics: general music quality, prompt
+consistency and melody--chord consistency.
+
+\begin{table*}[t]
+\centering
+\caption{General quality: corpus-pooled divergence from the ground-truth continuation ($\downarrow$, 0 is the reference) over 92 held-out songs; each sample index pooled over all songs against the pooled reference, mean$\pm$std over the three samples. Bold: best per column. $^{*}$: reported but not ranked.}
+\label{tab:e1_quality}
+\vspace{4pt}
+\small
+\begin{tabular}{llccccc}
+\hline
+Group & System & Harm.\ rhythm & Onset grid, mel. & Onset grid, chd. & Duration, mel. & Duration, chd. \\
+\hline
+\textbf{Ours} & Duet & \textbf{0.0031}$\pm$0.0013 & \textbf{0.0009}$\pm$0.0002 & 0.0018$\pm$0.0009 & 0.0393$\pm$0.0019 & \textbf{0.0032}$\pm$0.0009 \\
+ & \hspace{1em}{\footnotesize w/o MoE (dense)} & 0.0042$\pm$0.0004 & 0.0147$\pm$0.0004 & 0.0020$\pm$0.0008 & 0.0366$\pm$0.0009 & 0.0048$\pm$0.0017 \\
+ & \hspace{1em}{\footnotesize w/o draft tokens} & 0.0065$\pm$0.0028 & 0.0143$\pm$0.0012 & \textbf{0.0015}$\pm$0.0010 & 0.0380$\pm$0.0019 & 0.0054$\pm$0.0033 \\
+\hline
+\textbf{Internal} & Single-stream (scratch) & 0.0152$\pm$0.0041 & 0.0016$\pm$0.0002 & 0.0035$\pm$0.0019 & 0.0369$\pm$0.0015 & 0.0112$\pm$0.0042 \\
+ & Single-stream (finetuned)$^{*}$ & 0.0031$\pm$0.0006 & 0.0015$\pm$0.0003 & 0.0004$\pm$0.0002 & 0.0353$\pm$0.0012 & 0.0009$\pm$0.0002 \\
+\hline
+\textbf{External} & Whole-Song Gen & 0.0163$\pm$0.0077 & 0.0039$\pm$0.0003 & 0.0078$\pm$0.0035 & \textbf{0.0070}$\pm$0.0023 & 0.0124$\pm$0.0065 \\
+ & AMT & 0.0726$\pm$0.0035 & 0.0025$\pm$0.0011 & 0.0473$\pm$0.0087 & 0.0235$\pm$0.0037 & 0.0814$\pm$0.0082 \\
+\hline
+\end{tabular}
+\end{table*}
+
+\textbf{General quality.}
+Table~\ref{tab:e1_quality} reports per-stream Jensen--Shannon
+divergence (JSD) between generated and reference distributions of
+chord-change intervals, onset positions, and note durations.
+The finetuned single-stream model serves as an unranked reference
+and remains at the reference floor. Among ranked systems, \sys
+leads on three of five metrics and ties on chord onset positions.
+Both ablations yield similar chord statistics but increase melody
+onset JSD from $0.0009$ to $0.0147$ and $0.0143$. External systems
+deviate further in chord-change intervals and chord durations.
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=0.9\textwidth]{figures/e1_v5b92_prompt_fit.pdf}
+  \caption{Objective evaluation on 92 held-out songs, relative to the
+  ground-truth continuation ($0$ = matches the real song). Prompt
+  consistency: (a)~pitch-class JSD vs.\ prompt, melody; (b)~onset-pattern
+  similarity vs.\ prompt, melody; (c,~d)~the same for chord.
+  Melody--chord consistency: (e)~chord-tone ratio; (f)~pitch consonance;
+  (g)~melody--chord tonal distance; (h)~coupling. Boxes: quartiles over
+  songs, whiskers $1.5$\,IQR; $\diamond$ mean; dashed line: reference.
+  Systems left of the vertical rule are ranked: solid star, the best of
+  them; hollow star, the best of all where different.}
+  \label{fig:e1_objective}
+\end{figure*}
+
+\textbf{Prompt consistency.} Fig.~\ref{fig:e1_objective}(a--d) measures,
+per stream, tonal drift (pitch-class divergence between prompt and
+continuation) and rhythmic placement (cosine between their bar-level
+onset profiles), each relative to the ground-truth continuation.
+Rhythm does not separate the systems, but tonal drift tracks how much
+of the pretrained backbone a system keeps: \sys, its no-draft-token
+arm and the finetuned single-stream model, which inherit the pretrained
+weights intact, drift least and are statistically level, whereas the
+dense arm and the model trained from scratch drift three to four times
+farther ($p<0.001$) and Whole-Song Gen nearly ten times.
+
+\textbf{Melody--chord consistency.} Fig.~\ref{fig:e1_objective}(e--h)
+scores how well the two streams agree: chord-tone ratio and pitch
+consonance~\cite{yeh2021}, melody--chord tonal distance, and coupling,
+the chord-tone coverage on the true pairing minus that with the chord
+track shifted two bars, which only rewards chords that follow
+\emph{this} melody. Among systems trained on the same data \sys is
+closest to the reference on all four; removing the draft tokens or
+training from scratch roughly doubles its gap and one dense block in
+place of the experts quadruples it. The finetuned single-stream model
+and the external systems sit nearer still, but they are not the target:
+the first is the backbone finetuned on the interleaved stream, the
+ceiling of joint training on this data, and the others harmonize one
+stream given the other, an easier task than writing both at once; they
+mark how far co-generation has to go, and \sys covers most of that
+distance with both pretrained models intact.
+
+\subsection{Subjective evaluation}
+\label{sec:subjective}
+
+Five held-out songs were selected; for each, one sample from \sys and
+from each of the four baselines of Sec.~\ref{sec:baselines}, plus the
+ground-truth continuation, gives six clips, thirty in all. Each clip
+contains the prompt followed by its continuation, all rendered on piano
+at one velocity and tempo. Raters heard the groups, and the clips
+within a group, in random order and rated every clip from $1$ to $5$
+on \emph{prompt consistency}, \emph{melody--chord consistency},
+\emph{structure}, \emph{musicality} and \emph{creativity}. 18 raters
+(10 male, 8 female; age 21--55; 12 with some musical training, 4 with
+none, 2 amateur musicians) gave 402 ratings, 67 per system, in 67
+complete rater--song blocks. Ratings were analyzed with a
+repeated-measures ANOVA over systems (Greenhouse--Geisser
+corrected~\cite{greenhouse1959methods}), followed by paired $t$-tests
+against \sys with Holm correction~\cite{holm1979simple}; error bars
+are within-subject 95\% confidence
+intervals~\cite{cousineau2005confidence,morey2008confidence}.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/subjective_bars_final.pdf}
+  \caption{Subjective evaluation: mean rating per system and axis
+    (scale $1$--$5$) with within-subject 95\% confidence intervals over
+    the 67 rater--song blocks. $*$: differs from \sys, paired $t$-test,
+    Holm-corrected, $p < 0.05$.}
+  \label{fig:subjective}
+\end{figure}
+
+The effect of system is significant on every axis ($p < 10^{-7}$).
+Among the generative systems \sys has the highest mean on every axis
+but musicality, where the finetuned single-stream model leads ($3.77$
+against $3.65$), and overall ($3.81$). It is rated significantly above
+the scratch single-stream model and Whole-Song Gen, most on the two
+consistency axes and least on musicality and creativity; it does not
+differ significantly from AMT or from the finetuned single-stream
+model on any axis; and ground truth remains significantly above every
+system. The ordering agrees with the prompt and melody--chord
+consistency results of Fig.~\ref{fig:e1_objective}.
+
+% \subsection{Expert-routing ablation}
+% \label{sec:abl_routing}
+%
+% We compare four feed-forward designs at equal parameters and activated
+% compute, all from the same warm start: a \emph{shared} router scoring
+% every position; \emph{stream-specific} routers over one pool (\sys,
+% Eq.~\eqref{eq:moe}); a \emph{hard-partitioned} pool, each
+% stream restricted to two experts with the balance term computed within
+% its pair~\cite{moma}; and a \emph{dense} layer of inner width $8d$,
+% matching the activated compute of two $4d$ experts. The two
+% stream-specific routers start as one matrix, so at step~0 the model is
+% the shared-router model. Routing statistics are read on a fixed
+% held-out batch (about 770 positions per stream per layer); a second
+% batch reproduces every pattern. [X: per-arm training budget.]
+%
+% \begin{figure}[t]
+%   \centering
+%   \begin{minipage}[t]{0.56\columnwidth}
+%     \centering
+%     \includegraphics[width=\linewidth]{figures/expert_purity.pdf}
+%     \\ {\small (a)}
+%   \end{minipage}\hfill
+%   \begin{minipage}[t]{0.42\columnwidth}
+%     \centering
+%     \includegraphics[width=\linewidth]{figures/content_probe.pdf}
+%     \\ {\small (b)}
+%   \end{minipage}
+%   \caption{Shared router versus stream-specific routers, same held-out
+%     batch. (a)~Expert purity: the share of melody among the positions
+%     each expert wins per layer. Poles are per-stream specialists (S,
+%     at most $10\%$ or at least $90\%$); the midpoint marks experts
+%     serving both streams (I, $40$--$60\%$). (b)~Layers, out of twelve,
+%     in which routing inside a stream follows the frame's register
+%     beyond a permutation null.}
+%   \label{fig:routing}
+% \end{figure}
+%
+% A shared router separates the streams strongly (mean $\ell_1$
+% distance $0.59$ of $2$ between the streams' mean routing distributions)
+% but mostly by stream identity: with the melody token copied into the
+% chord positions, so that only identity differs, $0.41$ remains, and
+% swapping the streams' contents moves the expert preferences in none of
+% the eleven usable layers. Offering the identity as a per-stream bias on
+% the logits changes nothing (bias deltas at most $0.06$); removing it
+% from the router's job does, which is what Eq.~\eqref{eq:moe}
+% does. Fig.~\ref{fig:routing}(a) shows the result: expert purity, the
+% share of melody among the positions an expert wins, rises from nine
+% specialist cells of 48 to twelve, no expert being assigned to a stream,
+% while some experts keep serving both. Fig.~\ref{fig:routing}(b) shows
+% where the freed capacity goes: routing inside a stream follows the
+% frame's register above a permutation null in nine chord layers of
+% twelve against five for the shared router, while melody stays near the
+% ceiling (ten against nine).
+%
+% \begin{figure}[t]
+%   \centering
+%   \includegraphics[width=\columnwidth]{figures/load_distribution.pdf}
+%   \caption{Distribution of the 48 per-expert top-1 loads (12 layers
+%     $\times$ 4 experts) per router design, (a)~teacher-forced on the
+%     held-out batch and (b)~free-running, over the routing decisions of
+%     the newest positions during generation. Per-layer loads sum to one,
+%     so both means are $1/E$ and only the spread differs.}
+%   \label{fig:load}
+% \end{figure}
+%
+% Separate routers do not starve experts (Fig.~\ref{fig:load}): none is
+% dead in either design, teacher-forced or free-running, and deadliness,
+% one minus the mean smallest expert load relative to $1/E$, is $0.25$
+% for both under teacher forcing and $0.31$ against the shared router's
+% $0.36$ on the model's own output, where the stream-specific routers
+% also keep loads closer to balanced ($\sigma = 0.071$ against $0.085$).
+
+\vfill\pagebreak
+
+\bibliographystyle{IEEEbib}
+\bibliography{refs}
+
+\end{document}
