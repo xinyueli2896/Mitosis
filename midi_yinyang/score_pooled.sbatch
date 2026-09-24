@@ -23,6 +23,10 @@
 #   BOLD_BEST / BOLD_EXCLUDE / GROUP_COLUMN   table marks and layout
 #              (default 1 / S1 / 1)
 #   EXCLUDE_SYSTEMS  internal names left off the table, space-separated
+#   QUALITY_DIGITS   decimals in the table (default 3; 4 when the
+#              pooled values sit at the 0.001 level)
+#   TABLE_ONLY=1  skip the rescoring and only rebuild the table from
+#              the existing results/<TAG>_pooled.csv (seconds)
 #
 #   sbatch --export=ALL,MANIFEST=results/E1_p80_v5b92_lora_manifest.tsv \
 #       midi_yinyang/score_pooled.sbatch
@@ -67,6 +71,7 @@ echo "POOLED-ONLY RESCORE  manifest=$MANIFEST  refs=$OUT_ROOT/prompts  window=$P
 echo "-> results/${TAG}_pooled.csv  figures/${TAG}_quality.tex"
 echo "================================================================"
 
+[[ "${TABLE_ONLY:-0}" == "1" ]] || \
 python eval_metrics.py --task melchord --manifest "$MANIFEST" \
     --ref-a-dir "$OUT_ROOT/prompts/mel" --ref-b-dir "$OUT_ROOT/prompts/chord" \
     --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
@@ -81,4 +86,5 @@ python e1_quality_table.py --pooled "results/${TAG}_pooled.csv" \
     $([[ "${BOLD_BEST:-1}" == "1" ]] || echo --no-bold) \
     --bold-exclude "${BOLD_EXCLUDE-S1}" \
     $([[ "${GROUP_COLUMN:-1}" == "1" ]] && echo --group-column) \
+    --digits "${QUALITY_DIGITS:-3}" \
     ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"}
