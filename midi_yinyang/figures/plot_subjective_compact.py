@@ -61,8 +61,8 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--exclude', nargs='*', default=[])
     ap.add_argument('--drop-constant', action='store_true')
-    ap.add_argument('--height', type=float, default=2.0, help='figure height in inches')
-    ap.add_argument('--width', type=float, default=3.0, help='figure width in inches')
+    ap.add_argument('--height', type=float, default=1.7, help='figure height in inches')
+    ap.add_argument('--width', type=float, default=2.5, help='figure width in inches')
     args = ap.parse_args()
     rows = load(args.csv, args.exclude, args.drop_constant)
     Ys, n = matrix(rows, 'block')
@@ -76,7 +76,7 @@ def main():
     fig.patch.set_facecolor(SURFACE); ax.set_facecolor(SURFACE)
     k = len(SYSTEMS)
     # rows top to bottom; systems stacked within a row, ours on top
-    off = (np.arange(k) - (k - 1) / 2) * 0.11
+    off = (np.arange(k) - (k - 1) / 2) * 0.105
     handles = {}
     for j, a in enumerate(ROW_AXES):
         Y = Ys[a]
@@ -105,7 +105,7 @@ def main():
             ax.axhline(ybase - 0.5, color=GRID, lw=0.3, zorder=0)
     ax.set_yticks(range(len(ROWS)))
     ax.set_yticklabels(ROWS[::-1], color=INK)
-    ax.set_ylim(-0.5, len(ROWS) - 0.5)
+    ax.set_ylim(-0.45, len(ROWS) - 0.55)
     ax.set_xlim(2.5, 4.75)
     ax.set_xticks([3, 4])
     ax.set_xlabel('mean rating', color=INK)
@@ -122,7 +122,7 @@ def main():
                loc='upper center', bbox_to_anchor=(0.5, 1.0), frameon=False,
                fontsize=FS_LEGEND - 3, handletextpad=0.3, columnspacing=0.7,
                borderaxespad=0.1, handlelength=1.2, labelcolor=INK)
-    fig.tight_layout(pad=0.3, rect=[0, 0, 1, 0.91])
+    fig.tight_layout(pad=0.2, rect=[0, 0, 1, 0.885])
     for ext in ('pdf', 'png'):
         fig.savefig(f'{args.out}.{ext}', dpi=300, facecolor=SURFACE)
         print('wrote', f'{args.out}.{ext}')
