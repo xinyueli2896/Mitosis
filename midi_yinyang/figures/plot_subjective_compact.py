@@ -29,7 +29,10 @@ sys.path.insert(0, _ROOT)
 from subjective_anova import AXES, SYSTEMS, load, matrix, holm  # noqa: E402
 from plot_e1_box import FAMILY_COLOR, INK, GRID, SURFACE, FS_TICK, FS_LABEL, FS_LEGEND  # noqa: E402
 
-ROWS = ['Prompt\nconsistency', 'Structure', 'Melody–chord\nconsistency', 'Musicality',
+# row order of the paper's figure (2026-09-24): the two consistency axes
+# first, then structure, musicality, creativity, overall
+ROW_AXES = ['consistency', 'fit', 'structure', 'musicality', 'creativity', 'overall']
+ROWS = ['Prompt\nconsistency', 'Melody–chord\nconsistency', 'Structure', 'Musicality',
         'Creativity', 'Overall']
 # system -> (display, family, marker); ground truth in ink with an open marker
 SYS = {'Duet (alt commit)': ('Duet (ours)', 'Ours', 'o'),
@@ -74,7 +77,7 @@ def main():
     # rows top to bottom; systems stacked within a row, ours on top
     off = (np.arange(k) - (k - 1) / 2) * 0.11
     handles = {}
-    for j, a in enumerate(AXES + ['overall']):
+    for j, a in enumerate(ROW_AXES):
         Y = Ys[a]
         mean, ci = Y.mean(0), within_ci(Y)
         praw = np.array([stats.ttest_rel(Y[:, 0], Y[:, i]).pvalue for i in range(1, k)])
