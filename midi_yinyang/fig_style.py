@@ -1,23 +1,23 @@
-"""Shared style of the model-figure panels. Palette (2026-09-24): the
-six-swatch set Vanilla Cream / Blush Petal / Rosewood / Sage Leaf /
-Misty Sky / Midnight Lagoon -- Misty Sky for stream x, Sage Leaf for
-stream y, Vanilla Cream for every model component, Blush Petal for the
-two cross-attention paths with their lines in the reading stream's
-colour, Rosewood for the self-attention lines, Midnight Lagoon for
-outlines, arrows and type. Changing a value here restyles all three
-panels."""
+"""Shared style of the model-figure panels. Palette (2026-09-24, second
+set): Phantom / Breeze / Morning Mist / White Russian / Air-Kiss /
+Coconut Macaroon. The two lightest swatches tell the streams apart
+(Morning Mist for x, White Russian for y, their wedges in Breeze and
+Air-Kiss), Coconut Macaroon fills every component, Air-Kiss the two
+cross-attention boxes and gates, Breeze the translucent expert band,
+and Phantom is the ink: outlines, arrows, lines and type. Changing a
+value here restyles all three panels."""
 
-BLUE, BLUE_L = 'A9B7C6', 'A9B7C6'        # stream x: Misty Sky (fill and wedge)
-RED, RED_L = 'A8B58A', 'A8B58A'          # stream y: Sage Leaf (fill and wedge)
+BLUE, BLUE_L = 'E1EAEC', 'C3DDE4'        # stream x: Morning Mist fill, Breeze wedge
+RED, RED_L = 'EEDFD9', 'F0D3C8'          # stream y: White Russian fill, Air-Kiss wedge
 FILL = {'x': BLUE, 'y': RED}
 LINE = {'x': BLUE_L, 'y': RED_L}
-COMP = 'FFF7E6'                          # model components: Vanilla Cream
-POOL = 'A9B7C6'                          # the expert pool band: Misty Sky, drawn translucent
-GREEN, GREEN_L = 'F7C8D3', 'A9B7C6'      # x-stream cross path: Blush Petal box, lines in the reading stream's Misty Sky
-YELLOW, YELLOW_L = 'F7C8D3', 'A8B58A'    # y-stream cross path: Blush Petal box, lines in the reading stream's Sage Leaf
+COMP = 'D7C7BD'                          # model components: Coconut Macaroon
+POOL = 'C3DDE4'                          # the expert pool band: Breeze, drawn translucent
+GREEN, GREEN_L = 'F0D3C8', 'D7C7BD'      # x-stream cross path: Air-Kiss box, Coconut Macaroon lines
+YELLOW, YELLOW_L = 'F0D3C8', 'D7C7BD'    # y-stream cross path: Air-Kiss box, Coconut Macaroon lines
 CROSS = {'x': (GREEN, GREEN_L), 'y': (YELLOW, YELLOW_L)}
-GREY_L = 'B46A72'                        # self-attention lines: Rosewood
-INK = '2D3A47'                           # outlines, arrows and type: Midnight Lagoon
+GREY_L = '6F7C80'                        # self-attention lines: Phantom
+INK = '6F7C80'                           # outlines, arrows and type: Phantom
 LW = 1.5                                 # outline weight of every box
 AW = 1.1                                 # arrow weight
 FS = 10.5                                # label size in boxes
