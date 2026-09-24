@@ -1130,7 +1130,9 @@ def main():
             ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(3))
             ax.tick_params(axis='y', labelsize=FS_TICK - 1.0, pad=1.5)
         elif args.names == 'none':
-            # the one-column sheet: y tick numbers a point smaller
+            # the one-column sheet: y tick numbers a point smaller and
+            # three or four of them, not a ladder
+            ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(4))
             ax.tick_params(axis='y', labelsize=FS_TICK - 1.0)
         used.append((idx // ncols, idx % ncols, ax))
     for r in range(nrows):
