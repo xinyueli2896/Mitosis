@@ -60,6 +60,9 @@
 #             panel per row, short writes the two-line short codes
 #             horizontally under the columns instead of turning the full
 #             names vertical, so the one-column sheet keeps its width
+#   NO_TITLES=1  no metric name on the panels (ORIENT=v); the caption
+#             names the lettered panels
+#   PANEL_HEIGHT  inches per panel row for ORIENT=v (default 1.35)
 #   ORIENT    h (default): wide layout, four panels per row, systems on
 #             the y-axis, use with figure*; v: one-column layout
 #   WIDTH     box-sheet width in inches for ORIENT=v (default 3.4, one
@@ -149,6 +152,8 @@ POOLED_CSV="${POOLED_CSV:-}"
 WIDTH="${WIDTH:-3.4}"
 ORIENT="${ORIENT:-h}"
 NAMES="${NAMES:-long}"   # long | short | none
+NO_TITLES="${NO_TITLES:-0}"
+PANEL_HEIGHT="${PANEL_HEIGHT:-1.35}"
 UBR_WIDTH="${UBR_WIDTH:-7.0}"
 TITLE="${TITLE:-}"
 EXCLUDE_SYSTEMS="${EXCLUDE_SYSTEMS:-}"
@@ -190,7 +195,8 @@ if [[ -n "${BLOCKS// /}" ]]; then
                 || echo "[table] no $pc; quality table skipped"
         fi
         python plot_e1_box.py --csv "$CSV" --out "${OUT}_${b}" \
-            --block "$b" ${NCOLS:+--ncols "$NCOLS"} --width "$WIDTH" --orient "$ORIENT" --names "$NAMES" \
+            --block "$b" ${NCOLS:+--ncols "$NCOLS"} --width "$WIDTH" --orient "$ORIENT" --names "$NAMES" --panel-height "$PANEL_HEIGHT" \
+            $([[ "$NO_TITLES" == "1" ]] && echo --no-titles) \
             $([[ "$DELTAS_ONLY" == "1" ]] && echo --deltas-only) \
             $([[ "$PER_SONG" == "1" ]] && echo --per-song) \
             ${POOLED_CSV:+--pooled-csv "$POOLED_CSV"} \
@@ -198,7 +204,8 @@ if [[ -n "${BLOCKS// /}" ]]; then
             ${TITLE:+--title "$TITLE"}
     done
 else
-    python plot_e1_box.py --csv "$CSV" --out "$OUT" --width "$WIDTH" --orient "$ORIENT" --names "$NAMES" \
+    python plot_e1_box.py --csv "$CSV" --out "$OUT" --width "$WIDTH" --orient "$ORIENT" --names "$NAMES" --panel-height "$PANEL_HEIGHT" \
+            $([[ "$NO_TITLES" == "1" ]] && echo --no-titles) \
         ${NCOLS:+--ncols "$NCOLS"} ${METRICS:+--metrics "$METRICS"} \
         ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"} \
         ${TITLE:+--title "$TITLE"}
