@@ -70,6 +70,10 @@
 #             drawn on every panel, e.g. DIVIDER_AFTER=S1
 #   BEST_OVERALL=1  also mark the best of ALL columns with a hollow grey
 #             star (the solid star stays the best RANKED one)
+#   MERGE_BLOCKS=1  draw every block in BLOCKS on ONE sheet, panels
+#             lettered straight through, one legend; e.g.
+#             BLOCKS="prompt fit" ORIENT=v NCOLS=4 WIDTH=7 for a two-
+#             column figure of two rows of four
 #   ORIENT    h (default): wide layout, four panels per row, systems on
 #             the y-axis, use with figure*; v: one-column layout
 #   WIDTH     box-sheet width in inches for ORIENT=v (default 3.4, one
@@ -189,7 +193,20 @@ echo "BLOCKS: ${BLOCKS:-<none: single figure from METRICS>}"
 echo "NCOLS : ${NCOLS:-<per preset>}   DELTAS_ONLY=$DELTAS_ONLY"
 echo "================================================================"
 
-if [[ -n "${BLOCKS// /}" ]]; then
+if [[ -n "${BLOCKS// /}" && "${MERGE_BLOCKS:-0}" == "1" ]]; then
+    # one sheet with every block's panels in a row, one legend; the
+    # output suffix joins the block names (prompt fit -> _prompt_fit)
+    echo "--- merged: $BLOCKS ---"
+    python plot_e1_box.py --csv "$CSV" --out "${OUT}_$(echo $BLOCKS | tr ' ' '_')" \
+        --block "$BLOCKS" ${NCOLS:+--ncols "$NCOLS"} --width "$WIDTH" --orient "$ORIENT" --names "$NAMES" --panel-height "$PANEL_HEIGHT" \
+        $([[ "$NO_TITLES" == "1" ]] && echo --no-titles) \
+        ${ORDER:+--order "$ORDER"} ${RANKED:+--ranked "$RANKED"} ${DIVIDER_AFTER:+--divider-after "$DIVIDER_AFTER"} $([[ "$BEST_OVERALL" == "1" ]] && echo --best-overall) \
+        $([[ "$DELTAS_ONLY" == "1" ]] && echo --deltas-only) \
+        $([[ "$PER_SONG" == "1" ]] && echo --per-song) \
+        ${POOLED_CSV:+--pooled-csv "$POOLED_CSV"} \
+        ${EXCLUDE_SYSTEMS:+--exclude "$EXCLUDE_SYSTEMS"} \
+        ${TITLE:+--title "$TITLE"}
+elif [[ -n "${BLOCKS// /}" ]]; then
     for b in $BLOCKS; do
         echo "--- $b ---"
         if [[ "$b" == quality && "${QUALITY_TABLE:-1}" == "1" ]]; then

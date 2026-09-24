@@ -952,19 +952,29 @@ def main():
     if args.block:
         from eval_metrics import H_GROUPS
         pre = presets()
-        if args.block in pre:
-            metrics, auto_ncols, auto_title, pooled_mode = pre[args.block]
-        elif args.block in H_GROUPS:
-            # raw hypothesis block. `_ref` columns hold the reference
-            # pair's own statistic, copied into every system's row:
-            # identical across columns by construction, so a box plot of
-            # one is the same box drawn nine times. prompt_onsets_* goes
-            # too -- a guard on the INPUT, not a score.
-            metrics = _block(args.block)
-        else:
-            raise SystemExit(
-                f'unknown block {args.block}; presets: {" ".join(pre)}; '
-                f'raw blocks: {" ".join(H_GROUPS)}')
+        # several presets may be named at once ("prompt fit"): their
+        # panels are concatenated into one sheet, lettered straight
+        # through, under one legend (2026-09-24, by request)
+        blocks = [b for b in re.split(r'[,\s]+', args.block) if b]
+        metrics, titles = [], []
+        for b in blocks:
+            if b in pre:
+                ms, auto_ncols, t, pooled_mode = pre[b]
+                metrics += ms; titles.append(t)
+            elif b in H_GROUPS:
+                # raw hypothesis block. `_ref` columns hold the reference
+                # pair's own statistic, copied into every system's row:
+                # identical across columns by construction, so a box plot
+                # of one is the same box drawn nine times. prompt_onsets_*
+                # goes too -- a guard on the INPUT, not a score.
+                metrics += _block(b)
+            else:
+                raise SystemExit(
+                    f'unknown block {b}; presets: {" ".join(pre)}; '
+                    f'raw blocks: {" ".join(H_GROUPS)}')
+        auto_title = '; '.join(titles)
+        if len(blocks) > 1 and pooled_mode:
+            raise SystemExit('a pooled preset cannot be merged with another sheet')
         if args.deltas_only and not pooled_mode:
             # a pooled sheet is divergence-from-reference already and
             # carries no _delta suffix; the flag would empty it
@@ -1158,7 +1168,7 @@ def main():
     # below the panels: vertical full names need ~1.5 in; two-line short
     # codes ~0.35 in; none leaves the legend alone, which then also lists
     # the systems (~0.85 in)
-    extra = (0.8 if args.names == 'none' else
+    extra = ((0.8 if args.width < 5 else 0.5) if args.names == 'none' else
              1.0 if short_names else (2.25 if ncols > 1 else 1.6))
     fig, axgrid = plt.subplots(
         nrows, ncols, squeeze=False,
@@ -1183,7 +1193,7 @@ def main():
         else:
             labels = draw_panel(ax, m, per_song, order, present, title_chars,
                                 letter=letter, overall=args.best_overall)
-        if ncols >= 3:
+        if args.width / ncols < 1.2:
             # narrow panels: three y ticks at most, a point smaller, so
             # the tick labels do not take half the panel's width
             ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(3))
@@ -1335,7 +1345,8 @@ def main():
             labels_.append(f)
     # Two legend columns fit a 3.4 in figure at 7 pt; three would not.
     fig.legend(handles=handles, labels=labels_, loc='lower center',
-               ncol=2 if args.width < 5 else 3, frameon=False,
+               ncol=2 if args.width < 5 else (6 if args.names == 'none' else 3),
+               frameon=False,
                # the system-swatch legend (--names none) one point smaller
                fontsize=FS_LEGEND - (1.0 if args.names == 'none' else 0.0),
                labelcolor=INK,
@@ -1346,11 +1357,11 @@ def main():
         fig.suptitle(args.title, fontsize=FS_LETTER, color=INK, y=0.995)
 
     # The legend's share of the height, so it never overlaps the names.
-    n_leg = math.ceil(len(handles) / (2 if args.width < 5 else 3))
+    n_leg = math.ceil(len(handles) / (2 if args.width < 5 else (6 if args.names == 'none' else 3)))
     row_h = 0.13 if args.names == 'none' else 0.15
     leg_frac = (row_h * n_leg + 0.06) / fig.get_figheight()
     fig.tight_layout(rect=(0, leg_frac, 1, 1.0), h_pad=1.0,
-                     w_pad=0.4 if ncols >= 3 else 0.8)
+                     w_pad=0.4 if args.width / ncols < 1.2 else 0.8)
     for ext in ('pdf', 'png'):
         path = f'{args.out}.{ext}'
         fig.savefig(path, dpi=300, facecolor=SURFACE)
