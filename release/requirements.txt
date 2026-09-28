@@ -1,0 +1,26 @@
+# Python 3.10 or 3.11. Install torch for your CUDA version first if pip's
+# default build does not match your driver (https://pytorch.org).
+torch>=2.1
+lightning>=2.1
+pytorch_lightning>=2.1
+numpy
+scipy
+matplotlib
+pretty_midi
+mido
+joblib
+six
+tqdm
+huggingface_hub
+tensorboard      # training logs when WANDB is off
+# runtime dependencies of the bundled transformers 4.49.0 fork
+# (built by scripts/setup_transformers.sh; do not pip-install transformers)
+tokenizers
+safetensors
+regex
+pyyaml
+requests
+filelock
+packaging
+# optional: training curves with WANDB=1
+wandb

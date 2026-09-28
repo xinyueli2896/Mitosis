@@ -1,0 +1,496 @@
+import numpy as np
+import xf_midi
+import pretty_midi
+from settings import RWC_DATASET_PATH, LA_DATASET_PATH, NOTTINGHAM_DATASET_PATH, POP909_MELODY_PATH, POP909_CHORD_PATH
+import os
+import re
+from joblib import Parallel, delayed
+import torch
+import shutil
+
+tokenize_dict = {'<sos>': 0, '<eos>': 1, '<pad>': 2}
+tokenize_count = [-1, -1, -1]
+
+DURATION_TEMPLATES = np.array([1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096])
+
+def filter_la_tempo_changes():
+    la_folder = os.path.join(LA_DATASET_PATH, 'MIDIs')
+    output_folder = os.path.join(LA_DATASET_PATH, 'with_tempo_changes')
+    for folder in os.listdir(la_folder):
+        for file in os.listdir(os.path.join(la_folder, folder)):
+            midi_path = os.path.join(la_folder, folder, file)
+            try:
+                midi = pretty_midi.PrettyMIDI(midi_path)
+            except:
+                continue
+            tempo_changes = midi.get_tempo_changes()
+            if len(tempo_changes[0]) > 3:
+                for ins in midi.instruments:
+                    if ins.is_drum: # has a drum track
+                        shutil.copy(midi_path, os.path.join(output_folder, file))
+
+def analyze_la_quantization(midi_path, beat_div=4):
+    try:
+        # Read the midi as a score MIDI
+        # E.g., a MIDI note with start_time = 3.0 means it starts at the 3rd subbeat
+        midi = xf_midi.XFMidi(midi_path, constant_tempo=60.0 / beat_div)
+    except:
+        return None
+    midi_end_time = int(midi.get_end_time())
+    if midi_end_time <= 0:
+        return None
+    best_statistics = 1.0
+    for i, ins in enumerate(midi.instruments):
+        if len(ins.notes) > 20:
+            statistics = np.zeros(beat_div, dtype=np.uint32)
+            for note in ins.notes:
+                start_time = int(round(note.start))
+                statistics[start_time % beat_div] += 1
+            statistics = statistics[1::2].sum() / len(ins.notes)
+            best_statistics = min(best_statistics, statistics)
+    return best_statistics
+
+def filter_la_quantization(midi, beat_div=4):
+    best_statistics = 1.0
+    for i, ins in enumerate(midi.instruments):
+        if len(ins.notes) > 20:
+            statistics = np.zeros(beat_div, dtype=np.uint32)
+            for note in ins.notes:
+                start_time = int(round(note.start))
+                statistics[start_time % beat_div] += 1
+            statistics = statistics[1::2].sum() / len(ins.notes)
+            best_statistics = min(best_statistics, statistics)
+    # best_statistics < 4.5: likely well-quantized
+    # best_statistics > 6.5: totally wrong beats, but tempo seems to be correct. Model can learn something from it.
+    return best_statistics <= 0.45 or 0.65 < best_statistics < 1.0
+
+def get_density(ins, sparse_beat_group=4):
+    # Quantize using beat_div, then evaluate how many onsets are on sparse_beat_group
+    return len([note for note in ins.notes if int(round(note.start)) % sparse_beat_group == 0]) / len(ins.notes)
+
+def preprocess_midi(midi_path, max_polyphony, beat_div=4, ins_ids='all', filter=True, dedup=False, fixed_length=-1, return_midi_ins=False):
+    '''
+    Preprocess a MIDI file into a tensor representation
+    :param midi_path: Path to the MIDI file
+    :param max_polyphony: Maximum number of notes that can be played at the same time
+    :param beat_div: Number of subbeats per beat
+    :param ins_ids: List of instrument ids to include, or 'all' to include all instruments
+    :return: A tensor representation of the MIDI file
+    '''
+    try:
+        # Read the midi as a score MIDI
+        # E.g., a MIDI note with start_time = 3.0 means it starts at the 3rd subbeat
+        midi = xf_midi.XFMidi(midi_path, constant_tempo=60.0 / beat_div)
+    except:
+        return None
+    midi_end_time = int(midi.get_end_time())
+    if fixed_length >= 0:
+        midi_end_time = fixed_length
+    if midi_end_time <= 0:
+        return None
+    if filter and not filter_la_quantization(midi, beat_div):
+        return None
+    if not isinstance(ins_ids, list):
+        ins_ids = [ins_ids]
+    if ins_ids[0].startswith('dense'):
+        if len(midi.instruments) > 1:
+            densities = [get_density(ins) for i, ins in enumerate(midi.instruments)]
+            if min(densities) < 0.7 and max(densities) > 0.8:
+                # Good density distribution
+                pass
+            else:
+                return None
+        else:
+            return None
+    if ins_ids[0].startswith('random'):
+        if len(midi.instruments) > 1:
+            ins_random_split = np.zeros(len(midi.instruments), dtype=np.uint8)
+            split_at = np.random.randint(1, len(midi.instruments))
+            ins_random_split[np.random.permutation(len(midi.instruments))[:split_at]] = 1
+        else:
+            return None  # invalid midi file
+    else:
+        ins_random_split = None
+    duration_boundaries = (DURATION_TEMPLATES[1:] + DURATION_TEMPLATES[:-1]) / 2
+    # Trace max and min pitches to calculate the possible pitch shift range
+    min_pitch = 127
+    max_pitch = 0
+    result_rolls = []
+    result_midi_ins = []
+    for ins_id in ins_ids:
+        if return_midi_ins:
+            result_midi_ins.append([])
+        repeat_notes_dict = {}  # do dedup per instrument id
+        has_any_note = False
+        rolls = np.full((midi_end_time, max_polyphony, 4), dtype=np.uint8, fill_value=255)
+        polyphony_counts = np.zeros(midi_end_time, dtype=np.uint8)
+        for i, ins in enumerate(midi.instruments):
+            output_midi_ins = pretty_midi.Instrument(program=ins.program, is_drum=ins.is_drum) if return_midi_ins else None
+            program = ins.program
+            if ins.is_drum:
+                program = 127
+            for note in ins.notes:
+                start_time = int(round(note.start))
+                end_time = int(round(note.end))
+                if start_time >= 0 and start_time < midi_end_time and polyphony_counts[start_time] < max_polyphony:
+                    duration = np.searchsorted(duration_boundaries, end_time - start_time)
+                    if not ins.is_drum:
+                        min_pitch = min(min_pitch, note.pitch)
+                        max_pitch = max(max_pitch, note.pitch)
+                    # If ins_id is not 'all', filter notes by ins_id
+                    add_note = False
+                    if ins_id == 'all':
+                        add_note = True
+                    elif isinstance(ins_id, int):
+                        # Filter by program number, not implemented yet
+                        raise NotImplementedError
+                    elif isinstance(ins_id, str):
+                        if '-' in ins_id:
+                            # Filter by track ID, e.g., 'track-0', 'upto-1', 'from-2', 'notrack-3'
+                            task, num = ins_id.split('-')
+                            num = int(num)
+                            if task == 'track':
+                                add_note = i == num
+                            elif task == 'upto':
+                                add_note = i <= num
+                            elif task == 'from':
+                                add_note = i >= num
+                            elif task == 'notrack':
+                                add_note = i != num
+                            elif task == 'random':
+                                add_note = ins_random_split[i] == num
+                            else:
+                                raise NotImplementedError
+                        elif ins_id == 'dense':
+                            add_note = densities[i] <= 0.75
+                        elif ins_id == 'sparse':
+                            add_note = densities[i] > 0.75
+                        elif ins_id == 'drum':
+                            # Drum only
+                            add_note = ins.is_drum
+                        elif ins_id == 'nondrum':
+                            # Non-drum only
+                            add_note = not ins.is_drum
+                        elif ins_id == 'empty':
+                            # Empty track
+                            add_note = False
+                        else:
+                            raise NotImplementedError
+                    else:
+                        raise NotImplementedError
+                    if add_note:
+                        has_any_note = True
+                        if return_midi_ins:
+                            output_midi_ins.notes.append(pretty_midi.Note(start=note.start, end=note.end, pitch=note.pitch, velocity=note.velocity))
+                        if dedup:
+                            if (program, start_time, note.pitch) in repeat_notes_dict:
+                                [prev_duration, prev_index] = repeat_notes_dict[(program, start_time, note.pitch)]
+                                if prev_duration < duration:
+                                    # Keep the longer note
+                                    rolls[start_time, prev_index] = [program, note.pitch, duration, note.velocity]
+                                    repeat_notes_dict[(program, start_time, note.pitch)] = [duration, prev_index]
+                            else:
+                                repeat_notes_dict[(program, start_time, note.pitch)] = [duration, polyphony_counts[start_time]]
+                                # Add note to the roll
+                                rolls[start_time, polyphony_counts[start_time]] = [program, note.pitch, duration, note.velocity]
+                                polyphony_counts[start_time] += 1
+                        else:
+                            # Add note to the roll
+                            rolls[start_time, polyphony_counts[start_time]] = [program, note.pitch, duration, note.velocity]
+                            polyphony_counts[start_time] += 1
+            if return_midi_ins and len(output_midi_ins.notes) > 0:
+                result_midi_ins[-1].append(output_midi_ins)
+        if not has_any_note and ins_id != 'empty':
+            return None  # invalid midi file
+        for i in range(midi_end_time):
+            # Sort notes by ins first, then by pitch, then by duration
+            rolls[i, :polyphony_counts[i]] = rolls[i, :polyphony_counts[i]][np.lexsort((rolls[i, :polyphony_counts[i], 2], rolls[i, :polyphony_counts[i], 1], rolls[i, :polyphony_counts[i], 0], rolls[i, :polyphony_counts[i], 3]))]
+            if polyphony_counts[i] < max_polyphony:
+                rolls[i, polyphony_counts[i], 0] = 254  # EOS token
+        result_rolls.append(rolls)
+    if return_midi_ins:
+        return result_midi_ins
+    result_rolls = np.concatenate(result_rolls, axis=1)
+    # Get song-level pitch shift range
+    pitch_shift_max = 127 - max_pitch
+    pitch_shift_min = -min_pitch
+    # Convert to tensor
+    return torch.tensor(result_rolls.reshape(midi_end_time, -1)), torch.tensor([pitch_shift_min, pitch_shift_max], dtype=torch.int8)
+
+
+def create_npy_dataset_from_midi(folder, max_polyphony, dataset_name, ins_ids='all', scan_subfolders=True, dedup=False, max_idx=None, filter=True, include_files=None):
+    # Get all midi files in the folder, recursively
+    midi_files = []
+    if scan_subfolders:
+        for root, dirs, files in os.walk(folder):
+            for file in files:
+                if file.endswith('.mid') or file.endswith('.MID'):
+                    midi_files.append(os.path.join(root, file))
+    else:
+        for file in os.listdir(folder):
+            if file.endswith('.mid') or file.endswith('.MID'):
+                midi_files.append(os.path.join(folder, file))
+    # Sort deterministically. os.listdir / os.walk return inode order, which is
+    # not lexicographic and can differ between sibling folders that contain the
+    # same file names — that breaks paired-stream datasets (melody vs chord)
+    # since song i in one .pt would map to a different song in the other.
+    midi_files.sort()
+    if include_files is not None:
+        # Pre-filter to a known-good file set (e.g. only songs that have
+        # BOTH streams) so two ins_ids passes over the same folder tokenize
+        # identical file lists from the start, instead of relying on
+        # preprocess_midi's per-file None-drop to coincidentally agree.
+        include_files = set(include_files)
+        midi_files = [p for p in midi_files
+                     if os.path.relpath(p, folder) in include_files]
+    if max_idx is not None:
+        midi_files = midi_files[:max_idx]
+    # Process files in parallel
+    print(f'Processing {len(midi_files)} files')
+    results = Parallel(n_jobs=-1, verbose=10)(delayed(preprocess_midi)(midi_file, max_polyphony, ins_ids=ins_ids, dedup=dedup, filter=filter) for midi_file in midi_files)
+    # Filter out None results
+    midi_files = [os.path.relpath(midi_files[i], folder) for i, result in enumerate(results) if result is not None]
+    results = [result for result in results if result is not None]
+    results_data = [result[0] for result in results]
+    results_shift = [result[1] for result in results]
+    # np.save(f'data/{dataset_name}.npy', np.concatenate(results, axis=0))
+    torch.save(torch.cat(results_data, dim=0), f'data/{dataset_name}.pt')
+    torch.save(torch.cat(results_shift, dim=0), f'data/{dataset_name}.pitch_shift_range.pt')
+    lengths = [len(data) for data in results_data]
+    # save midi file names
+    f = open(f'data/{dataset_name}.txt', 'w')
+    for i, midi_file in enumerate(midi_files):
+        f.write(str(i) + '\t' + midi_file + '\n')
+    # np.save(f'data/{dataset_name}.length.npy', np.array(lengths))
+    torch.save(torch.tensor(lengths), f'data/{dataset_name}.length.pt')
+
+def create_rwc_cp(max_polyphony=16):
+    rwc_folder = os.path.join(RWC_DATASET_PATH, 'AIST.RWC-MDB-P-2001.SMF_SYNC')
+    create_npy_dataset_from_midi(rwc_folder, max_polyphony, f'rwc_cp{max_polyphony}_v2')
+
+def create_la_cp(max_polyphony=16):
+    la_folder = os.path.join(LA_DATASET_PATH, 'MIDIs')
+    create_npy_dataset_from_midi(la_folder, max_polyphony, f'la_cp{max_polyphony}_v2')
+
+def create_nottingham_parts(max_polyphony=8):
+    rwc_folder = os.path.join(NOTTINGHAM_DATASET_PATH, 'MIDI')
+    create_npy_dataset_from_midi(rwc_folder, max_polyphony, f'nottingham_cp{max_polyphony}_v2_chord_mel', ins_ids=['track-1', 'track-0'], scan_subfolders=False)
+
+def create_transposed_nottingham_test(max_polyphony=8):
+    rwc_folder = os.path.join(R'E:\Programming\melodyt5\transposed_midi')
+    create_npy_dataset_from_midi(rwc_folder, max_polyphony, f'transposed_nottingham_test_cp{max_polyphony}_v2_chord_mel', ins_ids=['track-1', 'track-0'], scan_subfolders=False)
+
+def create_rwc_drums(max_polyphony=16):
+    rwc_folder = os.path.join(RWC_DATASET_PATH, 'AIST.RWC-MDB-P-2001.SMF_SYNC')
+    create_npy_dataset_from_midi(rwc_folder, max_polyphony, f'rwc_cp{max_polyphony}_v2_drums_nondrum', ins_ids=['drum', 'nondrum'])
+
+def create_rwc_drums_fix(max_polyphony=16):
+    rwc_folder = os.path.join(RWC_DATASET_PATH, 'RemoveChannel10')
+    create_npy_dataset_from_midi(rwc_folder, max_polyphony, f'rwc_cp{max_polyphony}_v2_drums_nondrum_fix', ins_ids=['drum', 'nondrum'])
+
+def create_la_drums(max_polyphony=16):
+    la_folder = os.path.join(LA_DATASET_PATH, 'MIDIs')
+    create_npy_dataset_from_midi(la_folder, max_polyphony, f'la_cp{max_polyphony}_v2_drums_nondrum_dedup', ins_ids=['drum', 'nondrum'], max_idx=50000, dedup=True)
+
+def create_rwc_chords(max_polyphony=16):
+    rwc_folder = os.path.join('temp', 'rwc_chord')
+    create_npy_dataset_from_midi(rwc_folder, max_polyphony, f'rwc_cp{max_polyphony}_v2_chords', ins_ids=['from-2', 'upto-1'], scan_subfolders=False)
+
+def create_rwc_majmin_chords(max_polyphony=16):
+    rwc_folder = os.path.join('temp', 'rwc_chord_majmin')
+    create_npy_dataset_from_midi(rwc_folder, max_polyphony, f'rwc_cp{max_polyphony}_v2_majmin', ins_ids=['from-1', 'upto-0'], scan_subfolders=False)
+
+def create_la_random_split(max_polyphony=16):
+    la_folder = os.path.join(LA_DATASET_PATH, 'MIDIs')
+    create_npy_dataset_from_midi(la_folder, max_polyphony, f'la_cp{max_polyphony}_v2_random_dedup', ins_ids=['random-0', 'random-1'], max_idx=50000, dedup=True)
+
+def create_la_density(max_polyphony=16):
+    la_folder = os.path.join(LA_DATASET_PATH, 'MIDIs')
+    create_npy_dataset_from_midi(la_folder, max_polyphony, f'la_cp{max_polyphony}_v2_density', ins_ids=['dense', 'sparse'], max_idx=50000)
+
+def create_la_med(max_polyphony=16):
+    la_folder = os.path.join(LA_DATASET_PATH, 'MIDIs')
+    create_npy_dataset_from_midi(la_folder, max_polyphony, f'la_cp{max_polyphony}_v2_med_dedup', max_idx=50000, dedup=True)
+
+# POP909_PT_TAG: appended to the pop909 melody/chord dataset names, so a
+# dataset built from a DIFFERENT source corpus (e.g. the v4 aligner's
+# output) lands beside the old one instead of overwriting it. Empty by
+# default, so every existing name is unchanged. The source folders
+# themselves are POP909_MELODY_PATH / POP909_CHORD_PATH, which
+# preprocess_pop909.sbatch symlinks to MELODY_DIR / CHORD_DIR -- the tag
+# is what stops two different corpora sharing one .pt.
+PT_TAG = os.environ.get('POP909_PT_TAG', '')
+# POP909_EXCLUDE_IDS: song ids to CUT from the pop909 melody/chord
+# datasets entirely -- not held out by the index rule, but absent, the
+# way 001-005 were cut by hand before the original preprocessing. They
+# stay absent from the .txt, so build_prompt_crops adds them back
+# through --extra-ids and its train-split guard passes.
+#
+# This exists because rebuilding from a fresh aligner output reinstates
+# them: the aligner processes all 909 songs, so a song that used to be
+# cut lands back in the corpus and, at 002-005, in the TRAIN split.
+# Nothing warns you -- the guard in build_prompt_crops is what caught it.
+EXCLUDE_IDS = {i for i in
+               os.environ.get('POP909_EXCLUDE_IDS', '').replace(',', ' ').split()
+               if i}
+
+
+def _drop_excluded(folder):
+    """Files under `folder` whose 3-digit id is in EXCLUDE_IDS."""
+    if not EXCLUDE_IDS:
+        return None
+    keep = []
+    for f in sorted(os.listdir(folder)):
+        if not (f.endswith('.mid') or f.endswith('.MID')):
+            continue
+        m = re.search(r'(\d{3})', f)
+        if m and m.group(1) in EXCLUDE_IDS:
+            continue
+        keep.append(f)
+    print(f'[exclude] cutting ids {sorted(EXCLUDE_IDS)} from {folder}: '
+          f'{len(keep)} files kept')
+    return keep
+
+
+def create_pop909_melody(max_polyphony=8):
+    # POP909 melody is monophonic; any budget leaves headroom for incidental
+    # overlap. Default 8 keeps the two melchord streams at ONE shared budget
+    # (see create_pop909_chord for why the chord side needs > 4).
+    # filter=False because POP909 is already curated and the LA-quantization
+    # heuristic is for noisy datasets.
+    create_npy_dataset_from_midi(
+        POP909_MELODY_PATH,
+        max_polyphony,
+        f'pop909_melody_cp{max_polyphony}_v2{PT_TAG}',
+        ins_ids='all',
+        scan_subfolders=False,
+        filter=False,
+        include_files=_drop_excluded(POP909_MELODY_PATH),
+    )
+
+
+def create_pop909_chord(max_polyphony=8):
+    # Chords are rendered as 1 bass + up to 4 upper voices by
+    # build_pop909_chord_midi.py -- seventh chords are FIVE simultaneous
+    # notes, so the former cp4 budget silently dropped the topmost tone
+    # (the seventh) from every such frame (13.8% of chord frames, 3.3% of
+    # chord notes on the eval split, measured by cp_capacity_check.py).
+    # cp8 covers the observed maximum with margin.
+    create_npy_dataset_from_midi(
+        POP909_CHORD_PATH,
+        max_polyphony,
+        f'pop909_chord_cp{max_polyphony}_v2{PT_TAG}',
+        ins_ids='all',
+        scan_subfolders=False,
+        filter=False,
+        include_files=_drop_excluded(POP909_CHORD_PATH),
+    )
+
+
+def _nottingham_midi_folder():
+    # settings.py carries a Windows path; NOTTINGHAM_MIDI_PATH overrides
+    # with the cluster location of the folder that directly contains the
+    # .mid files (e.g. .../nottingham-dataset/MIDI).
+    return os.environ.get('NOTTINGHAM_MIDI_PATH',
+                          os.path.join(NOTTINGHAM_DATASET_PATH, 'MIDI'))
+
+
+def _nottingham_two_track_files(folder):
+    """Song ids (basenames) that have >=2 note-bearing instruments.
+    A minority of Nottingham tunes (mostly 'morris' and a few others)
+    carry melody only, with no chord accompaniment track at all; those
+    must be excluded from BOTH streams up front, or the melody pass
+    keeps them while the chord pass silently drops them (preprocess_midi
+    returns None for a track-1 filter with no track 1), desynchronizing
+    the pairing."""
+    import warnings
+    keep = []
+    for name in sorted(os.listdir(folder)):
+        if not (name.endswith('.mid') or name.endswith('.MID')):
+            continue
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                pm = pretty_midi.PrettyMIDI(os.path.join(folder, name))
+            n_note_tracks = sum(1 for ins in pm.instruments if len(ins.notes) > 0)
+        except Exception:
+            n_note_tracks = 0
+        if n_note_tracks >= 2:
+            keep.append(name)
+    return keep
+
+
+def create_nottingham_melody(max_polyphony=8):
+    # Nottingham midis carry melody as instrument 0 and the rendered
+    # chord accompaniment as instrument 1 (same convention the legacy
+    # create_nottingham_parts relied on). The default matches the POP909
+    # melchord convention (cp8; see create_pop909_chord) so the two
+    # corpora are interchangeable downstream. filter=False: curated data. include_files restricts
+    # to songs with both tracks so this pass and the chord pass tokenize
+    # an identical file set (see _nottingham_two_track_files).
+    folder = _nottingham_midi_folder()
+    create_npy_dataset_from_midi(
+        folder,
+        max_polyphony,
+        f'nottingham_melody_cp{max_polyphony}_v2',
+        ins_ids=['track-0'],
+        scan_subfolders=False,
+        filter=False,
+        include_files=_nottingham_two_track_files(folder),
+    )
+
+
+def create_nottingham_chord(max_polyphony=8):
+    folder = _nottingham_midi_folder()
+    create_npy_dataset_from_midi(
+        folder,
+        max_polyphony,
+        f'nottingham_chord_cp{max_polyphony}_v2',
+        ins_ids=['track-1'],
+        scan_subfolders=False,
+        filter=False,
+        include_files=_nottingham_two_track_files(folder),
+    )
+
+
+def create_pop909_melchord_combined(max_polyphony=16):
+    # Merged melody+chord midis (merge_melody_chord.py) for finetuning the
+    # single-stream CP transformer. max_polyphony=16 matches the pretrained
+    # ckpt's data (la_cp16); actual content peaks at ~5 notes/frame, the
+    # rest of the slots hold EOS/pad exactly as in the LA data. IMPORTANT:
+    # build the folder with --chord-program 48 (or another program distinct
+    # from the melody's) -- the single-stream tokenizer separates streams by
+    # program only, and same-program streams fuse irreversibly.
+    folder = os.environ.get('POP909_COMBINED_PATH',
+                            'POP909-Dataset/POP909-melody-chord-tagged')
+    dataset_name = os.environ.get('POP909_MELCHORD_DATASET',
+                                  f'pop909_melchord_cp{max_polyphony}_v2')
+    create_npy_dataset_from_midi(
+        folder,
+        max_polyphony,
+        dataset_name,
+        ins_ids='all',
+        scan_subfolders=False,
+        filter=False,
+    )
+
+
+if __name__ == '__main__':
+    import sys
+    arg = sys.argv[1] if len(sys.argv) > 1 else None
+    # Optional second arg overrides max_polyphony; the output filename
+    # encodes it (..._cp{N}_v2), so different budgets never clobber.
+    cp = int(sys.argv[2]) if len(sys.argv) > 2 else None
+    kw = {} if cp is None else {'max_polyphony': cp}
+    if arg == 'pop909_melody':
+        create_pop909_melody(**kw)
+    elif arg == 'pop909_chord':
+        create_pop909_chord(**kw)
+    elif arg == 'pop909_melchord':
+        create_pop909_melchord_combined(**kw)
+    elif arg == 'nottingham_melody':
+        create_nottingham_melody(**kw)
+    elif arg == 'nottingham_chord':
+        create_nottingham_chord(**kw)
+    else:
+        create_rwc_cp(**kw)

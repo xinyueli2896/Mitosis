@@ -1,0 +1,2481 @@
+"""M2CDuetBlockDiffusion (variant A.3): DuetBlock with discrete-diffusion-style
+training at the query slots.
+
+Motivation
+----------
+Plain DuetBlock (A.2) trains the two query slots only in the "both fully
+masked" regime: their inputs are always mask_m_emb / mask_c_emb. At
+inference, each query slot predicts its target frame conditionally
+independently of the other slot, given the past. This is "equalize by
+removing" -- both slots have the same conditioning surface (past only),
+neither sees the other's current-frame value. To get mutual conditioning
+within a frame you need either:
+
+(a) iterative refinement (block diffusion): K passes per frame, with
+    progressively-committed slot inputs, so round k+1 sees round k's
+    estimates. The model needs to handle intermediate noise levels at
+    the query slots, not just the fully-masked regime.
+
+(b) MaskGIT-style commit-then-condition: round 1 commits one slot's
+    prediction, round 2 predicts the other conditioned on the committed
+    one. The model needs to handle "one slot committed, one slot masked"
+    inputs -- never seen in A.2 training.
+
+This variant trains the model to handle ANY noise combination at the two
+query slots. At training, per item, per slot, we sample a noise level
+k in {0, 1, ..., K} independently. With prob k/K the slot is fed
+mask_*_emb (parent's behaviour); with prob (K-k)/K it is fed the actual
+ground-truth frame embedding _encode_frame(target, mod). A learned
+k-embedding is added to each slot so the model knows the noise level
+(analogous to the timestep embedding in diffusion models).
+
+TERMINOLOGY -- k is a COMMITMENT level, not a noise level. The name
+"noise level" is inherited from the diffusion analogy, but because a
+slot is a single frame VECTOR (the local-encoder bottleneck), the
+corruption here is all-or-nothing masking per slot: no intermediate
+corruption state exists, and for a masked slot the target is
+statistically independent of k. What k actually carries is
+COORDINATION metadata: (a) each slot reads the partner's k through the
+frame pass, so k is the signal distinguishing "the partner is
+committed -- harmonize with it" (k=0) from "the partner is guessing --
+negotiate" (k=K); (b) at inference k indexes the refinement round, the
+hook for round-aware behaviour (drafts improve as k falls); (c) the
+(k_m, k_c) configuration is how a decode schedule -- parallel
+diffusion, MaskGIT commit-then-condition -- is communicated to one
+checkpoint. Prose and figures should say "commitment level"; the
+k_emb_* parameter names stay (renaming them would orphan every
+existing checkpoint). The opt-in --token_level_mask variant (codename
+A.4, run-dir tag 'tk') restores genuinely graded corruption -- per-token
+masking inside the frame -- and makes the diffusion reading literal;
+see the A.4 note in __init__.
+
+A.4 FAILURE ANALYSIS (first run, tag 'mgtk')
+--------------------------------------------
+The first A.4 run decoded to dense, messy music -- worse than A.2, and
+worse in a specific way (note density inflated, phrase boundaries gone).
+Per-token absorbing corruption is the standard recipe (D3PM, MaskGIT,
+MDLM), so the variant did not fail because the idea is wrong; it failed
+because that recipe has two prerequisites this implementation violated.
+
+  FIX 1 -- the [MASK] embedding must be trained, not borrowed. In the
+  literature [MASK] is a first-class vocabulary entry whose row is
+  learned from initialisation. A.4 instead reused a dead id in the
+  instrument-padding range (3327), so its embedding row arrived from the
+  pretrained checkpoint untouched by any gradient -- an arbitrary vector
+  pushed through a local encoder that had never seen it. Every corrupted
+  frame was therefore encoded through an out-of-distribution input.
+  Fixed by _init_frame_mask_row(): set the row to the mean of the real
+  token embeddings once, on_train_start, after the warm-start load.
+
+  FIX 2 -- structural tokens must be exempt from corruption. A cp frame
+  is (program, pitch-dur) pairs terminated by EOS: even positions are
+  programs and the EOS, odd positions are pitch-durs. The first run
+  masked all of them, so EOS itself could be masked -- and a frame whose
+  terminator is unknown reads as unfinished, which biases the next
+  refinement round toward more notes and compounds over rounds. That is
+  the density inflation that was actually heard. Fixed in
+  _token_level_slot(): only odd (pitch-dur) positions are maskable, so
+  corruption destroys WHICH notes while preserving HOW MANY and on which
+  instrument -- also the musically meaningful partial state.
+
+Both endpoints remain exact under the fixes (k=0 clean, k=K the learned
+whole-frame mask embedding, silent frames included), so a warm start
+from an A.2 checkpoint still reproduces A.2 at k=K.
+
+QUERY-PAIR COUNT (Q, --query_pairs)
+-----------------------------------
+Training supervises the query slots on ONE frame per forward: T_query is
+a single index, shared by the whole batch because it defines the [L, L]
+attention mask. The AR loss meanwhile scores all 2*T_full positions. So
+the frame pass -- the same-instant symmetric conditioning that is the
+only mechanism the decode loop actually uses -- receives roughly 1/T of
+the gradient, while the inherited AR pathway receives all of it.
+
+That is not how the literature does it. D3PM, MDLM and MaskGIT draw one
+noise level per sample but reconstruct EVERY corrupted position; BERT
+masks 15% of positions rather than one, for exactly this reason.
+
+--query_pairs Q appends Q query PAIRS instead of one, for Q distinct
+frames, each with its own visibility window (frames < T_j), its own
+(k_m, k_c) draw, and its own loss. Pairs are blind to each other -- a
+slot may read its own partner's draft, never another pair's, which
+inference could not supply. The clean stream is untouched and still
+blind to every slot.
+
+Cost: L goes from 2*T_full + 2 to 2*T_full + 2Q. At TRAIN_LENGTH=384
+that is 770 -> 784 for Q=8, i.e. +2% sequence and +3.7% attention for
+8x the query gradient and 8x the coverage of the (k_m, k_c) grid. No
+rotary extrapolation: each pair takes the rotary phase of its OWN
+frame, so no position is visited that Q=1 did not already visit.
+
+Q is training-only. Inference decodes one frame at a time regardless,
+so the parameters, the checkpoint and the decode path are unchanged,
+and validation keeps Q=1 so val_loss stays comparable across settings.
+
+Both schedules (parallel diffusion, MaskGIT) become valid inference
+strategies on the same trained checkpoint -- the user can experiment
+with either without retraining.
+
+Architecture
+------------
+Identical to M2CDuetBlockAttn. The mask_frame attention pass already
+lets the two query slots see each other, which is the channel through
+which mutual conditioning happens at inference. The new k_emb_* tables
+are the only extra parameters; they are zero-initialised so a warm-start
+from an A.2 ckpt behaves identically at k_m = k_c = K (fully masked).
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from cp_transformer_m2c_moe import (
+    RoFormerSymbolicTransformer, FramedDataset, TRAIN_LENGTH, MAX_STEPS,
+)
+from cp_transformer_m2c_duet_block import M2CDuetBlockAttn, normalize_T_query
+from cp_transformer_m2c_jointattn import _rope_freqs
+from tasks import get_task, TASKS, MELCHORD_TAG
+
+
+class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
+    """DuetBlock with discrete-diffusion training at the query slots.
+
+    See module docstring. Only forward() and loss() are overridden; the
+    layer stack, gates, mask construction, AR loss, and inference-time
+    shape are inherited unchanged.
+    """
+
+    def __init__(self, *args, diffusion_K=4, slot_rope_aligned=True,
+                 time_rope_aligned=False, self_cond_prob=0.5,
+                 token_level_mask=False, mask_revealed_query_loss=False,
+                 query_pairs=1, decoy_corruption=False,
+                 decoy_mask_residual=0.25, decoy_lag_bins=None,
+                 query_block=1, slot_sees_prev_frame=False,
+                 moe_aux_clean_only=False, cond_slot_prob=0.0,
+                 agree_head=False, agree_decoy_prob=0.5,
+                 agree_loss_weight=0.3, sc_ar_frac=0.0,
+                 sc_draft_temp=0.0, sc_k_consistent=False,
+                 sym_k=False, mask_k_prob=None, sc_val=False,
+                 sc_ar_free_run=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.diffusion_K = int(diffusion_K)
+        # --- conditional slots (A.3c) ------------------------------------
+        # With probability cond_slot_prob per (item, pair) the two slots
+        # are drawn in the commit-then-condition regime: one slot (leader,
+        # uniform) COMMITTED at k=0 with its ground-truth frame, the other
+        # fully MASKED at k=K. Otherwise the historical independent
+        # uniform draw over {0..K}^2. Motivation (E1 merged table, job
+        # 217818; probe 206671): under the uniform draw a slot predicts
+        # frame t with its partner masked half the time and learns the
+        # MARGINAL of its stream; refinement then commits generic drafts
+        # and the two streams end up less coupled than any baseline
+        # (coupling 0.053 vs reference 0.088). The ctc regime trains
+        # the CONDITIONAL p(follower_t | history, leader_t) directly and
+        # never asks for a both-masked prediction; decode with
+        # A3_SCHEDULE=ctc_* to use it. 0 = off (A.3 unchanged).
+        self.cond_slot_prob = float(cond_slot_prob)
+        # --- A.11: partner-agreement discrimination head ------------------
+        # ELECTRA's finding is that a plausible-but-wrong replacement pays
+        # off as a DETECTION target, not as a reconstruction target (D3PM
+        # ran the reconstruction comparison and the absorbing mask won;
+        # A.7 repeated it here and lost). The audio-visual
+        # synchronisation literature builds exactly A.7's negatives, the
+        # same signal offset in time, and uses them for detection too.
+        # So: inside the conditional-slot regime, where a leader is
+        # committed and a follower is masked, replace the LEADER's frame
+        # by the same stream's frame at a calibrated lag for a share of
+        # the pairs, and ask a linear head on the FOLLOWER's slot row
+        # whether the partner it just read was genuine. The follower's
+        # reconstruction loss is dropped on those items, so the model is
+        # never taught to ignore a clashing partner -- ELECTRA's split of
+        # corrupted input into detection only.
+        #
+        # Nothing else moves: the corruption schedule is untouched (A.7's
+        # failure was starving the mask), the sequence length is
+        # untouched (A.9's failure was swamping the balance statistics),
+        # and the decode path is unchanged -- the head is a training-time
+        # objective that shapes the representation and is never called at
+        # inference. The quantity it trains is the one `harmonic_coupling`
+        # scores: can this stream tell its true partner from the same
+        # partner a couple of bars away.
+        self.register_buffer(
+            'agree_head_flag',
+            torch.tensor(1 if agree_head else 0, dtype=torch.long))
+        self.agree_decoy_prob = float(agree_decoy_prob)
+        self.agree_loss_weight = float(agree_loss_weight)
+        self.agree_proj = (nn.Linear(self.hidden_size, 2)
+                           if agree_head else None)
+        self._agree_lag_m = self._agree_lag_c = None
+        self._last_slot_h = None
+        # --- A.12: self-conditioning drafts from the AR CONTENT HEAD ------
+        # Exposure gap found 2026-09-11. Self-conditioning already trains
+        # the slots on the model's own drafts rather than ground truth,
+        # but it draws those drafts from the QUERY logits of a
+        # fully-masked probe forward. Both decodes seed from the other
+        # head: the refinement loop's round-K seed and the commit
+        # decode's committed leader are both `local_sampling` on the
+        # CLEAN AR rows. So the first draft a slot ever sees at inference
+        # comes from a head whose output the slots were never trained on.
+        # sc_ar_frac is the share of self-conditioned items whose draft
+        # is taken from the AR rows instead, closing that gap.
+        #
+        self.register_buffer(
+            'sc_ar_frac_flag',
+            torch.tensor(float(sc_ar_frac), dtype=torch.float32))
+        self.sc_ar_frac = float(sc_ar_frac)
+        # --- sc_ar_free_run (2026-09-19): the AR-head draft is produced
+        # the way the DECODE produces it. Without it the draft is a
+        # per-position sample from the TEACHER-FORCED AR logits: each
+        # sub-token is drawn given the ground-truth prefix of its frame,
+        # so the draft keeps the true frame's note count, EOS position
+        # and program tokens and its errors never compound, and no
+        # validity mask is applied. The decode instead runs
+        # local_sampling free-running from the content hidden state, so
+        # the harmonizers meet drafts with their own structure. With the
+        # flag the probe calls local_sampling itself. Travels in the
+        # ckpt as a buffer (informational).
+        self.sc_ar_free_run = bool(sc_ar_free_run)
+        self.register_buffer('sc_ar_free_run_flag',
+                             torch.tensor(int(self.sc_ar_free_run),
+                                          dtype=torch.long))
+        # --- what the k tag means (A.12) ---------------------------------
+        # The decode's slot is one of exactly three things (_build_slot in
+        # the inference module): the mask embedding tagged k=K (round K,
+        # no estimate yet), a COMPLETE previous-round frame tagged k=r for
+        # every r<K, or a complete committed frame tagged k=0. An
+        # intermediate k at inference therefore always means "a whole
+        # draft from one round ago" -- never a partially corrupted frame.
+        #
+        # Training's frame-level slot means something else: the k tag
+        # rides a Bernoulli coin at rate k/K over {all-mask, all-truth}.
+        # The self-conditioning override writes into the truth branch and
+        # the coin then runs ON TOP of it, so with k drawn uniformly half
+        # of all self-conditioned slots discard their draft and show the
+        # mask embedding instead (and at k=K, all of them do). The
+        # intermediate k tags are thus trained on a slot distribution the
+        # decode never produces, and the draft budget is halved.
+        #
+        # sc_k_consistent makes the training slot mean what the decode
+        # means: for a self-conditioned item the coin is replaced by
+        # is_masked = (k == K), so k=K is the mask endpoint and every
+        # k<K carries the whole draft, tagged with its round. Positions
+        # are still scored -- a drafted slot is never `revealed` (see
+        # _query_loss_keep_mask) -- so the task stays revision, not copy.
+        self.register_buffer(
+            'sc_k_consistent_flag',
+            torch.tensor(1 if sc_k_consistent else 0, dtype=torch.long))
+        self.sc_k_consistent = bool(sc_k_consistent)
+        # Draft SHARPNESS. The probe's argmax is a lower-entropy frame
+        # than anything the decode commits (the paper decode samples at
+        # temperature 1.0, top-p 1.0), so argmax drafts train the slots on
+        # cleaner input than they will ever see. sc_draft_temp > 0 samples
+        # the draft at that temperature instead; 0.0 keeps the argmax, so
+        # every pre-A.12 run reproduces exactly.
+        self.register_buffer(
+            'sc_draft_temp_flag',
+            torch.tensor(float(sc_draft_temp), dtype=torch.float32))
+        self.sc_draft_temp = float(sc_draft_temp)
+        # Tie k_c to k_m so both slots always sit at the SAME level --
+        # the states the symmetric parallel decode visits. Mutually
+        # exclusive with cond_slot_prob, which exists to manufacture the
+        # opposite (one committed, one masked).
+        if sym_k and cond_slot_prob > 0:
+            raise ValueError(
+                'sym_k and cond_slot_prob are mutually exclusive: sym_k '
+                'puts both slots at one level (the parallel decode), '
+                'cond_slot_prob splits them into leader/follower (the '
+                'commit-then-condition decode).')
+        self.register_buffer(
+            'sym_k_flag', torch.tensor(1 if sym_k else 0, dtype=torch.long))
+        self.sym_k = bool(sym_k)
+        # --- dropping the mask state (A.12) ------------------------------
+        # Once every slot carries a model draft, k is not a corruption
+        # level: the draft is not a corruption of the target, it is a
+        # different object. All k still picks is mask-vs-draft, and the
+        # mask embedding is a distinct learned vector, so the tag is
+        # redundant with the content it labels.
+        #
+        # The masked half is also DEAD at decode. The seed round reads
+        # its prediction off the clean AR rows, and clean rows never
+        # attend the slots (audited), so whatever sits in a slot during
+        # that forward cannot reach the output. The only slot state the
+        # decode's output depends on is "both slots hold drafts".
+        #
+        # mask_k_prob=0 removes the mask draw from training entirely.
+        # diffusion_K must still be >= 1: the decode indexes k_emb by
+        # the round number, so a one-round parallel decode needs
+        # k_emb(1) to EXIST for the (inert) seed round even though
+        # nothing trains it. K=0 would size k_emb to one entry and the
+        # decode would index out of range.
+        if mask_k_prob is not None and not 0.0 <= float(mask_k_prob) <= 1.0:
+            raise ValueError(f'mask_k_prob must be in [0, 1], '
+                             f'got {mask_k_prob}')
+        if mask_k_prob is not None and sc_k_consistent:
+            raise ValueError(
+                'mask_k_prob and sc_k_consistent both decide when a slot '
+                'is masked; set one. (At K=1 sc_k_consistent is a no-op '
+                'anyway -- k=0 never masks, k=K always does.)')
+        self.mask_k_prob = (None if mask_k_prob is None
+                            else float(mask_k_prob))
+        self.register_buffer(
+            'mask_k_prob_flag',
+            torch.tensor(-1.0 if mask_k_prob is None else float(mask_k_prob),
+                         dtype=torch.float32))
+        # Validation normally pins k=K, i.e. the masked state. With the
+        # mask state untrained that measures the model on a task it
+        # never learned, so val_loss stops being a selection signal.
+        # sc_val instead presents validation the DRAFT state -- the
+        # probe runs in eval too, every slot is drafted, k is pinned to
+        # 0 -- so val_loss measures the revision task the decode runs.
+        # Drafts are taken at argmax regardless of sc_draft_temp, so the
+        # number stays deterministic across epochs.
+        self.register_buffer(
+            'sc_val_flag', torch.tensor(1 if sc_val else 0, dtype=torch.long))
+        self.sc_val = bool(sc_val)
+        if agree_head and cond_slot_prob <= 0:
+            raise ValueError(
+                'agree_head needs cond_slot_prob > 0: the head is defined '
+                'on the committed-leader / masked-follower pairs only.')
+        self.register_buffer(
+            'cond_slot_prob_flag',
+            torch.tensor(self.cond_slot_prob, dtype=torch.float32),
+        )
+        # --- A.7: lag-graded DECOY corruption -------------------------
+        # The corruption states the refinement loop actually visits are
+        # COMPLETE frames that fail to match their partner (every draft
+        # comes out of the AR chain fluent and self-contained; what is
+        # missing is coordination) -- not frames with notes missing.
+        # A.7 therefore corrupts a slot by replacing its frame with the
+        # SAME stream's frame from t +- lag(k) in the training window:
+        # k=0 is the true frame; k=1..K-1 draw the lag from bins of
+        # rising width (calibrated so k is equally spaced in MEASURED
+        # harmonic decoherence -- see calibrate_decoy_lag.py); k=K
+        # draws a uniform lag over the window, plus a residual
+        # probability of the plain mask embedding so the no-information
+        # endpoint stays trained (seedless decode; A.2 warm-start
+        # compat). Every corrupted state is a real, musically
+        # self-contained frame; what k grades is how UNRECONCILED it is
+        # with the partner at this instant. The query target stays the
+        # true frame, so the trained operation at every k is revision
+        # toward coordination -- exactly the decode loop's job.
+        # TRAINING-ONLY branch: validation (and any eval-mode forward)
+        # falls through to the frame-level mask path, whose k=K
+        # fully-masked pin keeps val_loss computed identically across
+        # A.3/A.4/A.5/A.6/A.7.
+        self.register_buffer(
+            'decoy_corruption_flag',
+            torch.tensor(1 if decoy_corruption else 0, dtype=torch.long),
+        )
+        self.decoy_mask_residual = float(decoy_mask_residual)
+        if decoy_lag_bins is None:
+            # CALIBRATED defaults for K=4 (calibrate_decoy_lag on the
+            # 876 usable POP909 train songs, job 202343, curve in
+            # results/decoy_lag_curve.csv): lags where measured
+            # decoherence crosses 0.25 / 0.50 / 0.75 of the span
+            # cov(0)=0.654 -> floor 0.467. Agreement decays FAST --
+            # half the span is gone within one bar.
+            decoy_lag_bins = [(1, 2), (3, 11), (12, 19)]
+        self.decoy_lag_bins = [tuple(int(v) for v in b)
+                               for b in decoy_lag_bins]
+        if decoy_corruption:
+            if len(self.decoy_lag_bins) != self.diffusion_K - 1:
+                raise ValueError(
+                    f'decoy_lag_bins needs exactly K-1='
+                    f'{self.diffusion_K - 1} (lo, hi) pairs for '
+                    f'k=1..K-1 (k=0 is the true frame, k=K is a '
+                    f'uniform lag), got {self.decoy_lag_bins}')
+            if token_level_mask:
+                raise ValueError('decoy_corruption and token_level_mask '
+                                 'are mutually exclusive corruption '
+                                 'kernels')
+            if mask_revealed_query_loss:
+                raise ValueError(
+                    'decoy_corruption requires the full-frame query '
+                    'loss: corrupted content is a WRONG frame, so '
+                    'scoring every position is where the revision '
+                    'signal lives (the keep-mask rationale does not '
+                    'apply)')
+        # --- A.4: token-level masking inside the frame ----------------
+        # Restores genuinely graded corruption: at commitment level k,
+        # each TOKEN of the target frame is masked independently with
+        # prob k/K and the local encoder embeds the partially-masked
+        # frame -- intermediate k become real intermediate states
+        # ("chord root known, upper voices open") instead of a biased
+        # coin between fully-masked and fully-clean. Endpoints preserved
+        # exactly: an all-masked draw falls back to mask_*_emb and k=0
+        # is the clean frame, so a warm start from an A.2/A.3 ckpt keeps
+        # its trained behaviour at both ends of the trajectory.
+        # The MASK id needs NO vocab change: with_velocity=False pads
+        # the program range to 256 with only 128 real programs and caps
+        # pitch-dur ids at 128*25-1 = 3199, so ids 3200..3327 are
+        # unreachable in real data AND excluded by local_sampling's
+        # valid-token masks. We take the last one.
+        self.register_buffer(
+            'token_level_mask_flag',
+            torch.tensor(1 if token_level_mask else 0, dtype=torch.long),
+        )
+        if token_level_mask:
+            if self.tokenizer.with_velocity:
+                raise ValueError(
+                    'token_level_mask needs a free token id, and the '
+                    'with_velocity vocabulary has none (128 instruments '
+                    'x 16 velocities fills the padded range).'
+                )
+            self.frame_mask_token = self.tokenizer.n_normal_tokens - 1
+        # A.4 FIX 1 (see the FAILURE ANALYSIS note below): the MASK id's
+        # embedding row must not start as an untrained random vector.
+        # Set once, AFTER weights load (on_train_start) -- doing it here
+        # would be overwritten by the warm-start state_dict, which
+        # carries the whole local_embedding table.
+        self.register_buffer(
+            'frame_mask_row_init_flag',
+            torch.tensor(0, dtype=torch.long),
+        )
+        # Score the query loss only where the slot did NOT hand the
+        # model its own target -- see _query_loss_keep_mask. Stored as a
+        # buffer so the objective a checkpoint was trained under travels
+        # inside it. NOTE: validation pins k=K, where nothing is
+        # revealed and the keep mask degenerates to the non-pad mask,
+        # so val_loss stays computed identically across the flag --
+        # only the TRAINING objective differs.
+        self.register_buffer(
+            'mask_revealed_query_loss_flag',
+            torch.tensor(1 if mask_revealed_query_loss else 0,
+                         dtype=torch.long),
+        )
+        # Per-modality commitment-level embeddings (the diffusion
+        # "timestep" analogue -- see the TERMINOLOGY note in the module
+        # docstring), indexed by k in {0, ..., K}. Zero-init: a
+        # warmstart from an A.2 ckpt then reproduces parent behaviour
+        # at k = K (fully masked) on step 0.
+        self.k_emb_m = nn.Embedding(self.diffusion_K + 1, self.hidden_size)
+        self.k_emb_c = nn.Embedding(self.diffusion_K + 1, self.hidden_size)
+        with torch.no_grad():
+            self.k_emb_m.weight.zero_()
+            self.k_emb_c.weight.zero_()
+
+        # --- v1.1 training-scheme flags -------------------------------
+        # slot_rope_aligned: apply RoPE to the two query slots at rotary
+        # index 2*T_query+2 / 2*T_query+3 -- the phase they naturally
+        # occupy at inference (right after the committed pairs of frame
+        # T_query) -- instead of their physical end-of-sequence position
+        # 2*T_full{, +1}. v1.0 ckpts trained the slots at a CONSTANT
+        # phase ~2*T_full, which mismatches inference for every t <
+        # T_full and required a zero-padding workaround at decode time.
+        # Stored as a buffer so the scheme travels inside the ckpt and
+        # inference can auto-detect it (legacy ckpts lack the key).
+        self.register_buffer(
+            'slot_rope_aligned_flag',
+            torch.tensor(1 if slot_rope_aligned else 0, dtype=torch.long),
+        )
+        # --- v1.2 training-scheme flag --------------------------------
+        # time_rope_aligned: rotary index = physical index // 2 for the
+        # whole sequence, so m_t and c_t share rotary position t and the
+        # SOS pair sits at 0. Musical distance == rotary distance again
+        # (the legacy parity scheme DOUBLES every musical distance
+        # relative to the single-stream pretrain and pushes a 384-frame
+        # sample to rotary 0..767, half of it untrained in the warm
+        # start) -- the candidate fix for the duet family's long-term-
+        # structure deficit, which A.2 exhibits despite 43k steps and
+        # full stream survival. Subsumes v1.1: the slot remap to
+        # 2*T_query+2/+3 then halves to T_query+1 for BOTH slots --
+        # exactly the rotary phase frame T_query's content occupies in
+        # the SOS-shifted clean stream, at any t, so decode needs no
+        # padding. Stream identity is carried by content (mask_*_emb,
+        # k_emb_*, token types), not position parity. Stored as a buffer
+        # so the scheme travels inside the ckpt and inference auto-
+        # detects it (legacy ckpts lack the key). Same D.1 scheme as
+        # M2CIntraCrossAttn's time_rope_aligned_flag.
+        self.register_buffer(
+            'time_rope_aligned_flag',
+            torch.tensor(1 if time_rope_aligned else 0, dtype=torch.long),
+        )
+        # self_cond_prob: per-item probability that an UNMASKED slot is
+        # fed the model's own (no-grad) prediction of the target frame
+        # instead of the ground-truth embedding. Closes the exposure gap
+        # between training (gt-or-mask) and inference (self-samples fed
+        # back across refinement rounds).
+        self.self_cond_prob = float(self_cond_prob)
+        # QUERY-PAIR COUNT (Q). How many DISTINCT frames each training
+        # forward supervises -- see the note in the module docstring.
+        # Training-only: inference always decodes one frame at a time,
+        # so Q leaves the parameters, the checkpoint and the decode path
+        # untouched, and Q=1 is bit-for-bit the historical behaviour.
+        # -1 = EVERY frame 1..T-1 carries a query pair (A.9). Any
+        # other value keeps the historical meaning.
+        self.query_pairs = -1 if int(query_pairs) < 0 else max(int(query_pairs), 1)
+        # --- A.9 / A.3f: the slot sees frame t-1 ----------------------
+        # See _build_masks in cp_transformer_m2c_duet_block.py. Travels
+        # in the ckpt as a buffer VALUE so load_model restores it;
+        # decoding with the other mask is a silent train/decode
+        # mismatch (the slot would see one frame more or less context
+        # than it was trained with).
+        self.slot_sees_prev_frame = bool(slot_sees_prev_frame)
+        self.register_buffer(
+            'slot_sees_prev_frame_flag',
+            torch.tensor(int(self.slot_sees_prev_frame), dtype=torch.long),
+        )
+        if self.slot_sees_prev_frame:
+            for layer in self.global_layers:
+                layer.slot_sees_prev_frame = True
+        # --- MoE balance loss over clean tokens only -------------------
+        # Training-time only (the aux term is not part of decoding), so
+        # it needs no ckpt flag; kept as an attribute for the log line.
+        self.moe_aux_clean_only = bool(moe_aux_clean_only)
+        if self.moe_aux_clean_only:
+            for layer in self.global_layers:
+                layer.moe_aux_clean_only = True
+        # --- A.8: CONTIGUOUS BLOCK of query pairs --------------------
+        # B = query_block frames t0..t0+B-1 carry slots in one forward.
+        # Unlike A.6's scattered Q (independent frames, each seeing its
+        # own past and only its partner), a block is what the DECODE
+        # can actually reproduce: at generation the B frames are all
+        # un-committed at once, so every slot conditions on the prefix
+        # before t0 and reads every other slot in the block. Training
+        # and decode therefore share one structure -- the property A.4
+        # lacked. B=1 is exactly A.3.
+        self.query_block = max(int(query_block), 1)
+        self.register_buffer(
+            'query_block_flag',
+            torch.tensor(self.query_block, dtype=torch.long),
+        )
+        if self.query_block > 1:
+            if self.slot_sees_prev_frame:
+                raise ValueError(
+                    'slot_sees_prev_frame is defined for the per-frame '
+                    'mask only; block mode (A.8) cuts history at the '
+                    'block start and is closed.')
+            if self.query_pairs > 1 or self.query_pairs < 0:
+                raise ValueError(
+                    'query_block (A.8, contiguous) and query_pairs '
+                    '(A.6, scattered) are different uses of the same '
+                    'slot machinery; enable only one.')
+            for layer in self.global_layers:
+                layer.query_block_mode = True
+
+    @property
+    def slot_rope_aligned(self):
+        return bool(self.slot_rope_aligned_flag.item())
+
+    @property
+    def time_rope_aligned(self):
+        return bool(self.time_rope_aligned_flag.item())
+
+    @property
+    def token_level_mask(self):
+        return bool(self.token_level_mask_flag.item())
+
+    @property
+    def mask_revealed_query_loss(self):
+        return bool(self.mask_revealed_query_loss_flag.item())
+
+    @property
+    def decoy_corruption(self):
+        return bool(self.decoy_corruption_flag.item())
+
+    @property
+    def agree_head(self):
+        return bool(self.agree_head_flag.item())
+
+    def _draw_agree_lags(self, shape, device, T_full):
+        """A.11 negatives: a signed offset drawn uniformly over the
+        calibrated decoy bins, then uniformly inside the chosen bin.
+        Bins come from calibrate_decoy_lag (harmonic agreement vs lag on
+        the POP909 train split), so the negatives span easy to hard
+        rather than all being trivially far."""
+        bins = self.decoy_lag_bins
+        which = torch.randint(0, len(bins), shape, device=device)
+        lo = torch.tensor([b[0] for b in bins], device=device)[which]
+        hi = torch.tensor([b[1] for b in bins], device=device)[which]
+        span = (hi - lo + 1).clamp_min(1)
+        mag = lo + (torch.rand(shape, device=device) * span).long().clamp_max(
+            span - 1)
+        mag = mag.clamp(1, max(T_full - 1, 1))
+        sign = torch.where(torch.rand(shape, device=device) < 0.5, -1, 1)
+        return mag * sign
+
+    def _draw_decoy_lags(self, k_t, T_full):
+        """A.7: per-item signed lag for one slot. Split out so the audit
+        can exercise the real draw.
+
+        k=0 -> 0 (the true frame). k in 1..K-1 -> magnitude uniform in
+        decoy_lag_bins[k-1] (inclusive), random sign. k=K -> magnitude
+        uniform in [1, T_full-1] (any other frame of the window).
+        Returns LongTensor[B]; the caller wraps t+lag modulo T_full.
+        """
+        B = k_t.shape[0]
+        device = k_t.device
+        lags = torch.zeros(B, dtype=torch.long, device=device)
+        K = self.diffusion_K
+        for level in range(1, K + 1):
+            sel = k_t == level
+            n = int(sel.sum())
+            if n == 0:
+                continue
+            if level == K:
+                hi = max(T_full - 1, 1)
+                mag = torch.randint(1, hi + 1, (n,), device=device)
+            else:
+                lo, hi = self.decoy_lag_bins[level - 1]
+                mag = torch.randint(lo, hi + 1, (n,), device=device)
+            sign = torch.where(
+                torch.rand(n, device=device) < 0.5,
+                torch.full((n,), -1, dtype=torch.long, device=device),
+                torch.full((n,), 1, dtype=torch.long, device=device))
+            lags[sel] = mag * sign
+        return lags
+
+    def _decoy_frame_slot(self, h, t_j, k_t, sc_mask, sc_emb, mod,
+                          T_full, mask_emb):
+        """A.7 slot construction (frame-level decoy; k-embedding is
+        added by the caller, mirroring _token_level_slot's contract).
+
+        content = the SAME stream's frame at (t_j + lag(k)) mod T_full;
+        the self-conditioning override then replaces content where its
+        mask is set (the model's own draft is a decoy of the model's
+        own error distribution); finally, at k=K a residual coin sends
+        decoy_mask_residual of the items to the plain mask embedding so
+        the no-information endpoint stays trained.
+
+        Returns (slot [B, 1, H], revealed [B] bool). revealed is True
+        only where the slot verbatim carries its ground-truth target
+        (k=0 and no self-conditioning override).
+        """
+        B, _, H = h.shape
+        lags = self._draw_decoy_lags(k_t, T_full)
+        idx = (lags + int(t_j)) % T_full
+        pos = 2 * idx + mod                              # stream parity
+        content = torch.gather(
+            h, 1, pos.view(B, 1, 1).expand(-1, 1, H))    # [B, 1, H]
+        is_sc = torch.zeros(B, dtype=torch.bool, device=h.device) \
+            if sc_mask is None else sc_mask
+        if sc_mask is not None and sc_emb is not None:
+            content = torch.where(
+                sc_mask.view(B, 1, 1), sc_emb.to(dtype=content.dtype),
+                content)
+        resid = (k_t == self.diffusion_K) & (
+            torch.rand(B, device=h.device) < self.decoy_mask_residual)
+        slot = torch.where(
+            resid.view(B, 1, 1), mask_emb.to(dtype=content.dtype),
+            content)
+        revealed = (k_t == 0) & (~is_sc)
+        return slot, revealed
+
+    def on_load_checkpoint(self, checkpoint):
+        """Let a checkpoint that predates a scheme buffer still resume.
+
+        Every training-scheme flag here is a registered buffer, so it
+        travels inside the ckpt -- but that also means a ckpt written
+        before a flag existed is MISSING that key, and Lightning's
+        resume path loads the state_dict strictly. Fill any absent
+        buffer with this run's own value, which is the right default:
+        the flag then comes from the CLI, exactly as it would on a cold
+        start. (frame_mask_row_init_flag=0 in particular means a legacy
+        A.4 ckpt gets its never-initialised mask row fixed on resume.)
+        """
+        sd = checkpoint.get('state_dict')
+        if isinstance(sd, dict):
+            for name, buf in self.named_buffers():
+                if name not in sd:
+                    sd[name] = buf.detach().clone()
+                    print(f'[compat] checkpoint predates buffer {name!r}; '
+                          f'filling in with this run\'s value '
+                          f'{buf.tolist()}')
+        super().on_load_checkpoint(checkpoint)
+
+    def _init_frame_mask_row(self):
+        """A.4 FIX 1: give the MASK id a trained-model-like embedding.
+
+        Standard absorbing-state discrete diffusion (D3PM, MaskGIT,
+        MDLM) carries [MASK] as a first-class vocabulary entry whose
+        embedding is learned from the start. A.4 instead repurposed a
+        dead id in the instrument-padding range, so its row arrived at
+        training as the pretrained checkpoint left it: never updated by
+        any real data, i.e. effectively random -- a stray vector shoved
+        into a PRETRAINED local encoder that had never seen it. That is
+        the leading explanation for the first A.4 run's collapse.
+
+        Fix: initialise the row to the MEAN of the real token
+        embeddings (programs 0..127 and pitch-durs 128..3199), so the
+        mask starts as a neutral, in-distribution "average token"
+        rather than noise, and learns away from there. Runs once, from
+        on_train_start (after the warm-start state_dict has loaded --
+        doing it in __init__ would be overwritten), and records itself
+        in a buffer so a resumed run does not re-initialise a row that
+        has since trained.
+        """
+        if not self.token_level_mask:
+            return
+        if bool(self.frame_mask_row_init_flag.item()):
+            return
+        with torch.no_grad():
+            emb = self.local_embedding.weight
+            real = emb[:128 * 25]        # programs + pitch-durs, no padding
+            emb[self.frame_mask_token] = real.mean(dim=0)
+            self.frame_mask_row_init_flag.fill_(1)
+        print(f'[A.4] frame mask row {self.frame_mask_token} initialised to '
+              f'the mean of {real.shape[0]} real token embeddings')
+
+    def on_train_start(self):
+        hook = getattr(super(), 'on_train_start', None)
+        if callable(hook):
+            hook()
+        self._init_frame_mask_row()
+
+    def _token_level_slot(self, content_tokens, sc_mask, sc_toks, k_t, mod):
+        """A.4 slot construction: per-token absorbing corruption.
+
+        content_tokens: [B, S] the target frame's tokens (or, where
+            sc_mask is set, the self-conditioning draft's tokens).
+        k_t: LongTensor[B] commitment levels.
+
+        A.4 FIX 2: only PITCH-DURATION tokens are maskable. A cp frame
+        is (program, pitch-dur) pairs terminated by EOS, so programs sit
+        at even positions and EOS at the even position after the last
+        pair. The first A.4 run masked those too, and a frame whose EOS
+        is masked reads as "not finished" -- which biases the next
+        refinement round toward more notes and compounds across rounds.
+        That is the density inflation heard on that run. Masking only
+        the odd (pitch-dur) positions preserves each frame's INSTRUMENT
+        and LENGTH while corrupting its CONTENT, which is both the
+        musically meaningful partial state ("how many notes is settled,
+        which notes is not") and the standard practice of leaving
+        structural tokens out of the corruption process.
+
+        Endpoints stay exact: k=K masks every pitch-dur token and falls
+        back to the learned whole-frame mask_*_emb (silent frames
+        included, so a silent frame cannot leak its silence at k=K);
+        k=0 masks nothing and encodes the clean frame.
+
+        Returns (slot [B, 1, H] WITHOUT the k-embedding -- the caller
+        adds it -- and revealed [B, S] bool, the positions whose GROUND
+        TRUTH was handed to the model inside the slot; see
+        _query_loss_keep_mask for why the loss must drop those).
+        """
+        B, S = content_tokens.shape
+        is_sc = (torch.zeros(B, dtype=torch.bool, device=content_tokens.device)
+                 if sc_mask is None else sc_mask)
+        if sc_mask is not None and sc_toks is not None:
+            content_tokens = torch.where(
+                sc_mask.view(B, 1), sc_toks, content_tokens)
+        corrupted, fully, drawn = self._corrupt_frame_tokens(
+            content_tokens, k_t)
+        enc = self._encode_frame(corrupted, mod)               # [B, 1, H]
+        mask_emb = (self.mask_m_emb if mod == 0 else self.mask_c_emb)
+        mask_emb = mask_emb.view(1, 1, -1).expand(B, 1, -1).to(enc.dtype)
+        slot = torch.where(fully.view(B, 1, 1), mask_emb, enc)
+        # A token is REVEALED when it survived the draw, the slot was
+        # not replaced wholesale by the mask embedding, and the content
+        # is ground truth rather than a self-conditioning draft (a draft
+        # token may be wrong, so predicting it is not free).
+        revealed = (~drawn) & (~fully).view(B, 1) & (~is_sc).view(B, 1)
+        return slot, revealed.expand(B, S)
+
+    def _corrupt_frame_tokens(self, content_tokens, k_t):
+        """Draw the per-token absorbing corruption for one slot.
+
+        Split out of _token_level_slot so the audit can exercise the
+        real draw instead of a copy of it.
+
+        Returns (corrupted [B, S], fully [B] bool, drawn [B, S] bool)
+        where `fully` marks the items whose slot must fall back to the
+        whole-frame mask embedding rather than the encoding of
+        `corrupted`, and `drawn` marks the individual tokens that were
+        replaced by the mask id.
+        """
+        B, S = content_tokens.shape
+        device = content_tokens.device
+        denom = max(self.diffusion_K, 1)
+        p = (k_t.float() / denom).view(B, 1)
+        # Odd positions are pitch-dur; even positions carry programs and
+        # the terminating EOS and are never corrupted (FIX 2).
+        is_pd = (torch.arange(S, device=device) % 2 == 1).view(1, S)
+        maskable = is_pd & (content_tokens != self.tokenizer.pad_token)
+        drawn = (torch.rand(B, S, device=device) < p) & maskable
+        corrupted = torch.where(
+            drawn,
+            torch.full_like(content_tokens, self.frame_mask_token),
+            content_tokens,
+        )
+        # Fully-unknown fallback -> the learned whole-frame mask
+        # embedding, in three cases:
+        #   k = K            endpoint, forced, so it is exact for EVERY
+        #                    frame including silent ones;
+        #   every pd drawn   the frame carries no content any more;
+        #   silent frame     a frame with no pitch-dur token at all has
+        #                    nothing to corrupt, so encoding it cleanly
+        #                    would reveal its silence for free at every
+        #                    k < K. Corrupt it all-or-nothing with the
+        #                    same probability p instead, which keeps the
+        #                    reveal rate monotone in k and both
+        #                    endpoints exact (p=0 at k=0, p=1 at k=K).
+        n_maskable = maskable.sum(dim=1)
+        all_drawn = (n_maskable > 0) & (drawn.sum(dim=1) == n_maskable)
+        silent_drawn = (n_maskable == 0) & (
+            torch.rand(B, device=device) < p.view(B))
+        fully = (k_t == self.diffusion_K) | all_drawn | silent_drawn
+        return corrupted, fully, drawn
+
+    def _draft_from_logits(self, logits, temp=None):
+        """Turn probe logits [..., V] into draft tokens [...].
+
+        sc_draft_temp == 0 -> argmax (the historical behaviour, so every
+        pre-A.12 run reproduces bit-for-bit). Otherwise a categorical
+        sample at that temperature, which is what the decode actually
+        commits; see the sc_draft_temp note in __init__.
+        """
+        t = self.sc_draft_temp if temp is None else float(temp)
+        if t <= 0:
+            return logits.argmax(dim=-1)
+        shape = logits.shape[:-1]
+        flat = logits.reshape(-1, logits.shape[-1]).float() / t
+        return torch.multinomial(
+            F.softmax(flat, dim=-1), 1).view(shape)
+
+    def _query_loss_keep_mask(self, non_pad_q):
+        """Which query-slot positions the query loss may score.
+
+        The query slot is BOTH the model's conditioning input for the
+        target frame AND the thing whose target it predicts. Wherever
+        the slot carries un-corrupted ground truth, predicting that
+        target is a free copy: at k=0 the whole frame is handed over,
+        and under A.4 every token that survived the draw is handed over
+        individually.
+
+        Scoring those positions is not just a diluted average. The copy
+        path and the "infer it from the partner's draft" path compete
+        for the same gradient, and only the second one exists at
+        inference -- where the slot holds the model's own draft, never
+        the answer. D3PM, MDLM and MaskGIT all score the denoising loss
+        on corrupted positions only, for exactly this reason.
+
+        So: drop the revealed positions. Self-conditioned items are
+        NOT dropped -- their slot holds a model draft that may be wrong,
+        so correcting it is real signal, and arguably the most valuable
+        signal in the objective.
+
+        We take the plain mean over the kept positions (MaskGIT) rather
+        than the 1/p importance weighting of the MDLM/D3PM ELBO: we want
+        a training signal, not a likelihood bound, and the reweighting
+        adds variance at small k for no benefit here.
+
+        Off by default. Validation is unaffected either way -- eval
+        pins k=K, nothing is revealed there, and the keep mask
+        degenerates to the non-pad mask, so val_loss stays directly
+        comparable across the flag. What the flag changes is the
+        TRAINING objective, so for the E6 arm comparison turn it on for
+        a WHOLE arm-set (e.g. all four arms) or none -- otherwise arms
+        differ by more than their router.
+        """
+        if not self.mask_revealed_query_loss:
+            return non_pad_q
+        revealed = getattr(self, '_last_query_revealed', None)
+        if revealed is None:
+            return non_pad_q
+        return non_pad_q * (~revealed).to(non_pad_q.dtype)
+
+    def _run_global_stack(self, h, T_query):
+        """Override: slot-aligned (v1.1) / time-aligned (v1.2) RoPE.
+
+        v1.1 (slot_rope_aligned): clean positions keep rotary index ==
+        physical index (0..L-3); the two slots get index 2*T_query+2 and
+        2*T_query+3, matching where inference naturally places them
+        after the committed pairs of frame T_query.
+
+        v1.2 (time_rope_aligned): the same position vector is then
+        HALVED (// 2), so m_t and c_t share rotary position t and both
+        slots land on T_query+1 -- the rotary phase frame T_query's
+        content occupies in the SOS-shifted clean stream. Musical
+        distance == rotary distance; within-stream geometry matches the
+        single-stream pretrain exactly.
+
+        Legacy scheme (v1.0 ckpts) falls through to the parent
+        implementation (contiguous 0..L-1).
+
+        Note the slots' rotary index may coincide with clean positions
+        holding frame T_query{+1}'s content at training time. Duplicate
+        rotary phases are benign: attention stays well-defined, the
+        slots never attend those rows (frame >= T_query is masked for
+        slot queries), and clean rows never attend the slots.
+        """
+        if not (self.slot_rope_aligned or self.time_rope_aligned):
+            return super()._run_global_stack(h, T_query)
+        B, L, H = h.shape
+        tq = normalize_T_query(T_query)
+        clean_len = L - 2 * len(tq)
+        head_dim = H // self.num_attention_heads
+        positions = torch.arange(L, device=h.device)
+        tq_t = torch.as_tensor(tq, device=h.device, dtype=positions.dtype)
+        positions[clean_len::2] = 2 * tq_t + 2
+        positions[clean_len + 1::2] = 2 * tq_t + 3
+        if self.time_rope_aligned:
+            positions = torch.div(positions, 2, rounding_mode='floor')
+        max_pos = int(positions.max().item()) + 1
+        cos_b, sin_b = _rope_freqs(max_pos, head_dim,
+                                    device=h.device, dtype=h.dtype)
+        cos = cos_b[:, :, positions]
+        sin = sin_b[:, :, positions]
+        total_aux = torch.zeros((), device=h.device, dtype=h.dtype)
+        for layer in self.global_layers:
+            h, aux = layer(h, T_query, cos, sin, clean_len)
+            total_aux = total_aux + aux
+        return h, total_aux / max(len(self.global_layers), 1)
+
+    # ------------------------------------------------------------------
+    # forward: same as parent except the query-slot inputs.
+    # ------------------------------------------------------------------
+    def forward(self, x, T_query=None, k_m=None, k_c=None,
+                sc_mask_m=None, sc_emb_m=None,
+                sc_mask_c=None, sc_emb_c=None,
+                sc_toks_m=None, sc_toks_c=None):
+        """x: [B, 2*T_full, subseq_len] interleaved ground-truth sequence.
+
+        T_query (int, optional): frame the query slots predict.
+        k_m, k_c (int OR LongTensor[B], optional): noise level per slot.
+            k = K (default): the slot is masked (parent behaviour).
+            k = 0: the slot is the ground-truth frame embedding.
+            0 < k < K: per-item Bernoulli mask with prob k/K.
+        sc_mask_m / sc_emb_m (optional): self-conditioning override for
+            the m slot. sc_mask_m: BoolTensor[B]; sc_emb_m: [B, 1, H].
+            Items where the mask is True use sc_emb (a model-generated
+            frame embedding) instead of the ground-truth embedding as
+            the slot's unmasked content. Only affects the Bernoulli
+            "content" branch; masked items still get mask_*_emb.
+            Same for the c slot.
+
+        Returns the same triple as parent: (ar_logits, query_logits, aux_loss).
+        """
+        batch_size, seq_len, subseq_len = x.shape
+        assert seq_len % 2 == 0
+        T_full = seq_len // 2
+
+        if T_query is None:
+            T_query = T_full - 1
+        tq = normalize_T_query(T_query)
+        n_pairs = len(tq)
+        for t_j in tq:
+            assert 1 <= t_j < T_full, (
+                f'T_query entry {t_j} out of valid range [1, {T_full})'
+            )
+        assert len(set(tq)) == n_pairs, (
+            f'T_query must list DISTINCT frames, got {tq}'
+        )
+
+        K = self.diffusion_K
+        k_m_t = self._coerce_k_pairs(k_m, batch_size, n_pairs, x.device)
+        k_c_t = self._coerce_k_pairs(k_c, batch_size, n_pairs, x.device)
+        sc_mask_m = self._coerce_sc_mask(sc_mask_m, batch_size, n_pairs)
+        sc_mask_c = self._coerce_sc_mask(sc_mask_c, batch_size, n_pairs)
+
+        # Local encode + token type ids (identical to parent).
+        idx = torch.arange(seq_len, device=x.device)
+        frame_type = (idx % 2).long()
+        token_type_ids = frame_type.unsqueeze(0).unsqueeze(-1).expand(
+            batch_size, seq_len, subseq_len
+        )
+        sos_type = frame_type.unsqueeze(0).unsqueeze(-1).expand(
+            batch_size, seq_len, 1
+        )
+        token_type_ids = torch.cat([sos_type, token_type_ids], dim=-1)
+
+        h, emb = self.local_encode(x, token_type_ids)
+        h = h.view(batch_size, seq_len, -1)
+        H = h.shape[-1]
+
+        # Standard shift for clean stream (identical to parent).
+        sos = self._assemble_sos(batch_size, h.device, h.dtype)
+        h_clean = torch.cat([sos, h[:, :-2]], dim=1)   # [B, 2T_full, H]
+
+        # --- query-slot construction (the new part) ---
+        # One (m, c) pair per entry of tq, built in pair order so that
+        # Q=1 consumes the RNG in exactly the historical order and
+        # reproduces the old behaviour bit-for-bit.
+        slots, revealed = [], []
+        mask_m_expand = self.mask_m_emb.view(1, 1, -1).expand(batch_size, 1, -1)
+        mask_c_expand = self.mask_c_emb.view(1, 1, -1).expand(batch_size, 1, -1)
+        denom = max(K, 1)
+        for j, t_j in enumerate(tq):
+            sc_m_j = None if sc_mask_m is None else sc_mask_m[:, j]
+            sc_c_j = None if sc_mask_c is None else sc_mask_c[:, j]
+            if self.decoy_corruption and self.training:
+                # A.7: lag-graded decoy corruption (see __init__ note).
+                # Training-only: eval falls through to the mask path
+                # below, whose k=K pin keeps val_loss comparable across
+                # the whole A-family.
+                slot_m, rev1_m = self._decoy_frame_slot(
+                    h, t_j, k_m_t[:, j], sc_m_j,
+                    self._sc_emb_slice(sc_emb_m, j), 0, T_full,
+                    mask_m_expand)
+                slot_c, rev1_c = self._decoy_frame_slot(
+                    h, t_j, k_c_t[:, j], sc_c_j,
+                    self._sc_emb_slice(sc_emb_c, j), 1, T_full,
+                    mask_c_expand)
+                slot_m = slot_m.to(h.dtype)
+                slot_c = slot_c.to(h.dtype)
+                rev_m = rev1_m.view(batch_size, 1).expand(-1, subseq_len)
+                rev_c = rev1_c.view(batch_size, 1).expand(-1, subseq_len)
+            elif self.token_level_mask:
+                # A.4: per-token absorbing corruption of the target
+                # frame, locally encoded -- intermediate k are genuinely
+                # partial frames. Self-conditioning at the TOKEN level.
+                slot_m, rev_m = self._token_level_slot(
+                    x[:, 2 * t_j], sc_m_j,
+                    self._sc_tok_slice(sc_toks_m, j), k_m_t[:, j], 0,
+                )
+                slot_c, rev_c = self._token_level_slot(
+                    x[:, 2 * t_j + 1], sc_c_j,
+                    self._sc_tok_slice(sc_toks_c, j), k_c_t[:, j], 1,
+                )
+                slot_m = slot_m.to(h.dtype)
+                slot_c = slot_c.to(h.dtype)
+            else:
+                # Ground-truth frame embeddings at t_j, with optional
+                # self-conditioning override (model-generated frame
+                # embeddings replacing gt for the flagged items).
+                gt_m = h[:, 2 * t_j:2 * t_j + 1]           # [B, 1, H]
+                gt_c = h[:, 2 * t_j + 1:2 * t_j + 2]       # [B, 1, H]
+                # A.11: the committed leader is replaced by the same
+                # stream's frame at lag != 0 for the flagged items. Only
+                # the leader is touched; the follower stays masked.
+                for lag_all, mod, ref in ((self._agree_lag_m, 0, 'm'),
+                                          (self._agree_lag_c, 1, 'c')):
+                    if lag_all is None:
+                        continue
+                    lag = lag_all[:, j]                    # [B], 0 = genuine
+                    if not bool((lag != 0).any()):
+                        continue
+                    pos = 2 * ((int(t_j) + lag) % T_full) + mod
+                    dec = torch.gather(
+                        h, 1, pos.view(batch_size, 1, 1).expand(-1, 1, H))
+                    sel = (lag != 0).view(batch_size, 1, 1)
+                    if ref == 'm':
+                        gt_m = torch.where(sel, dec.to(gt_m.dtype), gt_m)
+                    else:
+                        gt_c = torch.where(sel, dec.to(gt_c.dtype), gt_c)
+                if sc_m_j is not None:
+                    gt_m = torch.where(
+                        sc_m_j.view(batch_size, 1, 1),
+                        self._sc_emb_slice(sc_emb_m, j).to(dtype=gt_m.dtype),
+                        gt_m)
+                if sc_c_j is not None:
+                    gt_c = torch.where(
+                        sc_c_j.view(batch_size, 1, 1),
+                        self._sc_emb_slice(sc_emb_c, j).to(dtype=gt_c.dtype),
+                        gt_c)
+
+                # Per-item Bernoulli mask draws with prob k[i] / K (=0
+                # if K==0). Using max(K, 1) is purely a divide-by-zero
+                # guard; K==0 would mean "never mask," degenerate but
+                # well-defined.
+                u_m = torch.rand(batch_size, device=h.device)
+                u_c = torch.rand(batch_size, device=h.device)
+                b_masked_m = u_m < (k_m_t[:, j].float() / denom)
+                b_masked_c = u_c < (k_c_t[:, j].float() / denom)
+                if self.sc_k_consistent:
+                    # A.12: where a draft was written into gt above, the
+                    # coin would throw it away with prob k/K. Use the
+                    # decode's rule instead -- mask ONLY at k=K, so every
+                    # k<K presents the whole draft tagged with its round.
+                    # Items without a draft keep the Bernoulli coin, so
+                    # the two regimes stay separable in the logs.
+                    endpoint_m = k_m_t[:, j] == K
+                    endpoint_c = k_c_t[:, j] == K
+                    if sc_m_j is not None:
+                        b_masked_m = torch.where(
+                            sc_m_j, endpoint_m, b_masked_m)
+                    if sc_c_j is not None:
+                        b_masked_c = torch.where(
+                            sc_c_j, endpoint_c, b_masked_c)
+                is_masked_m = b_masked_m.to(h.dtype)
+                is_masked_c = b_masked_c.to(h.dtype)
+                # [B] -> [B, 1, 1] for broadcasting.
+                is_masked_m = is_masked_m.view(batch_size, 1, 1)
+                is_masked_c = is_masked_c.view(batch_size, 1, 1)
+
+                slot_m = is_masked_m * mask_m_expand \
+                    + (1.0 - is_masked_m) * gt_m
+                slot_c = is_masked_c * mask_c_expand \
+                    + (1.0 - is_masked_c) * gt_c
+
+                # Frame-level corruption is all-or-nothing, so an
+                # unmasked slot reveals the WHOLE target frame -- unless
+                # it was overridden by a self-conditioning draft, which
+                # may be wrong. [B] -> [B, S].
+                unmasked_m = is_masked_m.view(batch_size) == 0
+                unmasked_c = is_masked_c.view(batch_size) == 0
+                if sc_m_j is not None:
+                    unmasked_m = unmasked_m & ~sc_m_j
+                if sc_c_j is not None:
+                    unmasked_c = unmasked_c & ~sc_c_j
+                rev_m = unmasked_m.view(batch_size, 1).expand(-1, subseq_len)
+                rev_c = unmasked_c.view(batch_size, 1).expand(-1, subseq_len)
+
+            # Add per-item k-embeddings -- the commitment tag. Crucial
+            # for iterative refinement at inference, where the same slot
+            # input can mean very different things depending on where in
+            # the K-step trajectory we are, and it is what the partner
+            # slot reads (via the frame pass) to tell a committed frame
+            # from a tentative draft.
+            slot_m = slot_m + self.k_emb_m(
+                k_m_t[:, j]).view(batch_size, 1, -1).to(h.dtype)
+            slot_c = slot_c + self.k_emb_c(
+                k_c_t[:, j]).view(batch_size, 1, -1).to(h.dtype)
+            slots.extend([slot_m, slot_c])
+            revealed.extend([rev_m, rev_c])
+
+        # Stash for the loss. Set on EVERY forward, so the no-grad
+        # self-conditioning forward's value is overwritten by the real
+        # one that follows it -- loss() reads it after that second call.
+        self._last_query_revealed = torch.stack(
+            revealed, dim=1)                              # [B, 2Q, S]
+
+        if getattr(self, '_stash_slots', False):
+            # audit hook (off by default, zero cost): the slot INPUTS, so
+            # audit_agree_head can check the A.11 leader swap directly.
+            self._last_slots_in = torch.cat(slots, dim=1).detach()
+        h_full = torch.cat([h_clean] + slots, dim=1)
+        # h_full: [B, 2*T_full + 2*Q, H]
+
+        h_global, aux_loss = self._run_global_stack(h_full, T_query=tq)
+
+        # Split outputs (identical to parent at Q=1).
+        h_clean_global = h_global[:, :seq_len]
+        h_query_global = h_global[:, seq_len:]             # [B, 2Q, H]
+        self._last_slot_h = h_query_global                 # A.11 head input
+        if getattr(self, '_stash_h', False):
+            # for the free-running draft (sc_ar_free_run) and for
+            # diag_a12_draft: the content hidden states the decode's
+            # local_sampling reads
+            self._last_h_clean_global = h_clean_global.detach()
+
+        ar_logits = self.local_decode(h_clean_global, emb)
+
+        emb_reshape = emb.view(batch_size, seq_len, subseq_len, -1)
+        emb_query = torch.cat(
+            [emb_reshape[:, 2 * t_j:2 * t_j + 2] for t_j in tq], dim=1,
+        )                                                  # [B, 2Q, S, D]
+        emb_query_flat = emb_query.reshape(
+            batch_size * 2 * n_pairs, subseq_len, -1)
+        query_logits = self.local_decode(h_query_global, emb_query_flat)
+
+        return ar_logits, query_logits, aux_loss
+
+    def _coerce_k(self, k, batch_size, device):
+        """Accept int / None / LongTensor[B] and return LongTensor[B]."""
+        K = self.diffusion_K
+        if k is None:
+            # Default: fully masked (parent behaviour). Useful for
+            # warmstart sanity and for inference at the first round.
+            return torch.full((batch_size,), K, device=device, dtype=torch.long)
+        if isinstance(k, int):
+            return torch.full((batch_size,), int(k), device=device,
+                              dtype=torch.long)
+        k = k.to(device=device, dtype=torch.long)
+        if k.dim() == 0:
+            return k.view(1).expand(batch_size).clone()
+        assert k.shape == (batch_size,), (
+            f'k shape {tuple(k.shape)} != ({batch_size},)'
+        )
+        return k
+
+    def _coerce_k_pairs(self, k, batch_size, n_pairs, device):
+        """Accept int / None / LongTensor[B] / LongTensor[B, Q].
+
+        Returns LongTensor[B, Q]. A [B] tensor (the historical shape,
+        and what inference passes) is broadcast to every query pair.
+        """
+        if k is not None and torch.is_tensor(k) and k.dim() == 2:
+            k = k.to(device=device, dtype=torch.long)
+            assert k.shape == (batch_size, n_pairs), (
+                f'k shape {tuple(k.shape)} != ({batch_size}, {n_pairs})'
+            )
+            return k
+        return self._coerce_k(k, batch_size, device).view(
+            batch_size, 1).expand(batch_size, n_pairs)
+
+    @staticmethod
+    def _coerce_sc_mask(sc_mask, batch_size, n_pairs):
+        """None / BoolTensor[B] / BoolTensor[B, Q] -> None or [B, Q]."""
+        if sc_mask is None:
+            return None
+        if sc_mask.dim() == 1:
+            return sc_mask.view(batch_size, 1).expand(batch_size, n_pairs)
+        assert sc_mask.shape == (batch_size, n_pairs), (
+            f'sc_mask shape {tuple(sc_mask.shape)} != '
+            f'({batch_size}, {n_pairs})'
+        )
+        return sc_mask
+
+    @staticmethod
+    def _sc_tok_slice(t, j):
+        """Query pair j's draft TOKENS -> [B, S].
+
+        Accepts the historical un-paired [B, S] and the paired
+        [B, Q, S]. Kept separate from the embedding slicer because
+        [B, 1, S] and [B, 1, H] are indistinguishable by shape alone.
+        """
+        return t if (t is None or t.dim() == 2) else t[:, j]
+
+    @staticmethod
+    def _sc_emb_slice(t, j):
+        """Query pair j's draft EMBEDDING -> [B, 1, H].
+
+        Accepts the historical un-paired [B, 1, H] and the paired
+        [B, Q, 1, H].
+        """
+        return t if (t is None or t.dim() == 3) else t[:, j]
+
+    # ------------------------------------------------------------------
+    # loss: sample k_m, k_c per item per batch and call forward.
+    # ------------------------------------------------------------------
+    def loss(self, x_mel, x_acc, batch_pitch_shift):
+        # Preprocess + interleave (identical to parent).
+        x_mel, x_acc = self.preprocess(x_mel, batch_pitch_shift, y=x_acc)
+        batch_size, seq_len, subseq_len = x_mel.shape
+
+        stacked = torch.stack([x_mel, x_acc], dim=2)
+        x = stacked.view(batch_size, seq_len * 2, subseq_len)
+        T_full = seq_len
+        full_seq_len = seq_len * 2
+
+        # Sample the query frames. Q = query_pairs distinct frames per
+        # forward (see the QUERY-PAIR COUNT note in the module
+        # docstring); Q=1 reproduces the historical single-frame draw.
+        B_blk = min(max(int(self.query_block), 1), max(T_full - 1, 1))
+        if self.training and B_blk > 1:
+            # A.8: one contiguous block t0 .. t0+B-1, start uniform over
+            # the legal range so every block offset is trained.
+            hi = T_full - B_blk
+            t0 = int(torch.randint(low=1, high=max(hi + 1, 2), size=(1,),
+                                   device=x.device).item())
+            t0 = min(t0, max(T_full - B_blk, 1))
+            tq = tuple(range(t0, t0 + B_blk))
+        else:
+            tq = None
+        Q = (T_full - 1 if self.query_pairs < 0
+             else min(max(int(self.query_pairs), 1), T_full - 1))
+        if tq is not None:
+            pass
+        elif self.training:
+            if Q >= T_full - 1:
+                # A.9: every frame, no sampling -- the query objective
+                # becomes a full-sequence objective like the AR loss.
+                tq = tuple(range(1, T_full))
+            elif Q == 1:
+                tq = (int(torch.randint(
+                    low=1, high=T_full, size=(1,), device=x.device,
+                ).item()),)
+            else:
+                # Distinct frames, sorted so the run-to-run layout is
+                # deterministic given the draw.
+                perm = torch.randperm(T_full - 1, device=x.device)[:Q] + 1
+                tq = tuple(sorted(int(t) for t in perm.tolist()))
+        else:
+            # Eval keeps the historical single frame, so val_loss stays
+            # comparable across Q and B.
+            tq = (T_full - 1,)
+        n_pairs = len(tq)
+        T_query = tq[0] if n_pairs == 1 else tq
+
+        # A.11 state for this call, set inside the conditional-slot draw.
+        agree_lag_m = agree_lag_c = agree_valid = agree_label = None
+        agree_lead_is_m = None
+
+        K = self.diffusion_K
+        if self.training:
+            # Per-item, per-slot noise levels in {0, ..., K}. Sampling
+            # independently across slots covers BOTH inference schedules:
+            #   parallel diffusion (k_m == k_c per round) AND MaskGIT
+            #   (one slot at k=0, the other at k=K). The model has to
+            #   handle every (k_m, k_c) combination at train time.
+            # Per pair as well as per item: one forward then covers
+            # n_pairs points of the (k_m, k_c) grid instead of one.
+            if self.mask_k_prob is None:
+                k_m = torch.randint(0, K + 1, (batch_size, n_pairs),
+                                    device=x.device)
+                k_c = torch.randint(0, K + 1, (batch_size, n_pairs),
+                                    device=x.device)
+            else:
+                # Split the draw: the mask endpoint at an explicit rate,
+                # everything else uniform over the non-endpoint levels.
+                # At K=1 that is exactly "mask with prob p, draft
+                # otherwise", and p=0 drops the mask state entirely.
+                def _draw():
+                    lo = torch.randint(0, max(K, 1), (batch_size, n_pairs),
+                                       device=x.device)
+                    hit = (torch.rand(batch_size, n_pairs, device=x.device)
+                           < self.mask_k_prob)
+                    return torch.where(hit, torch.full_like(lo, K), lo)
+                k_m, k_c = _draw(), _draw()
+            if self.sym_k:
+                # A.12 symmetric update: ONE level per pair, both slots.
+                # The parallel refine decode moves both slots together --
+                # round r=K reads both drafts off the clean AR rows,
+                # round r<K puts both drafts in the slots and resamples
+                # both -- so the only (k_m, k_c) states it ever visits
+                # are the DIAGONAL ones. An independent draw spends half
+                # its pairs on the off-diagonal (one committed, one
+                # masked), which is the commit-then-condition shape this
+                # model is deliberately not using. Tying the draw puts
+                # every pair on a state the decode actually reaches.
+                k_c = k_m
+            if self.cond_slot_prob > 0:
+                # A.3c: commit-then-condition regime for a share of the
+                # pairs -- leader committed (k=0), follower masked (k=K).
+                use_ctc = torch.rand(batch_size, n_pairs,
+                                     device=x.device) < self.cond_slot_prob
+                lead_is_m = torch.rand(batch_size, n_pairs,
+                                       device=x.device) < 0.5
+                k_m = torch.where(use_ctc, torch.where(lead_is_m, 0, K), k_m)
+                k_c = torch.where(use_ctc, torch.where(lead_is_m, K, 0), k_c)
+                self._last_ctc_frac = use_ctc.float().mean().detach()
+                if self.agree_head:
+                    # A.11: on a share of the ctc pairs the committed
+                    # leader is swapped for a lagged frame of its own
+                    # stream; the head must notice. Label 1 = decoy.
+                    is_dec = (torch.rand(batch_size, n_pairs,
+                                         device=x.device)
+                              < self.agree_decoy_prob) & use_ctc
+                    lags = self._draw_agree_lags(
+                        (batch_size, n_pairs), x.device, T_full)
+                    lags = torch.where(is_dec, lags,
+                                       torch.zeros_like(lags))
+                    agree_lag_m = torch.where(lead_is_m, lags,
+                                              torch.zeros_like(lags))
+                    agree_lag_c = torch.where(lead_is_m,
+                                              torch.zeros_like(lags), lags)
+                    agree_valid, agree_label = use_ctc, is_dec.long()
+                    agree_lead_is_m = lead_is_m
+        else:
+            # Eval: fully-masked (most informative single-pass setting)
+            # -- unless sc_val, where validation measures the DRAFT
+            # state instead and k is pinned to 0 so the draft survives.
+            k_eval = 0 if self.sc_val else K
+            k_m = torch.full((batch_size, n_pairs), k_eval, device=x.device,
+                             dtype=torch.long)
+            k_c = torch.full((batch_size, n_pairs), k_eval, device=x.device,
+                             dtype=torch.long)
+        # Stash the FINAL levels (after every override) for the audits.
+        self._last_k_m, self._last_k_c = k_m, k_c
+
+        # --- self-conditioning (exposure-gap closing) -----------------
+        # At inference the slots carry the model's own previous-round
+        # samples, never ground truth. Train for that regime: with prob
+        # self_cond_prob per item per slot, replace the slot's unmasked
+        # content with the model's OWN prediction of the target frame,
+        # produced by a no-grad forward at fully-masked slots (round-one
+        # conditions). Token choice is the teacher-forced argmax of the
+        # query logits -- a cheap approximation of true AR sampling that
+        # still yields a realistic "plausible but imperfect" frame
+        # embedding. No gradient flows through the override content.
+        sc_mask_m = sc_emb_m = sc_mask_c = sc_emb_c = None
+        sc_toks_m = sc_toks_c = None
+        self._last_selfcond_frac = torch.zeros((), device=x.device)
+        self._last_sc_ar_frac = torch.zeros((), device=x.device)
+        if (self.training or self.sc_val) and self.self_cond_prob > 0:
+            if self.training:
+                sc_mask_m = torch.rand(batch_size, n_pairs,
+                                       device=x.device) < self.self_cond_prob
+                sc_mask_c = torch.rand(batch_size, n_pairs,
+                                       device=x.device) < self.self_cond_prob
+            else:
+                # sc_val: every slot drafted, no coin -- validation is a
+                # fixed measurement, not a sample of the training mix.
+                sc_mask_m = torch.ones(batch_size, n_pairs,
+                                       dtype=torch.bool, device=x.device)
+                sc_mask_c = sc_mask_m.clone()
+            if bool(sc_mask_m.any()) or bool(sc_mask_c.any()):
+                with torch.no_grad():
+                    k_full = torch.full((batch_size, n_pairs), K,
+                                        device=x.device, dtype=torch.long)
+                    self._agree_lag_m = self._agree_lag_c = None
+                    if self.sc_ar_free_run:
+                        self._stash_h = True
+                    ar_logits_sc, q_logits_sc, _ = self.forward(
+                        x, T_query=T_query, k_m=k_full, k_c=k_full,
+                    )
+                    self._stash_h = False
+                    V = self.tokenizer.n_tokens
+                    # Validation takes argmax regardless of
+                    # sc_draft_temp, so val_loss is deterministic.
+                    dtemp = None if self.training else 0.0
+                    toks = self._draft_from_logits(q_logits_sc.view(
+                        batch_size, n_pairs, 2, subseq_len, V,
+                    ), temp=dtemp)                      # [B, Q, 2, S]
+                    sc_toks_m = toks[:, :, 0]           # [B, Q, S]
+                    sc_toks_c = toks[:, :, 1]
+                    if getattr(self, '_stash_slots', False):
+                        # audit hook: the QUERY-head draft, before any
+                        # AR-head substitution, so audit_sc_ar_draft can
+                        # show the two sources actually differ.
+                        self._last_q_draft_m = sc_toks_m.clone()
+                        self._last_q_draft_c = sc_toks_c.clone()
+                    if self.sc_ar_frac > 0:
+                        # A.12: the AR clean rows' own draft of frame
+                        # t_j -- row 2*t_j predicts melody t_j, row
+                        # 2*t_j+1 predicts chord t_j (the clean stream
+                        # is shifted one frame right). This is exactly
+                        # what general_inference reads to seed a round
+                        # and to commit a leader.
+                        ar4 = ar_logits_sc.view(
+                            batch_size, full_seq_len, subseq_len, V)
+                        rows_m = torch.tensor(
+                            [2 * t for t in tq], device=x.device)
+                        if self.sc_ar_free_run:
+                            # the decode's own sampler, free-running
+                            # from the content rows, one call per pair
+                            hg = self._last_h_clean_global
+                            t_draft = (self.sc_draft_temp if dtemp is None
+                                       else float(dtemp))
+                            ar_toks_m = torch.stack([
+                                self.local_sampling(
+                                    hg[:, 2 * t], max_subseq_len=subseq_len,
+                                    temperature=t_draft, token_type_id=0)
+                                for t in tq], dim=1)          # [B, Q, S]
+                            ar_toks_c = torch.stack([
+                                self.local_sampling(
+                                    hg[:, 2 * t + 1], max_subseq_len=subseq_len,
+                                    temperature=t_draft, token_type_id=1)
+                                for t in tq], dim=1)
+                        else:
+                            ar_toks_m = self._draft_from_logits(
+                                ar4[:, rows_m], temp=dtemp)
+                            ar_toks_c = self._draft_from_logits(
+                                ar4[:, rows_m + 1], temp=dtemp)
+                        use_ar_m = (torch.rand(batch_size, n_pairs,
+                                               device=x.device)
+                                    < self.sc_ar_frac)
+                        use_ar_c = (torch.rand(batch_size, n_pairs,
+                                               device=x.device)
+                                    < self.sc_ar_frac)
+                        sc_toks_m = torch.where(
+                            use_ar_m.unsqueeze(-1), ar_toks_m, sc_toks_m)
+                        sc_toks_c = torch.where(
+                            use_ar_c.unsqueeze(-1), ar_toks_c, sc_toks_c)
+                        self._last_sc_ar_frac = (
+                            0.5 * (use_ar_m.float().mean()
+                                   + use_ar_c.float().mean()).detach())
+                        if getattr(self, '_stash_slots', False):
+                            self._last_ar_draft_m = ar_toks_m.clone()
+                            self._last_ar_draft_c = ar_toks_c.clone()
+                            self._last_use_ar_m = use_ar_m.clone()
+                    # A.4 corrupts at the TOKEN level, so it needs the
+                    # draft tokens themselves, not their encoding; the
+                    # frame-level branch needs the encoding.
+                    # One local-encoder call per stream over all Q
+                    # pairs: the encoder is per-frame, so folding Q
+                    # into the batch axis is exact. The per-pair loop
+                    # this replaces made 2Q encoder calls per step --
+                    # 766 at Q=all (A.9), which is what made that run
+                    # ~8x slower per step than A.3f, not the longer
+                    # sequence.
+                    sc_emb_m = self._encode_frame(
+                        sc_toks_m.reshape(batch_size * n_pairs, subseq_len), 0,
+                    ).view(batch_size, n_pairs, 1, -1)   # [B, Q, 1, H]
+                    sc_emb_c = self._encode_frame(
+                        sc_toks_c.reshape(batch_size * n_pairs, subseq_len), 1,
+                    ).view(batch_size, n_pairs, 1, -1)
+                    if n_pairs == 1:
+                        # Historical shapes, so a Q=1 run is unchanged.
+                        sc_toks_m, sc_toks_c = sc_toks_m[:, 0], sc_toks_c[:, 0]
+                        sc_emb_m, sc_emb_c = sc_emb_m[:, 0], sc_emb_c[:, 0]
+                self._last_selfcond_frac = (
+                    (sc_mask_m.float().sum() + sc_mask_c.float().sum())
+                    / (2 * batch_size * n_pairs)
+                ).detach()
+            else:
+                sc_mask_m = sc_mask_c = None
+
+        self._agree_lag_m, self._agree_lag_c = agree_lag_m, agree_lag_c
+        ar_logits, query_logits, aux_loss = self.forward(
+            x, T_query=T_query, k_m=k_m, k_c=k_c,
+            sc_mask_m=sc_mask_m, sc_emb_m=sc_emb_m,
+            sc_mask_c=sc_mask_c, sc_emb_c=sc_emb_c,
+            sc_toks_m=sc_toks_m, sc_toks_c=sc_toks_c,
+        )
+        targets_ar = x
+        targets_query = torch.cat(
+            [x[:, 2 * t_j:2 * t_j + 2] for t_j in tq], dim=1,
+        )                                                  # [B, 2Q, S]
+
+        # --- AR loss (unchanged from parent) ---
+        per_token_ar = F.cross_entropy(
+            ar_logits.reshape(-1, self.tokenizer.n_tokens),
+            targets_ar.reshape(-1),
+            ignore_index=self.tokenizer.pad_token,
+            reduction='none',
+        ).view(batch_size, full_seq_len, subseq_len)
+
+        non_pad_ar = (targets_ar != self.tokenizer.pad_token).float()
+        is_eos_ar = (targets_ar == self.tokenizer.eos_token).float() * non_pad_ar
+        is_content_ar = non_pad_ar * (1.0 - is_eos_ar)
+
+        frame_idx = torch.arange(full_seq_len, device=x.device)
+        frame_w = torch.where(
+            frame_idx % 2 == 0,
+            torch.as_tensor(self.mel_loss_weight, device=x.device),
+            torch.as_tensor(self.acc_loss_weight, device=x.device),
+        )
+        w_ar = frame_w.view(1, full_seq_len, 1).expand(batch_size, -1, subseq_len)
+        ttw_ar = 1.0 + (self.eos_loss_weight - 1.0) * is_eos_ar
+        weighted_ar = per_token_ar * w_ar * ttw_ar * non_pad_ar
+        norm_ar = (w_ar * ttw_ar * non_pad_ar).sum().clamp_min(1.0)
+        ar_loss = weighted_ar.sum() / norm_ar
+
+        content_n_ar = is_content_ar.sum().clamp_min(1.0)
+        eos_n_ar = is_eos_ar.sum().clamp_min(1.0)
+        ar_loss_content = (per_token_ar * is_content_ar).sum() / content_n_ar
+        ar_loss_eos = (per_token_ar * is_eos_ar).sum() / eos_n_ar
+
+        # --- Query loss (CE on the 2 appended slots, parent's shape) ---
+        per_token_q = F.cross_entropy(
+            query_logits.reshape(-1, self.tokenizer.n_tokens),
+            targets_query.reshape(-1),
+            ignore_index=self.tokenizer.pad_token,
+            reduction='none',
+        ).view(batch_size, 2 * n_pairs, subseq_len)
+        non_pad_q = (targets_query != self.tokenizer.pad_token).float()
+        keep_q = self._query_loss_keep_mask(non_pad_q)
+        # A.11: no reconstruction on a corrupted partner (ELECTRA's split).
+        agree_loss = torch.zeros((), device=x.device)
+        self._last_agree_acc = torch.zeros((), device=x.device)
+        self._last_agree_frac = torch.zeros((), device=x.device)
+        if (self.agree_head and agree_valid is not None
+                and bool(agree_valid.any())):
+            idx = torch.arange(n_pairs, device=x.device)
+            fol_row = 2 * idx.view(1, -1) + torch.where(
+                agree_lead_is_m, 1, 0)                      # [B, P]
+            drop = torch.zeros(batch_size, 2 * n_pairs,
+                               dtype=torch.bool, device=x.device)
+            drop.scatter_(1, fol_row, (agree_label > 0) & agree_valid)
+            keep_q = keep_q * (~drop).unsqueeze(-1).to(keep_q.dtype)
+            slot_h = self._last_slot_h                      # [B, 2P, H]
+            fol_h = torch.gather(
+                slot_h, 1, fol_row.unsqueeze(-1).expand(-1, -1, slot_h.size(-1)))
+            logits_ag = self.agree_proj(fol_h)              # [B, P, 2]
+            v = agree_valid.reshape(-1)
+            la = logits_ag.reshape(-1, 2)[v]
+            lb = agree_label.reshape(-1)[v]
+            agree_loss = F.cross_entropy(la, lb)
+            self._last_agree_acc = (la.argmax(-1) == lb).float().mean().detach()
+            self._last_agree_frac = v.float().mean().detach()
+        self._last_agree_loss = agree_loss.detach()
+        norm_q = keep_q.sum().clamp_min(1.0)
+        query_loss = (per_token_q * keep_q).sum() / norm_q
+        self._last_query_kept_frac = (
+            keep_q.sum() / non_pad_q.sum().clamp_min(1.0)).detach()
+
+        # Diagnostic split: average query CE by noise-level bin per slot.
+        # Useful for spotting "model only learns at k=0 / k=K" failure modes.
+        with torch.no_grad():
+            q_loss_per_item = (per_token_q * non_pad_q).sum(dim=(1, 2)) / \
+                non_pad_q.sum(dim=(1, 2)).clamp_min(1.0)   # [B]
+            # Mean k across the batch (cheap proxy for the distribution).
+            mean_k_m = k_m.float().mean()
+            mean_k_c = k_c.float().mean()
+
+        self._last_ar_loss = ar_loss.detach()
+        self._last_ar_loss_content = ar_loss_content.detach()
+        self._last_ar_loss_eos = ar_loss_eos.detach()
+        self._last_query_loss = query_loss.detach()
+        self._last_T_query = tq[0]
+        self._last_n_pairs = n_pairs
+        self._last_mean_k_m = mean_k_m.detach()
+        self._last_mean_k_c = mean_k_c.detach()
+
+        if isinstance(aux_loss, torch.Tensor):
+            aux_loss = aux_loss.mean()
+        else:
+            aux_loss = ar_loss.new_zeros(())
+
+        total_loss = (
+            ar_loss
+            + self.query_loss_weight * query_loss
+            + self.aux_loss_weight * aux_loss
+            + self.agree_loss_weight * agree_loss
+        )
+        return total_loss, aux_loss
+
+    def training_step(self, batch, batch_idx):
+        loss, aux_loss = self.loss(*batch)
+        self.log('train_loss', loss)
+        self.log('train_ar_loss', self._last_ar_loss)
+        self.log('train_ar_loss_content', self._last_ar_loss_content)
+        self.log('train_ar_loss_eos', self._last_ar_loss_eos)
+        self.log('train_query_loss', self._last_query_loss)
+        self.log('train_moe_aux_loss', aux_loss.detach())
+        self.log('train_T_query', float(self._last_T_query))
+        self.log('train_mean_k_m', self._last_mean_k_m)
+        self.log('train_mean_k_c', self._last_mean_k_c)
+        self.log('train_selfcond_frac', self._last_selfcond_frac)
+        if self.sc_ar_frac > 0:
+            self.log('train_sc_ar_frac', self._last_sc_ar_frac)
+        self.log('train_query_kept_frac', self._last_query_kept_frac)
+        self.log('train_query_pairs', float(self._last_n_pairs))
+        self.log('train_ctc_frac', getattr(self, '_last_ctc_frac', torch.zeros(())))
+        if self.agree_head:
+            self.log('train_agree_loss', self._last_agree_loss)
+            self.log('train_agree_acc', self._last_agree_acc)
+            self.log('train_agree_frac', self._last_agree_frac)
+        return loss
+
+    def on_before_optimizer_step(self, optimizer):
+        # Total gradient norm BEFORE clipping. With gradient_clip_val=1.0
+        # a norm that sits far above 1 means the update direction is
+        # whichever loss term has the larger gradient, regardless of the
+        # weights on the terms -- the weight-insensitivity A.9 shows.
+        try:
+            from pytorch_lightning.utilities import grad_norm
+            n = grad_norm(self, norm_type=2).get('grad_2.0_norm_total')
+            if n is not None:
+                self.log('train_grad_norm_preclip', n, prog_bar=False)
+        except Exception:
+            pass
+
+    def validation_step(self, batch, batch_idx):
+        loss, aux_loss = self.loss(*batch)
+        self.log('val_loss', loss)
+        self.log('val_ar_loss', self._last_ar_loss)
+        self.log('val_ar_loss_content', self._last_ar_loss_content)
+        self.log('val_ar_loss_eos', self._last_ar_loss_eos)
+        self.log('val_query_loss', self._last_query_loss)
+        self.log('val_query_kept_frac', self._last_query_kept_frac)
+        self.log('val_moe_aux_loss', aux_loss.detach())
+        return loss
+
+
+# ---------------------------------------------------------------------------
+# Training entry point. Mirrors duet_block but adds --diffusion_K.
+# ---------------------------------------------------------------------------
+
+if __name__ == '__main__':
+    from torch.utils.data import DataLoader
+    # The Trainer must come from the SAME package as the model's base
+    # class: RoFormerSymbolicTransformer subclasses
+    # pytorch_lightning.LightningModule (cp_transformer_m2c_moe), and a
+    # lightning.pytorch Trainer refuses it ("must be a LightningModule").
+    # The bare `lightning` top-level module also lacks `callbacks` in
+    # 2.x. So pytorch_lightning first; lightning.pytorch only as a
+    # fallback for an env that ships the model's base from there.
+    try:
+        import pytorch_lightning as L
+        from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
+    except ImportError:
+        import lightning.pytorch as L
+        from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
+
+    parser = argparse.ArgumentParser(
+        description='Train M2CDuetBlockDiffusion (DuetBlock + discrete-diffusion '
+                    'training at the query slots; supports both parallel and '
+                    'MaskGIT-style refinement at inference).',
+    )
+    parser.add_argument('--task', type=str, required=True,
+                        choices=sorted(TASKS))
+    parser.add_argument('--batch_size', type=int, default=4)
+    parser.add_argument('--model_size', type=str, default='large',
+                        choices=['small', 'large'])
+    parser.add_argument('--path_to_dataset', type=str, default=None)
+    parser.add_argument('--mod_a_path', type=str, default=None)
+    parser.add_argument('--model_name', type=str, default=None)
+    parser.add_argument('--model_abbr', type=str, default=None,
+                        help='Model abbreviation used in the run-dir name '
+                             '(A3/A4/A5/A6, arm-prefixed for '
+                             'departures from the per-part-gate default: '
+                             'A2=shared router, D1=dense, D2=hard route). '
+                             'Default: derived from the flags, so '
+                             'mismatched configs never share a dir. '
+                             'Override only to pin a legacy name.')
+    parser.add_argument('--checkpoint_path', type=str, default=None)
+    parser.add_argument('--wandb', action='store_true', default=False)
+    parser.add_argument('--moe_num_experts', type=int, default=4)
+    parser.add_argument('--moe_topk', type=int, default=2)
+    parser.add_argument('--moe_intermediate_size', type=int, default=None)
+    parser.add_argument('--global_num_layers', type=int, default=None)
+    parser.add_argument('--mel_loss_weight', type=float, default=1.0)
+    parser.add_argument('--acc_loss_weight', type=float, default=1.0)
+    parser.add_argument('--run_tag', type=str, default=None)
+    parser.add_argument('--preserve_program', action='store_true', default=True)
+    parser.add_argument('--hardcode_program', dest='preserve_program',
+                        action='store_false')
+    parser.add_argument('--wandb_dir', type=str, default='/tmp/wandb')
+    parser.add_argument('--save_top_k', type=int, default=2)
+    parser.add_argument('--step_ckpt_every', type=int, default=0,
+                        help='Also write a rolling checkpoint every N '
+                             'training steps, independent of val_loss '
+                             '(0 = off). Keeps exactly one, the newest. '
+                             'The best-val callback cannot keep late '
+                             'weights once val_loss has stopped '
+                             'improving, and save_last has not proven '
+                             'a reliable substitute (A.8: last.ckpt '
+                             'frozen at step 9500 of 75000).')
+    parser.add_argument('--limit_val_batches', type=int, default=25,
+                        help='validation batches per check. Validation is '
+                             'now DETERMINISTIC (fixed sample order and '
+                             'crop offsets -- see FramedDataset.__iter__), '
+                             'so this sets how much of the val split the '
+                             'metric covers rather than how noisy it is. '
+                             'Raise it (100+) for a metric stable enough to '
+                             'compare ACROSS runs; the cost is per check, '
+                             'so pair a raise with a larger '
+                             '--val_check_interval.')
+    parser.add_argument('--val_check_interval', type=int, default=500,
+                        help='steps between val evaluations. On the small '
+                             'melchord corpora the val minimum can arrive '
+                             'within the first ~1k steps, which 500 '
+                             'resolves with only one or two points -- too '
+                             'coarse to tell a real minimum from a '
+                             'monotonic rise.')
+    parser.add_argument('--ckpt_dir', type=str, default=None)
+    parser.add_argument('--max_lr', type=float, default=1e-4)
+    parser.add_argument('--lr_total_steps', type=int, default=None)
+    parser.add_argument('--gradient_clip_val', type=float, default=1.0)
+    parser.add_argument('--aux_loss_weight', type=float, default=0.01)
+    parser.add_argument('--eos_loss_weight', type=float, default=1.0)
+    parser.add_argument('--silence_augment_prob', type=float, default=0.0)
+    parser.add_argument('--moe_monitor_every_n_steps', type=int, default=0)
+    parser.add_argument('--moe_monitor_n_samples', type=int, default=4)
+    parser.add_argument('--dump_samples_dir', type=str, default=None)
+    parser.add_argument('--dump_samples_n', type=int, default=4)
+    parser.add_argument('--dump_samples_every_n_epochs', type=int, default=None)
+    parser.add_argument('--max_polyphony', type=int, default=16)
+    parser.add_argument('--gate_init_bias', type=float, default=-10.0)
+    parser.add_argument('--query_block', type=int, default=1,
+                        help='A.8: B contiguous frames carry query '
+                             'pairs in one forward, all conditioning on '
+                             'the prefix before the block and reading '
+                             'each other -- the structure the BLOCK '
+                             'decode reproduces (it commits B frames '
+                             'per refinement cycle). 1 = A.3. Mutually '
+                             'exclusive with --query_pairs.')
+    parser.add_argument('--decoy_corruption', type=int, default=0,
+                        help='A.7: corrupt query slots with the same '
+                             'stream\'s frame from t +- lag(k) instead '
+                             'of the mask embedding -- complete, '
+                             'self-contained frames whose harmonic '
+                             'agreement with the partner decays with k.')
+    parser.add_argument('--decoy_mask_residual', type=float, default=0.25,
+                        help='A.7: probability that a k=K slot draws the '
+                             'plain mask embedding instead of a random-'
+                             'lag decoy, keeping the no-information '
+                             'endpoint trained.')
+    parser.add_argument('--decoy_lag_bins', type=str,
+                        default='1:2,3:11,12:19',
+                        help='A.7: K-1 lo:hi lag bins (frames, '
+                             'inclusive) for k=1..K-1, separated by '
+                             '"," or "/" (use "/" inside sbatch '
+                             '--export, which splits on commas); k=K '
+                             'is always a uniform lag. Default = '
+                             'calibrate_decoy_lag job 202343.')
+    parser.add_argument('--query_loss_weight', type=float, default=1.0,
+                        help='Weight on the query-slot CE term. Lower it '
+                             'if the AR stream regresses while the model is '
+                             'learning the diffusion task; 1.0 is fine for '
+                             'warmstart-from-A.2.')
+    parser.add_argument('--diffusion_K', type=int, default=4,
+                        help='Number of noise-level bins. K=4 means each '
+                             'slot is sampled in {0,1,2,3,4}: 0=fully '
+                             'committed (sees ground truth), K=fully masked '
+                             '(parent behaviour). At inference, K is also '
+                             'the number of refinement steps you can run. '
+                             'Larger K = finer schedule, larger embedding '
+                             'table, more train-time noise diversity.')
+    parser.add_argument('--self_cond_prob', type=float, default=0.5,
+                        help='Per-item, per-slot probability that an '
+                             'unmasked query slot is fed the model\'s own '
+                             '(no-grad, teacher-forced-argmax) prediction '
+                             'instead of the ground-truth embedding. '
+                             'Closes the train/inference exposure gap. '
+                             '0 disables (v1.0 behaviour). Costs one extra '
+                             'no-grad forward per step when active.')
+    parser.add_argument('--legacy_slot_rope', action='store_true', default=False,
+                        help='Train with the v1.0 slot RoPE scheme (slots '
+                             'at constant end-of-sequence phase) instead '
+                             'of the v1.1 aligned scheme. Ablation only.')
+    parser.add_argument('--time_rope_aligned', type=int, default=0,
+                        help='1 = v1.2 scheme: rotary index = physical '
+                             'index // 2, so m_t and c_t share rotary '
+                             'position t and musical distance == rotary '
+                             'distance (restores the pretrain positional '
+                             'geometry; candidate fix for the long-term-'
+                             'structure deficit). Subsumes v1.1 slot '
+                             'alignment. Baked into the ckpt as a buffer; '
+                             'inference auto-detects. Incompatible with '
+                             '--legacy_slot_rope.')
+    parser.add_argument('--moe_modality_bias', type=int, default=0,
+                        help='1 = A.2.moe_improved: learned per-modality '
+                             'additive bias [2, E] on the router logits, '
+                             'zero-init. Hands the router the slot-parity '
+                             'bit the per-modality attention projections '
+                             'already imprint on the hidden state (probes '
+                             'measured ~69%% of routing separation as that '
+                             'stamp), freeing the input-driven pathway for '
+                             'within-modality structure. Baked into the '
+                             'ckpt as the ffn.modality_bias parameter; '
+                             'inference auto-detects. Success metric: the '
+                             'identical-content probe\'s stamp share on '
+                             'the CONTENT pathway falls toward zero '
+                             '(analyze_moe_routing.sbatch PROBE=identical).')
+    parser.add_argument('--moe_modality_gates', type=int, default=0,
+                        help='1 = A.2.moe_permod: per-modality router '
+                             'matrices gate_m/gate_c replacing the single '
+                             'shared gate -- the q_m/q_c move applied to '
+                             'the router. Each gate only scores its own '
+                             'stream, so the parity stamp becomes a '
+                             'constant offset it cannot route on, and '
+                             'within-stream routing is content-driven by '
+                             'construction. The expert pool stays fully '
+                             'shared and unassigned: which experts each '
+                             'stream uses, and whether any serves both '
+                             '(an integrator), is learned -- read it off '
+                             'analyze_moe_routing\'s purity tables. '
+                             'Presence of gate_m/gate_c in the ckpt is '
+                             'the flag; inference auto-detects. A '
+                             'warm-start ckpt with only the shared '
+                             'gate.weight seeds BOTH gates with it.')
+    parser.add_argument('--moe_modality_hard_route', type=int, default=0,
+                        help='1 = A.2.moe_hardroute: DISJOINT expert '
+                             'pools. mod_a may only reach experts '
+                             '[0, E/2), mod_b only [E/2, E), enforced by '
+                             'masking the other pool out of the softmax. '
+                             'This is the imposed-separation control '
+                             '(MoMa / VL-MoE / Uni-MoE style) that the '
+                             'learned per-modality gates are argued '
+                             'against: same parameters, same activated '
+                             'compute, but an integrator expert serving '
+                             'both streams is no longer representable. '
+                             'The load-balancing aux loss is computed '
+                             'WITHIN each pool so the arm is not '
+                             'penalised for its own architecture. Expert '
+                             'purity is 0/100 BY CONSTRUCTION -- read '
+                             'within-pool content-responsiveness and '
+                             'downstream quality instead. Requires an '
+                             'even --moe_num_experts and topk <= E/2; '
+                             'carried in the ckpt as the '
+                             'ffn.hard_route_flag buffer, which '
+                             'inference auto-detects.')
+    parser.add_argument('--token_level_mask', type=int, default=0,
+                        help='1 = A.4: per-token absorbing corruption of '
+                             'the query-slot frame. At commitment level '
+                             'k each non-pad token of the target frame '
+                             'is masked independently with prob k/K and '
+                             'the local encoder embeds the partial '
+                             'frame, so intermediate k are genuinely '
+                             'intermediate states (the plain variant '
+                             'is all-or-nothing per slot). Endpoints '
+                             'match the plain variant exactly '
+                             '(all-masked -> mask_*_emb; k=0 -> clean), '
+                             'so shared/mg ckpts warm-start cleanly. '
+                             'Uses free token id n_normal_tokens-1 '
+                             '(instrument-padding range; unreachable in '
+                             'data and excluded from sampling) -- no '
+                             'vocab change. Carried in the ckpt as the '
+                             'token_level_mask_flag buffer; inference '
+                             'auto-detects and enables confidence-based '
+                             'per-token re-masking across rounds. '
+                             'melchord (with_velocity=False) only.')
+    parser.add_argument('--mask_revealed_query_loss', type=int, default=0,
+                        help='1 = score the query loss ONLY where the '
+                             'query slot did not already hand the model '
+                             'its own target. The slot is both the '
+                             'conditioning input and the thing being '
+                             'predicted, so at k=0 (and, under A.4, at '
+                             'every token that survived the draw) the '
+                             'target is a free copy. D3PM / MDLM / '
+                             'MaskGIT all score corrupted positions '
+                             'only; we did not, which lets the copy '
+                             'path compete for gradient with the '
+                             '"infer it from the partner draft" path -- '
+                             'the only one that exists at inference. '
+                             'Self-conditioned items are kept (their '
+                             'slot holds a draft that may be wrong). '
+                             'OFF by default. val_loss stays '
+                             'comparable across the flag (eval pins '
+                             'k=K, where nothing is revealed), but the '
+                             'TRAINING objective differs -- so enable '
+                             'it for a WHOLE arm-set or none. Run dirs '
+                             'get a "qm" marker; carried in the ckpt '
+                             'as the mask_revealed_query_loss_flag '
+                             'buffer.')
+    parser.add_argument('--moe_aux_clean_only', action='store_true',
+                        help='Compute the Switch load-balancing loss over '
+                             'the CLEAN tokens only, leaving query slots '
+                             'out of the balance statistics. Matters at '
+                             'query_pairs=-1 (A.9), where ~half the '
+                             'tokens are slots and most of those are the '
+                             'identical mask vector.')
+    parser.add_argument('--slot_sees_prev_frame', action='store_true',
+                        help='Let each query slot read the clean rows '
+                             'that PREDICT its frame (content up to t-1, '
+                             'both streams). The historical mask stops '
+                             'at content t-2, one frame short of what '
+                             'the AR head at the same phase sees. A.3f '
+                             'alone; A.9 with --query_pairs -1.')
+    parser.add_argument('--sc_ar_free_run', action='store_true', default=False,
+                        help='A.12: build the AR-head draft with local_sampling '
+                             '(free-running, validity-masked, as the decode '
+                             'does) instead of per-position samples from the '
+                             'teacher-forced AR logits. See __init__.')
+    parser.add_argument('--sc_ar_frac', type=float, default=0.0,
+                        help='A.12: share of self-conditioned slots whose '
+                             'draft comes from the AR CONTENT HEAD rather '
+                             'than the query logits. The decode seeds every '
+                             'round from the AR head, so at 0 the slots are '
+                             'never trained on the draft distribution they '
+                             'actually meet.')
+    parser.add_argument('--sc_draft_temp', type=float, default=0.0,
+                        help='A.12: sample the self-conditioning draft at '
+                             'this temperature instead of taking the argmax '
+                             '(0 = argmax, the pre-A.12 behaviour). The '
+                             'paper decode commits at temperature 1.0, so an '
+                             'argmax draft is sharper than anything the '
+                             'slots meet at inference.')
+    parser.add_argument('--mask_k_prob', type=float, default=None,
+                        help='A.12: rate at which a query pair is drawn at '
+                             'the MASK endpoint k=K; the rest are uniform '
+                             'over {0..K-1}. Default (unset) is the plain '
+                             'uniform draw over {0..K}. At K=1 this reads '
+                             '"mask with probability p, draft otherwise", '
+                             'and p=0 drops the mask state from training '
+                             'entirely -- which is what the symmetric '
+                             'one-round decode wants, since its seed round '
+                             'reads the clean AR rows and cannot see the '
+                             'slots at all. Needs --sc_val, or validation '
+                             'measures a state nothing trained.')
+    parser.add_argument('--sc_val', action='store_true', default=False,
+                        help='A.12: present VALIDATION the draft state '
+                             'instead of the masked one -- run the probe '
+                             'in eval, draft every slot, pin k=0. Drafts '
+                             'are argmax regardless of --sc_draft_temp so '
+                             'val_loss stays deterministic. Use whenever '
+                             'the mask state is untrained; note val_loss '
+                             'is then on its own scale and NOT comparable '
+                             'with the rest of the A family (val_ar_loss_'
+                             'content still is).')
+    parser.add_argument('--downbeat_map', default=None,
+                        help='path to a .downbeats.pt from '
+                             'build_downbeat_map.py, so training windows '
+                             'start on REAL bar lines. Default: the file '
+                             'beside the mod_b dataset. Absent, the loader '
+                             'keeps offset %% 16, which is not a bar line '
+                             'after an irregular bar -- 46.5%% of POP909 '
+                             'beats are in that region.')
+    parser.add_argument('--sym_k', action='store_true', default=False,
+                        help='A.12 symmetric update: draw ONE level per '
+                             'query pair and give it to BOTH slots, so '
+                             'every pair sits on a diagonal (k, k) state. '
+                             'Those are the only states the parallel '
+                             'refine decode visits; an independent draw '
+                             'spends half its pairs on the leader/follower '
+                             'shape that belongs to the ctc decode. '
+                             'Mutually exclusive with --cond_slot_prob.')
+    parser.add_argument('--sc_k_consistent', action='store_true',
+                        default=False,
+                        help='A.12: for self-conditioned slots, mask at k=K '
+                             'only instead of drawing a Bernoulli coin at '
+                             'rate k/K, so every k<K carries the WHOLE draft '
+                             'tagged with its round -- which is the only '
+                             'thing the decode ever puts in a slot. Without '
+                             'it half the drafts are discarded before the '
+                             'model sees them.')
+    parser.add_argument('--agree_head', action='store_true', default=False,
+                        help='A.11: partner-agreement discrimination head on '
+                             'the conditional-slot pairs. Needs '
+                             '--cond_slot_prob > 0.')
+    parser.add_argument('--cross_lora_rank', type=int, default=0,
+                        help='Give the two cross-stream pathways their own '
+                             'Q/K/V projections as rank-r corrections of '
+                             'the per-stream ones (W^{ab} = W^b + B A; see '
+                             'M2CDuetBlockLayer). 0 = shared projections, '
+                             'the default block. Orthogonal to the family: '
+                             'the run name gets an L<r> suffix.')
+    parser.add_argument('--moe_expert_lora_rank', type=int, default=0,
+                        help='Experts as rank-r low-rank adaptations of ONE '
+                             'shared feed-forward network (fc1_base/fc2_base '
+                             '+ per-expert B A on each map; see '
+                             'SimpleMoEFFN) instead of E full copies. 0 = '
+                             'full copies, the default. Orthogonal to the '
+                             'family: the run name gets an E<r> suffix.')
+    parser.add_argument('--moe_freeze_base_ffn', type=int, default=1,
+                        help='With --moe_expert_lora_rank: keep the shared '
+                             'base FFN at its pretrained weights and train '
+                             'only the per-expert deltas (1, default: the '
+                             'LoRA convention) or fine-tune the base too (0).')
+    parser.add_argument('--agree_decoy_prob', type=float, default=0.5,
+                        help='A.11: share of conditional-slot pairs whose '
+                             'committed leader is swapped for a lagged frame.')
+    parser.add_argument('--agree_loss_weight', type=float, default=0.3,
+                        help='A.11: weight on the detection cross-entropy. '
+                             'Keep it small -- the audio-visual literature '
+                             'reports hard temporal negatives degrading '
+                             'downstream features when over-weighted.')
+    parser.add_argument('--cond_slot_prob', type=float, default=0.0,
+                        help='A.3c: probability per (item, pair) that the '
+                             'two slots are drawn in the commit-then-'
+                             'condition regime (one committed at k=0, the '
+                             'other masked at k=K, leader uniform) instead '
+                             'of the independent uniform draw. Trains the '
+                             'conditional p(follower | history, leader) '
+                             'directly; decode with A3_SCHEDULE=ctc_*.')
+    parser.add_argument('--query_pairs', type=int, default=1,
+                        help='Q: how many DISTINCT frames each training '
+                             'forward supervises at the query slots. '
+                             'Q=1 (default) is the historical behaviour '
+                             'and is reproduced bit-for-bit. Q>1 '
+                             'appends Q query pairs, each with its own '
+                             'visibility window, its own (k_m, k_c) '
+                             'draw and its own loss, so the frame pass '
+                             'gets Qx the gradient for a few percent '
+                             'more attention (L: 2T+2 -> 2T+2Q; at '
+                             'TRAIN_LENGTH=384, Q=8 is +2%% sequence, '
+                             '+3.7%% attention). Pairs are blind to each '
+                             'other. Training-only: inference decodes '
+                             'one frame at a time, so parameters, the '
+                             'ckpt and the decode path are unchanged, '
+                             'and validation stays at Q=1 so val_loss '
+                             'remains comparable. Run dirs get a "qN" '
+                             'marker for Q>1.')
+    parser.add_argument('--fresh_schedule', action='store_true', default=False)
+    args = parser.parse_args()
+
+    n_gpus = max(torch.cuda.device_count(), 1)
+    gnl = args.global_num_layers
+    if gnl is None:
+        gnl = 12 if args.model_size == 'large' else 6
+
+    task = get_task(args.task)
+    mod_a_path = args.mod_a_path if args.mod_a_path is not None else task.mod_a_path
+    mod_b_path = args.path_to_dataset if args.path_to_dataset is not None else task.mod_b_path
+
+    def derive_model_abbr(a):
+        """ONE abbreviation per model configuration -- the run-dir name.
+
+        Names come from the codename ledger in VARIANTS.md. The old
+        concatenated flag markers (mg/tk/qm/qN) are ABOLISHED
+        (2026-08-31): a run dir carries its model's name, and the name
+        is DERIVED from the flags so mismatched configs still can never
+        auto-resume into each other. Suffixes appear only for
+        non-default settings (K != 4; A.6 at Q != 8).
+        """
+        if getattr(a, 'query_block', 1) > 1:
+            # A.8 = A.3 scaffold + block. The block is ORTHOGONAL to the
+            # corruption kernel, so a block run on A.7's decoy kernel is
+            # a DIFFERENT model and must not share A.8's run dir.
+            fam = 'A8d' if a.decoy_corruption else 'A8'
+        elif a.decoy_corruption:
+            fam = 'A7'                         # A.7 = A.3 scaffold +
+                                               # lag-graded decoy corruption
+                                               # (init rejects combining it
+                                               # with tk/qm flags)
+        elif a.token_level_mask and a.mask_revealed_query_loss:
+            fam = 'A4'                         # A.4 = A.5 + token corruption
+        elif a.token_level_mask:
+            fam = 'A4legacy'                   # deprecated: token corruption
+                                               # without A.5's loss -- the
+                                               # bugged first run's config
+        elif a.mask_revealed_query_loss and a.query_pairs > 1:
+            fam = 'A6'
+        elif a.mask_revealed_query_loss:
+            fam = 'A5'
+        elif a.slot_sees_prev_frame and a.query_pairs < 0:
+            fam = 'A9'                         # A.9 = A.3 kernel, slot sees
+                                               # t-1, a query pair at EVERY
+                                               # frame, A.3 decode
+        elif (getattr(a, 'sc_ar_frac', 0.0) > 0
+              or getattr(a, 'sc_k_consistent', False)):
+            fam = 'A12fr' if getattr(a, 'sc_ar_free_run', False) else 'A12'
+                                               # AR-head self-conditioning
+                                               # drafts (the decode's own
+                                               # seed distribution)
+        elif getattr(a, 'agree_head', False):
+            fam = 'A11'                        # conditional slots + the
+                                               # partner-agreement head
+        elif a.slot_sees_prev_frame and a.cond_slot_prob > 0:
+            fam = 'A3fc'                       # A.3f + conditional slots
+        elif a.slot_sees_prev_frame:
+            fam = 'A3f'                        # A.3 + the t-1 mask fix only
+        elif a.cond_slot_prob > 0:
+            fam = 'A3c'                        # A.3 + conditional slots
+        elif a.query_pairs < 0:
+            fam = 'A3qall'                     # every frame, old mask
+        elif a.query_pairs > 1:
+            fam = f'A3q{a.query_pairs}'        # unnamed combo, kept unique
+        else:
+            fam = 'A3'
+        # E6 ablation arms = departures from the per-part-gate default.
+        if a.moe_num_experts == 1:
+            arm = 'D1'                         # dense / no MoE
+        elif a.moe_modality_hard_route:
+            arm = 'D2'                         # imposed split
+        elif not a.moe_modality_gates:
+            arm = 'D3'                         # shared gate ('A2' pre
+                                               # 2026-09-03 renaming)
+        else:
+            arm = ''                           # the default model (arm
+                                               # code D0 in E6 tables)
+        if a.moe_modality_bias:
+            arm += 'mb'
+        abbr = arm + fam
+        if a.diffusion_K != 4:
+            abbr += f'K{a.diffusion_K}'
+        if fam == 'A6' and a.query_pairs != 8:
+            abbr += f'q{a.query_pairs}'
+        if fam.startswith('A8') and a.query_block != 4:
+            abbr += f'b{a.query_block}'
+        if getattr(a, 'cross_lora_rank', 0) > 0:
+            abbr += f'L{a.cross_lora_rank}'      # cross-pair low-rank
+                                               # projections (any family)
+        if getattr(a, 'moe_expert_lora_rank', 0) > 0:
+            abbr += f'E{a.moe_expert_lora_rank}'  # low-rank experts over
+                                               # one shared FFN
+        return abbr
+
+    tag = f'_{args.run_tag}' if args.run_tag else ''
+    if args.time_rope_aligned and args.legacy_slot_rope:
+        raise SystemExit('--time_rope_aligned and --legacy_slot_rope are '
+                         'mutually exclusive (v1.2 vs v1.0).')
+    scheme_version = ('v1.2' if args.time_rope_aligned
+                      else 'v1.0' if args.legacy_slot_rope else 'v1.1')
+    model_abbr = args.model_abbr or derive_model_abbr(args)
+    # MELCHORD_TAG must be in the name: it selects a DIFFERENT corpus
+    # (data/pop909_*_v2<tag>.pt) under the same task, and the sbatch
+    # wrapper's RUN_DIR carries it. Without it here, ckpt_dir =
+    # ckpt/<model_name> is not the directory the wrapper checks for
+    # last.ckpt, so a requeue after the time cap restarts at step 0
+    # instead of resuming -- and two corpora share one run directory.
+    # Appended unconditionally, exactly as the wrapper does -- the two
+    # spellings must not diverge on any path.
+    default_name = (f"m2c_duet_block_diffusion_{scheme_version}_{args.model_size}_"
+                    f"gnl{gnl}_{model_abbr}_{task.name}{MELCHORD_TAG}{tag}_"
+                    f"batch_{args.batch_size * n_gpus}_schedule")
+    model_name = args.model_name if args.model_name is not None else default_name
+
+    print(f'[task] {task.name}  mod_a={task.mod_a_label}  mod_b={task.mod_b_label}')
+
+    net = M2CDuetBlockDiffusion(
+        large=(args.model_size == 'large'),
+        with_velocity=False,
+        moe_num_experts=args.moe_num_experts,
+        moe_topk=args.moe_topk,
+        moe_intermediate_size=args.moe_intermediate_size,
+        global_num_layers=gnl,
+        mel_loss_weight=args.mel_loss_weight,
+        acc_loss_weight=args.acc_loss_weight,
+        preserve_program=args.preserve_program,
+        max_lr=args.max_lr,
+        lr_total_steps=args.lr_total_steps,
+        aux_loss_weight=args.aux_loss_weight,
+        silence_augment_prob=args.silence_augment_prob,
+        eos_loss_weight=args.eos_loss_weight,
+        gate_init_bias=args.gate_init_bias,
+        query_loss_weight=args.query_loss_weight,
+        diffusion_K=args.diffusion_K,
+        slot_rope_aligned=(not args.legacy_slot_rope),
+        time_rope_aligned=bool(args.time_rope_aligned),
+        self_cond_prob=args.self_cond_prob,
+        moe_modality_bias=bool(args.moe_modality_bias),
+        moe_modality_gates=bool(args.moe_modality_gates),
+        moe_modality_hard_route=bool(args.moe_modality_hard_route),
+        token_level_mask=bool(args.token_level_mask),
+        mask_revealed_query_loss=bool(args.mask_revealed_query_loss),
+        query_pairs=args.query_pairs,
+        decoy_corruption=bool(args.decoy_corruption),
+        decoy_mask_residual=args.decoy_mask_residual,
+        decoy_lag_bins=[tuple(int(v) for v in b.split(':'))
+                        for b in args.decoy_lag_bins.replace('/', ',')
+                        .split(',')],
+        query_block=args.query_block,
+        cond_slot_prob=args.cond_slot_prob,
+        sc_ar_frac=args.sc_ar_frac,
+        sc_ar_free_run=bool(args.sc_ar_free_run),
+        sc_draft_temp=args.sc_draft_temp,
+        sc_k_consistent=bool(args.sc_k_consistent),
+        sym_k=bool(args.sym_k),
+        mask_k_prob=args.mask_k_prob,
+        sc_val=bool(args.sc_val),
+        agree_head=bool(args.agree_head),
+        cross_lora_rank=args.cross_lora_rank,
+        moe_expert_lora_rank=args.moe_expert_lora_rank,
+        moe_freeze_base_ffn=bool(args.moe_freeze_base_ffn),
+        agree_decoy_prob=args.agree_decoy_prob,
+        agree_loss_weight=args.agree_loss_weight,
+    )
+    print(f'[scheme] {scheme_version}: slot_rope_aligned={not args.legacy_slot_rope}  '
+          f'time_rope_aligned={bool(args.time_rope_aligned)}  '
+          f'self_cond_prob={args.self_cond_prob}  '
+          f'moe_modality_bias={bool(args.moe_modality_bias)}'
+          f'{" (A.2.moe_improved)" if args.moe_modality_bias else ""}  '
+          f'moe_modality_gates={bool(args.moe_modality_gates)}'
+          f'{" (A.2.moe_permod)" if args.moe_modality_gates else ""}  '
+          f'moe_modality_hard_route={bool(args.moe_modality_hard_route)}'
+          f'{" (A.2.moe_hardroute)" if args.moe_modality_hard_route else ""}  '
+          f'token_level_mask={bool(args.token_level_mask)}'
+          f'{" (A.4)" if args.token_level_mask else ""}\n'
+          f'mask_revealed_query_loss='
+          f'{bool(args.mask_revealed_query_loss)}  '
+          f'query_pairs={args.query_pairs}  '
+          f'slot_sees_prev_frame={args.slot_sees_prev_frame}  '
+          f'moe_aux_clean_only={args.moe_aux_clean_only}  '
+          f'cond_slot_prob={args.cond_slot_prob}  '
+          f'agree_head={args.agree_head}  sc_ar_frac={args.sc_ar_frac}  '
+          f'cross_lora_rank={args.cross_lora_rank}  '
+          f'moe_expert_lora_rank={args.moe_expert_lora_rank}'
+          f'{" (freeze base)" if args.moe_freeze_base_ffn else ""}  '
+          f'sc_draft_temp={args.sc_draft_temp}  '
+          f'sc_k_consistent={bool(args.sc_k_consistent)}  '
+          f'sym_k={bool(args.sym_k)}  '
+          f'mask_k_prob={args.mask_k_prob}  sc_val={bool(args.sc_val)}'
+          f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
+          f'aux_loss_weight={args.aux_loss_weight}  '
+          f'query_loss_weight={args.query_loss_weight}  '
+          f'query_block={args.query_block}'
+          f'{" (A.8)" if args.query_block > 1 else ""}  '
+          f'decoy_corruption={bool(args.decoy_corruption)}'
+          f'{" (A.7)" if args.decoy_corruption else ""}'
+          f'{f"  decoy_lag_bins={args.decoy_lag_bins}  decoy_mask_residual={args.decoy_mask_residual}" if args.decoy_corruption else ""}')
+    print(f'Architecture: M2CDuetBlockDiffusion (A.3)  K={args.diffusion_K}  '
+          f'3-pass (intra/cross/frame) + 2 gates + query slots with per-item '
+          f'noise levels + k-embedding')
+    print(f'Global depth: {gnl}   gate_init_bias: {args.gate_init_bias}   '
+          f'query_loss_weight: {args.query_loss_weight}')
+
+    # Windows snap to REAL bar lines when a downbeat map exists beside
+    # the dataset. Without it the loader falls back to offset %% 16,
+    # which stops being a bar line after an irregular bar -- 46.5% of
+    # POP909's beats sit in that region. Built by build_downbeat_map.py;
+    # --downbeat_map overrides the default location.
+    db_map = args.downbeat_map or (
+        os.path.splitext(mod_b_path)[0] + '.downbeats.pt')
+    train_set = FramedDataset(mod_b_path, TRAIN_LENGTH,
+                              args.batch_size, split='train',
+                              mel_path=mod_a_path, downbeat_path=db_map)
+    val_set = FramedDataset(mod_b_path, TRAIN_LENGTH,
+                            args.batch_size, split='val',
+                            mel_path=mod_a_path, downbeat_path=db_map)
+    train_set_loader = DataLoader(train_set, batch_size=None, num_workers=0)
+    val_set_loader = DataLoader(val_set, batch_size=None, num_workers=0)
+
+    global_batch = args.batch_size * n_gpus
+    steps_per_epoch = max(1, train_set.valid_song_count // global_batch)
+    if args.lr_total_steps is not None:
+        implied_epochs = args.lr_total_steps / max(1, steps_per_epoch)
+        print(f'[lr] valid_train_songs={train_set.valid_song_count}  '
+              f'global_batch={global_batch}  steps_per_epoch={steps_per_epoch}  '
+              f'lr_total_steps={args.lr_total_steps}  '
+              f'implied_epochs={implied_epochs:.2f}')
+
+    ckpt_dir = args.ckpt_dir or f'ckpt/{model_name}'
+    # {step} in the filename is NOT cosmetic. With an iterable dataset
+    # the epoch counter can sit at 00 for the whole run, so filenames
+    # built from (epoch, rounded val_loss) alone COLLIDE whenever two
+    # checkpoints round to the same 5-decimal val_loss -- and with
+    # enable_version_counter=False Lightning then OVERWRITES the file:
+    # best_k_models ends up holding two entries that point at one file
+    # on disk (observed on the first A.5 run: save_top_k=2, one
+    # val-tagged file). The strictly increasing step makes every save
+    # path unique. Keep {step} BEFORE {val_loss}: resolve_best_ckpt
+    # parses the metric tag at the END of the filename.
+    checkpoint_callback = L.callbacks.ModelCheckpoint(
+        monitor='val_loss', save_top_k=args.save_top_k, save_last=True,
+        enable_version_counter=False,
+        dirpath=ckpt_dir,
+        filename=model_name + '.{epoch:02d}.{step}.{val_loss:.5f}',
+    )
+
+    if n_gpus > 1:
+        import importlib
+        strategies = importlib.import_module(L.__name__ + '.strategies')
+        import datetime
+        # 20 minutes, not 2 hours. This timeout is how long a rank
+        # waits for its partners on a collective, so it is also how long
+        # the job burns when one rank DIES rather than lags: job 238154
+        # lost five hours with rank 0 already dead of a CUDA error while
+        # rank 1 sat in a BROADCAST. Nothing here legitimately blocks
+        # for twenty minutes -- the longest real wait is the first
+        # validation -- so a shorter value costs nothing and turns a
+        # wasted allocation into a fast failure.
+        strategy = strategies.DDPStrategy(
+            timeout=datetime.timedelta(minutes=20),
+            find_unused_parameters=True,
+        )
+    else:
+        strategy = 'auto'
+
+    extra_callbacks = []
+    # Second best-1 on the CLEAN-ROW loss alone (2026-09-10). val_loss
+    # sums AR + query_loss_weight * query + aux; the query term can keep
+    # improving for hundreds of epochs while the clean-row AR loss
+    # overfits POP909 (811 songs, 101 steps/epoch: the slot-free A.1
+    # melchord run bottoms at ~10 epochs and then doubles). A
+    # val_loss-selected file may therefore carry an overfit AR head.
+    # Written into <run>/best_ar/ so resolve_best_ckpt never finds two
+    # monitored metrics in one directory; point CKPT_* at that subdir
+    # to evaluate the AR-selected weights instead.
+    extra_callbacks.append(L.callbacks.ModelCheckpoint(
+        monitor='val_ar_loss_content', save_top_k=1, save_last=False,
+        enable_version_counter=False,
+        dirpath=os.path.join(ckpt_dir, 'best_ar'),
+        filename=model_name + '.{epoch:02d}.{step}.{val_ar_loss_content:.5f}',
+    ))
+    if args.step_ckpt_every > 0:
+        # Insurance against a monotonically worsening val_loss. With
+        # save_top_k on val_loss, a run whose val_loss bottoms early
+        # (A.6, A.8: from ~10k of 75k steps) never writes another
+        # best-k file, and last.ckpt was observed frozen at the last
+        # best-k save -- so the converged weights simply did not exist
+        # on disk. This callback has no monitor: it writes the newest
+        # weights every N steps and keeps only that one. The filename
+        # carries no val_ tag, so resolve_best_ckpt never auto-selects
+        # it; pass the file explicitly to use it.
+        extra_callbacks.append(L.callbacks.ModelCheckpoint(
+            dirpath=ckpt_dir,
+            filename=model_name + '.rolling.{step}',
+            every_n_train_steps=args.step_ckpt_every,
+            save_top_k=1, monitor=None, save_last=False,
+            enable_version_counter=False,
+        ))
+    if args.moe_monitor_every_n_steps > 0:
+        from moe_routing_monitor import MoERoutingMonitor
+        extra_callbacks.append(
+            MoERoutingMonitor(
+                every_n_steps=args.moe_monitor_every_n_steps,
+                n_samples=args.moe_monitor_n_samples,
+            ).as_callback()
+        )
+    if args.dump_samples_dir is not None:
+        from dump_train_samples import DumpInputSamplesCallback
+        extra_callbacks.append(
+            DumpInputSamplesCallback(
+                out_dir=args.dump_samples_dir,
+                n_samples=args.dump_samples_n,
+                max_polyphony=args.max_polyphony,
+                every_n_epochs=args.dump_samples_every_n_epochs,
+            ).as_callback()
+        )
+
+    trainer = L.Trainer(
+        devices=n_gpus,
+        precision='bf16-mixed' if torch.cuda.is_available() else 32,
+        max_steps=(args.lr_total_steps if args.lr_total_steps is not None else MAX_STEPS),
+        accelerator='gpu' if torch.cuda.is_available() else 'cpu',
+        callbacks=[checkpoint_callback] + extra_callbacks,
+        val_check_interval=args.val_check_interval,
+        limit_val_batches=args.limit_val_batches,
+        check_val_every_n_epoch=None,
+        gradient_clip_val=(args.gradient_clip_val if args.gradient_clip_val > 0 else None),
+        logger=(
+            WandbLogger(
+                name=model_name, project='MusicMOE',
+                save_dir=args.wandb_dir,
+                config={
+                    'batch_size': args.batch_size,
+                    'model_size': args.model_size,
+                    'train_length': TRAIN_LENGTH,
+                    'variant': 'm2c_duet_block_diffusion',
+                    'task': task.name,
+                    'mod_a_label': task.mod_a_label,
+                    'mod_b_label': task.mod_b_label,
+                    'global_num_layers': gnl,
+                    'moe_num_experts': args.moe_num_experts,
+                    'moe_topk': args.moe_topk,
+                    'gate_init_bias': args.gate_init_bias,
+                    'query_loss_weight': args.query_loss_weight,
+                    'diffusion_K': args.diffusion_K,
+                    'slot_rope_aligned': not args.legacy_slot_rope,
+                    'self_cond_prob': args.self_cond_prob,
+                    'moe_modality_bias': bool(args.moe_modality_bias),
+                    'moe_modality_gates': bool(args.moe_modality_gates),
+                    'moe_modality_hard_route': bool(
+                        args.moe_modality_hard_route),
+                    'token_level_mask': bool(args.token_level_mask),
+                    'mask_revealed_query_loss':
+                        bool(args.mask_revealed_query_loss),
+                    'query_pairs': args.query_pairs,
+                    'slot_sees_prev_frame': bool(args.slot_sees_prev_frame),
+                    'cond_slot_prob': args.cond_slot_prob,
+                    'sc_ar_frac': args.sc_ar_frac,
+                    'sc_ar_free_run': bool(args.sc_ar_free_run),
+                    'sc_draft_temp': args.sc_draft_temp,
+                    'sc_k_consistent': bool(args.sc_k_consistent),
+                    'sym_k': bool(args.sym_k),
+                    'mask_k_prob': args.mask_k_prob,
+                    'sc_val': bool(args.sc_val),
+                    'agree_head': bool(args.agree_head),
+                    'cross_lora_rank': args.cross_lora_rank,
+                    'moe_expert_lora_rank': args.moe_expert_lora_rank,
+                    'moe_freeze_base_ffn': bool(args.moe_freeze_base_ffn),
+                    'agree_decoy_prob': args.agree_decoy_prob,
+                    'agree_loss_weight': args.agree_loss_weight,
+                    'moe_aux_clean_only': bool(args.moe_aux_clean_only),
+                    'aux_loss_weight': args.aux_loss_weight,
+                    'query_block': args.query_block,
+                    'decoy_corruption': bool(args.decoy_corruption),
+                    'decoy_mask_residual': args.decoy_mask_residual,
+                    'decoy_lag_bins': args.decoy_lag_bins,
+                    'run_tag': args.run_tag,
+                    'model_abbr': model_abbr,
+                },
+            ) if args.wandb else TensorBoardLogger('tb_logs', name=model_name)
+        ),
+        num_sanity_val_steps=0 if args.checkpoint_path is not None else 2,
+        strategy=strategy,
+    )
+    ckpt_path_for_resume = None
+    if args.checkpoint_path is not None:
+        loaded = torch.load(args.checkpoint_path, map_location='cpu',
+                             weights_only=False)
+        has_lightning_meta = (
+            isinstance(loaded, dict)
+            and 'pytorch-lightning_version' in loaded
+        )
+        if has_lightning_meta and not args.fresh_schedule:
+            print(f'[resume] full Lightning ckpt at {args.checkpoint_path}')
+            ckpt_path_for_resume = args.checkpoint_path
+        else:
+            if has_lightning_meta and args.fresh_schedule:
+                print(f'[fresh-schedule] loading model weights only from '
+                       f'{args.checkpoint_path}')
+            else:
+                print(f'[init] bare warm-start ckpt at {args.checkpoint_path}')
+            sd = loaded['state_dict'] if isinstance(loaded, dict) and 'state_dict' in loaded else loaded
+            # Drop incoming scheme-flag buffers: warm-starting from a
+            # ckpt trained under another rope scheme (e.g. an A.1 ckpt,
+            # or a v1.1 A.2 run via --fresh_schedule) must not silently
+            # override the scheme this run's CLI declared -- the
+            # [scheme] line above prints BEFORE this load and would lie.
+            sd = dict(sd)
+            sd.pop('time_rope_aligned_flag', None)
+            sd.pop('slot_rope_aligned_flag', None)
+            # A.2.moe_permod warm start: a ckpt carrying only the shared
+            # gate.weight (the init ckpt, or a trained shared-gate run)
+            # seeds BOTH per-modality gates with it, so the gates start
+            # identical and diverge only from their streams' gradients
+            # (the q_m/q_c warm-start convention).
+            if args.moe_modality_gates:
+                n_remap = 0
+                for k in [k for k in sd if k.endswith('ffn.gate.weight')]:
+                    base = k[: -len('gate.weight')]
+                    for tgt in ('gate_m.weight', 'gate_c.weight'):
+                        if base + tgt not in sd:
+                            sd[base + tgt] = sd[k].clone()
+                            n_remap += 1
+                    del sd[k]
+                if n_remap:
+                    print(f'[init] moe_modality_gates: seeded {n_remap} '
+                          f'gate_m/gate_c weights from shared gate.weight')
+            missing, unexpected = net.load_state_dict(sd, strict=False)
+            if missing:
+                # Expected: k_emb_m.weight, k_emb_c.weight (zero-init).
+                print(f'[init] {len(missing)} missing keys (first few: {missing[:3]})')
+            if unexpected:
+                print(f'[init] {len(unexpected)} unexpected keys (first few: {unexpected[:3]})')
+    print(f'[scheme] effective: slot_rope_aligned={net.slot_rope_aligned} '
+          f'time_rope_aligned={net.time_rope_aligned} '
+          '(after any warm-start load)')
+
+    trainer.fit(net, train_set_loader, val_set_loader,
+                ckpt_path=ckpt_path_for_resume)

@@ -1,0 +1,22 @@
+# built by scripts/setup_transformers.sh
+duet/transformers_roformer_moe/
+
+# data, checkpoints and everything the scripts generate
+duet/data/
+duet/ckpt/
+duet/input/
+duet/temp/
+duet/results/
+duet/POP909-Dataset/
+duet/external/
+duet/figures/*.pdf
+duet/figures/*.png
+duet/figures/*.tex
+duet/tb_logs/
+duet/lightning_logs/
+duet/wandb/
+logs/
+
+__pycache__/
+*.pyc
+.DS_Store
