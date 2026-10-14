@@ -14,6 +14,9 @@
 #
 # A system is scored when every staged song has N_SAMPLES outputs;
 # incomplete systems are listed and skipped.
+#
+# DATASET=nottingham scores temp/E1_nottingham/ and writes the same files
+# with E1_nottingham_ in place of E1_.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 need "$PROMPTS/.ready" "Generate at least one system first."
 SONG_IDS=$(ls "$PROMPTS/mel" | sed 's/\.mid$//' | sort | tr '\n' ' ')
@@ -40,27 +43,27 @@ done
 [[ ${#SCORED[@]} -gt 0 ]] || { echo "ERROR: no complete system under $OUT_ROOT" >&2; exit 1; }
 echo "[evaluate] scoring: ${SCORED[*]}"
 
-python build_eval_manifest.py "${SRC[@]}" --songs $SONG_IDS --modes co --out results/E1_manifest.tsv
-python eval_metrics.py --task melchord --manifest results/E1_manifest.tsv \
+python build_eval_manifest.py "${SRC[@]}" --songs $SONG_IDS --modes co --out results/${RESULTS_TAG}_manifest.tsv
+python eval_metrics.py --task melchord --manifest results/${RESULTS_TAG}_manifest.tsv \
     --ref-a-dir "$PROMPTS/mel" --ref-b-dir "$PROMPTS/chord" \
     --prompt-frames "$PROMPT_LENGTH" --total-frames "$GEN_LENGTH" \
-    --out results/E1_metrics.csv --pooled-out results/E1_pooled.csv \
+    --out results/${RESULTS_TAG}_metrics.csv --pooled-out results/${RESULTS_TAG}_pooled.csv \
     --pooled-boot 2000 --pooled-boot-mode songs --pooled-weight song
 
 BASE=A3ctcaT; [[ " ${SCORED[*]} " == *" $BASE "* ]] || BASE="${SCORED[0]}"
-python aggregate_eval_results.py --csv results/E1_metrics.csv --task melchord \
-    --baseline "$BASE" --mode co --out-md results/E1_table_twosided.md
+python aggregate_eval_results.py --csv results/${RESULTS_TAG}_metrics.csv --task melchord \
+    --baseline "$BASE" --mode co --out-md results/${RESULTS_TAG}_table_twosided.md
 
 # Table 1: each sample index pooled over all songs against the pooled
 # reference, mean +- std over the samples; the finetuned single-stream
 # model is shown but not ranked
-python e1_quality_table.py --pooled results/E1_pooled.csv --out figures/E1_quality.tex \
+python e1_quality_table.py --pooled results/${RESULTS_TAG}_pooled.csv --out figures/${RESULTS_TAG}_quality.tex \
     --metrics h3 --per-sample --bold-exclude S1 --group-column --digits 4
 
 # Figure 2: solid star = best among Duet, its two ablations and the
 # single-stream model trained from scratch (left of the dashed rule);
 # hollow star = best of all systems where different
-python plot_e1_box.py --csv results/E1_metrics.csv --out figures/E1_prompt_fit \
+python plot_e1_box.py --csv results/${RESULTS_TAG}_metrics.csv --out figures/${RESULTS_TAG}_prompt_fit \
     --block "prompt fit" --orient v --ncols 4 --width 7 --panel-height 1.3 \
     --names none --short-titles \
     --ranked "A3ctcaT D1 A1 S-scratch" --divider-after S-scratch --best-overall

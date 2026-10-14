@@ -3,6 +3,8 @@
 #
 #   bash scripts/generate.sh duet            [CKPT=<run dir or .ckpt>]
 #   bash scripts/generate.sh dense | no_draft | ss_finetuned | ss_scratch
+#   DATASET=nottingham bash scripts/generate.sh duet   # Nottingham prompts,
+#                                     # your Nottingham run, temp/E1_nottingham/
 #
 # Every system continues the same staged prompts (the held-out songs,
 # first PROMPT_LENGTH frames) to GEN_LENGTH frames, N_SAMPLES times, into
@@ -20,13 +22,27 @@ bash "$ROOT/scripts/stage_prompts.sh"
 
 # Default checkpoints: the released files, or your own run directories.
 case "$SYSTEM" in
-    duet)         CKPT="${CKPT:-ckpt/duet}" ;;
-    dense)        CKPT="${CKPT:-ckpt/dense}" ;;
-    no_draft)     CKPT="${CKPT:-ckpt/no_draft}" ;;
-    ss_finetuned) CKPT="${CKPT:-ckpt/ss_finetuned}" ;;
-    ss_scratch)   CKPT="${CKPT:-ckpt/ss_scratch}" ;;
+    duet|dense|no_draft|ss_finetuned|ss_scratch) ;;
     *) echo "generate.sh covers the in-house systems; see scripts/external/ for $SYSTEM" >&2; exit 1 ;;
 esac
+if [[ -z "${CKPT:-}" && "$DATASET" == pop909 ]]; then
+    CKPT="ckpt/$SYSTEM"
+elif [[ -z "${CKPT:-}" ]]; then
+    # No released Nottingham checkpoints: default to the run directory
+    # train.sh wrote for this system (without RUN_TAG; pass CKPT=
+    # for a tagged run or when several batch sizes were trained).
+    case "$SYSTEM" in
+        duet|dense)   _pat="ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_${SYSTEM}_${TASK}_batch_*_schedule" ;;
+        no_draft)     _pat="ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_${TASK}_batch_*_schedule" ;;
+        ss_finetuned) _pat="ckpt/cp_transformer_v0.42_size*_pop909ft_${SS_RUN_TAG}_batch_*_schedule" ;;
+        ss_scratch)   _pat="ckpt/cp_transformer_v0.42_size*_pop909scratch_${SS_RUN_TAG}_batch_*_schedule" ;;
+    esac
+    mapfile -t _runs < <(compgen -G "$_pat" || true)
+    [[ ${#_runs[@]} -eq 1 ]] || {
+        echo "ERROR: expected one run directory matching $_pat, found ${#_runs[@]}." \
+             "Train it (DATASET=$DATASET scripts/train.sh $SYSTEM) or pass CKPT=<run dir>." >&2; exit 1; }
+    CKPT="${_runs[0]}"
+fi
 need "$CKPT" "Download the checkpoints (scripts/download.sh) or pass CKPT=<your run dir>."
 # A directory holding a single checkpoint (a released model) is resolved
 # to that file; a training run directory is handed over with a trailing

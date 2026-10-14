@@ -124,6 +124,46 @@ The exact schedule of each released checkpoint is stored in its
 `hyper_parameters`. With a different GPU count the learning rate is scaled
 as in the table's runs (`MAX_LR` overrides it).
 
+## The same task on Nottingham
+
+`DATASET=nottingham` runs every in-house system on the Nottingham folk
+tunes (<https://github.com/jukedeck/nottingham-dataset>) instead of
+POP909. Every stage script reads it, and everything it writes is kept
+apart from the POP909 files: `data/nottingham_*`, `input/nottingham_heldout/`,
+run directories named with the task `melchord_nottingham`,
+`temp/E1_nottingham/`, and `results/E1_nottingham_*`.
+
+```bash
+export DATASET=nottingham NOTTINGHAM_RAW=/path/to/nottingham-dataset/MIDI
+bash scripts/prepare_data.sh train     # data/nottingham_{melody,chord}_cp4_v2.pt, data/nottingham_melchord_tagged_cp16_v2.pt
+bash scripts/prepare_data.sh eval      # input/nottingham_heldout/{melody,chord}/
+
+for s in duet dense no_draft ss_finetuned ss_scratch; do bash scripts/train.sh $s; done
+for s in duet dense no_draft ss_finetuned ss_scratch; do bash scripts/generate.sh $s; done
+bash scripts/evaluate.sh
+```
+
+The recipes are the POP909 ones (same steps, batch sizes and learning
+rates). What differs:
+
+- **Corpus.** Melody is each MIDI's first track and chords its second,
+  both on program 0 as for POP909's duet streams; the single-stream copy
+  re-tags the chords to program 48. The 13 tunes without a chord track
+  are dropped, leaving 1,021, and the 87 or so shorter than 384 frames
+  sit outside training as they do for POP909 (`FramedDataset`).
+- **Held-out prompts.** Index 0 mod 10 of the training manifest, as for
+  POP909. Only tunes in 4/4 or 2/2 are kept, because the scoring and the
+  80/416-frame protocol assume 16 frames per bar, and only tunes whose
+  crop reaches `GEN_LENGTH`. Each is cropped so its first full downbeat
+  is at frame 32; the pickup is found from the chord track, which starts
+  on the downbeat. `prompt_crops.tsv` lists every held-out tune, kept or
+  dropped and why. Training uses every metre.
+- **Checkpoints.** No Nottingham checkpoints are released, so
+  `generate.sh` defaults to the run directory `train.sh` wrote for the
+  system; pass `CKPT=` for any other.
+- **External baselines.** AMT and Whole-Song Gen are POP909-only here;
+  `evaluate.sh` scores whichever systems are complete.
+
 ## Running under SLURM
 
 `slurm/run.sbatch` runs any stage script; resources go on the command line:
@@ -131,6 +171,24 @@ as in the table's runs (`MAX_LR` overrides it).
 ```bash
 J1=$(sbatch --parsable --gres=gpu:1 --time=12:00:00 slurm/run.sbatch generate.sh duet)
 sbatch --dependency=afterok:$J1 slurm/run.sbatch evaluate.sh
+```
+
+Environment knobs such as `DATASET` travel with `--export=ALL,...`.
+
+### Running the Nottingham pipeline on SLURM
+
+```bash
+E=ALL,DATASET=nottingham,NOTTINGHAM_RAW=/path/to/nottingham-dataset/MIDI
+P=$(sbatch --parsable --export=$E --cpus-per-task=16 --time=02:00:00 slurm/run.sbatch prepare_data.sh train)
+V=$(sbatch --parsable --export=$E --dependency=afterok:$P slurm/run.sbatch prepare_data.sh eval)
+V=$(sbatch --parsable --export=$E --dependency=afterok:$V slurm/run.sbatch stage_prompts.sh)  # once, before the parallel generators
+for s in duet dense no_draft ss_finetuned ss_scratch; do
+    g=1; [[ $s == duet || $s == dense || $s == no_draft ]] && g=2
+    T=$(sbatch --parsable --export=$E --dependency=afterok:$P --gres=gpu:$g --time=48:00:00 slurm/run.sbatch train.sh $s)
+    G=$(sbatch --parsable --export=$E --dependency=afterok:$T:$V --gres=gpu:1 --time=12:00:00 slurm/run.sbatch generate.sh $s)
+    GEN="$GEN:$G"
+done
+sbatch --export=$E --dependency=afterok$GEN slurm/run.sbatch evaluate.sh
 ```
 
 ## Things that fail silently if changed

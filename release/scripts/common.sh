@@ -16,6 +16,37 @@ export PYTHONPATH="$DUET/transformers_roformer_moe/src:$DUET${PYTHONPATH:+:$PYTH
 cd "$DUET"
 mkdir -p data ckpt temp results figures
 
+# ---- dataset ------------------------------------------------------------
+# DATASET picks the corpus every stage reads and writes: pop909 (the
+# paper) or nottingham (the same melody-chord task on the Nottingham folk
+# tunes). Each gets its own training tensors, held-out prompts, run
+# directories, samples and result files, so the two never mix.
+DATASET="${DATASET:-pop909}"
+case "$DATASET" in
+pop909)
+    TASK=melchord                                   # tasks.py entry for the duet models
+    DUET_DATA=pop909                                # data/${DUET_DATA}_{melody,chord}_cp4_v2.pt
+    SS_DATA=data/pop909_melchord_tagged_cp16_v2.pt  # single-stream corpus
+    SS_RUN_TAG=tagged
+    DS_SUFFIX=""                                    # appended to scratch folders
+    _EVAL_SRC=input/heldout_v5; _OUT_ROOT=temp/E1; RESULTS_TAG=E1
+    # Held-out songs dropped from generation and scoring. 506 and 786 have
+    # no chord note inside the prompt window, so no system is given
+    # anything to continue; 456 has no Whole-Song Gen output. Leaves 92.
+    _EXCLUDE="456 506 786"
+    ;;
+nottingham)
+    TASK=melchord_nottingham
+    DUET_DATA=nottingham
+    SS_DATA=data/nottingham_melchord_tagged_cp16_v2.pt
+    SS_RUN_TAG=nottingham_tagged
+    DS_SUFFIX=_nottingham
+    _EVAL_SRC=input/nottingham_heldout; _OUT_ROOT=temp/E1_nottingham; RESULTS_TAG=E1_nottingham
+    _EXCLUDE=""
+    ;;
+*) echo "unknown DATASET '$DATASET' (pop909 nottingham)" >&2; exit 1 ;;
+esac
+
 # ---- the paper's evaluation protocol -----------------------------------
 # Every system continues the same prompts: the first PROMPT_LENGTH frames
 # (sixteenth notes; 80 = five bars) of each held-out song, to GEN_LENGTH
@@ -23,12 +54,9 @@ mkdir -p data ckpt temp results figures
 PROMPT_LENGTH="${PROMPT_LENGTH:-80}"
 GEN_LENGTH="${GEN_LENGTH:-416}"
 N_SAMPLES="${N_SAMPLES:-3}"
-# Held-out songs dropped from generation and scoring. 506 and 786 have no
-# chord note inside the prompt window, so no system is given anything to
-# continue; 456 has no Whole-Song Gen output. Leaves 92 songs.
-EXCLUDE_SONGS="${EXCLUDE_SONGS-456 506 786}"
-EVAL_SRC="${EVAL_SRC:-input/heldout_v5}"   # built by prepare_data.sh eval
-OUT_ROOT="${OUT_ROOT:-temp/E1}"            # generated samples, one folder per system
+EXCLUDE_SONGS="${EXCLUDE_SONGS-$_EXCLUDE}"
+EVAL_SRC="${EVAL_SRC:-$_EVAL_SRC}"         # built by prepare_data.sh eval
+OUT_ROOT="${OUT_ROOT:-$_OUT_ROOT}"         # generated samples, one folder per system
 PROMPTS="$OUT_ROOT/prompts"
 
 # The pretrained single-stream backbone (Jiang et al., ISMIR 2025).
