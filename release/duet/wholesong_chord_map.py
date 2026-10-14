@@ -147,6 +147,9 @@ def cap_voices(notes, max_voices):
     return sorted(out)
 
 
+STACKED = 0     # upper_base value: upper tones stacked on the bass
+
+
 def revoice(notes, bass_base, upper_base, fold, merge):
     """f: re-render each chord segment of `notes` in the given convention.
 
@@ -171,8 +174,15 @@ def revoice(notes, bass_base, upper_base, fold, merge):
     out = []
     for f0, f1, pcs, bass_pc in out_segs:
         upper = set(pcs) if fold else set(pcs) - {bass_pc}
-        out.append((f0, f1, bass_base + bass_pc))
-        out.extend((f0, f1, upper_base + pc) for pc in sorted(upper))
+        bass = bass_base + bass_pc
+        out.append((f0, f1, bass))
+        if upper_base == STACKED:
+            # close position on the bass, each tone at the first pitch
+            # above it (abc2midi's voicing, so Nottingham's)
+            out.extend((f0, f1, bass + ((pc - bass_pc) % 12 or 12))
+                       for pc in upper)
+        else:
+            out.extend((f0, f1, upper_base + pc) for pc in sorted(upper))
     return sorted(out)
 
 
@@ -344,7 +354,7 @@ def main():
     # ---- 2. FIT f -------------------------------------------------------
     print('\n=== 2. FIT  ours = f(theirs) ===')
     bass_cands = sorted({k for k, _ in ob.most_common(2)} | {36, 48})
-    upper_cands = sorted({k for k, _ in ou.most_common(2)} | {48, 60})
+    upper_cands = sorted({k for k, _ in ou.most_common(2)} | {48, 60, STACKED})
     results = []
     for bb in bass_cands:
         for ub in upper_cands:
@@ -367,7 +377,8 @@ def main():
               f'merge {int(merge)}')
     else:
         _a, _p, _o, bb, ub, fold, merge = results[0]
-        print(f'  best map: bass -> {bb}+pc, upper -> {ub}+pc, '
+        print(f'  best map: bass -> {bb}+pc, upper -> '
+              f'{"stacked on the bass" if ub == STACKED else f"{ub}+pc"}, '
               f'{"bass folded into upper" if fold else "bass not duplicated"}'
               f', {"contiguous repeats merged" if merge else "segments kept"}')
     best_abs = results[0][0]

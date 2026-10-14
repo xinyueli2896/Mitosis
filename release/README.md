@@ -196,7 +196,23 @@ rates). What differs:
 - **Checkpoints.** No Nottingham checkpoints are released, so
   `generate.sh` defaults to the run directory `train.sh` wrote for the
   system; pass `CKPT=` for any other.
-- **External baselines.** AMT and Whole-Song Gen are POP909-only here;
+- **External baselines.** Both run on the same prompts, with the same
+  prompt length, continuation length and sample count:
+  `DATASET=nottingham bash scripts/external/amt.sh generate` and
+  `DATASET=nottingham bash scripts/external/wholesong.sh generate`.
+  AMT needs nothing new: the prompts are at 120 BPM, its time base.
+  Whole-Song Gen reads songs in its POP909 layout, which
+  `build_nottingham_wholesong.py` writes from the staged crops: melody,
+  chord symbols named from our chord track (every held-out chord matches
+  a template), and a phrase label. Nottingham has no phrase annotation,
+  so the label is a heuristic (an optional pickup bar as intro, then
+  8-bar phrases lettered by melodic repetition), and it reaches the
+  model only through the prompt bars. As for POP909's padded crops, the
+  baseline's prompt drops our silent lead-in bars (one for pickup tunes,
+  two otherwise) and its output is shifted back by them. Its chords are
+  re-voiced into Nottingham's close-position voicing (bass at 36+pc,
+  tones stacked on it), which `wholesong_chord_map.py` now fits
+  alongside POP909's fixed-octave rendering.
   `evaluate.sh` scores whichever systems are complete.
 
 ## Running under SLURM

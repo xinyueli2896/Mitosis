@@ -62,7 +62,15 @@ from wholesong_our_prompt import build_lsh_prompt, splice_into_song
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--song-ids', type=int, nargs='+', default=[1, 2, 3, 4, 5])
+    ap.add_argument('--song-ids', nargs='+', default=['1', '2', '3', '4', '5'],
+                    help='POP909 ids (zero-padded to three digits), or '
+                         'with --song-dir the folder names under it')
+    ap.add_argument('--song-dir', default=None,
+                    help='read each song from <song-dir>/<id>/ (melody.txt, '
+                         'finalized_chord.txt, human_label1.txt, as '
+                         'build_nottingham_wholesong.py writes them) with '
+                         'their own file readers, instead of from their '
+                         'POP909 copy. 4/4 only; no accompaniment.')
     ap.add_argument('--prompt-bars', type=int, default=6)
     ap.add_argument('--n-samples', type=int, default=3)
     ap.add_argument('--skip-existing', action='store_true',
@@ -148,6 +156,21 @@ def main():
     # their repo root must be the cwd (resource paths are relative)
     from data_utils.read_pop909_data import (analyze_pop909_dataset,
                                              read_pop909_dataset)
+    from data_utils.utils.read_file import read_chord, read_label, read_melody
+    from data_utils.utils.song_data_structure import McpaMusic
+
+    def read_song(sid):
+        if not args.song_dir:
+            return read_pop909_dataset(song_ids=[int(sid)])
+        d = os.path.join(args.song_dir, sid)
+        mel = read_melody(os.path.join(d, 'melody.txt'))
+        # No accompaniment exists for these songs and the acc stage is
+        # never run; the melody stands in so their constructor and
+        # analysis (which size and roll the acc track) have one.
+        return [McpaMusic(mel, read_chord(os.path.join(d, 'finalized_chord.txt')),
+                          mel.copy(), read_label(os.path.join(d, 'human_label1.txt')),
+                          num_beat_per_measure=4, num_step_per_beat=4,
+                          song_name=sid, clean_chord_unit=4)]
     from data_utils.pytorch_datasets.counterpoint_dataset import \
         CounterpointDataset
     from data_utils.pytorch_datasets.leadsheet_dataset import LeadSheetDataset
@@ -228,7 +251,7 @@ def main():
 
     ok, failed = [], []
     for sid in args.song_ids:
-        name = str(sid).zfill(3)
+        name = sid if args.song_dir else str(sid).zfill(3)
         print(f'\n=== song {name} ===', flush=True)
         # Every stage of the cascade runs per song, so the resumable
         # unit is the song: skip only when all its samples are written.
@@ -242,7 +265,7 @@ def main():
             ok.append(name)
             continue
         try:
-            dataset = read_pop909_dataset(song_ids=[sid])
+            dataset = read_song(name)
             if args.our_melody_dir and args.our_prompt_level == 'all':
                 # Splice BEFORE the analysis, so their reductions --
                 # tr_algo for the melody, get_chord_reduction for the
