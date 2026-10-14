@@ -731,7 +731,13 @@ if __name__ == '__main__':
     if n_gpus > 1:
         import pytorch_lightning.strategies as strategies
         import datetime
-        strategy = strategies.DDPStrategy(timeout=datetime.timedelta(hours=2))
+        # Not every parameter reaches the loss on every step: top-2 MoE
+        # routing can leave an expert idle, and sf_dir_emb is unused when
+        # same_frame=0. The Duet trainer sets the same flag.
+        strategy = strategies.DDPStrategy(
+            timeout=datetime.timedelta(hours=2),
+            find_unused_parameters=True,
+        )
     else:
         strategy = 'auto'
 
