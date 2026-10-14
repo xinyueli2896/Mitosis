@@ -228,6 +228,17 @@ Environment knobs such as `DATASET` travel with `--export=ALL,...`.
 
 ### Running the Nottingham pipeline on SLURM
 
+Two whole-node jobs cover training and the external baselines (they
+carry `--account`/`--qos` for our cluster; override on the command
+line elsewhere):
+
+```bash
+sbatch slurm/train_all_nottingham.sbatch        # every in-house system, scripts/train_all.sh on 8 GPUs
+sbatch slurm/infer_external_nottingham.sbatch   # AMT + Whole-Song Gen, 8 slices each
+```
+
+Or stage by stage:
+
 ```bash
 E=ALL,DATASET=nottingham,NOTTINGHAM_RAW=/path/to/nottingham-dataset/MIDI
 P=$(sbatch --parsable --export=$E --cpus-per-task=16 --time=02:00:00 slurm/run.sbatch prepare_data.sh train)
