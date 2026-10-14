@@ -23,6 +23,12 @@ Per test song (POP909 ids, default 1-5):
                  phrase across the rest. Removes the only ground-truth
                  leak into the generated region, which is what makes
                  the comparison with a prompt-only system fair.
+     Under `generated` every prompt (form, counterpoint, lead sheet)
+     is cut from an analysis of the song TRUNCATED at the prompt's end,
+     because their analysis is per phrase (key from the phrase's whole
+     chord span, tonal reduction over the whole phrase, a phrase roll
+     counting down to its end) and the full song's would carry music
+     after the prompt into it.
      NOTE even under `generated` the song LENGTH stays oracle: the
      generated form is truncated to the GT bar count, because a
      fixed-length continuation protocol has to know where to stop for
@@ -171,6 +177,50 @@ def main():
                           mel.copy(), read_label(os.path.join(d, 'human_label1.txt')),
                           num_beat_per_measure=4, num_step_per_beat=4,
                           song_name=sid, clean_chord_unit=4)]
+
+    def truncate_song(song, n_bars):
+        """The song cut at bar n_bars: notes and chords after it dropped,
+        those sounding across it shortened, phrases clipped to it."""
+        nbpm_, nspb_ = song.num_beat_per_measure, song.num_step_per_beat
+        end_beat = n_bars * nbpm_
+        end_step = end_beat * nspb_
+
+        def clip(mat, end, dur_col):
+            m = np.asarray(mat)
+            m = m[m[:, 0] < end].copy()
+            m[:, dur_col] = np.minimum(m[:, dur_col], end - m[:, 0])
+            return m
+
+        phrases = []
+        for tp, st, lg in zip(song.phrase_types, song.phrase_starts,
+                              song.phrase_lengths):
+            st, lg = int(st), int(lg)
+            if st >= n_bars:
+                break
+            lg = min(lg, n_bars - st)
+            phrases.append({'name': f'{tp}{lg}', 'type': tp, 'lgth': lg,
+                            'start': st})
+        mel = clip(song.melody, end_step, 2)
+        acc = None if song.acc is None else clip(song.acc, end_step, 2)
+        if acc is None or not len(acc):
+            acc = mel.copy()        # never read for the prompt; sizes only
+        return McpaMusic(mel, clip(song.chord, end_beat, -1), acc, phrases,
+                         num_beat_per_measure=nbpm_,
+                         num_step_per_beat=nspb_, song_name=song.song_name,
+                         clean_chord_unit=song.clean_chord_unit)
+
+    def level_img(cls, P, ana, stores, **kw):
+        """One level's full-length GT image from analyses `ana`, built
+        with their dataset class exactly as the code below does."""
+        ds = cls(ana, shift_high=0, shift_low=0, max_l=P['max_l'], h=P['h'],
+                 n_channels=P['n_channel'], random_pitch_aug=False, **kw)
+        for st in stores:
+            if st == 'phrase':
+                ds.store_phrase(0)
+            else:
+                getattr(ds, f'store_{st}')(0, 0)
+        L = ds.lengths[0]
+        return ds.lang_to_img(0, 0, L, tgt_lgth=L)
     from data_utils.pytorch_datasets.counterpoint_dataset import \
         CounterpointDataset
     from data_utils.pytorch_datasets.leadsheet_dataset import LeadSheetDataset
@@ -352,6 +402,36 @@ def main():
                   f'prompt = {prompt_bars} bars = {p_beats} beats / '
                   f'{p_16} sixteenths')
 
+            ana_p = None
+            if args.form == 'generated':
+                # NO LOOK-AHEAD INSIDE THE PROMPT EITHER. Their analysis
+                # works phrase by phrase: the key of a phrase is estimated
+                # from its whole chord span, the tonal reduction runs over
+                # the whole phrase, and the phrase roll counts down to the
+                # phrase's end. The prompt bars cut the first phrase(s)
+                # short, so prompts sliced from the FULL song's analysis
+                # carry the key, reduction and remaining length of music
+                # after the prompt. Re-run the analysis on the song cut
+                # at the prompt's end, and take every prompt from that:
+                # the baseline then sees exactly the prompt bars, and the
+                # full analysis above contributes song LENGTH only.
+                cb0 = crops[name][0] if crops else 0
+                ana_p = analyze_pop909_dataset(
+                    [truncate_song(dataset[0], cb0 + prompt_bars)])
+                ctp_img = level_img(CounterpointDataset, P_CTP, ana_p,
+                                    ('key', 'phrase', 'red_mel', 'red_chd'),
+                                    use_autoreg_cond=True,
+                                    use_external_cond=False)[:, cb0 * nbpm:]
+                lsh_img = level_img(LeadSheetDataset, P_LSH, ana_p,
+                                    ('key', 'phrase', 'red_mel', 'red_chd',
+                                     'mel', 'chd'),
+                                    use_autoreg_cond=True,
+                                    use_external_cond=False)[:, cb0 * nbpm * nspb:]
+                assert ctp_img.shape[1] >= p_beats and lsh_img.shape[1] >= p_16, \
+                    (ctp_img.shape, lsh_img.shape, p_beats, p_16)
+                print(f'  [prompt] analysed on bars 0..{cb0 + prompt_bars - 1} '
+                      f'only (no music after the prompt)')
+
             n = args.n_samples
             # Slice the prompts out of the ground-truth images NOW, so
             # that under --form generated the full-length images can be
@@ -410,8 +490,11 @@ def main():
                 # is built from `analyses`, which the crop above never
                 # touched.
                 frm_bars_full = frm_ds.lengths[0]
-                frm_img = frm_ds.lang_to_img(0, 0, frm_bars_full,
-                                             tgt_lgth=frm_bars_full)
+                # the length comes from the full song; the IMAGE, which
+                # the prompt is sliced from, from the prompt-only analysis
+                del frm_ds
+                frm_img = level_img(FormDataset, P_FRM, ana_p,
+                                    ('key', 'phrase'))
                 # CROP IT, exactly as ctp_img and lsh_img were cropped.
                 # Until 2026-09-13 this slice was missing: the form
                 # prompt came from bars 0..prompt_bars-1 of the ORIGINAL
