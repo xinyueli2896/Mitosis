@@ -128,6 +128,7 @@ from an A.2 ckpt behaves identically at k_m = k_c = K (fully masked).
 from __future__ import annotations
 
 import argparse
+import copy
 import os
 
 import torch
@@ -161,9 +162,26 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  agree_loss_weight=0.3, sc_ar_frac=0.0,
                  sc_draft_temp=0.0, sc_k_consistent=False,
                  sym_k=False, mask_k_prob=None, sc_val=False,
-                 sc_ar_free_run=False, **kwargs):
+                 sc_ar_free_run=False, stale_draft_every=0, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
+        # --- stale-snapshot drafts ---------------------------------------
+        # stale_draft_every=N > 0 draws the self-conditioning drafts from
+        # a FROZEN copy of this model, refreshed from the live weights
+        # every N optimizer steps, instead of from the live weights. The
+        # slots then learn to revise what an older version of the model
+        # would have written, so they never co-adapt to drafts that move
+        # with every update. No drafting happens before the first
+        # refresh (step N): until then the slots follow the ordinary
+        # k schedule. The copy is kept out of the module tree (not in
+        # state_dict, the optimizer or DDP); a resumed run takes a fresh
+        # snapshot at its first step, so for up to N steps after a resume
+        # the drafts come from the resumed weights rather than the copy
+        # the interrupted run held.
+        self.stale_draft_every = int(stale_draft_every)
+        self.register_buffer('stale_draft_every_flag',
+                             torch.tensor(self.stale_draft_every,
+                                          dtype=torch.long))
         # --- conditional slots (A.3c) ------------------------------------
         # With probability cond_slot_prob per (item, pair) the two slots
         # are drawn in the commit-then-condition regime: one slot (leader,
@@ -726,6 +744,49 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         if callable(hook):
             hook()
         self._init_frame_mask_row()
+
+    def on_train_batch_start(self, batch, batch_idx):
+        hook = getattr(super(), 'on_train_batch_start', None)
+        if callable(hook):
+            hook(batch, batch_idx)
+        N = self.stale_draft_every
+        step = int(self.global_step)
+        if N <= 0 or step < N:
+            return
+        # global_step repeats across accumulated micro-batches; refresh
+        # once per boundary, and at once when a resumed run has no copy
+        if self.__dict__.get('_stale_net') is None or (
+                step % N == 0 and self.__dict__.get('_stale_step') != step):
+            self._refresh_stale(step)
+
+    def _refresh_stale(self, step):
+        """Copy the live weights into the frozen draft model."""
+        stale = self.__dict__.get('_stale_net')
+        if stale is None:
+            # deepcopy without the trainer. Tensors the modules stash as
+            # plain attributes from the last step can be non-leaf, which
+            # deepcopy refuses: the memo hands the copy a detached clone
+            # of each instead. Assigned through __dict__ so nn.Module
+            # does not register the copy.
+            memo = {id(v): v.detach().clone() for mod in self.modules()
+                    for v in vars(mod).values()
+                    if isinstance(v, torch.Tensor)
+                    and not isinstance(v, nn.Parameter)
+                    and v.grad_fn is not None}
+            trainer = self.__dict__.get('_trainer')
+            self.__dict__['_trainer'] = None
+            try:
+                stale = copy.deepcopy(self, memo)
+            finally:
+                self.__dict__['_trainer'] = trainer
+            stale.stale_draft_every = 0
+            stale.requires_grad_(False)
+            stale.eval()
+            self.__dict__['_stale_net'] = stale
+        else:
+            stale.load_state_dict(self.state_dict())
+        self.__dict__['_stale_step'] = step
+        print(f'[stale] draft model refreshed at step {step}')
 
     def _token_level_slot(self, content_tokens, sc_mask, sc_toks, k_t, mod):
         """A.4 slot construction: per-token absorbing corruption.
@@ -1377,7 +1438,16 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         sc_toks_m = sc_toks_c = None
         self._last_selfcond_frac = torch.zeros((), device=x.device)
         self._last_sc_ar_frac = torch.zeros((), device=x.device)
-        if (self.training or self.sc_val) and self.self_cond_prob > 0:
+        # Stale-snapshot drafts (stale_draft_every > 0): in training the
+        # probe below runs on the frozen copy, and is skipped altogether
+        # until the copy exists. Validation (sc_val) keeps the live model.
+        stale = (self.__dict__.get('_stale_net')
+                 if self.stale_draft_every > 0 and self.training else None)
+        probe = stale if stale is not None else self
+        stale_wait = (self.stale_draft_every > 0 and self.training
+                      and stale is None)
+        if ((self.training or self.sc_val) and self.self_cond_prob > 0
+                and not stale_wait):
             if self.training:
                 sc_mask_m = torch.rand(batch_size, n_pairs,
                                        device=x.device) < self.self_cond_prob
@@ -1394,12 +1464,13 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                     k_full = torch.full((batch_size, n_pairs), K,
                                         device=x.device, dtype=torch.long)
                     self._agree_lag_m = self._agree_lag_c = None
+                    probe._agree_lag_m = probe._agree_lag_c = None
                     if self.sc_ar_free_run:
-                        self._stash_h = True
-                    ar_logits_sc, q_logits_sc, _ = self.forward(
+                        probe._stash_h = True
+                    ar_logits_sc, q_logits_sc, _ = probe.forward(
                         x, T_query=T_query, k_m=k_full, k_c=k_full,
                     )
-                    self._stash_h = False
+                    probe._stash_h = False
                     V = self.tokenizer.n_tokens
                     # Validation takes argmax regardless of
                     # sc_draft_temp, so val_loss is deterministic.
@@ -1429,16 +1500,16 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                         if self.sc_ar_free_run:
                             # the decode's own sampler, free-running
                             # from the content rows, one call per pair
-                            hg = self._last_h_clean_global
+                            hg = probe._last_h_clean_global
                             t_draft = (self.sc_draft_temp if dtemp is None
                                        else float(dtemp))
                             ar_toks_m = torch.stack([
-                                self.local_sampling(
+                                probe.local_sampling(
                                     hg[:, 2 * t], max_subseq_len=subseq_len,
                                     temperature=t_draft, token_type_id=0)
                                 for t in tq], dim=1)          # [B, Q, S]
                             ar_toks_c = torch.stack([
-                                self.local_sampling(
+                                probe.local_sampling(
                                     hg[:, 2 * t + 1], max_subseq_len=subseq_len,
                                     temperature=t_draft, token_type_id=1)
                                 for t in tq], dim=1)
@@ -1915,6 +1986,11 @@ if __name__ == '__main__':
                              'at content t-2, one frame short of what '
                              'the AR head at the same phase sees. A.3f '
                              'alone; A.9 with --query_pairs -1.')
+    parser.add_argument('--stale_draft_every', type=int, default=0,
+                        help='draw the self-conditioning drafts from a frozen '
+                             'copy of the model refreshed every N steps '
+                             'instead of the live weights; no drafts before '
+                             'step N. 0 = live weights (the paper Duet).')
     parser.add_argument('--sc_ar_free_run', action='store_true', default=False,
                         help='A.12: build the AR-head draft with local_sampling '
                              '(free-running, validity-masked, as the decode '
@@ -2193,6 +2269,7 @@ if __name__ == '__main__':
         sc_ar_frac=args.sc_ar_frac,
         sc_ar_free_run=bool(args.sc_ar_free_run),
         sc_draft_temp=args.sc_draft_temp,
+        stale_draft_every=args.stale_draft_every,
         sc_k_consistent=bool(args.sc_k_consistent),
         sym_k=bool(args.sym_k),
         mask_k_prob=args.mask_k_prob,
@@ -2400,6 +2477,7 @@ if __name__ == '__main__':
                     'sc_ar_frac': args.sc_ar_frac,
                     'sc_ar_free_run': bool(args.sc_ar_free_run),
                     'sc_draft_temp': args.sc_draft_temp,
+                    'stale_draft_every': args.stale_draft_every,
                     'sc_k_consistent': bool(args.sc_k_consistent),
                     'sym_k': bool(args.sym_k),
                     'mask_k_prob': args.mask_k_prob,

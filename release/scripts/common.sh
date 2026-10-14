@@ -68,16 +68,17 @@ BACKBONE="${BACKBONE:-ckpt/cp_transformer_v0.42_size1_batch_48_schedule.epoch.00
 system_id() {
     case "$1" in
         duet)          echo A3ctcaT ;;
+        duet_stale)    echo A3stale ;;
         dense)         echo D1 ;;
         no_draft)      echo A1 ;;
         ss_finetuned)  echo S1 ;;
         ss_scratch)    echo S-scratch ;;
         wholesong)     echo WSfv4 ;;
         amt)           echo AMT ;;
-        *) echo "unknown system '$1' (duet dense no_draft ss_finetuned ss_scratch wholesong amt)" >&2; return 1 ;;
+        *) echo "unknown system '$1' (duet duet_stale dense no_draft ss_finetuned ss_scratch wholesong amt)" >&2; return 1 ;;
     esac
 }
-ALL_SYSTEMS="duet dense no_draft ss_finetuned ss_scratch wholesong amt"
+ALL_SYSTEMS="duet duet_stale dense no_draft ss_finetuned ss_scratch wholesong amt"
 
 # Number of visible GPUs (CUDA_VISIBLE_DEVICES, else what torch sees).
 n_gpus() {

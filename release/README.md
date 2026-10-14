@@ -124,6 +124,40 @@ The exact schedule of each released checkpoint is stored in its
 `hyper_parameters`. With a different GPU count the learning rate is scaled
 as in the table's runs (`MAX_LR` overrides it).
 
+## Variant: drafts from a stale snapshot
+
+`train.sh duet_stale` trains Duet with one change in how the draft tokens
+are filled during training. In the paper's Duet, half of the slots are
+filled with the live model's query-head argmax. In `duet_stale`, both the
+melody and the chord slot of every item get a draft. The draft is sampled
+from the AR head the way the decode samples (`local_sampling`,
+temperature 1). It comes from a frozen copy of the model that is
+refreshed from the live weights every `STALE_EVERY` steps (default
+1000). There are no drafts before the first refresh. The masking
+schedule (`k`) is unchanged, so a masked slot stays masked. The copy
+costs one more model's weights in GPU memory. Generation and scoring
+treat it like Duet (`generate.sh duet_stale`, output id `A3stale`), and
+it starts from Duet's init.
+
+## Training everything on one machine
+
+`scripts/train_all.sh` trains all six systems on one multi-GPU machine
+without SLURM. Each run gets the GPU count of its paper recipe, so its
+learning rate and global batch match the paper. Runs are packed onto the
+free GPUs with the longest first. On 8 GPUs, dense, duet, duet_stale and
+no_draft start together on two GPUs each. The single-stream runs take the
+first GPUs that free up, and dense (100k steps) finishes last.
+
+```bash
+DATASET=nottingham NOTTINGHAM_RAW=/path/to/nottingham-dataset/MIDI \
+    bash scripts/train_all.sh 2>&1 | tee logs/train_all_nottingham.log
+```
+
+It prepares the data first if the tensors are missing, writes one log per
+run to `logs/train_<dataset>_<system>.log`, and ends with each run's exit
+code. Re-running it resumes. `GPU_IDS`, `SYSTEMS` and `GPUS_<system>`
+(for example `GPUS_dense=4`) change the packing.
+
 ## The same task on Nottingham
 
 `DATASET=nottingham` runs every in-house system on the Nottingham folk

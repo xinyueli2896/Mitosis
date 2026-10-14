@@ -63,8 +63,12 @@ python e1_quality_table.py --pooled results/${RESULTS_TAG}_pooled.csv --out figu
 # Figure 2: solid star = best among Duet, its two ablations and the
 # single-stream model trained from scratch (left of the dashed rule);
 # hollow star = best of all systems where different
+# the stale-draft variant is drawn (and ranked) only when it was scored
+RANKED="A3ctcaT D1 A1 S-scratch"; FIG_EXCLUDE=A3stale
+[[ " ${SCORED[*]} " == *" A3stale "* ]] && { RANKED="A3ctcaT A3stale D1 A1 S-scratch"; FIG_EXCLUDE=""; }
 python plot_e1_box.py --csv results/${RESULTS_TAG}_metrics.csv --out figures/${RESULTS_TAG}_prompt_fit \
+    --exclude "$FIG_EXCLUDE" \
     --block "prompt fit" --orient v --ncols 4 --width 7 --panel-height 1.3 \
     --names none --short-titles \
-    --ranked "A3ctcaT D1 A1 S-scratch" --divider-after S-scratch --best-overall
+    --ranked "$RANKED" --divider-after S-scratch --best-overall
 echo "[evaluate] results under $DUET/results and $DUET/figures"

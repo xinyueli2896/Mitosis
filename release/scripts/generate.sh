@@ -16,23 +16,23 @@
 # Keep N_SAMPLES >= 2: with a single sample the duet generators write
 # <song>/co.mid instead of the <song>/co/sample_<i>.mid layout evaluate.sh reads.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-SYSTEM="${1:?usage: generate.sh duet|dense|no_draft|ss_finetuned|ss_scratch}"
+SYSTEM="${1:?usage: generate.sh duet|duet_stale|dense|no_draft|ss_finetuned|ss_scratch}"
 ID="$(system_id "$SYSTEM")"
 bash "$ROOT/scripts/stage_prompts.sh"
 
 # Default checkpoints: the released files, or your own run directories.
 case "$SYSTEM" in
-    duet|dense|no_draft|ss_finetuned|ss_scratch) ;;
+    duet|duet_stale|dense|no_draft|ss_finetuned|ss_scratch) ;;
     *) echo "generate.sh covers the in-house systems; see scripts/external/ for $SYSTEM" >&2; exit 1 ;;
 esac
-if [[ -z "${CKPT:-}" && "$DATASET" == pop909 ]]; then
+if [[ -z "${CKPT:-}" && "$DATASET" == pop909 && "$SYSTEM" != duet_stale ]]; then
     CKPT="ckpt/$SYSTEM"
 elif [[ -z "${CKPT:-}" ]]; then
     # No released Nottingham checkpoints: default to the run directory
     # train.sh wrote for this system (without RUN_TAG; pass CKPT=
     # for a tagged run or when several batch sizes were trained).
     case "$SYSTEM" in
-        duet|dense)   _pat="ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_${SYSTEM}_${TASK}_batch_*_schedule" ;;
+        duet|duet_stale|dense) _pat="ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_${SYSTEM}_${TASK}_batch_*_schedule" ;;
         no_draft)     _pat="ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_${TASK}_batch_*_schedule" ;;
         ss_finetuned) _pat="ckpt/cp_transformer_v0.42_size*_pop909ft_${SS_RUN_TAG}_batch_*_schedule" ;;
         ss_scratch)   _pat="ckpt/cp_transformer_v0.42_size*_pop909scratch_${SS_RUN_TAG}_batch_*_schedule" ;;
@@ -54,7 +54,7 @@ fi
 OUT="$OUT_ROOT/$ID"
 
 case "$SYSTEM" in
-duet|dense)
+duet|duet_stale|dense)
     # Draft-and-denoise, leader alternating by frame (ctc_alt): the
     # leader's draft is sampled from its autoregressive head and written
     # into its draft token, one denoise pass reads out both streams.
