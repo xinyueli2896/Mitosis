@@ -91,3 +91,15 @@ n_gpus() {
 
 # need <path> <hint>: stop with a hint when a required input is missing.
 need() { [[ -e "$1" ]] || { echo "ERROR: $1 not found. $2" >&2; exit 1; }; }
+
+# shard <words...>: with SHARD=K/N, keep every N-th word starting at the
+# K-th (0-based), so N jobs on N GPUs split a song list between them;
+# without SHARD, all of them.
+shard() {
+    if [[ -z "${SHARD:-}" ]]; then echo "$*"; return; fi
+    local k="${SHARD%/*}" n="${SHARD#*/}" i=0 w out=()
+    [[ "$k" =~ ^[0-9]+$ && "$n" =~ ^[0-9]+$ && "$k" -lt "$n" ]] || {
+        echo "ERROR: SHARD=$SHARD, expected K/N with 0 <= K < N" >&2; exit 1; }
+    for w in "$@"; do (( i++ % n == k )) && out+=("$w"); done
+    echo "${out[@]}"
+}
