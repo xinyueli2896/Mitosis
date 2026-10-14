@@ -2,7 +2,7 @@
 # External baseline: Whole-Song Gen (Wang, Min and Xia, ICLR 2024),
 # prompted lead-sheet continuation.
 #
-#   bash scripts/external/wholesong.sh setup
+#   bash scripts/external/wholesong.sh setup     # code, venv, and their data + models from Google Drive
 #   POP909_RAW=/path/to/POP909-Dataset/POP909 bash scripts/external/wholesong.sh generate
 #   DATASET=nottingham bash scripts/external/wholesong.sh generate
 #
@@ -23,6 +23,18 @@
 source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
 WS="$DUET/external/whole_song_gen"
 
+# its downloads unpack as <dir>/<dir>/...; flatten them once
+flatten() {
+    local d
+    shopt -s dotglob
+    for d in pretrained_models results_default data; do
+        if [[ -d "${WS:?}/$d/$d" ]]; then
+            mv "${WS:?}/$d/$d"/* "${WS:?}/$d/" && rmdir "${WS:?}/${d:?}/${d:?}"
+        fi
+    done
+    shopt -u dotglob
+}
+
 case "${1:?usage: wholesong.sh setup|generate}" in
 setup)
     mkdir -p "$DUET/external"
@@ -34,12 +46,29 @@ setup)
     source "$WS/.venv/bin/activate"
     REQ=$(find "$WS" -maxdepth 2 -iname 'requirements*.txt' | head -1)
     [[ -n "$REQ" ]] && pip install -q -r "$REQ"
+    # Their release data, VAEs and diffusion models: one Google Drive
+    # archive per folder, linked from that folder's download_link.txt.
+    # Their code needs all three (data_utils loads data/ on import).
+    pip install -q gdown
+    for d in data pretrained_models results_default; do
+        if [[ -n "$(ls -A "$WS/$d" | grep -vx download_link.txt)" ]]; then
+            echo "[wholesong] $d/ already populated"; continue
+        fi
+        id=$(grep -o 'file/d/[A-Za-z0-9_-]*' "$WS/$d/download_link.txt" | cut -d/ -f3)
+        [[ -n "$id" ]] || { echo "ERROR: no Drive file id in $WS/$d/download_link.txt" >&2; exit 1; }
+        echo "[wholesong] downloading $d/ (Drive id $id)"
+        tmp="${WS:?}/.download_${d:?}"
+        gdown --fuzzy "https://drive.google.com/file/d/$id/view" -O "$tmp"
+        case "$(file -b "$tmp")" in
+            Zip*)         unzip -q -o "$tmp" -d "$WS/$d" ;;
+            *gzip*|*tar*) tar -xf "$tmp" -C "$WS/$d" ;;
+            *) echo "ERROR: $tmp is not a zip or tar archive ($(file -b "$tmp"))" >&2; exit 1 ;;
+        esac
+        rm -f -- "${tmp:?}"
+    done
+    flatten
     (cd "$WS" && PYTHONPATH="$WS" python "$DUET/wholesong_deps.py")
-    cat <<EOF
-[wholesong] code and environment ready under $WS.
-Download the pretrained stages (form, counterpoint, lead sheet) as the
-whole-song-gen README describes, into $WS/pretrained_models/.
-EOF
+    echo "[wholesong] code, environment, data and models ready under $WS"
     ;;
 generate)
     [[ -d "$WS/.venv" ]] || { echo "run 'wholesong.sh setup' first" >&2; exit 1; }
@@ -62,12 +91,7 @@ generate)
     fi
     (
         source "$WS/.venv/bin/activate"
-        # its own nested download layout, flattened once
-        shopt -s dotglob
-        for d in pretrained_models results_default data; do
-            if [[ -d "$WS/$d/$d" ]]; then mv "$WS/$d/$d"/* "$WS/$d/"; rmdir "$WS/$d/$d"; fi
-        done
-        shopt -u dotglob
+        flatten
         cd "$WS"
         export PYTHONPATH="$WS:$PYTHONPATH"
         python "$DUET/wholesong_deps.py"
