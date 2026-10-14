@@ -58,7 +58,7 @@ setup)
         [[ -n "$id" ]] || { echo "ERROR: no Drive file id in $WS/$d/download_link.txt" >&2; exit 1; }
         echo "[wholesong] downloading $d/ (Drive id $id)"
         tmp="${WS:?}/.download_${d:?}"
-        gdown --fuzzy "https://drive.google.com/file/d/$id/view" -O "$tmp"
+        gdown "$id" -O "$tmp"        # a bare file id works across gdown versions
         case "$(file -b "$tmp")" in
             Zip*)         unzip -q -o "$tmp" -d "$WS/$d" ;;
             *gzip*|*tar*) tar -xf "$tmp" -C "$WS/$d" ;;
