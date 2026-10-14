@@ -533,12 +533,15 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
 
 if __name__ == '__main__':
     from torch.utils.data import DataLoader
+    # Same order as cp_transformer_m2c_duet_block_diffusion.py: the model
+    # subclasses pytorch_lightning.LightningModule, and the bare
+    # `lightning` module has no `callbacks`, so pytorch_lightning first.
     try:
-        import lightning as L
-        from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
-    except ImportError:
         import pytorch_lightning as L
         from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
+    except ImportError:
+        import lightning.pytorch as L
+        from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 
     parser = argparse.ArgumentParser(
         description='Train M2CIntraCrossAttn (per-modality Q/K/V/O + '

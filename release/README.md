@@ -149,12 +149,13 @@ rates). What differs:
 - **Corpus.** Melody is each MIDI's first track and chords its second,
   both on program 0 as for POP909's duet streams; the single-stream copy
   re-tags the chords to program 48. The 13 tunes without a chord track
-  are dropped, leaving 1,021, and the 87 or so shorter than 384 frames
-  sit outside training as they do for POP909 (`FramedDataset`).
+  are dropped, leaving 1,021; the 153 shorter than 384 frames sit
+  outside training and validation (`FramedDataset`), leaving 868.
 - **Held-out prompts.** Index 0 mod 10 of the training manifest, as for
   POP909. Only tunes in 4/4 or 2/2 are kept, because the scoring and the
   80/416-frame protocol assume 16 frames per bar, and only tunes whose
-  crop reaches `GEN_LENGTH`. Each is cropped so its first full downbeat
+  crop reaches `GEN_LENGTH`: 49 of the 87 held-out tunes (the other 38
+  are in 3/4, 6/8 and similar metres). Each is cropped so its first full downbeat
   is at frame 32; the pickup is found from the chord track, which starts
   on the downbeat. `prompt_crops.tsv` lists every held-out tune, kept or
   dropped and why. Training uses every metre.
