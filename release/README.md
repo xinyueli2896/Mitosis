@@ -235,6 +235,7 @@ line elsewhere):
 ```bash
 sbatch slurm/train_all_nottingham.sbatch        # every in-house system, scripts/train_all.sh on 8 GPUs
 sbatch slurm/infer_external_nottingham.sbatch   # AMT + Whole-Song Gen, 8 slices each
+sbatch slurm/infer_nottingham.sbatch            # the six in-house systems, 8 slices each
 ```
 
 Or stage by stage:

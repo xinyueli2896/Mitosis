@@ -18,7 +18,13 @@
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 SYSTEM="${1:?usage: generate.sh duet|duet_stale|dense|no_draft|ss_finetuned|ss_scratch}"
 ID="$(system_id "$SYSTEM")"
-bash "$ROOT/scripts/stage_prompts.sh"
+# SHARD=K/N: this call takes every N-th song (see slurm/infer_nottingham.sbatch).
+# Run stage_prompts.sh once first; parallel calls would race to stage.
+if [[ -n "${SHARD:-}" ]]; then
+    need "$PROMPTS/.ready" "Run 'bash scripts/stage_prompts.sh' once before sharded calls."
+else
+    bash "$ROOT/scripts/stage_prompts.sh"
+fi
 
 # Default checkpoints: the released files, or your own run directories.
 case "$SYSTEM" in
@@ -53,6 +59,26 @@ if [[ -d "$CKPT" ]]; then
 fi
 OUT="$OUT_ROOT/$ID"
 
+# The generators read whole folders, so a shard is a folder of links to
+# its songs, one per system and shard (parallel calls never share one).
+# Outputs still go to $OUT; finished songs are skipped there as usual.
+PDIR="$PROMPTS"
+if [[ -n "${SHARD:-}" ]]; then
+    PDIR="$PROMPTS/shards/${SYSTEM}_${SHARD/\//of}"
+    mkdir -p "$PDIR"
+    for sub in mel chord merged_tagged; do
+        mkdir -p "$PDIR/$sub"
+        find "$PDIR/$sub" -maxdepth 1 -name '*.mid' -type l -delete
+    done
+    SONGS=$(shard $(for f in "$PROMPTS"/mel/*.mid; do basename "$f" .mid; done))
+    for s in $SONGS; do
+        for sub in mel chord merged_tagged; do
+            ln -sf "$(readlink -f "$PROMPTS/$sub/$s.mid")" "$PDIR/$sub/$s.mid"
+        done
+    done
+    echo "[generate] $SYSTEM shard $SHARD: $(wc -w <<< "$SONGS") songs"
+fi
+
 case "$SYSTEM" in
 duet|duet_stale|dense)
     # Draft-and-denoise, leader alternating by frame (ctc_alt): the
@@ -63,7 +89,7 @@ duet|duet_stale|dense)
     [[ "$SYSTEM" == dense ]] && SHAPE=(--moe-num-experts 1 --moe-topk 1 --moe-intermediate-size 6144)
     MELCHORD_CP=4 A3_SCHEDULE=ctc_alt A3_REFINE_STEPS=4 A3_FINAL_TEMP=1.0 A3_TOP_P=1.0 \
     python cp_transformer_m2c_duet_block_diffusion_combined.py \
-        --ckpt "$CKPT" --mel-folder "$PROMPTS/mel" --chord-folder "$PROMPTS/chord" \
+        --ckpt "$CKPT" --mel-folder "$PDIR/mel" --chord-folder "$PDIR/chord" \
         --output-dir "$OUT" --modes co \
         --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
         --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 4 --skip-existing \
@@ -71,7 +97,7 @@ duet|duet_stale|dense)
     ;;
 no_draft)
     MELCHORD_CP=4 python cp_transformer_m2c_intra_cross_attn_combined.py \
-        --ckpt "$CKPT" --mel-folder "$PROMPTS/mel" --chord-folder "$PROMPTS/chord" \
+        --ckpt "$CKPT" --mel-folder "$PDIR/mel" --chord-folder "$PDIR/chord" \
         --output-dir "$OUT" --modes co \
         --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
         --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 4 --skip-existing \
@@ -81,7 +107,7 @@ ss_finetuned|ss_scratch)
     # single stream: continues the merged file (chords on program 48) and
     # writes temp/<save-name>/<song>.mid_temp1.0_continuation_<i>.mid
     python cp_transformer_inference.py --ckpt "$CKPT" \
-        --midi-folder "$PROMPTS/merged_tagged" \
+        --midi-folder "$PDIR/merged_tagged" \
         --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
         --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 16 --skip-existing \
         --save-name "${OUT#temp/}"
