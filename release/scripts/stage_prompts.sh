@@ -39,6 +39,6 @@ for f in sorted(glob.glob(os.path.join(folder, '*.mid'))):
         m.save(f)
 PY
 python merge_melody_chord.py --melody "$PROMPTS/mel" --chord "$PROMPTS/chord" \
-    --dst "$PROMPTS/merged_tagged" --chord-program 48
+    --dst "$PROMPTS/merged_tagged" --chord-program 48 --chord-channel 1
 date > "$PROMPTS/.ready"
 echo "[prompts] $(ls "$PROMPTS/mel" | wc -l) songs staged under $DUET/$PROMPTS"

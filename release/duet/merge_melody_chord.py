@@ -68,6 +68,23 @@ def _force_track_channel(track, channel):
     return out
 
 
+def _meta_only(track):
+    """The track's meta events (tempo, metre, key) at their own times.
+
+    The grid track is the melody file's first track. In a single-track
+    file (Nottingham's crops) that track also holds the melody, which
+    was then written twice: once here and once as MELODY.
+    """
+    out = mido.MidiTrack()
+    t = last = 0
+    for msg in track:
+        t += msg.time
+        if msg.is_meta:
+            out.append(msg.copy(time=t - last))
+            last = t
+    return out
+
+
 def _note_tracks(mid):
     return [t for t in mid.tracks
             if any(m.type == "note_on" and m.velocity > 0 for m in t)]
@@ -91,7 +108,7 @@ def merge_pair(mel_path, chord_path, out_path,
         raise ValueError(f"no note tracks in {chord_path}")
 
     out = mido.MidiFile(ticks_per_beat=mel.ticks_per_beat)
-    out.tracks.append(mel.tracks[0])   # tempo/meta grid
+    out.tracks.append(_meta_only(mel.tracks[0]))   # tempo/meta grid
     for t in mel_notes:
         t = _rename_track(t, "MELODY")
         if mel_program is not None:
