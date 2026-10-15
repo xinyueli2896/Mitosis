@@ -225,7 +225,39 @@ def main():
         return
 
     print(f'[amt] loading {a.model}')
-    model = AutoModelForCausalLM.from_pretrained(a.model).cuda().eval()
+    model, info = AutoModelForCausalLM.from_pretrained(
+        a.model, output_loading_info=True)
+    model = model.cuda().eval()
+    # A checkpoint that loads with missing weights leaves them randomly
+    # initialised, and transformers only warns. A random model draws
+    # its next event time uniformly over the 100 s vocab, so generate()
+    # stops at the first time past the end: a near-empty continuation.
+    missing = [k for k in info.get('missing_keys', [])
+               if not k.endswith(('attn.bias', 'attn.masked_bias'))]
+    print(f'[amt] loading info: {len(missing)} missing, '
+          f'{len(info.get("unexpected_keys", []))} unexpected, '
+          f'{len(info.get("mismatched_keys", []))} mismatched')
+    if missing or info.get('mismatched_keys'):
+        raise SystemExit(f'[amt] weights did not load: missing {missing[:8]} '
+                         f'mismatched {info.get("mismatched_keys", [])[:8]}')
+
+    def prompt_nll(path):
+        """Mean next-token loss on a prompt, teacher-forced. A trained
+        model sits far below ln(vocab) ~ 10.9 nats; near it means the
+        weights are effectively random."""
+        from anticipation.vocab import AUTOREGRESS
+        ev = ops.pad(ops.clip(midi_to_events(path), 0, prompt_s,
+                              clip_duration=False, seconds=True))
+        x = torch.tensor([AUTOREGRESS] + ev[:1023]).unsqueeze(0).cuda()
+        with torch.no_grad():
+            return float(model(x, labels=x).loss)
+    nll = prompt_nll(files[0])
+    print(f'[amt] sanity: teacher-forced loss on {os.path.basename(files[0])} '
+          f'prompt = {nll:.2f} nats/token (random weights ~10.9)')
+    if nll > 8.0:
+        raise SystemExit('[amt] the model scores its prompt like an untrained '
+                         'model; check the transformers/torch versions in '
+                         'the AMT venv')
 
     if a.restrict:
         amt_sample.instr_logits = restrict_instruments(
