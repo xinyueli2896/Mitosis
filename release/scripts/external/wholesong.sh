@@ -94,12 +94,19 @@ prep|generate|map)
         fi
         IDS=$(for f in "$PROMPTS"/mel/*.mid; do basename "$f" .mid; done | tr '\n' ' ')
         CROPS="$SONGS/crops.tsv"
-        # the songs are built from our crops, so the prompt is ours already
-        SRC=(--song-dir "$SONGS")
+        # the songs are built from our crops, so the prompt is ours already.
+        # Written at our crops' tempo (build_nottingham_prompts --tempo),
+        # not their 90 bpm default, so the files line up with the prompt
+        # in seconds as well as in frames.
+        SRC=(--song-dir "$SONGS" --bpm 120)
+        # its prompt bars are its own re-rendering (one melody voice,
+        # per-beat chord symbols); put our exact prompt back in front
+        SPLICE=(--splice-prompt-mel-dir "$PROMPTS/mel")
     else
         : "${POP909_RAW:?set POP909_RAW (the lead-sheet prompt reads chord_midi.txt)}"
         IDS=$(for f in "$PROMPTS"/mel/*.mid; do b=$(basename "$f" .mid); echo $((10#$b)); done | tr '\n' ' ')
         CROPS="$(readlink -f "$EVAL_SRC/prompt_crops.tsv")"
+        SPLICE=()
         SRC=(--our-melody-dir "$MEL" --our-chord-dir "$CHD" --our-prompt-level all
              --pop909-dir "$POP909_RAW")
     fi
@@ -123,7 +130,7 @@ prep|generate|map)
     # re-voice the chord track into our rendering, four voices -> WSfv4
     python wholesong_chord_map.py --out-root "$OUT_ROOT" --system WSf \
         --chord-dir "$PROMPTS/chord" --prompt-frames "$PROMPT_LENGTH" --show 4 \
-        --max-voices 4 --apply WSfv4
+        --max-voices 4 --apply WSfv4 "${SPLICE[@]}"
     echo "[wholesong] -> $DUET/$OUT_ROOT/WSfv4"
     ;;
 *) echo "usage: wholesong.sh setup|prep|generate|map" >&2; exit 1 ;;
