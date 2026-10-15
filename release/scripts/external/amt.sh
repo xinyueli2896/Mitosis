@@ -52,7 +52,8 @@ generate)
     python amt_prompted.py --merged-folder "$PROMPTS/merged_tagged" --ids $IDS \
         --out-dir "$OUT_ROOT/AMT" --model "$MODEL" \
         --prompt-frames "$PROMPT_LENGTH" --gen-frames "$GEN_LENGTH" \
-        --n-samples "$N_SAMPLES" --top-p 0.98 --skip-existing
+        --n-samples "$N_SAMPLES" --top-p 0.98 --skip-existing \
+        --notes-tsv "amt_notes${SHARD:+_${SHARD/\//of}}.tsv"
     echo "[amt] -> $DUET/$OUT_ROOT/AMT"
     ;;
 *) echo "usage: amt.sh setup|generate" >&2; exit 1 ;;

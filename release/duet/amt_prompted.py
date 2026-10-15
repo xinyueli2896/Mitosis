@@ -152,6 +152,9 @@ def main():
     p.add_argument('--max-songs', type=int, default=None,
                    help='stop after N songs, for a smoke run')
     p.add_argument('--ids', nargs='*', default=None)
+    p.add_argument('--notes-tsv', default='amt_notes.tsv',
+                   help='per-sample note counts, under --out-dir; give each '
+                        'parallel shard its own name')
     p.add_argument('--selftest', action='store_true',
                    help='tokenize one song, round-trip it back to midi and '
                         'report the time base and instrument preservation, '
@@ -275,7 +278,7 @@ def main():
 
     if rows:
         os.makedirs(a.out_dir, exist_ok=True)
-        with open(os.path.join(a.out_dir, 'amt_notes.tsv'), 'w',
+        with open(os.path.join(a.out_dir, a.notes_tsv), 'w',
                   newline='') as fh:
             w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()),
                                delimiter='\t')
