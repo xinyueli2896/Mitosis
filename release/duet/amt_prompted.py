@@ -155,6 +155,10 @@ def main():
     p.add_argument('--notes-tsv', default='amt_notes.tsv',
                    help='per-sample note counts, under --out-dir; give each '
                         'parallel shard its own name')
+    p.add_argument('--debug', action='store_true',
+                   help="pass debug=True to their generate(): prints the "
+                        "prompt tokens and every generated event ('C time "
+                        "dur instr pitch'; instr 129 is a REST)")
     p.add_argument('--selftest', action='store_true',
                    help='tokenize one song, round-trip it back to midi and '
                         'report the time base and instrument preservation, '
@@ -169,6 +173,7 @@ def main():
     from anticipation import ops
     from anticipation.convert import midi_to_events, events_to_midi
     import anticipation.sample as amt_sample
+    from anticipation.vocab import TIME_OFFSET
 
     prompt_s = a.prompt_frames / FRAMES_PER_SECOND
     total_s = a.gen_frames / FRAMES_PER_SECOND
@@ -290,7 +295,11 @@ def main():
                 with torch.no_grad():
                     gen = amt_sample.generate(
                         model, start_time=prompt_s, end_time=total_s,
-                        inputs=prompt, top_p=a.top_p)
+                        inputs=prompt, top_p=a.top_p, debug=a.debug)
+                new = [t for t in gen[0::3] if t - TIME_OFFSET > int(100 * prompt_s)]
+                print(f'  sample {i}: {len(new)} events after the prompt'
+                      + (f', last at {(max(new) - TIME_OFFSET) / 100:.2f}s'
+                         if new else ''))
                 mid = events_to_midi(ops.combine(gen, []))
                 split, n_mel, n_chd, n_stray = split_by_program(
                     mid, a.mel_program, a.chord_program)
