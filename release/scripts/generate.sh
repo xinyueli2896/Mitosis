@@ -84,10 +84,14 @@ duet|duet_stale|dense)
     # Draft-and-denoise, leader alternating by frame (ctc_alt): the
     # leader's draft is sampled from its autoregressive head and written
     # into its draft token, one denoise pass reads out both streams.
+    # duet_stale has no leader (joint): one forward drafts both streams
+    # from their autoregressive heads, both drafts go into the draft
+    # tokens, one refine pass reads out both -- the regime it trains on.
     # Temperature 1, no nucleus cut.
+    SCHED=ctc_alt; [[ "$SYSTEM" == duet_stale ]] && SCHED=joint
     SHAPE=(--moe-num-experts 4 --moe-topk 2)
     [[ "$SYSTEM" == dense ]] && SHAPE=(--moe-num-experts 1 --moe-topk 1 --moe-intermediate-size 6144)
-    MELCHORD_CP=4 A3_SCHEDULE=ctc_alt A3_REFINE_STEPS=4 A3_FINAL_TEMP=1.0 A3_TOP_P=1.0 \
+    MELCHORD_CP=4 A3_SCHEDULE=$SCHED A3_REFINE_STEPS=4 A3_FINAL_TEMP=1.0 A3_TOP_P=1.0 \
     python cp_transformer_m2c_duet_block_diffusion_combined.py \
         --ckpt "$CKPT" --mel-folder "$PDIR/mel" --chord-folder "$PDIR/chord" \
         --output-dir "$OUT" --modes co \

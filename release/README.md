@@ -135,9 +135,11 @@ temperature 1). It comes from a frozen copy of the model that is
 refreshed from the live weights every `STALE_EVERY` steps (default
 1000). There are no drafts before the first refresh. The masking
 schedule (`k`) is unchanged, so a masked slot stays masked. The copy
-costs one more model's weights in GPU memory. Generation and scoring
-treat it like Duet (`generate.sh duet_stale`, output id `A3stale`), and
-it starts from Duet's init.
+costs one more model's weights in GPU memory. Scoring treats it like
+Duet (`generate.sh duet_stale`, output id `A3stale`), and it starts from
+Duet's init. Its decode has no leader (`A3_SCHEDULE=joint`): one forward
+drafts both streams from their AR heads, both drafts are written into
+the draft tokens, and one more forward reads both refined frames out.
 
 ## Training everything on one machine
 
