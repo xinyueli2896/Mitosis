@@ -9,6 +9,8 @@
 # Controls against the POP909 run that worked (same driver, same code):
 #   AMT_DIR=<dir>   use another checkout's venv, e.g. the one the POP909
 #                   run used (midi_yinyang/external/anticipation)
+#   ATTN=sdpa       transformers' default attention path, to compare
+#                   with the eager one amt_prompted.py now uses
 #   MERGED=<dir>    another merged prompt folder, e.g. a POP909
 #                   prompts/merged_tagged, with TUNE=<its song id>
 #
@@ -42,4 +44,4 @@ rm -rf temp/diagnose_amt
 python amt_prompted.py --merged-folder "$MERGED" --ids "${TUNE:-ashover19}" \
     --out-dir temp/diagnose_amt --model "${AMT_MODEL:-stanford-crfm/music-medium-800k}" \
     --prompt-frames "$PROMPT_LENGTH" --gen-frames "$GEN_LENGTH" \
-    --n-samples 1 --top-p 0.98 --debug
+    --n-samples 1 --top-p 0.98 --debug --attn "${ATTN:-eager}"

@@ -155,6 +155,8 @@ def main():
     p.add_argument('--notes-tsv', default='amt_notes.tsv',
                    help='per-sample note counts, under --out-dir; give each '
                         'parallel shard its own name')
+    p.add_argument('--attn', default='eager', choices=('eager', 'sdpa'),
+                   help='GPT-2 attention path; see the loading code')
     p.add_argument('--debug', action='store_true',
                    help="pass debug=True to their generate(): prints the "
                         "prompt tokens and every generated event ('C time "
@@ -230,9 +232,19 @@ def main():
         return
 
     print(f'[amt] loading {a.model}')
+    # attn_implementation='eager': recent transformers default GPT-2 to
+    # SDPA, which drops the config's scale_attn_by_inverse_layer_idx /
+    # reorder_and_upcast_attn (only the eager path applies them). A
+    # checkpoint trained with them then runs with the wrong attention
+    # scale: it loads cleanly and quietly degrades.
     model, info = AutoModelForCausalLM.from_pretrained(
-        a.model, output_loading_info=True)
+        a.model, output_loading_info=True, attn_implementation=a.attn)
     model = model.cuda().eval()
+    cfg = model.config
+    print(f'[amt] attention {cfg._attn_implementation}; '
+          f'scale_attn_by_inverse_layer_idx='
+          f'{getattr(cfg, "scale_attn_by_inverse_layer_idx", None)} '
+          f'reorder_and_upcast_attn={getattr(cfg, "reorder_and_upcast_attn", None)}')
     # A checkpoint that loads with missing weights leaves them randomly
     # initialised, and transformers only warns. A random model draws
     # its next event time uniformly over the 100 s vocab, so generate()
