@@ -533,12 +533,15 @@ class M2CIntraCrossAttn(RoFormerSymbolicTransformer):
 
 if __name__ == '__main__':
     from torch.utils.data import DataLoader
+    # Same order as cp_transformer_m2c_duet_block_diffusion.py: the model
+    # subclasses pytorch_lightning.LightningModule, and the bare
+    # `lightning` module has no `callbacks`, so pytorch_lightning first.
     try:
-        import lightning as L
-        from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
-    except ImportError:
         import pytorch_lightning as L
         from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
+    except ImportError:
+        import lightning.pytorch as L
+        from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 
     parser = argparse.ArgumentParser(
         description='Train M2CIntraCrossAttn (per-modality Q/K/V/O + '
@@ -728,7 +731,13 @@ if __name__ == '__main__':
     if n_gpus > 1:
         import pytorch_lightning.strategies as strategies
         import datetime
-        strategy = strategies.DDPStrategy(timeout=datetime.timedelta(hours=2))
+        # Not every parameter reaches the loss on every step: top-2 MoE
+        # routing can leave an expert idle, and sf_dir_emb is unused when
+        # same_frame=0. The Duet trainer sets the same flag.
+        strategy = strategies.DDPStrategy(
+            timeout=datetime.timedelta(hours=2),
+            find_unused_parameters=True,
+        )
     else:
         strategy = 'auto'
 

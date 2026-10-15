@@ -124,6 +124,99 @@ The exact schedule of each released checkpoint is stored in its
 `hyper_parameters`. With a different GPU count the learning rate is scaled
 as in the table's runs (`MAX_LR` overrides it).
 
+## Variant: drafts from a stale snapshot
+
+`train.sh duet_stale` trains Duet with one change in how the draft tokens
+are filled during training. In the paper's Duet, half of the slots are
+filled with the live model's query-head argmax. In `duet_stale`, both the
+melody and the chord slot of every item get a draft. The draft is sampled
+from the AR head the way the decode samples (`local_sampling`,
+temperature 1). It comes from a frozen copy of the model that is
+refreshed from the live weights every `STALE_EVERY` steps (default
+1000). There are no drafts before the first refresh. The masking
+schedule (`k`) is unchanged, so a masked slot stays masked. The copy
+costs one more model's weights in GPU memory. Scoring treats it like
+Duet (`generate.sh duet_stale`, output id `A3stale`), and it starts from
+Duet's init. Its decode has no leader (`A3_SCHEDULE=joint`): one forward
+drafts both streams from their AR heads, both drafts are written into
+the draft tokens, and one more forward reads both refined frames out.
+
+## Training everything on one machine
+
+`scripts/train_all.sh` trains all six systems on one multi-GPU machine
+without SLURM. Each run gets the GPU count of its paper recipe, so its
+learning rate and global batch match the paper. Runs are packed onto the
+free GPUs with the longest first. On 8 GPUs, dense, duet, duet_stale and
+no_draft start together on two GPUs each. The single-stream runs take the
+first GPUs that free up, and dense (100k steps) finishes last.
+
+```bash
+DATASET=nottingham NOTTINGHAM_RAW=/path/to/nottingham-dataset/MIDI \
+    bash scripts/train_all.sh 2>&1 | tee logs/train_all_nottingham.log
+```
+
+It prepares the data first if the tensors are missing, writes one log per
+run to `logs/train_<dataset>_<system>.log`, and ends with each run's exit
+code. Re-running it resumes. `GPU_IDS`, `SYSTEMS` and `GPUS_<system>`
+(for example `GPUS_dense=4`) change the packing.
+
+## The same task on Nottingham
+
+`DATASET=nottingham` runs every in-house system on the Nottingham folk
+tunes (<https://github.com/jukedeck/nottingham-dataset>) instead of
+POP909. Every stage script reads it, and everything it writes is kept
+apart from the POP909 files: `data/nottingham_*`, `input/nottingham_heldout/`,
+run directories named with the task `melchord_nottingham`,
+`temp/E1_nottingham/`, and `results/E1_nottingham_*`.
+
+```bash
+export DATASET=nottingham NOTTINGHAM_RAW=/path/to/nottingham-dataset/MIDI
+bash scripts/prepare_data.sh train     # data/nottingham_{melody,chord}_cp4_v2.pt, data/nottingham_melchord_tagged_cp16_v2.pt
+bash scripts/prepare_data.sh eval      # input/nottingham_heldout/{melody,chord}/
+
+for s in duet dense no_draft ss_finetuned ss_scratch; do bash scripts/train.sh $s; done
+for s in duet dense no_draft ss_finetuned ss_scratch; do bash scripts/generate.sh $s; done
+bash scripts/evaluate.sh
+```
+
+The recipes are the POP909 ones (same steps, batch sizes and learning
+rates). What differs:
+
+- **Corpus.** Melody is each MIDI's first track and chords its second,
+  both on program 0 as for POP909's duet streams; the single-stream copy
+  re-tags the chords to program 48. The 13 tunes without a chord track
+  are dropped, leaving 1,021; the 153 shorter than 384 frames sit
+  outside training and validation (`FramedDataset`), leaving 868.
+- **Held-out prompts.** Index 0 mod 10 of the training manifest, as for
+  POP909. Only tunes in 4/4 or 2/2 are kept, because the scoring and the
+  80/416-frame protocol assume 16 frames per bar, and only tunes whose
+  crop reaches `GEN_LENGTH`: 49 of the 87 held-out tunes (the other 38
+  are in 3/4, 6/8 and similar metres). Each is cropped so its first full downbeat
+  is at frame 32; the pickup is found from the chord track, which starts
+  on the downbeat. `prompt_crops.tsv` lists every held-out tune, kept or
+  dropped and why. Training uses every metre.
+- **Checkpoints.** No Nottingham checkpoints are released, so
+  `generate.sh` defaults to the run directory `train.sh` wrote for the
+  system; pass `CKPT=` for any other.
+- **External baselines.** Both run on the same prompts, with the same
+  prompt length, continuation length and sample count:
+  `DATASET=nottingham bash scripts/external/amt.sh generate` and
+  `DATASET=nottingham bash scripts/external/wholesong.sh generate`.
+  AMT needs nothing new: the prompts are at 120 BPM, its time base.
+  Whole-Song Gen reads songs in its POP909 layout, which
+  `build_nottingham_wholesong.py` writes from the staged crops: melody,
+  chord symbols named from our chord track (every held-out chord matches
+  a template), and a phrase label. Nottingham has no phrase annotation,
+  so the label is a heuristic (an optional pickup bar as intro, then
+  8-bar phrases lettered by melodic repetition), and it reaches the
+  model only through the prompt bars. As for POP909's padded crops, the
+  baseline's prompt drops our silent lead-in bars (one for pickup tunes,
+  two otherwise) and its output is shifted back by them. Its chords are
+  re-voiced into Nottingham's close-position voicing (bass at 36+pc,
+  tones stacked on it), which `wholesong_chord_map.py` now fits
+  alongside POP909's fixed-octave rendering.
+  `evaluate.sh` scores whichever systems are complete.
+
 ## Running under SLURM
 
 `slurm/run.sbatch` runs any stage script; resources go on the command line:
@@ -131,6 +224,36 @@ as in the table's runs (`MAX_LR` overrides it).
 ```bash
 J1=$(sbatch --parsable --gres=gpu:1 --time=12:00:00 slurm/run.sbatch generate.sh duet)
 sbatch --dependency=afterok:$J1 slurm/run.sbatch evaluate.sh
+```
+
+Environment knobs such as `DATASET` travel with `--export=ALL,...`.
+
+### Running the Nottingham pipeline on SLURM
+
+Two whole-node jobs cover training and the external baselines (they
+carry `--account`/`--qos` for our cluster; override on the command
+line elsewhere):
+
+```bash
+sbatch slurm/train_all_nottingham.sbatch        # every in-house system, scripts/train_all.sh on 8 GPUs
+sbatch slurm/infer_external_nottingham.sbatch   # AMT + Whole-Song Gen, 8 slices each
+sbatch slurm/infer_nottingham.sbatch            # the six in-house systems, 8 slices each
+```
+
+Or stage by stage:
+
+```bash
+E=ALL,DATASET=nottingham,NOTTINGHAM_RAW=/path/to/nottingham-dataset/MIDI
+P=$(sbatch --parsable --export=$E --cpus-per-task=16 --time=02:00:00 slurm/run.sbatch prepare_data.sh train)
+V=$(sbatch --parsable --export=$E --dependency=afterok:$P slurm/run.sbatch prepare_data.sh eval)
+V=$(sbatch --parsable --export=$E --dependency=afterok:$V slurm/run.sbatch stage_prompts.sh)  # once, before the parallel generators
+for s in duet dense no_draft ss_finetuned ss_scratch; do
+    g=1; [[ $s == duet || $s == dense || $s == no_draft ]] && g=2
+    T=$(sbatch --parsable --export=$E --dependency=afterok:$P --gres=gpu:$g --time=48:00:00 slurm/run.sbatch train.sh $s)
+    G=$(sbatch --parsable --export=$E --dependency=afterok:$T:$V --gres=gpu:1 --time=12:00:00 slurm/run.sbatch generate.sh $s)
+    GEN="$GEN:$G"
+done
+sbatch --export=$E --dependency=afterok$GEN slurm/run.sbatch evaluate.sh
 ```
 
 ## Things that fail silently if changed

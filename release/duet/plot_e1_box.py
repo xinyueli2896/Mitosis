@@ -91,6 +91,9 @@ GROUPS = [
         # a second line starting with "w/o", a minus or a bracket is a
         # QUALIFIER: the wide layout draws it a point smaller, in grey
         ('A3ctcaT',   'Duet',                     'Duet'),
+        # drafts from a stale snapshot (train.sh duet_stale); drawn only
+        # when scored
+        ('A3stale',   'Duet\n(stale drafts)',     'Duet\nstale'),
         # the dense arm: one FFN of width 6144 in place of the routed
         # pool. The expert-adapter variants (A3L16E16, A3L16E16_nocross)
         # are scored in the CSVs but left off every figure and table.
@@ -148,6 +151,7 @@ PALETTE = {
 SYSTEM_COLOR = {
     # ours: darkest to lightest in the order of the sheet
     'A3ctcaT':   PALETTE['gold'],
+    'A3stale':   '#f5b72a',        # between Duet and dense
     'D1':        '#f7c452',        # lighter gold
     'A1':        '#fbdc95',        # lighter still
     'S-scratch': PALETTE['slate'],

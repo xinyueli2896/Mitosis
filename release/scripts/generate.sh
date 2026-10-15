@@ -3,6 +3,8 @@
 #
 #   bash scripts/generate.sh duet            [CKPT=<run dir or .ckpt>]
 #   bash scripts/generate.sh dense | no_draft | ss_finetuned | ss_scratch
+#   DATASET=nottingham bash scripts/generate.sh duet   # Nottingham prompts,
+#                                     # your Nottingham run, temp/E1_nottingham/
 #
 # Every system continues the same staged prompts (the held-out songs,
 # first PROMPT_LENGTH frames) to GEN_LENGTH frames, N_SAMPLES times, into
@@ -14,19 +16,39 @@
 # Keep N_SAMPLES >= 2: with a single sample the duet generators write
 # <song>/co.mid instead of the <song>/co/sample_<i>.mid layout evaluate.sh reads.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-SYSTEM="${1:?usage: generate.sh duet|dense|no_draft|ss_finetuned|ss_scratch}"
+SYSTEM="${1:?usage: generate.sh duet|duet_stale|dense|no_draft|ss_finetuned|ss_scratch}"
 ID="$(system_id "$SYSTEM")"
-bash "$ROOT/scripts/stage_prompts.sh"
+# SHARD=K/N: this call takes every N-th song (see slurm/infer_nottingham.sbatch).
+# Run stage_prompts.sh once first; parallel calls would race to stage.
+if [[ -n "${SHARD:-}" ]]; then
+    need "$PROMPTS/.ready" "Run 'bash scripts/stage_prompts.sh' once before sharded calls."
+else
+    bash "$ROOT/scripts/stage_prompts.sh"
+fi
 
 # Default checkpoints: the released files, or your own run directories.
 case "$SYSTEM" in
-    duet)         CKPT="${CKPT:-ckpt/duet}" ;;
-    dense)        CKPT="${CKPT:-ckpt/dense}" ;;
-    no_draft)     CKPT="${CKPT:-ckpt/no_draft}" ;;
-    ss_finetuned) CKPT="${CKPT:-ckpt/ss_finetuned}" ;;
-    ss_scratch)   CKPT="${CKPT:-ckpt/ss_scratch}" ;;
+    duet|duet_stale|dense|no_draft|ss_finetuned|ss_scratch) ;;
     *) echo "generate.sh covers the in-house systems; see scripts/external/ for $SYSTEM" >&2; exit 1 ;;
 esac
+if [[ -z "${CKPT:-}" && "$DATASET" == pop909 && "$SYSTEM" != duet_stale ]]; then
+    CKPT="ckpt/$SYSTEM"
+elif [[ -z "${CKPT:-}" ]]; then
+    # No released Nottingham checkpoints: default to the run directory
+    # train.sh wrote for this system (without RUN_TAG; pass CKPT=
+    # for a tagged run or when several batch sizes were trained).
+    case "$SYSTEM" in
+        duet|duet_stale|dense) _pat="ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_${SYSTEM}_${TASK}_batch_*_schedule" ;;
+        no_draft)     _pat="ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_${TASK}_batch_*_schedule" ;;
+        ss_finetuned) _pat="ckpt/cp_transformer_v0.42_size*_pop909ft_${SS_RUN_TAG}_batch_*_schedule" ;;
+        ss_scratch)   _pat="ckpt/cp_transformer_v0.42_size*_pop909scratch_${SS_RUN_TAG}_batch_*_schedule" ;;
+    esac
+    mapfile -t _runs < <(compgen -G "$_pat" || true)
+    [[ ${#_runs[@]} -eq 1 ]] || {
+        echo "ERROR: expected one run directory matching $_pat, found ${#_runs[@]}." \
+             "Train it (DATASET=$DATASET scripts/train.sh $SYSTEM) or pass CKPT=<run dir>." >&2; exit 1; }
+    CKPT="${_runs[0]}"
+fi
 need "$CKPT" "Download the checkpoints (scripts/download.sh) or pass CKPT=<your run dir>."
 # A directory holding a single checkpoint (a released model) is resolved
 # to that file; a training run directory is handed over with a trailing
@@ -37,17 +59,41 @@ if [[ -d "$CKPT" ]]; then
 fi
 OUT="$OUT_ROOT/$ID"
 
+# The generators read whole folders, so a shard is a folder of links to
+# its songs, one per system and shard (parallel calls never share one).
+# Outputs still go to $OUT; finished songs are skipped there as usual.
+PDIR="$PROMPTS"
+if [[ -n "${SHARD:-}" ]]; then
+    PDIR="$PROMPTS/shards/${SYSTEM}_${SHARD/\//of}"
+    mkdir -p "$PDIR"
+    for sub in mel chord merged_tagged; do
+        mkdir -p "$PDIR/$sub"
+        find "$PDIR/$sub" -maxdepth 1 -name '*.mid' -type l -delete
+    done
+    SONGS=$(shard $(for f in "$PROMPTS"/mel/*.mid; do basename "$f" .mid; done))
+    for s in $SONGS; do
+        for sub in mel chord merged_tagged; do
+            ln -sf "$(readlink -f "$PROMPTS/$sub/$s.mid")" "$PDIR/$sub/$s.mid"
+        done
+    done
+    echo "[generate] $SYSTEM shard $SHARD: $(wc -w <<< "$SONGS") songs"
+fi
+
 case "$SYSTEM" in
-duet|dense)
+duet|duet_stale|dense)
     # Draft-and-denoise, leader alternating by frame (ctc_alt): the
     # leader's draft is sampled from its autoregressive head and written
     # into its draft token, one denoise pass reads out both streams.
+    # duet_stale has no leader (joint): one forward drafts both streams
+    # from their autoregressive heads, both drafts go into the draft
+    # tokens, one refine pass reads out both -- the regime it trains on.
     # Temperature 1, no nucleus cut.
+    SCHED=ctc_alt; [[ "$SYSTEM" == duet_stale ]] && SCHED=joint
     SHAPE=(--moe-num-experts 4 --moe-topk 2)
     [[ "$SYSTEM" == dense ]] && SHAPE=(--moe-num-experts 1 --moe-topk 1 --moe-intermediate-size 6144)
-    MELCHORD_CP=4 A3_SCHEDULE=ctc_alt A3_REFINE_STEPS=4 A3_FINAL_TEMP=1.0 A3_TOP_P=1.0 \
+    MELCHORD_CP=4 A3_SCHEDULE=$SCHED A3_REFINE_STEPS=4 A3_FINAL_TEMP=1.0 A3_TOP_P=1.0 \
     python cp_transformer_m2c_duet_block_diffusion_combined.py \
-        --ckpt "$CKPT" --mel-folder "$PROMPTS/mel" --chord-folder "$PROMPTS/chord" \
+        --ckpt "$CKPT" --mel-folder "$PDIR/mel" --chord-folder "$PDIR/chord" \
         --output-dir "$OUT" --modes co \
         --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
         --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 4 --skip-existing \
@@ -55,7 +101,7 @@ duet|dense)
     ;;
 no_draft)
     MELCHORD_CP=4 python cp_transformer_m2c_intra_cross_attn_combined.py \
-        --ckpt "$CKPT" --mel-folder "$PROMPTS/mel" --chord-folder "$PROMPTS/chord" \
+        --ckpt "$CKPT" --mel-folder "$PDIR/mel" --chord-folder "$PDIR/chord" \
         --output-dir "$OUT" --modes co \
         --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
         --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 4 --skip-existing \
@@ -65,7 +111,7 @@ ss_finetuned|ss_scratch)
     # single stream: continues the merged file (chords on program 48) and
     # writes temp/<save-name>/<song>.mid_temp1.0_continuation_<i>.mid
     python cp_transformer_inference.py --ckpt "$CKPT" \
-        --midi-folder "$PROMPTS/merged_tagged" \
+        --midi-folder "$PDIR/merged_tagged" \
         --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
         --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 16 --skip-existing \
         --save-name "${OUT#temp/}"

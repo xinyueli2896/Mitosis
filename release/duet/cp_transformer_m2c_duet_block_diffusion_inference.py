@@ -550,7 +550,12 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
       A3_SEED_FROM_AR   '0' disables the AR seed.
       A3_FINAL_TEMP     float, same as final_temperature.
       A3_SCHEDULE       'refine' (default) or ctc_m / ctc_c / ctc_alt /
-                        ctc2_*: commit-then-condition (see the code).
+                        ctc2_*: commit-then-condition (see the code), or
+                        joint: leaderless draft-and-denoise -- one
+                        forward drafts BOTH streams from the AR heads,
+                        both drafts go into their slots as committed
+                        content (k=0), one more forward reads both
+                        refined frames out of the slots.
       A3_CTC_DENOISE_LEADER  '1' (default): in the ctc denoise forward
                         BOTH slots are read out -- the follower from its
                         empty slot given the leader's draft, and the
@@ -644,7 +649,14 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     ctc_mix_mode = _os.environ.get('A3_CTC_MIX_MODE', 'linear')
     assert 0.0 <= ctc_follower_mix <= 1.0, ctc_follower_mix
     assert ctc_mix_mode in ('linear', 'geo'), ctc_mix_mode
-    if schedule.startswith('ctc'):
+    # joint (leaderless draft-and-denoise, the duet_stale decode): the
+    # regime the stale-draft model trains on, where BOTH query slots hold
+    # a stale AR draft and each slot emits its stream's clean frame.
+    joint = schedule == 'joint'
+    if joint:
+        print(f'[gen] A3_SCHEDULE=joint: leaderless draft-and-denoise '
+              f'(both drafts committed, one refine forward)')
+    elif schedule.startswith('ctc'):
         base, _, lead = schedule.partition('_')
         ctc_passes = 2 if base == 'ctc2' else 1
         ctc_leader = lead or 'm'
@@ -754,8 +766,8 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
             last_m_tokens = None
             last_c_tokens = None
 
-            if ctc_passes:
-                # --- commit-then-condition -----------------------------
+            if ctc_passes or joint:
+                # --- commit-then-condition / joint ---------------------
                 # seed: both slots masked (r=K), drafts from the AR heads
                 slot_m = _build_slot(model, 'sample' if m_sampling else 'committed',
                                      None, m_action_h, K, K, 0, B)
@@ -777,11 +789,28 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                                                   max_subseq_len=subseq_len,
                                                   temperature=temperature,
                                                   token_type_id=1)
-                lead = {'m': 0, 'c': 1, 'alt': t % 2}[ctc_leader]
-                order = [(lead, 1 - lead)]
-                if ctc_passes == 2:
-                    order.append((1 - lead, lead))
                 sampling = {0: m_sampling, 1: c_sampling}
+                if joint:
+                    # both drafts committed (k=0), no leader; a given
+                    # stream keeps its action frame, as in the seed
+                    slots = [_build_slot(model, 'committed', None,
+                                         model._encode_frame(cur[i], i).to(dtype=dtype),
+                                         0, K, i, B) for i in (0, 1)]
+                    h_in = torch.cat([h_clean_padded, slots[0], slots[1]], dim=1)
+                    h_global, _ = model._run_global_stack(h_in, T_query=T_query)
+                    for i in (0, 1):
+                        if sampling[i]:
+                            # slot positions: melody at -2, chord at -1
+                            cur[i] = model.local_sampling(
+                                h_global[:, -2 if i == 0 else -1],
+                                max_subseq_len=subseq_len,
+                                temperature=final_temperature, token_type_id=i)
+                    order = []
+                else:
+                    lead = {'m': 0, 'c': 1, 'alt': t % 2}[ctc_leader]
+                    order = [(lead, 1 - lead)]
+                    if ctc_passes == 2:
+                        order.append((1 - lead, lead))
                 for ld, fo in order:
                     if not sampling[fo]:
                         continue        # follower is given: nothing to predict

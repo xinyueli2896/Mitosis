@@ -152,6 +152,15 @@ def main():
     p.add_argument('--max-songs', type=int, default=None,
                    help='stop after N songs, for a smoke run')
     p.add_argument('--ids', nargs='*', default=None)
+    p.add_argument('--notes-tsv', default='amt_notes.tsv',
+                   help='per-sample note counts, under --out-dir; give each '
+                        'parallel shard its own name')
+    p.add_argument('--attn', default='eager', choices=('eager', 'sdpa'),
+                   help='GPT-2 attention path; see the loading code')
+    p.add_argument('--debug', action='store_true',
+                   help="pass debug=True to their generate(): prints the "
+                        "prompt tokens and every generated event ('C time "
+                        "dur instr pitch'; instr 129 is a REST)")
     p.add_argument('--selftest', action='store_true',
                    help='tokenize one song, round-trip it back to midi and '
                         'report the time base and instrument preservation, '
@@ -166,6 +175,7 @@ def main():
     from anticipation import ops
     from anticipation.convert import midi_to_events, events_to_midi
     import anticipation.sample as amt_sample
+    from anticipation.vocab import TIME_OFFSET
 
     prompt_s = a.prompt_frames / FRAMES_PER_SECOND
     total_s = a.gen_frames / FRAMES_PER_SECOND
@@ -222,7 +232,49 @@ def main():
         return
 
     print(f'[amt] loading {a.model}')
-    model = AutoModelForCausalLM.from_pretrained(a.model).cuda().eval()
+    # attn_implementation='eager': recent transformers default GPT-2 to
+    # SDPA, which drops the config's scale_attn_by_inverse_layer_idx /
+    # reorder_and_upcast_attn (only the eager path applies them). A
+    # checkpoint trained with them then runs with the wrong attention
+    # scale: it loads cleanly and quietly degrades.
+    model, info = AutoModelForCausalLM.from_pretrained(
+        a.model, output_loading_info=True, attn_implementation=a.attn)
+    model = model.cuda().eval()
+    cfg = model.config
+    print(f'[amt] attention {cfg._attn_implementation}; '
+          f'scale_attn_by_inverse_layer_idx='
+          f'{getattr(cfg, "scale_attn_by_inverse_layer_idx", None)} '
+          f'reorder_and_upcast_attn={getattr(cfg, "reorder_and_upcast_attn", None)}')
+    # A checkpoint that loads with missing weights leaves them randomly
+    # initialised, and transformers only warns. A random model draws
+    # its next event time uniformly over the 100 s vocab, so generate()
+    # stops at the first time past the end: a near-empty continuation.
+    missing = [k for k in info.get('missing_keys', [])
+               if not k.endswith(('attn.bias', 'attn.masked_bias'))]
+    print(f'[amt] loading info: {len(missing)} missing, '
+          f'{len(info.get("unexpected_keys", []))} unexpected, '
+          f'{len(info.get("mismatched_keys", []))} mismatched')
+    if missing or info.get('mismatched_keys'):
+        raise SystemExit(f'[amt] weights did not load: missing {missing[:8]} '
+                         f'mismatched {info.get("mismatched_keys", [])[:8]}')
+
+    def prompt_nll(path):
+        """Mean next-token loss on a prompt, teacher-forced. A trained
+        model sits far below ln(vocab) ~ 10.9 nats; near it means the
+        weights are effectively random."""
+        from anticipation.vocab import AUTOREGRESS
+        ev = ops.pad(ops.clip(midi_to_events(path), 0, prompt_s,
+                              clip_duration=False, seconds=True))
+        x = torch.tensor([AUTOREGRESS] + ev[:1023]).unsqueeze(0).cuda()
+        with torch.no_grad():
+            return float(model(x, labels=x).loss)
+    nll = prompt_nll(files[0])
+    print(f'[amt] sanity: teacher-forced loss on {os.path.basename(files[0])} '
+          f'prompt = {nll:.2f} nats/token (random weights ~10.9)')
+    if nll > 8.0:
+        raise SystemExit('[amt] the model scores its prompt like an untrained '
+                         'model; check the transformers/torch versions in '
+                         'the AMT venv')
 
     if a.restrict:
         amt_sample.instr_logits = restrict_instruments(
@@ -255,7 +307,11 @@ def main():
                 with torch.no_grad():
                     gen = amt_sample.generate(
                         model, start_time=prompt_s, end_time=total_s,
-                        inputs=prompt, top_p=a.top_p)
+                        inputs=prompt, top_p=a.top_p, debug=a.debug)
+                new = [t for t in gen[0::3] if t - TIME_OFFSET > int(100 * prompt_s)]
+                print(f'  sample {i}: {len(new)} events after the prompt'
+                      + (f', last at {(max(new) - TIME_OFFSET) / 100:.2f}s'
+                         if new else ''))
                 mid = events_to_midi(ops.combine(gen, []))
                 split, n_mel, n_chd, n_stray = split_by_program(
                     mid, a.mel_program, a.chord_program)
@@ -275,7 +331,7 @@ def main():
 
     if rows:
         os.makedirs(a.out_dir, exist_ok=True)
-        with open(os.path.join(a.out_dir, 'amt_notes.tsv'), 'w',
+        with open(os.path.join(a.out_dir, a.notes_tsv), 'w',
                   newline='') as fh:
             w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()),
                                delimiter='\t')

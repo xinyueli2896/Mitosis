@@ -147,6 +147,9 @@ def cap_voices(notes, max_voices):
     return sorted(out)
 
 
+STACKED = 0     # upper_base value: upper tones stacked on the bass
+
+
 def revoice(notes, bass_base, upper_base, fold, merge):
     """f: re-render each chord segment of `notes` in the given convention.
 
@@ -171,8 +174,15 @@ def revoice(notes, bass_base, upper_base, fold, merge):
     out = []
     for f0, f1, pcs, bass_pc in out_segs:
         upper = set(pcs) if fold else set(pcs) - {bass_pc}
-        out.append((f0, f1, bass_base + bass_pc))
-        out.extend((f0, f1, upper_base + pc) for pc in sorted(upper))
+        bass = bass_base + bass_pc
+        out.append((f0, f1, bass))
+        if upper_base == STACKED:
+            # close position on the bass, each tone at the first pitch
+            # above it (abc2midi's voicing, so Nottingham's)
+            out.extend((f0, f1, bass + ((pc - bass_pc) % 12 or 12))
+                       for pc in upper)
+        else:
+            out.extend((f0, f1, upper_base + pc) for pc in sorted(upper))
     return sorted(out)
 
 
@@ -223,8 +233,8 @@ def find_outputs(root, system, song):
                                          'sample_*.mid')))
 
 
-def write_applied(pm, inst, new_notes, path):
-    """Replace `inst`'s notes with new_notes (frames) and write pm to path."""
+def set_frames(pm, inst, new_notes):
+    """Replace `inst`'s notes with new_notes (frames)."""
     tpf = pm.resolution / BEAT_DIV
     vel = int(np.median([n.velocity for n in inst.notes])) if inst.notes else 80
     inst.notes = [
@@ -232,8 +242,34 @@ def write_applied(pm, inst, new_notes, path):
                          start=pm.tick_to_time(int(round(f0 * tpf))),
                          end=pm.tick_to_time(int(round(f1 * tpf))))
         for f0, f1, p in new_notes]
+
+
+def write_applied(pm, inst, new_notes, path):
+    """Replace `inst`'s notes with new_notes (frames) and write pm to path."""
+    set_frames(pm, inst, new_notes)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     pm.write(path)
+
+
+def splice_prompt(theirs, ours, P):
+    """Frames < P from OUR prompt, frames >= P from the output.
+
+    The baseline's prompt bars are its re-rendering of the prompt it was
+    given (one melody voice, chords as per-beat symbols), not our
+    prompt. Every other system's file carries our prompt verbatim; this
+    puts the same prompt in front of the baseline's continuation. A
+    continuation note sounding across P keeps only its part from P on.
+    """
+    head = [(f0, min(f1, P), p) for f0, f1, p in ours if f0 < P]
+    tail = [(max(f0, P), f1, p) for f0, f1, p in theirs if f1 > P]
+    return sorted(head + tail)
+
+
+def melody_instrument(pm):
+    for inst in pm.instruments:
+        if (inst.name or '').strip().lower() == 'melody':
+            return inst
+    return None
 
 
 def main():
@@ -259,6 +295,13 @@ def main():
     ap.add_argument('--force-map', default='',
                     help='use this map instead of the fitted one: '
                          'bass_base,upper_base,fold,merge e.g. 36,60,1,0')
+    ap.add_argument('--splice-prompt-mel-dir', default='',
+                    help='with --apply: replace the first --prompt-frames '
+                         'frames of BOTH tracks by our prompt (melody from '
+                         'this folder, chord from --chord-dir), so the file '
+                         'opens with the exact prompt every other system '
+                         'was given. The scorer reads frames >= the prompt '
+                         'only, so this changes no score.')
     args = ap.parse_args()
     P = args.prompt_frames
 
@@ -344,7 +387,7 @@ def main():
     # ---- 2. FIT f -------------------------------------------------------
     print('\n=== 2. FIT  ours = f(theirs) ===')
     bass_cands = sorted({k for k, _ in ob.most_common(2)} | {36, 48})
-    upper_cands = sorted({k for k, _ in ou.most_common(2)} | {48, 60})
+    upper_cands = sorted({k for k, _ in ou.most_common(2)} | {48, 60, STACKED})
     results = []
     for bb in bass_cands:
         for ub in upper_cands:
@@ -367,7 +410,8 @@ def main():
               f'merge {int(merge)}')
     else:
         _a, _p, _o, bb, ub, fold, merge = results[0]
-        print(f'  best map: bass -> {bb}+pc, upper -> {ub}+pc, '
+        print(f'  best map: bass -> {bb}+pc, upper -> '
+              f'{"stacked on the bass" if ub == STACKED else f"{ub}+pc"}, '
               f'{"bass folded into upper" if fold else "bass not duplicated"}'
               f', {"contiguous repeats merged" if merge else "segments kept"}')
     best_abs = results[0][0]
@@ -413,13 +457,25 @@ def main():
                 pm, inst, theirs_all = load_theirs(src)
                 new = cap_voices(revoice(theirs_all, bb, ub, fold, merge),
                                  args.max_voices)
+                if args.splice_prompt_mel_dir:
+                    new = splice_prompt(new, load_ours(os.path.join(
+                        args.chord_dir, f'{s}.mid')), P)
+                    mel = melody_instrument(pm)
+                    if mel is None:
+                        raise ValueError(f'{src}: no MELODY track')
+                    set_frames(pm, mel, splice_prompt(
+                        notes_to_frames(pm, mel.notes),
+                        load_ours(os.path.join(args.splice_prompt_mel_dir,
+                                               f'{s}.mid')), P))
                 dst = os.path.join(args.out_root, args.apply, s, 'co',
                                    os.path.basename(src))
                 write_applied(pm, inst, new, dst)
                 n_files += 1
         print(f'  wrote {n_files} files under {args.out_root}/{args.apply}/')
         print(f'  map: bass -> {bb}+pc, upper -> {ub}+pc, fold={int(fold)}, '
-              f'merge={int(merge)}; melody and tempo untouched'
+              f'merge={int(merge)}; '
+              + ('prompt frames replaced by ours' if args.splice_prompt_mel_dir
+                 else 'melody and tempo untouched')
               + (f'; chords capped to the lowest {args.max_voices} voices'
                  if args.max_voices else ''))
 

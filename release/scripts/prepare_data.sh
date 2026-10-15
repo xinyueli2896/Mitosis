@@ -16,19 +16,81 @@
 #
 # Run `train` first: `eval` reads the training manifest to know which
 # songs were never trained on.
+#
+# Nottingham (DATASET=nottingham) builds the same three tensors and a
+# prompt set from https://github.com/jukedeck/nottingham-dataset:
+#
+#   DATASET=nottingham NOTTINGHAM_RAW=/path/to/nottingham-dataset/MIDI \
+#       bash scripts/prepare_data.sh train|eval
+#
+# train  data/nottingham_{melody,chord}_cp4_v2.pt        the two Duet streams
+#        (melody = the MIDI's first track, chords = its second; the 13
+#        melody-only tunes are left out of every corpus)
+#        data/nottingham_melchord_tagged_cp16_v2.pt      the single-stream
+#        baselines (same tunes, same order, chords on program 48)
+# eval   input/nottingham_heldout/{melody,chord}/         the held-out prompts
+#        (index 0 mod 10 of the training manifest, 4/4 and 2/2 tunes long
+#        enough to cover GEN_LENGTH, cropped so the first full downbeat is
+#        at frame 32 as for POP909; see build_nottingham_prompts.py)
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-: "${POP909_RAW:?set POP909_RAW to the POP909 folder of the POP909-Dataset repository}"
 STAGE="${1:?usage: prepare_data.sh train|eval}"
-# intermediate midi folders, under duet/. Fixed: the tokenizer reads
-# POP909-Dataset/POP909-{melody,chord} (settings.py).
-WORK=POP909-Dataset
-mkdir -p "$WORK"
 
 # Duet streams: max 4 simultaneous notes per frame. The chord stream is a
 # bass note plus up to three upper tones; the melody is monophonic.
 CP_DUET=4
 # Single-stream models: the backbone's own budget.
 CP_MERGED=16
+
+if [[ "$DATASET" == nottingham ]]; then
+    : "${NOTTINGHAM_RAW:?set NOTTINGHAM_RAW to the MIDI folder of the nottingham-dataset repository}"
+    WORK=Nottingham
+    mkdir -p "$WORK"
+    case "$STAGE" in
+    train)
+        # 1. the two Duet streams, read straight from the two-track MIDIs
+        export NOTTINGHAM_MIDI_PATH="$NOTTINGHAM_RAW"
+        python preprocess_large_midi_dataset.py nottingham_melody "$CP_DUET"
+        python preprocess_large_midi_dataset.py nottingham_chord "$CP_DUET"
+        python check_paired_dataset.py "data/nottingham_melody_cp${CP_DUET}_v2" "data/nottingham_chord_cp${CP_DUET}_v2"
+
+        # 2. single-stream corpus: both tracks are on program 0 in the
+        #    source, so the chord track is re-tagged to 48 before the
+        #    merged tokenization keeps the streams apart
+        python tag_nottingham_melchord.py --src "$NOTTINGHAM_RAW" \
+            --dst "$WORK/nottingham-melchord-tagged" --chord-program 48
+        POP909_COMBINED_PATH="$WORK/nottingham-melchord-tagged" \
+        POP909_MELCHORD_DATASET="nottingham_melchord_tagged_cp${CP_MERGED}_v2" \
+            python preprocess_large_midi_dataset.py pop909_melchord "$CP_MERGED"
+
+        # 3. the held-out split is index mod 10, so every corpus must list
+        #    the same tunes in the same order
+        python - "data/nottingham_melody_cp${CP_DUET}_v2.txt" \
+            "data/nottingham_melchord_tagged_cp${CP_MERGED}_v2.txt" <<'PY'
+import sys
+a, b = ([l.split('\t', 1)[1].strip() for l in open(f)] for f in sys.argv[1:])
+if a != b:
+    sys.exit(f'ERROR: duet and single-stream corpora list different tunes '
+             f'({len(a)} vs {len(b)}); the held-out split would differ')
+print(f'[prepare] {len(a)} tunes, same order in the duet and single-stream corpora')
+PY
+        ;;
+    eval)
+        need "data/nottingham_melody_cp${CP_DUET}_v2.txt" "Run 'DATASET=nottingham prepare_data.sh train' first."
+        python build_nottingham_prompts.py --src "$NOTTINGHAM_RAW" --dst "$EVAL_SRC" \
+            --dataset "nottingham_melody_cp${CP_DUET}_v2" --split-ratio 10 \
+            --lead-bars 2 --min-frames "$GEN_LENGTH" --tempo 120
+        echo "prompts: $DUET/$EVAL_SRC/{melody,chord}"
+        ;;
+    *) echo "usage: prepare_data.sh train|eval" >&2; exit 1 ;;
+    esac
+    exit 0
+fi
+
+: "${POP909_RAW:?set POP909_RAW to the POP909 folder of the POP909-Dataset repository}"
+# intermediate midi folders, under duet/. Fixed: the tokenizer reads
+# POP909-Dataset/POP909-{melody,chord} (settings.py).
+WORK=POP909-Dataset
+mkdir -p "$WORK"
 
 case "$STAGE" in
 train)
