@@ -4,6 +4,7 @@
 #   bash scripts/train.sh duet            # Duet (the proposed model)
 #   bash scripts/train.sh duet_stale      # Duet, drafts from a stale snapshot
 #   bash scripts/train.sh duet_v2         # Duet trained for its own decode (see README)
+#   bash scripts/train.sh duet_v2c48      # duet_v2 with the chord stream on program 48
 #   bash scripts/train.sh duet_prev       # Duet, query slots also read frame t-1
 #   bash scripts/train.sh dense           # Duet w/o MoE: one dense FFN of width 6144
 #   bash scripts/train.sh no_draft        # Duet w/o draft tokens
@@ -21,7 +22,7 @@
 # Knobs (environment): MAX_LR, LR_TOTAL_STEPS, BATCH_SIZE (per GPU),
 # RUN_TAG (run-name suffix), WANDB=1 (log to Weights & Biases).
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-SYSTEM="${1:?usage: train.sh duet|duet_stale|duet_v2|duet_prev|dense|no_draft|ss_finetuned|ss_scratch}"
+SYSTEM="${1:?usage: train.sh duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense|no_draft|ss_finetuned|ss_scratch}"
 system_id "$SYSTEM" >/dev/null
 
 NGPUS="$(n_gpus)"
@@ -37,7 +38,7 @@ launch() {   # launch <script.py> args...: python on one GPU, torchrun on severa
 wandb_flag() { [[ "${WANDB:-0}" == "1" ]] && echo "$1" || echo "$2"; }
 
 case "$SYSTEM" in
-duet|duet_stale|duet_v2|duet_prev|dense)
+duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense)
     # Both Duet streams read cp4 tensors: MAX_POLYPHONY is the tokenizer's
     # budget and MELCHORD_CP selects data/${DUET_DATA}_*_cp${MELCHORD_CP}_v2.pt.
     # The checkpoint does not record it, so keep the two in step.
@@ -45,6 +46,13 @@ duet|duet_stale|duet_v2|duet_prev|dense)
     export MELCHORD_CP="$MAX_POLYPHONY"
     need "data/${DUET_DATA}_melody_cp${MELCHORD_CP}_v2.pt" "Run 'prepare_data.sh train' or download the data."
     need "$BACKBONE" "Download the pretrained backbone (scripts/download.sh)."
+    if [[ "$SYSTEM" == duet_v2c48 ]]; then
+        # same recipe as duet_v2, chord stream on program 48; the task
+        # name carries it into the run directory
+        [[ "$DATASET" == nottingham ]] || { echo "ERROR: duet_v2c48 is built for DATASET=nottingham" >&2; exit 1; }
+        need "data/nottingham_chord48_cp${MELCHORD_CP}_v2.pt" "Run 'DATASET=nottingham prepare_data.sh chord48'."
+        TASK="${TASK}_c48"
+    fi
     # Draft slots: the paper Duet fills a slot with the live model's
     # query-head argmax for half the items. duet_stale fills BOTH slots of
     # every item with a draft sampled from the AR head the way the decode
@@ -65,7 +73,7 @@ duet|duet_stale|duet_v2|duet_prev|dense)
             # frame t-1 of both streams, which the AR head it replaces
             # always could (without it the slot sees content up to t-2)
             DRAFT=(--self_cond_prob 0.5 --slot_sees_prev_frame) ;;
-        duet_v2)
+        duet_v2|duet_v2c48)
             # trained for the decode it is sampled with (ctc_alt,
             # leader kept as drafted): the slot reads frame t-1; 80% of
             # query pairs are the decode's state, leader's draft token
@@ -84,6 +92,7 @@ duet|duet_stale|duet_v2|duet_prev|dense)
         ABBR=dense; STEPS="${LR_TOTAL_STEPS:-100000}"; LIMIT_VAL=100
     fi
     BATCH_SIZE="${BATCH_SIZE:-4}"
+    [[ "$SYSTEM" == duet_v2c48 ]] && ABBR=duet_v2   # the task name tells the two apart
     INIT="ckpt/init/${ABBR%%_*}_init.ckpt"   # every duet_* variant starts from duet's init
     RUN_DIR="ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_${ABBR}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_$((BATCH_SIZE * NGPUS))_schedule"
     if [[ -f "$RUN_DIR/last.ckpt" ]]; then

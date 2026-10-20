@@ -28,7 +28,7 @@ fi
 
 # Default checkpoints: the released files, or your own run directories.
 case "$SYSTEM" in
-    duet|duet_stale|duet_v2|duet_prev|dense|no_draft|ss_finetuned|ss_scratch) ;;
+    duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense|no_draft|ss_finetuned|ss_scratch) ;;
     duet_keeplead|duet_mix|duet_k0|duet_bestar) ;;
     *) echo "generate.sh covers the in-house systems; see scripts/external/ for $SYSTEM" >&2; exit 1 ;;
 esac
@@ -36,6 +36,30 @@ esac
 # its best_ar/ weights, selected on the clean-row loss alone).
 CKPT_SYS="$SYSTEM"
 case "$SYSTEM" in duet_keeplead|duet_mix|duet_k0|duet_bestar) CKPT_SYS=duet ;; esac
+# duet_v2c48: duet_v2's run under the _c48 task, fed chord prompts on program 48
+CHORD_SUB=chord
+if [[ "$SYSTEM" == duet_v2c48 ]]; then
+    CKPT_SYS=duet_v2; TASK="${TASK}_c48"; CHORD_SUB=chord48
+    if [[ ! -d "$PROMPTS/chord48" ]]; then
+        # built aside and renamed in one step: sharded calls start together
+        _tmp=$(mktemp -d "$PROMPTS/chord48.XXXXXX")
+        cp -f "$PROMPTS"/chord/*.mid "$_tmp/"
+        python - "$_tmp" <<'PY'
+import glob, os, sys
+import mido
+for f in sorted(glob.glob(os.path.join(sys.argv[1], '*.mid'))):
+    m = mido.MidiFile(f)
+    for tr in m.tracks:
+        if not any(x.type == 'note_on' for x in tr):
+            continue
+        tr[:] = [x for x in tr if x.type != 'program_change']
+        ch = next(x.channel for x in tr if x.type == 'note_on')
+        tr.insert(0, mido.Message('program_change', program=48, channel=ch, time=0))
+    m.save(f)
+PY
+        mv -T "$_tmp" "$PROMPTS/chord48" 2>/dev/null || rm -rf "$_tmp"
+    fi
+fi
 if [[ -z "${CKPT:-}" && "$DATASET" == pop909 && "$CKPT_SYS" == duet && "$SYSTEM" == duet_bestar ]]; then
     echo "ERROR: the released duet checkpoint has no best_ar/; pass CKPT=<run dir>/best_ar" >&2; exit 1
 elif [[ -z "${CKPT:-}" && "$DATASET" == pop909 && "$CKPT_SYS" =~ ^(duet|dense|no_draft|ss_finetuned|ss_scratch)$ ]]; then
@@ -74,13 +98,13 @@ PDIR="$PROMPTS"
 if [[ -n "${SHARD:-}" ]]; then
     PDIR="$PROMPTS/shards/${SYSTEM}_${SHARD/\//of}"
     mkdir -p "$PDIR"
-    for sub in mel chord merged_tagged; do
+    for sub in mel $CHORD_SUB merged_tagged; do
         mkdir -p "$PDIR/$sub"
         find "$PDIR/$sub" -maxdepth 1 -name '*.mid' -type l -delete
     done
     SONGS=$(shard $(for f in "$PROMPTS"/mel/*.mid; do basename "$f" .mid; done))
     for s in $SONGS; do
-        for sub in mel chord merged_tagged; do
+        for sub in mel $CHORD_SUB merged_tagged; do
             ln -sf "$(readlink -f "$PROMPTS/$sub/$s.mid")" "$PDIR/$sub/$s.mid"
         done
     done
@@ -88,7 +112,7 @@ if [[ -n "${SHARD:-}" ]]; then
 fi
 
 case "$SYSTEM" in
-duet|duet_stale|duet_v2|duet_prev|dense|duet_keeplead|duet_mix|duet_k0|duet_bestar)
+duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense|duet_keeplead|duet_mix|duet_k0|duet_bestar)
     # Draft-and-denoise, leader alternating by frame (ctc_alt): the
     # leader's draft is sampled from its autoregressive head and written
     # into its draft token, one denoise pass reads out both streams.
@@ -112,7 +136,7 @@ duet|duet_stale|duet_v2|duet_prev|dense|duet_keeplead|duet_mix|duet_k0|duet_best
     SCHED=ctc_alt; [[ "$SYSTEM" == duet_stale ]] && SCHED=joint
     DENOISE_LEADER=1; FOLLOWER_MIX=0; REFINE_STEPS=4
     case "$SYSTEM" in
-        duet_keeplead|duet_v2) DENOISE_LEADER=0 ;;
+        duet_keeplead|duet_v2|duet_v2c48) DENOISE_LEADER=0 ;;
         duet_mix) DENOISE_LEADER=0; FOLLOWER_MIX=0.5 ;;
         duet_k0)  SCHED=refine; REFINE_STEPS=0 ;;
     esac
@@ -121,7 +145,7 @@ duet|duet_stale|duet_v2|duet_prev|dense|duet_keeplead|duet_mix|duet_k0|duet_best
     MELCHORD_CP=4 A3_SCHEDULE=$SCHED A3_REFINE_STEPS=$REFINE_STEPS A3_FINAL_TEMP=1.0 A3_TOP_P=1.0 \
     A3_CTC_DENOISE_LEADER=$DENOISE_LEADER A3_CTC_FOLLOWER_MIX=$FOLLOWER_MIX A3_CTC_MIX_MODE=geo \
     python cp_transformer_m2c_duet_block_diffusion_combined.py \
-        --ckpt "$CKPT" --mel-folder "$PDIR/mel" --chord-folder "$PDIR/chord" \
+        --ckpt "$CKPT" --mel-folder "$PDIR/mel" --chord-folder "$PDIR/$CHORD_SUB" \
         --output-dir "$OUT" --modes co \
         --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
         --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 4 --skip-existing \

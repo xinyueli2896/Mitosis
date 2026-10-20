@@ -169,6 +169,7 @@ without retraining, and two retrains address all three:
 | `duet_bestar` | `A3ar` | paper decode on `<run>/best_ar/`, the weights best on the clean-row loss |
 | `duet_prev` | `A3f` | retrain: paper recipe + `--slot_sees_prev_frame`; paper decode |
 | `duet_v2` | `A3v2` | retrain: `--slot_sees_prev_frame`, `--cond_slot_prob 0.8` (leader committed with its true frame, follower masked), `--self_cond_prob 0`, `--mask_revealed_query_loss 1`, `--val_ctc`; decoded ctc_alt with the leader kept as drafted |
+| `duet_v2c48` | `A3v2c48` | `duet_v2` with the chord stream on program 48, the single-stream models' tag (`prepare_data.sh chord48`, task `melchord_nottingham_c48`); the same notes, only the program token differs |
 
 `duet_v2` turns the decode into ancestral sampling of one frame: the
 leader from its AR head, then the follower from its slot given the
@@ -180,9 +181,9 @@ follower scored), so best-val selects on the head the decode samples.
 ```bash
 # decodes of the existing checkpoint (one node, 8 shards each)
 sbatch --export=ALL,SYSTEMS="duet_keeplead duet_mix duet_k0 duet_bestar" slurm/infer_nottingham.sbatch
-# the two retrains (4 GPUs), then their samples
+# the three retrains (6 GPUs), then their samples
 T=$(sbatch --parsable slurm/train_duet_variants_nottingham.sbatch)
-sbatch --dependency=afterok:$T --export=ALL,SYSTEMS="duet_v2 duet_prev" slurm/infer_nottingham.sbatch
+sbatch --dependency=afterok:$T --export=ALL,SYSTEMS="duet_v2 duet_v2c48 duet_prev" slurm/infer_nottingham.sbatch
 ```
 
 `evaluate.sh` scores every variant that is complete. Table 1 and

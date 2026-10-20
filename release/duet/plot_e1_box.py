@@ -121,6 +121,7 @@ GROUPS = [
     # or Figure 2.
     ('Duet variants', True, [
         ('A3v2',      'Duet v2',                    'Duet\nv2'),
+        ('A3v2c48',   'Duet v2, chords prog. 48',   'Duet\nv2 c48'),
         ('A3f',       'Duet, slot sees t-1',        'Duet\nt-1'),
         ('A3kl',      'Duet, leader kept',          'Duet\nkeep'),
         ('A3mx',      'Duet, leader kept + AR mix', 'Duet\nmix'),

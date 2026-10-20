@@ -74,6 +74,20 @@ if a != b:
 print(f'[prepare] {len(a)} tunes, same order in the duet and single-stream corpora')
 PY
         ;;
+    chord48)
+        # the Duet chord stream on program 48, as the single-stream corpus
+        # tags it (duet_v2c48); read from the tagged copy `train` wrote
+        need "data/nottingham_melody_cp${CP_DUET}_v2.txt" "Run 'DATASET=nottingham prepare_data.sh train' first."
+        [[ -d "$WORK/nottingham-melchord-tagged" ]] || python tag_nottingham_melchord.py \
+            --src "$NOTTINGHAM_RAW" --dst "$WORK/nottingham-melchord-tagged" --chord-program 48
+        NOTTINGHAM_MIDI_PATH="$WORK/nottingham-melchord-tagged" \
+        NOTTINGHAM_CHORD_DATASET="nottingham_chord48_cp${CP_DUET}_v2" \
+            python preprocess_large_midi_dataset.py nottingham_chord "$CP_DUET"
+        python check_paired_dataset.py "data/nottingham_melody_cp${CP_DUET}_v2" "data/nottingham_chord48_cp${CP_DUET}_v2"
+        cmp -s <(cut -f2 "data/nottingham_melody_cp${CP_DUET}_v2.txt") <(cut -f2 "data/nottingham_chord48_cp${CP_DUET}_v2.txt") || {
+            echo "ERROR: chord48 lists different tunes than the melody stream" >&2; exit 1; }
+        echo "[prepare] data/nottingham_chord48_cp${CP_DUET}_v2.pt"
+        ;;
     eval)
         need "data/nottingham_melody_cp${CP_DUET}_v2.txt" "Run 'DATASET=nottingham prepare_data.sh train' first."
         python build_nottingham_prompts.py --src "$NOTTINGHAM_RAW" --dst "$EVAL_SRC" \
@@ -81,7 +95,7 @@ PY
             --lead-bars 2 --min-frames "$GEN_LENGTH" --tempo 120
         echo "prompts: $DUET/$EVAL_SRC/{melody,chord}"
         ;;
-    *) echo "usage: prepare_data.sh train|eval" >&2; exit 1 ;;
+    *) echo "usage: prepare_data.sh train|chord48|eval" >&2; exit 1 ;;
     esac
     exit 0
 fi
