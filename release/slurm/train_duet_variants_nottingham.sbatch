@@ -6,8 +6,8 @@
 #
 #   sbatch slurm/train_duet_variants_nottingham.sbatch
 #
-#   duet_v2    slot reads t-1 + conditional slots (0.8) + teacher-forced
-#              leader + follower-state validation
+#   duet_v2    trained for the leaderless joint decode: slot reads t-1,
+#              both draft tokens hold AR-sampled drafts at k=0, both scored
 #   duet_v2c48 duet_v2 with the chord stream on program 48, as the
 #              single-stream models see it (tagged vs same-program input)
 #   duet_prev  the paper recipe + slot reads t-1 only (attributes that change)

@@ -72,8 +72,8 @@ system_id() {
         duet_v2)       echo A3v2 ;;
         duet_v2c48)    echo A3v2c48 ;;
         duet_prev)     echo A3f ;;
-        duet_keeplead) echo A3kl ;;
-        duet_mix)      echo A3mx ;;
+        duet_joint)    echo A3jt ;;
+        duet_jointmix) echo A3jm ;;
         duet_k0)       echo A3K0 ;;
         duet_bestar)   echo A3ar ;;
         dense)         echo D1 ;;
@@ -85,10 +85,11 @@ system_id() {
         *) echo "unknown system '$1' (duet duet_stale dense no_draft ss_finetuned ss_scratch wholesong amt; variants: $DUET_VARIANTS)" >&2; return 1 ;;
     esac
 }
-# Duet variants (README "Improving Duet's co-generation"): two retrains
-# (duet_v2, duet_prev) and four decodes of the paper's duet checkpoint.
+# Duet variants (README "Improving Duet's co-generation"), all decoded
+# without a leader: three retrains (duet_v2, duet_v2c48, duet_prev) and
+# four decodes of the paper's duet checkpoint.
 # Scored when complete, kept out of Table 1 and Figure 2.
-DUET_VARIANTS="duet_v2 duet_v2c48 duet_prev duet_keeplead duet_mix duet_k0 duet_bestar"
+DUET_VARIANTS="duet_v2 duet_v2c48 duet_prev duet_joint duet_jointmix duet_k0 duet_bestar"
 ALL_SYSTEMS="duet duet_stale dense no_draft ss_finetuned ss_scratch wholesong amt $DUET_VARIANTS"
 
 # Number of visible GPUs (CUDA_VISIBLE_DEVICES, else what torch sees).

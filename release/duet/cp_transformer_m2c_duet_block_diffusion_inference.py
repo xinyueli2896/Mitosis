@@ -653,9 +653,17 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     # regime the stale-draft model trains on, where BOTH query slots hold
     # a stale AR draft and each slot emits its stream's clean frame.
     joint = schedule == 'joint'
+    # A3_JOINT_MIX=w (2026-10-20): in the joint refine forward, sample
+    # each stream from a per-sub-token mixture of its slot's refined
+    # distribution and its own AR head's (the head that drafted it),
+    # weight w on the AR head; A3_CTC_MIX_MODE picks linear or geo as
+    # for the ctc follower mix. Symmetric: both streams are mixed alike.
+    joint_mix = float(_os.environ.get('A3_JOINT_MIX', '0'))
+    assert 0.0 <= joint_mix <= 1.0, joint_mix
     if joint:
         print(f'[gen] A3_SCHEDULE=joint: leaderless draft-and-denoise '
-              f'(both drafts committed, one refine forward)')
+              f'(both drafts committed, one refine forward), '
+              f'AR mix {joint_mix} ({ctc_mix_mode})')
     elif schedule.startswith('ctc'):
         base, _, lead = schedule.partition('_')
         ctc_passes = 2 if base == 'ctc2' else 1
@@ -804,7 +812,9 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                             cur[i] = model.local_sampling(
                                 h_global[:, -2 if i == 0 else -1],
                                 max_subseq_len=subseq_len,
-                                temperature=final_temperature, token_type_id=i)
+                                temperature=final_temperature, token_type_id=i,
+                                h_alt=h_ar[i] if joint_mix > 0 else None,
+                                alt_weight=joint_mix, mix_mode=ctc_mix_mode)
                     order = []
                 else:
                     lead = {'m': 0, 'c': 1, 'alt': t % 2}[ctc_leader]

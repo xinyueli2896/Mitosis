@@ -143,49 +143,53 @@ the draft tokens, and one more forward reads both refined frames out.
 
 ## Improving Duet's co-generation
 
-On Nottingham, Duet's rhythm rows (harmonic rhythm, onset grid,
-duration) trail both of its own ablations. Every frame the paper decode
-commits comes out of a query slot: the follower's, and with
-`A3_CTC_DENOISE_LEADER=1` (the default) the leader's too, re-read from
-its draft token. A query slot for frame t never sees frame t-1 (it
-reads clean history through t-2; see `_build_masks`). The AR head that
-wrote the leader's draft does see t-1, and so do both ablations. Whether
-a note was just struck or is still sounding is exactly what onset and
-duration statistics measure. Second, the follower is read from the state
-(leader committed, follower masked) that the paper's training samples
-on about 8% of query pairs, and its draft tokens carry a mix of ground
-truth and query-head argmax drafts, never the AR samples the decode
-writes. Third, best-val selection scores both slots masked, a state the
-decode never reads from.
+Duet's generations fall short of its own ablations and of the finetuned
+single-stream model, and they lose on every rhythm row (harmonic rhythm,
+onset grid, duration). Three things in the code bear on it:
 
-Four decodes of the existing duet checkpoint test the first point
-without retraining, and two retrains address all three:
+- **A draft token never sees the previous frame.** A query slot for
+  frame t reads clean history through t-2 (`_build_masks`). The AR
+  heads, which write the drafts, see t-1, and so do both ablations. But
+  every committed frame is read out of a slot. Whether a note was just
+  struck or is still sounding is exactly what onset and duration
+  statistics measure.
+- **The decode reads the slots in a state training barely visits.** In
+  the leaderless joint decode, both draft tokens hold AR samples tagged
+  k=0. The paper's training puts a draft in a slot a quarter of the time
+  (a coin at rate k/K masks half of them), and that draft is a
+  query-head argmax rather than an AR sample.
+- **Best-val scores both slots masked**, a state no decode reads from.
+
+Every variant below decodes without a leader: one forward drafts both
+streams from their AR heads, both drafts go into the draft tokens, and
+one more forward reads both refined frames out (`A3_SCHEDULE=joint`).
 
 | Script name | Output id | What changes |
 |---|---|---|
-| `duet_keeplead` | `A3kl` | paper decode, leader committed as drafted (`A3_CTC_DENOISE_LEADER=0`) |
-| `duet_mix` | `A3mx` | as `duet_keeplead`, follower sampled from the product of its slot and its own AR head (`A3_CTC_FOLLOWER_MIX=0.5`, geo) |
+| `duet_joint` | `A3jt` | the paper's duet checkpoint, joint decode |
+| `duet_jointmix` | `A3jm` | as `duet_joint`, each stream sampled from the product of its refined distribution and its own AR head's (`A3_JOINT_MIX=0.5`, geo), so both see frame t-1 |
 | `duet_k0` | `A3K0` | AR heads only, draft tokens unused (control) |
-| `duet_bestar` | `A3ar` | paper decode on `<run>/best_ar/`, the weights best on the clean-row loss |
-| `duet_prev` | `A3f` | retrain: paper recipe + `--slot_sees_prev_frame`; paper decode |
-| `duet_v2` | `A3v2` | retrain: `--slot_sees_prev_frame`, `--cond_slot_prob 0.8` (leader committed with its true frame, follower masked), `--self_cond_prob 0`, `--mask_revealed_query_loss 1`, `--val_ctc`; decoded ctc_alt with the leader kept as drafted |
+| `duet_bestar` | `A3ar` | `duet_joint` on `<run>/best_ar/`, the weights best on the clean-row loss |
+| `duet_prev` | `A3f` | retrain: paper recipe + `--slot_sees_prev_frame` |
+| `duet_v2` | `A3v2` | retrain for the joint decode: `--slot_sees_prev_frame`; both slots drafted every pair, from the AR heads the way the decode samples (`--self_cond_prob 1 --sc_ar_frac 1 --sc_ar_free_run --sc_draft_temp 1`), tagged k=0 and scored (`--draft_k0`); validation in the same state (`--sc_val`) |
 | `duet_v2c48` | `A3v2c48` | `duet_v2` with the chord stream on program 48, the single-stream models' tag (`prepare_data.sh chord48`, task `melchord_nottingham_c48`); the same notes, only the program token differs |
 
-`duet_v2` turns the decode into ancestral sampling of one frame: the
-leader from its AR head, then the follower from its slot given the
-leader, both with frame t-1 in view, alternating which stream leads. The
-slot learns that conditional by teacher forcing, and `--val_ctc`
-validates in that same state (leader alternating over the batch,
-follower scored), so best-val selects on the head the decode samples.
+`duet_stale` (above) is the closest earlier attempt at the joint
+regime. It differs from `duet_v2` in the t-1 mask, drafts from a frozen
+copy, k tags drawn uniformly with half the drafts masked, and validation
+on masked slots.
 
 ```bash
-# decodes of the existing checkpoint (one node, 8 shards each)
-sbatch --export=ALL,SYSTEMS="duet_keeplead duet_mix duet_k0 duet_bestar" slurm/infer_nottingham.sbatch
+# decodes of the existing checkpoint (Nottingham: one node, 8 shards each)
+sbatch --export=ALL,SYSTEMS="duet_joint duet_jointmix duet_k0 duet_bestar" slurm/infer_nottingham.sbatch
 # the three retrains (6 GPUs), then their samples
 T=$(sbatch --parsable slurm/train_duet_variants_nottingham.sbatch)
 sbatch --dependency=afterok:$T --export=ALL,SYSTEMS="duet_v2 duet_v2c48 duet_prev" slurm/infer_nottingham.sbatch
 ```
 
+On POP909, all of them except `duet_v2c48` run through `slurm/run.sbatch`
+(`generate.sh <system>`, `train.sh <system>`). `duet_bestar` needs
+`CKPT=<run dir>/best_ar`, since the released checkpoint has none.
 `evaluate.sh` scores every variant that is complete. Table 1 and
 Figure 2 leave them out; `figures/<tag>_quality_variants.tex` is Table 1
 with them added, and `results/<tag>_table_twosided.md` tests each one

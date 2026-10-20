@@ -29,13 +29,13 @@ fi
 # Default checkpoints: the released files, or your own run directories.
 case "$SYSTEM" in
     duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense|no_draft|ss_finetuned|ss_scratch) ;;
-    duet_keeplead|duet_mix|duet_k0|duet_bestar) ;;
+    duet_joint|duet_jointmix|duet_k0|duet_bestar) ;;
     *) echo "generate.sh covers the in-house systems; see scripts/external/ for $SYSTEM" >&2; exit 1 ;;
 esac
 # The decode variants re-decode the paper's duet checkpoint (duet_bestar:
 # its best_ar/ weights, selected on the clean-row loss alone).
 CKPT_SYS="$SYSTEM"
-case "$SYSTEM" in duet_keeplead|duet_mix|duet_k0|duet_bestar) CKPT_SYS=duet ;; esac
+case "$SYSTEM" in duet_joint|duet_jointmix|duet_k0|duet_bestar) CKPT_SYS=duet ;; esac
 # duet_v2c48: duet_v2's run under the _c48 task, fed chord prompts on program 48
 CHORD_SUB=chord
 if [[ "$SYSTEM" == duet_v2c48 ]]; then
@@ -112,7 +112,7 @@ if [[ -n "${SHARD:-}" ]]; then
 fi
 
 case "$SYSTEM" in
-duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense|duet_keeplead|duet_mix|duet_k0|duet_bestar)
+duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense|duet_joint|duet_jointmix|duet_k0|duet_bestar)
     # Draft-and-denoise, leader alternating by frame (ctc_alt): the
     # leader's draft is sampled from its autoregressive head and written
     # into its draft token, one denoise pass reads out both streams.
@@ -121,29 +121,27 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense|duet_keeplead|duet_mix|duet_k
     # tokens, one refine pass reads out both -- the regime it trains on.
     # Temperature 1, no nucleus cut.
     #
-    # Variants (README "Improving Duet's co-generation"):
-    #   duet_keeplead  ctc_alt, the leader's draft is committed as drafted
-    #                  (its AR head saw frame t-1; the slot that would
-    #                  re-read it does not)
-    #   duet_mix       duet_keeplead + the follower sampled from the
-    #                  product of its slot (sees leader_t) and its own AR
-    #                  head (sees t-1), equal weights
+    # Variants (README "Improving Duet's co-generation"), all leaderless:
+    #   duet_joint     the paper checkpoint, joint decode: both streams
+    #                  drafted by their AR heads, both drafts in the draft
+    #                  tokens, one refine forward reads both frames out
+    #   duet_jointmix  duet_joint, each stream sampled from the product
+    #                  of its refined distribution and its own AR head's
+    #                  (the head that sees frame t-1), equal weights
     #   duet_k0        AR heads only, no draft tokens read (control: the
     #                  duet checkpoint's backbone vs w/o draft tokens)
-    #   duet_bestar    the paper decode on the best_ar/ weights
-    #   duet_v2        ctc_alt, leader kept as drafted (the decode it trains for)
-    #   duet_prev      the paper decode on the t-1 retrain
-    SCHED=ctc_alt; [[ "$SYSTEM" == duet_stale ]] && SCHED=joint
-    DENOISE_LEADER=1; FOLLOWER_MIX=0; REFINE_STEPS=4
+    #   duet_bestar    duet_joint on the best_ar/ weights
+    #   duet_v2, duet_v2c48, duet_prev   the retrains, joint decode
+    SCHED=ctc_alt; REFINE_STEPS=4; JOINT_MIX=0
     case "$SYSTEM" in
-        duet_keeplead|duet_v2|duet_v2c48) DENOISE_LEADER=0 ;;
-        duet_mix) DENOISE_LEADER=0; FOLLOWER_MIX=0.5 ;;
+        duet_stale|duet_joint|duet_bestar|duet_v2|duet_v2c48|duet_prev) SCHED=joint ;;
+        duet_jointmix) SCHED=joint; JOINT_MIX=0.5 ;;
         duet_k0)  SCHED=refine; REFINE_STEPS=0 ;;
     esac
     SHAPE=(--moe-num-experts 4 --moe-topk 2)
     [[ "$SYSTEM" == dense ]] && SHAPE=(--moe-num-experts 1 --moe-topk 1 --moe-intermediate-size 6144)
     MELCHORD_CP=4 A3_SCHEDULE=$SCHED A3_REFINE_STEPS=$REFINE_STEPS A3_FINAL_TEMP=1.0 A3_TOP_P=1.0 \
-    A3_CTC_DENOISE_LEADER=$DENOISE_LEADER A3_CTC_FOLLOWER_MIX=$FOLLOWER_MIX A3_CTC_MIX_MODE=geo \
+    A3_JOINT_MIX=$JOINT_MIX A3_CTC_MIX_MODE=geo \
     python cp_transformer_m2c_duet_block_diffusion_combined.py \
         --ckpt "$CKPT" --mel-folder "$PDIR/mel" --chord-folder "$PDIR/$CHORD_SUB" \
         --output-dir "$OUT" --modes co \

@@ -3,7 +3,7 @@
 #
 #   bash scripts/train.sh duet            # Duet (the proposed model)
 #   bash scripts/train.sh duet_stale      # Duet, drafts from a stale snapshot
-#   bash scripts/train.sh duet_v2         # Duet trained for its own decode (see README)
+#   bash scripts/train.sh duet_v2         # Duet trained for the leaderless joint decode (see README)
 #   bash scripts/train.sh duet_v2c48      # duet_v2 with the chord stream on program 48
 #   bash scripts/train.sh duet_prev       # Duet, query slots also read frame t-1
 #   bash scripts/train.sh dense           # Duet w/o MoE: one dense FFN of width 6144
@@ -70,21 +70,20 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense)
                    --sc_draft_temp 1.0 --stale_draft_every "${STALE_EVERY:-1000}") ;;
         duet_prev)
             # the paper recipe with one change: a query slot also reads
-            # frame t-1 of both streams, which the AR head it replaces
-            # always could (without it the slot sees content up to t-2)
+            # frame t-1 of both streams, which the AR head that drafts
+            # into it always could (without it the slot sees up to t-2)
             DRAFT=(--self_cond_prob 0.5 --slot_sees_prev_frame) ;;
         duet_v2|duet_v2c48)
-            # trained for the decode it is sampled with (ctc_alt,
-            # leader kept as drafted): the slot reads frame t-1; 80% of
-            # query pairs are the decode's state, leader's draft token
-            # committed (k=0) with its true frame and follower masked
-            # (k=K), so the follower learns p(follower_t | past,
-            # leader_t) by teacher forcing; no loss where a slot holds
-            # its own target; validation in that same state, so
-            # best-val selects on the follower the decode samples.
-            DRAFT=(--self_cond_prob 0.0 --slot_sees_prev_frame
-                   --cond_slot_prob "${COND_SLOT_PROB:-0.8}" --val_ctc)
-            MRQL=1 ;;
+            # trained for the leaderless joint decode it is sampled with:
+            # the slot reads frame t-1; every query pair is the decode's
+            # state -- both draft tokens hold a draft sampled from the AR
+            # heads the way the decode samples it (free-running,
+            # temperature 1), both tagged k=0, both slots scored against
+            # their true frames; validation in that same state (drafts
+            # at argmax), so best-val selects on what the decode reads.
+            DRAFT=(--slot_sees_prev_frame --self_cond_prob 1.0
+                   --sc_ar_frac 1.0 --sc_ar_free_run --sc_draft_temp 1.0
+                   --draft_k0 --sc_val) ;;
         esac
     else
         # compute-matched dense arm: one expert of width 6144 = two active 3072-wide experts
