@@ -3,6 +3,8 @@
 #
 #   bash scripts/train.sh duet            # Duet (the proposed model)
 #   bash scripts/train.sh duet_stale      # Duet, drafts from a stale snapshot
+#   bash scripts/train.sh duet_v2         # Duet trained for its own decode (see README)
+#   bash scripts/train.sh duet_prev       # Duet, query slots also read frame t-1
 #   bash scripts/train.sh dense           # Duet w/o MoE: one dense FFN of width 6144
 #   bash scripts/train.sh no_draft        # Duet w/o draft tokens
 #   bash scripts/train.sh ss_finetuned    # single-stream backbone, finetuned
@@ -19,7 +21,7 @@
 # Knobs (environment): MAX_LR, LR_TOTAL_STEPS, BATCH_SIZE (per GPU),
 # RUN_TAG (run-name suffix), WANDB=1 (log to Weights & Biases).
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-SYSTEM="${1:?usage: train.sh duet|duet_stale|dense|no_draft|ss_finetuned|ss_scratch}"
+SYSTEM="${1:?usage: train.sh duet|duet_stale|duet_v2|duet_prev|dense|no_draft|ss_finetuned|ss_scratch}"
 system_id "$SYSTEM" >/dev/null
 
 NGPUS="$(n_gpus)"
@@ -35,7 +37,7 @@ launch() {   # launch <script.py> args...: python on one GPU, torchrun on severa
 wandb_flag() { [[ "${WANDB:-0}" == "1" ]] && echo "$1" || echo "$2"; }
 
 case "$SYSTEM" in
-duet|duet_stale|dense)
+duet|duet_stale|duet_v2|duet_prev|dense)
     # Both Duet streams read cp4 tensors: MAX_POLYPHONY is the tokenizer's
     # budget and MELCHORD_CP selects data/${DUET_DATA}_*_cp${MELCHORD_CP}_v2.pt.
     # The checkpoint does not record it, so keep the two in step.
@@ -50,21 +52,39 @@ duet|duet_stale|dense)
     # the model refreshed every STALE_EVERY steps; no drafts before the
     # first refresh.
     DRAFT=(--self_cond_prob 0.5)
-    if [[ "$SYSTEM" == duet || "$SYSTEM" == duet_stale ]]; then
+    MRQL=0      # --mask_revealed_query_loss
+    if [[ "$SYSTEM" != dense ]]; then
         EXPERTS=(--moe_num_experts 4 --moe_topk 2)
-        ABBR=duet; STEPS="${LR_TOTAL_STEPS:-50000}"; LIMIT_VAL=25
-        if [[ "$SYSTEM" == duet_stale ]]; then
-            ABBR=duet_stale
+        ABBR=$SYSTEM; STEPS="${LR_TOTAL_STEPS:-50000}"; LIMIT_VAL=25
+        case "$SYSTEM" in
+        duet_stale)
             DRAFT=(--self_cond_prob 1.0 --sc_ar_frac 1.0 --sc_ar_free_run
-                   --sc_draft_temp 1.0 --stale_draft_every "${STALE_EVERY:-1000}")
-        fi
+                   --sc_draft_temp 1.0 --stale_draft_every "${STALE_EVERY:-1000}") ;;
+        duet_prev)
+            # the paper recipe with one change: a query slot also reads
+            # frame t-1 of both streams, which the AR head it replaces
+            # always could (without it the slot sees content up to t-2)
+            DRAFT=(--self_cond_prob 0.5 --slot_sees_prev_frame) ;;
+        duet_v2)
+            # trained for the decode it is sampled with (ctc_alt,
+            # leader kept as drafted): the slot reads frame t-1; 80% of
+            # query pairs are the decode's state, leader's draft token
+            # committed (k=0) with its true frame and follower masked
+            # (k=K), so the follower learns p(follower_t | past,
+            # leader_t) by teacher forcing; no loss where a slot holds
+            # its own target; validation in that same state, so
+            # best-val selects on the follower the decode samples.
+            DRAFT=(--self_cond_prob 0.0 --slot_sees_prev_frame
+                   --cond_slot_prob "${COND_SLOT_PROB:-0.8}" --val_ctc)
+            MRQL=1 ;;
+        esac
     else
         # compute-matched dense arm: one expert of width 6144 = two active 3072-wide experts
         EXPERTS=(--moe_num_experts 1 --moe_topk 1 --moe_intermediate_size 6144)
         ABBR=dense; STEPS="${LR_TOTAL_STEPS:-100000}"; LIMIT_VAL=100
     fi
     BATCH_SIZE="${BATCH_SIZE:-4}"
-    INIT="ckpt/init/${ABBR%_stale}_init.ckpt"   # duet_stale starts from duet's init
+    INIT="ckpt/init/${ABBR%%_*}_init.ckpt"   # every duet_* variant starts from duet's init
     RUN_DIR="ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_${ABBR}_${TASK}${RUN_TAG:+_$RUN_TAG}_batch_$((BATCH_SIZE * NGPUS))_schedule"
     if [[ -f "$RUN_DIR/last.ckpt" ]]; then
         START="$RUN_DIR/last.ckpt"; echo "[train] resuming $START"
@@ -92,7 +112,7 @@ duet|duet_stale|dense)
         --moe_monitor_every_n_steps 500 --dump_samples_dir "temp/train_samples_$ABBR$DS_SUFFIX" \
         --gate_init_bias -10.0 --query_loss_weight 2.0 "${DRAFT[@]}" \
         --time_rope_aligned 1 --moe_modality_bias 0 --moe_modality_gates 1 \
-        --moe_modality_hard_route 0 --token_level_mask 0 --mask_revealed_query_loss 0 \
+        --moe_modality_hard_route 0 --token_level_mask 0 --mask_revealed_query_loss "$MRQL" \
         --query_pairs 1 --query_block 1 --decoy_corruption 0 \
         --decoy_mask_residual 0.25 --decoy_lag_bins 1:2,3:11,12:19 \
         --model_abbr "$ABBR" --diffusion_K 4 --step_ckpt_every 5000 \

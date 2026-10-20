@@ -162,7 +162,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  agree_loss_weight=0.3, sc_ar_frac=0.0,
                  sc_draft_temp=0.0, sc_k_consistent=False,
                  sym_k=False, mask_k_prob=None, sc_val=False,
-                 sc_ar_free_run=False, stale_draft_every=0, **kwargs):
+                 sc_ar_free_run=False, stale_draft_every=0,
+                 val_ctc=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- stale-snapshot drafts ---------------------------------------
@@ -355,6 +356,24 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.register_buffer(
             'sc_val_flag', torch.tensor(1 if sc_val else 0, dtype=torch.long))
         self.sc_val = bool(sc_val)
+        # val_ctc (2026-10-20): validate in the state the ctc decode
+        # reads its output from. The default pin (both slots masked,
+        # k=K) is a state the draft-and-denoise decode never samples
+        # from, so val_loss could not tell a good follower from a bad
+        # one and best-val picked checkpoints on the AR term alone. With
+        # val_ctc each validation item has a leader committed at k=0
+        # with its TRUE frame and a follower masked at k=K, the leader
+        # alternating over the batch as the decode alternates over
+        # frames, and the query loss scores the follower only (the
+        # leader slot holds its own target). val_loss is then AR +
+        # query_loss_weight * follower CE, the two heads ctc_alt with
+        # A3_CTC_DENOISE_LEADER=0 samples from.
+        if val_ctc and sc_val:
+            raise ValueError('val_ctc and sc_val both set the validation '
+                             'slot state; set one.')
+        self.val_ctc = bool(val_ctc)
+        self.register_buffer(
+            'val_ctc_flag', torch.tensor(int(self.val_ctc), dtype=torch.long))
         if agree_head and cond_slot_prob <= 0:
             raise ValueError(
                 'agree_head needs cond_slot_prob > 0: the head is defined '
@@ -933,7 +952,9 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         a WHOLE arm-set (e.g. all four arms) or none -- otherwise arms
         differ by more than their router.
         """
-        if not self.mask_revealed_query_loss:
+        drop_revealed = (self.mask_revealed_query_loss
+                         or (self.val_ctc and not self.training))
+        if not drop_revealed:
             return non_pad_q
         revealed = getattr(self, '_last_query_revealed', None)
         if revealed is None:
@@ -1421,6 +1442,12 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                              dtype=torch.long)
             k_c = torch.full((batch_size, n_pairs), k_eval, device=x.device,
                              dtype=torch.long)
+            if self.val_ctc:
+                # leader alternates over the batch: even items melody-led
+                lead_is_m = (torch.arange(batch_size, device=x.device)
+                             % 2 == 0).view(-1, 1).expand(-1, n_pairs)
+                k_m = torch.where(lead_is_m, 0, K).long()
+                k_c = torch.where(lead_is_m, K, 0).long()
         # Stash the FINAL levels (after every override) for the audits.
         self._last_k_m, self._last_k_c = k_m, k_c
 
@@ -2022,6 +2049,14 @@ if __name__ == '__main__':
                              'reads the clean AR rows and cannot see the '
                              'slots at all. Needs --sc_val, or validation '
                              'measures a state nothing trained.')
+    parser.add_argument('--val_ctc', action='store_true', default=False,
+                        help='Validate in the ctc decode state: leader '
+                             'committed with its true frame (k=0), '
+                             'follower masked (k=K), leader alternating '
+                             'over the batch; the query loss scores the '
+                             'follower only. Makes val_loss (and best-val '
+                             'selection) measure the heads A3_SCHEDULE='
+                             'ctc_alt A3_CTC_DENOISE_LEADER=0 samples from.')
     parser.add_argument('--sc_val', action='store_true', default=False,
                         help='A.12: present VALIDATION the draft state '
                              'instead of the masked one -- run the probe '
@@ -2274,6 +2309,7 @@ if __name__ == '__main__':
         sym_k=bool(args.sym_k),
         mask_k_prob=args.mask_k_prob,
         sc_val=bool(args.sc_val),
+        val_ctc=bool(args.val_ctc),
         agree_head=bool(args.agree_head),
         cross_lora_rank=args.cross_lora_rank,
         moe_expert_lora_rank=args.moe_expert_lora_rank,
@@ -2305,7 +2341,8 @@ if __name__ == '__main__':
           f'sc_draft_temp={args.sc_draft_temp}  '
           f'sc_k_consistent={bool(args.sc_k_consistent)}  '
           f'sym_k={bool(args.sym_k)}  '
-          f'mask_k_prob={args.mask_k_prob}  sc_val={bool(args.sc_val)}'
+          f'mask_k_prob={args.mask_k_prob}  sc_val={bool(args.sc_val)}  '
+          f'val_ctc={bool(args.val_ctc)}'
           f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
           f'query_loss_weight={args.query_loss_weight}  '
@@ -2482,6 +2519,7 @@ if __name__ == '__main__':
                     'sym_k': bool(args.sym_k),
                     'mask_k_prob': args.mask_k_prob,
                     'sc_val': bool(args.sc_val),
+                    'val_ctc': bool(args.val_ctc),
                     'agree_head': bool(args.agree_head),
                     'cross_lora_rank': args.cross_lora_rank,
                     'moe_expert_lora_rank': args.moe_expert_lora_rank,

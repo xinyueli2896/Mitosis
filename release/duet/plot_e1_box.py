@@ -116,6 +116,17 @@ GROUPS = [
         ('WSfv4',     'Whole-Song Gen',             'WSG'),
         ('AMT',       'AMT',                        'AMT'),
     ]),
+    # Duet variants (README "Improving Duet's co-generation"), shown only
+    # where evaluate.sh leaves them in: its variants table, not Table 1
+    # or Figure 2.
+    ('Duet variants', True, [
+        ('A3v2',      'Duet v2',                    'Duet\nv2'),
+        ('A3f',       'Duet, slot sees t-1',        'Duet\nt-1'),
+        ('A3kl',      'Duet, leader kept',          'Duet\nkeep'),
+        ('A3mx',      'Duet, leader kept + AR mix', 'Duet\nmix'),
+        ('A3K0',      'Duet, AR heads only',        'Duet\nK0'),
+        ('A3ar',      'Duet, best AR weights',      'Duet\nbest AR'),
+    ]),
 ]
 # systems drawn but left out of the best-of comparison whatever their
 # family says: the finetuned single-stream model starts from the same
@@ -164,6 +175,7 @@ FAMILY_COLOR = {
     'Internal baselines':  PALETTE['slate'],
     'External baselines':  PALETTE['maroon'],
     'Not ranked':          PALETTE['grey'],
+    'Duet variants':       '#f5b72a',
 }
 
 

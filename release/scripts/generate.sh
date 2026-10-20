@@ -16,7 +16,7 @@
 # Keep N_SAMPLES >= 2: with a single sample the duet generators write
 # <song>/co.mid instead of the <song>/co/sample_<i>.mid layout evaluate.sh reads.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-SYSTEM="${1:?usage: generate.sh duet|duet_stale|dense|no_draft|ss_finetuned|ss_scratch}"
+SYSTEM="${1:?usage: generate.sh duet|duet_stale|dense|no_draft|ss_finetuned|ss_scratch|<a duet variant>}"
 ID="$(system_id "$SYSTEM")"
 # SHARD=K/N: this call takes every N-th song (see slurm/infer_nottingham.sbatch).
 # Run stage_prompts.sh once first; parallel calls would race to stage.
@@ -28,17 +28,24 @@ fi
 
 # Default checkpoints: the released files, or your own run directories.
 case "$SYSTEM" in
-    duet|duet_stale|dense|no_draft|ss_finetuned|ss_scratch) ;;
+    duet|duet_stale|duet_v2|duet_prev|dense|no_draft|ss_finetuned|ss_scratch) ;;
+    duet_keeplead|duet_mix|duet_k0|duet_bestar) ;;
     *) echo "generate.sh covers the in-house systems; see scripts/external/ for $SYSTEM" >&2; exit 1 ;;
 esac
-if [[ -z "${CKPT:-}" && "$DATASET" == pop909 && "$SYSTEM" != duet_stale ]]; then
-    CKPT="ckpt/$SYSTEM"
+# The decode variants re-decode the paper's duet checkpoint (duet_bestar:
+# its best_ar/ weights, selected on the clean-row loss alone).
+CKPT_SYS="$SYSTEM"
+case "$SYSTEM" in duet_keeplead|duet_mix|duet_k0|duet_bestar) CKPT_SYS=duet ;; esac
+if [[ -z "${CKPT:-}" && "$DATASET" == pop909 && "$CKPT_SYS" == duet && "$SYSTEM" == duet_bestar ]]; then
+    echo "ERROR: the released duet checkpoint has no best_ar/; pass CKPT=<run dir>/best_ar" >&2; exit 1
+elif [[ -z "${CKPT:-}" && "$DATASET" == pop909 && "$CKPT_SYS" =~ ^(duet|dense|no_draft|ss_finetuned|ss_scratch)$ ]]; then
+    CKPT="ckpt/$CKPT_SYS"
 elif [[ -z "${CKPT:-}" ]]; then
     # No released Nottingham checkpoints: default to the run directory
     # train.sh wrote for this system (without RUN_TAG; pass CKPT=
     # for a tagged run or when several batch sizes were trained).
-    case "$SYSTEM" in
-        duet|duet_stale|dense) _pat="ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_${SYSTEM}_${TASK}_batch_*_schedule" ;;
+    case "$CKPT_SYS" in
+        duet|duet_stale|duet_v2|duet_prev|dense) _pat="ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_${CKPT_SYS}_${TASK}_batch_*_schedule" ;;
         no_draft)     _pat="ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_${TASK}_batch_*_schedule" ;;
         ss_finetuned) _pat="ckpt/cp_transformer_v0.42_size*_pop909ft_${SS_RUN_TAG}_batch_*_schedule" ;;
         ss_scratch)   _pat="ckpt/cp_transformer_v0.42_size*_pop909scratch_${SS_RUN_TAG}_batch_*_schedule" ;;
@@ -48,6 +55,7 @@ elif [[ -z "${CKPT:-}" ]]; then
         echo "ERROR: expected one run directory matching $_pat, found ${#_runs[@]}." \
              "Train it (DATASET=$DATASET scripts/train.sh $SYSTEM) or pass CKPT=<run dir>." >&2; exit 1; }
     CKPT="${_runs[0]}"
+    [[ "$SYSTEM" == duet_bestar ]] && CKPT="$CKPT/best_ar"
 fi
 need "$CKPT" "Download the checkpoints (scripts/download.sh) or pass CKPT=<your run dir>."
 # A directory holding a single checkpoint (a released model) is resolved
@@ -80,7 +88,7 @@ if [[ -n "${SHARD:-}" ]]; then
 fi
 
 case "$SYSTEM" in
-duet|duet_stale|dense)
+duet|duet_stale|duet_v2|duet_prev|dense|duet_keeplead|duet_mix|duet_k0|duet_bestar)
     # Draft-and-denoise, leader alternating by frame (ctc_alt): the
     # leader's draft is sampled from its autoregressive head and written
     # into its draft token, one denoise pass reads out both streams.
@@ -88,10 +96,30 @@ duet|duet_stale|dense)
     # from their autoregressive heads, both drafts go into the draft
     # tokens, one refine pass reads out both -- the regime it trains on.
     # Temperature 1, no nucleus cut.
+    #
+    # Variants (README "Improving Duet's co-generation"):
+    #   duet_keeplead  ctc_alt, the leader's draft is committed as drafted
+    #                  (its AR head saw frame t-1; the slot that would
+    #                  re-read it does not)
+    #   duet_mix       duet_keeplead + the follower sampled from the
+    #                  product of its slot (sees leader_t) and its own AR
+    #                  head (sees t-1), equal weights
+    #   duet_k0        AR heads only, no draft tokens read (control: the
+    #                  duet checkpoint's backbone vs w/o draft tokens)
+    #   duet_bestar    the paper decode on the best_ar/ weights
+    #   duet_v2        ctc_alt, leader kept as drafted (the decode it trains for)
+    #   duet_prev      the paper decode on the t-1 retrain
     SCHED=ctc_alt; [[ "$SYSTEM" == duet_stale ]] && SCHED=joint
+    DENOISE_LEADER=1; FOLLOWER_MIX=0; REFINE_STEPS=4
+    case "$SYSTEM" in
+        duet_keeplead|duet_v2) DENOISE_LEADER=0 ;;
+        duet_mix) DENOISE_LEADER=0; FOLLOWER_MIX=0.5 ;;
+        duet_k0)  SCHED=refine; REFINE_STEPS=0 ;;
+    esac
     SHAPE=(--moe-num-experts 4 --moe-topk 2)
     [[ "$SYSTEM" == dense ]] && SHAPE=(--moe-num-experts 1 --moe-topk 1 --moe-intermediate-size 6144)
-    MELCHORD_CP=4 A3_SCHEDULE=$SCHED A3_REFINE_STEPS=4 A3_FINAL_TEMP=1.0 A3_TOP_P=1.0 \
+    MELCHORD_CP=4 A3_SCHEDULE=$SCHED A3_REFINE_STEPS=$REFINE_STEPS A3_FINAL_TEMP=1.0 A3_TOP_P=1.0 \
+    A3_CTC_DENOISE_LEADER=$DENOISE_LEADER A3_CTC_FOLLOWER_MIX=$FOLLOWER_MIX A3_CTC_MIX_MODE=geo \
     python cp_transformer_m2c_duet_block_diffusion_combined.py \
         --ckpt "$CKPT" --mel-folder "$PDIR/mel" --chord-folder "$PDIR/chord" \
         --output-dir "$OUT" --modes co \

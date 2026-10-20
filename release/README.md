@@ -141,6 +141,55 @@ Duet's init. Its decode has no leader (`A3_SCHEDULE=joint`): one forward
 drafts both streams from their AR heads, both drafts are written into
 the draft tokens, and one more forward reads both refined frames out.
 
+## Improving Duet's co-generation
+
+On Nottingham, Duet's rhythm rows (harmonic rhythm, onset grid,
+duration) trail both of its own ablations. Every frame the paper decode
+commits comes out of a query slot: the follower's, and with
+`A3_CTC_DENOISE_LEADER=1` (the default) the leader's too, re-read from
+its draft token. A query slot for frame t never sees frame t-1 (it
+reads clean history through t-2; see `_build_masks`). The AR head that
+wrote the leader's draft does see t-1, and so do both ablations. Whether
+a note was just struck or is still sounding is exactly what onset and
+duration statistics measure. Second, the follower is read from the state
+(leader committed, follower masked) that the paper's training samples
+on about 8% of query pairs, and its draft tokens carry a mix of ground
+truth and query-head argmax drafts, never the AR samples the decode
+writes. Third, best-val selection scores both slots masked, a state the
+decode never reads from.
+
+Four decodes of the existing duet checkpoint test the first point
+without retraining, and two retrains address all three:
+
+| Script name | Output id | What changes |
+|---|---|---|
+| `duet_keeplead` | `A3kl` | paper decode, leader committed as drafted (`A3_CTC_DENOISE_LEADER=0`) |
+| `duet_mix` | `A3mx` | as `duet_keeplead`, follower sampled from the product of its slot and its own AR head (`A3_CTC_FOLLOWER_MIX=0.5`, geo) |
+| `duet_k0` | `A3K0` | AR heads only, draft tokens unused (control) |
+| `duet_bestar` | `A3ar` | paper decode on `<run>/best_ar/`, the weights best on the clean-row loss |
+| `duet_prev` | `A3f` | retrain: paper recipe + `--slot_sees_prev_frame`; paper decode |
+| `duet_v2` | `A3v2` | retrain: `--slot_sees_prev_frame`, `--cond_slot_prob 0.8` (leader committed with its true frame, follower masked), `--self_cond_prob 0`, `--mask_revealed_query_loss 1`, `--val_ctc`; decoded ctc_alt with the leader kept as drafted |
+
+`duet_v2` turns the decode into ancestral sampling of one frame: the
+leader from its AR head, then the follower from its slot given the
+leader, both with frame t-1 in view, alternating which stream leads. The
+slot learns that conditional by teacher forcing, and `--val_ctc`
+validates in that same state (leader alternating over the batch,
+follower scored), so best-val selects on the head the decode samples.
+
+```bash
+# decodes of the existing checkpoint (one node, 8 shards each)
+sbatch --export=ALL,SYSTEMS="duet_keeplead duet_mix duet_k0 duet_bestar" slurm/infer_nottingham.sbatch
+# the two retrains (4 GPUs), then their samples
+T=$(sbatch --parsable slurm/train_duet_variants_nottingham.sbatch)
+sbatch --dependency=afterok:$T --export=ALL,SYSTEMS="duet_v2 duet_prev" slurm/infer_nottingham.sbatch
+```
+
+`evaluate.sh` scores every variant that is complete. Table 1 and
+Figure 2 leave them out; `figures/<tag>_quality_variants.tex` is Table 1
+with them added, and `results/<tag>_table_twosided.md` tests each one
+against Duet.
+
 ## Training everything on one machine
 
 `scripts/train_all.sh` trains all six systems on one multi-GPU machine
