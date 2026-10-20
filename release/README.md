@@ -179,17 +179,20 @@ regime. It differs from `duet_v2` in the t-1 mask, drafts from a frozen
 copy, k tags drawn uniformly with half the drafts masked, and validation
 on masked slots.
 
+Two whole-node jobs run them (8 GPUs; `DATASET` defaults to nottingham):
+
 ```bash
-# decodes of the existing checkpoint (Nottingham: one node, 8 shards each)
-sbatch --export=ALL,SYSTEMS="duet_joint duet_jointmix duet_k0 duet_bestar" slurm/infer_nottingham.sbatch
-# the three retrains (6 GPUs), then their samples
-T=$(sbatch --parsable slurm/train_duet_variants_nottingham.sbatch)
-sbatch --dependency=afterok:$T --export=ALL,SYSTEMS="duet_v2 duet_v2c48 duet_prev" slurm/infer_nottingham.sbatch
+# decodes of the existing checkpoint, every GPU taking an eighth of the songs
+sbatch slurm/infer_duet_variants.sbatch
+# the retrains, two GPUs each, then their samples
+T=$(sbatch --parsable slurm/train_duet_variants.sbatch)
+sbatch --dependency=afterok:$T --export=ALL,SYSTEMS="duet_v2 duet_v2c48 duet_prev" slurm/infer_duet_variants.sbatch
 ```
 
-On POP909, all of them except `duet_v2c48` run through `slurm/run.sbatch`
-(`generate.sh <system>`, `train.sh <system>`). `duet_bestar` needs
-`CKPT=<run dir>/best_ar`, since the released checkpoint has none.
+With `--export=ALL,DATASET=pop909` the same jobs run on POP909: the
+decodes use the released checkpoint and leave out `duet_bestar` (it has
+no best_ar/; `CKPT_duet_bestar=<run dir>/best_ar` adds it), and the
+retrains are `duet_v2` and `duet_prev`.
 `evaluate.sh` scores every variant that is complete. Table 1 and
 Figure 2 leave them out; `figures/<tag>_quality_variants.tex` is Table 1
 with them added, and `results/<tag>_table_twosided.md` tests each one
