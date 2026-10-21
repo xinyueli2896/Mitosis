@@ -95,14 +95,17 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|dense)
             # commitment level per pair for both slots (the joint decode
             # moves them together), masked only at k=K, a whole draft at
             # every k<K (--sc_k_consistent); 8 query pairs per sequence
-            # instead of 1, 8x the refine gradient.
+            # instead of 1. Both losses are token means, so Q does not
+            # shift the AR/query balance (query_loss_weight 2 either
+            # way); it averages the query term over 8x the frames.
             DRAFT=(--slot_sees_prev_frame --self_cond_prob 1.0
                    --sc_ar_frac 1.0 --sc_ar_free_run --sc_draft_temp 1.0
                    --sym_k --sc_k_consistent --sc_val)
             QP=8
             # duet_v3r: each slot outputs its stream's AR row for the
             # same frame plus a zero-initialised correction, so the
-            # refine starts exactly at AR-heads-only quality
+            # refine starts exactly at AR-heads-only quality; the AR row
+            # is detached there, so only the AR loss trains it
             if [[ "$SYSTEM" == duet_v3r ]]; then DRAFT+=(--residual_refine); fi ;;
         esac
     else

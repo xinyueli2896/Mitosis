@@ -1251,11 +1251,16 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         h_query_global = h_global[:, seq_len:]             # [B, 2Q, H]
         self._last_slot_h = h_query_global                 # A.11 head input
         if self.residual_refine:
-            # pair j's AR rows: 2*t_j predicts melody t_j, 2*t_j+1 chord
+            # pair j's AR rows: 2*t_j predicts melody t_j, 2*t_j+1 chord.
+            # Detached: the AR rows are trained by the AR loss alone.
+            # Both losses are token means, so without the stop-gradient
+            # each query frame's AR row would also take the query loss
+            # (weight query_loss_weight over 2Q frames vs 1 over 2T) --
+            # ~100x the per-frame AR weight on the 8 sampled frames.
             rows = torch.tensor([2 * t_j + mod for t_j in tq for mod in (0, 1)],
                                 device=h_global.device)
             h_query_global = self.residual_slot_out(
-                h_query_global, h_global[:, rows])
+                h_query_global, h_global[:, rows].detach())
         if getattr(self, '_stash_h', False):
             # for the free-running draft (sc_ar_free_run) and for
             # diag_a12_draft: the content hidden states the decode's
