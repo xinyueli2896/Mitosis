@@ -28,8 +28,8 @@ fi
 
 # Default checkpoints: the released files, or your own run directories.
 case "$SYSTEM" in
-    duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|dense|no_draft|ss_finetuned|ss_scratch) ;;
-    duet_joint|duet_jointmix|duet_k0|duet_bestar|duet_prevmix|duet_v2mix|duet_prevk0|duet_prevr3|duet_v3rk0|duet_v3rr3) ;;
+    duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|dense|no_draft|ss_finetuned|ss_scratch) ;;
+    duet_joint|duet_jointmix|duet_k0|duet_bestar|duet_prevmix|duet_v2mix|duet_prevk0|duet_prevr3|duet_v3rk0|duet_v3rr3|duet_v3g15|duet_v3g2|duet_jfmg15|duet_jfmg2) ;;
     *) echo "generate.sh covers the in-house systems; see scripts/external/ for $SYSTEM" >&2; exit 1 ;;
 esac
 # The decode variants re-decode the paper's duet checkpoint (duet_bestar:
@@ -40,6 +40,8 @@ case "$SYSTEM" in
     duet_prevmix|duet_prevk0|duet_prevr3) CKPT_SYS=duet_prev ;;
     duet_v2mix)   CKPT_SYS=duet_v2 ;;
     duet_v3rk0|duet_v3rr3) CKPT_SYS=duet_v3r ;;
+    duet_v3g15|duet_v3g2) CKPT_SYS=duet_v3g ;;
+    duet_jfmg15|duet_jfmg2) CKPT_SYS=duet_jfmg ;;
 esac
 # duet_v2c48: duet_v2's run under the _c48 task (chord stream on 48)
 MEL_DATA="data/${DUET_DATA}_melody_cp4_v2.pt"
@@ -115,7 +117,7 @@ elif [[ -z "${CKPT:-}" ]]; then
     # train.sh wrote for this system (without RUN_TAG; pass CKPT=
     # for a tagged run or when several batch sizes were trained).
     case "$CKPT_SYS" in
-        duet|duet_stale|duet_v2|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|dense) _pat="ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_${CKPT_SYS}_${TASK}_batch_*_schedule" ;;
+        duet|duet_stale|duet_v2|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|dense) _pat="ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_${CKPT_SYS}_${TASK}_batch_*_schedule" ;;
         no_draft)     _pat="ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_${TASK}_batch_*_schedule" ;;
         ss_finetuned) _pat="ckpt/cp_transformer_v0.42_size*_pop909ft_${SS_RUN_TAG}_batch_*_schedule" ;;
         ss_scratch)   _pat="ckpt/cp_transformer_v0.42_size*_pop909scratch_${SS_RUN_TAG}_batch_*_schedule" ;;
@@ -158,7 +160,7 @@ if [[ -n "${SHARD:-}" ]]; then
 fi
 
 case "$SYSTEM" in
-duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|dense|duet_joint|duet_jointmix|duet_k0|duet_bestar|duet_prevmix|duet_v2mix|duet_prevk0|duet_prevr3|duet_v3rk0|duet_v3rr3)
+duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|dense|duet_joint|duet_jointmix|duet_k0|duet_bestar|duet_prevmix|duet_v2mix|duet_prevk0|duet_prevr3|duet_v3rk0|duet_v3rr3|duet_v3g15|duet_v3g2|duet_jfmg15|duet_jfmg2)
     # Draft-and-denoise, leader alternating by frame (ctc_alt): the
     # leader's draft is sampled from its autoregressive head and written
     # into its draft token, one denoise pass reads out both streams.
@@ -190,9 +192,16 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|
     #                  of both streams is one draw from the joint head
     #   duet_v3r       residual-refine retrain, joint decode; duet_v3rk0
     #                  its AR heads only, duet_v3rr3 its refine x3
-    SCHED=ctc_alt; REFINE_STEPS=4; JOINT_MIX=0; JOINT_ROUNDS=1
+    #   duet_jfm       masked joint frame, joint decode: each frame's note
+    #                  slots unmasked over 4 rounds, most confident first
+    #   duet_v3g, duet_jfmg  partner-dropout retrains, joint decode, no
+    #                  guidance; duet_v3g15/2, duet_jfmg15/2 the same
+    #                  checkpoints with partner guidance w = 1.5 / 2
+    SCHED=ctc_alt; REFINE_STEPS=4; JOINT_MIX=0; JOINT_ROUNDS=1; PARTNER_CFG=1
     case "$SYSTEM" in
-        duet_stale|duet_joint|duet_bestar|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr) SCHED=joint ;;
+        duet_stale|duet_joint|duet_bestar|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg) SCHED=joint ;;
+        duet_v3g15|duet_jfmg15) SCHED=joint; PARTNER_CFG=1.5 ;;
+        duet_v3g2|duet_jfmg2) SCHED=joint; PARTNER_CFG=2 ;;
         duet_prevr3|duet_v3rr3) SCHED=joint; JOINT_ROUNDS=3 ;;
         duet_jointmix|duet_prevmix|duet_v2mix) SCHED=joint; JOINT_MIX=0.5 ;;
         duet_k0|duet_prevk0|duet_v3rk0) SCHED=refine; REFINE_STEPS=0 ;;
@@ -201,6 +210,7 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|
     [[ "$SYSTEM" == dense ]] && SHAPE=(--moe-num-experts 1 --moe-topk 1 --moe-intermediate-size 6144)
     MELCHORD_CP=4 A3_SCHEDULE=$SCHED A3_REFINE_STEPS=$REFINE_STEPS A3_FINAL_TEMP=1.0 A3_TOP_P=1.0 \
     A3_JOINT_MIX=$JOINT_MIX A3_JOINT_ROUNDS=$JOINT_ROUNDS A3_CTC_MIX_MODE=geo \
+    A3_PARTNER_CFG=$PARTNER_CFG A3_MASK_STEPS="${MASK_STEPS:-4}" \
     A3_LOCK_PROGRAM="${LOCK_PROGRAM:-1}" \
     python cp_transformer_m2c_duet_block_diffusion_combined.py \
         --ckpt "$CKPT" --mel-folder "$PDIR/$MEL_SUB" --chord-folder "$PDIR/$CHORD_SUB" \

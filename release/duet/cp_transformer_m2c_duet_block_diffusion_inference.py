@@ -695,6 +695,30 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
         raise ValueError('joint_frame checkpoints decode with A3_SCHEDULE=joint')
     if jf and getattr(model, 'hold_tokens', 0):
         raise ValueError('joint_frame is not wired for hold_tokens')
+    # A3_PARTNER_CFG=w (2026-10-21, partner guidance): every global-stack
+    # forward of the joint decode runs twice, as is and with all the
+    # cross-stream gates at 0 (each stream alone); each sub-token is then
+    # drawn from uncond + w * (cond - uncond). w=1 is the plain decode.
+    # Meaningful for a checkpoint trained with --partner_drop_prob.
+    partner_cfg = float(_os.environ.get('A3_PARTNER_CFG', '1'))
+    if partner_cfg != 1.0:
+        if not joint:
+            raise ValueError('A3_PARTNER_CFG is wired for A3_SCHEDULE=joint only')
+        if joint_mix > 0:
+            raise ValueError('A3_PARTNER_CFG and A3_JOINT_MIX both use the '
+                             'second context; pick one')
+        trained_p = float(getattr(model, 'partner_drop_prob_flag', torch.zeros(())).item())
+        print(f'[gen] A3_PARTNER_CFG={partner_cfg}: partner guidance '
+              f'(checkpoint partner_drop_prob={trained_p})')
+        if trained_p <= 0:
+            print('[gen] WARNING: this checkpoint never trained without the '
+                  'partner stream; its unconditional branch is off-distribution')
+    guided = partner_cfg != 1.0
+    # A3_MASK_STEPS=n: rounds of the masked joint frame's decode
+    # (joint_frame='masked'); 4 by default, 1 fills every slot at once.
+    if getattr(model, 'joint_frame', '') == 'masked':
+        model.jm_steps = int(_os.environ.get('A3_MASK_STEPS', '4'))
+        print(f'[gen] masked joint frame: {model.jm_steps} unmasking round(s)')
     if joint:
         print(f'[gen] A3_SCHEDULE=joint: leaderless draft-and-denoise '
               f'(both drafts committed, one refine forward), '
@@ -888,6 +912,14 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                 clean_len = h_clean.shape[1]
                 # the AR heads' contexts, kept for the follower draft mix
                 h_ar = {0: h_global[:, clean_len - 2], 1: h_global[:, clean_len - 1]}
+                h_ar_u = None
+                if guided:
+                    # the same forward with each stream alone
+                    alone = torch.zeros(B, device=device)
+                    h_global_u, _ = model._run_global_stack(
+                        h_in, T_query=T_query, partner_keep=alone)
+                    h_ar_u = {0: h_global_u[:, clean_len - 2],
+                              1: h_global_u[:, clean_len - 1]}
                 cur = {0: m_tokens, 1: c_tokens}
                 if jf and m_sampling != c_sampling:
                     raise NotImplementedError(
@@ -896,17 +928,23 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                 if jf:
                     # one joint draw for both streams' frame t
                     cur[0], cur[1], _, _ = model.joint_sampling(
-                        h_ar[0], h_ar[1], subseq_len, temperature=temperature)
+                        h_ar[0], h_ar[1], subseq_len, temperature=temperature,
+                        h_m_u=h_ar_u[0] if guided else None,
+                        h_c_u=h_ar_u[1] if guided else None, cfg_w=partner_cfg)
                 if m_sampling and not jf:
                     cur[0] = model.local_sampling(h_global[:, clean_len - 2],
                                                   max_subseq_len=subseq_len,
                                                   temperature=temperature,
-                                                  token_type_id=0)
+                                                  token_type_id=0,
+                                                  h_alt=h_ar_u[0] if guided else None,
+                                                  alt_weight=partner_cfg, mix_mode='cfg')
                 if c_sampling and not jf:
                     cur[1] = model.local_sampling(h_global[:, clean_len - 1],
                                                   max_subseq_len=subseq_len,
                                                   temperature=temperature,
-                                                  token_type_id=1)
+                                                  token_type_id=1,
+                                                  h_alt=h_ar_u[1] if guided else None,
+                                                  alt_weight=partner_cfg, mix_mode='cfg')
                 sampling = {0: m_sampling, 1: c_sampling}
                 if joint:
                     # both drafts committed (k=0), no leader; a given
@@ -919,22 +957,38 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                                              0, K, i, B) for i in (0, 1)]
                         h_in = torch.cat([h_clean_padded, slots[0], slots[1]], dim=1)
                         h_global, _ = model._run_global_stack(h_in, T_query=T_query)
+                        h_slot = {i: model.residual_slot_out(
+                            h_global[:, -2 if i == 0 else -1], h_ar[i], i) for i in (0, 1)}
+                        h_slot_u = None
+                        if guided:
+                            # cut off from each other, a slot no longer
+                            # reads the partner's draft either
+                            h_global_u, _ = model._run_global_stack(
+                                h_in, T_query=T_query, partner_keep=alone)
+                            h_slot_u = {i: model.residual_slot_out(
+                                h_global_u[:, -2 if i == 0 else -1], h_ar_u[i], i)
+                                for i in (0, 1)}
                         if jf:
                             cur[0], cur[1], _, _ = model.joint_sampling(
-                                model.residual_slot_out(h_global[:, -2], h_ar[0], 0),
-                                model.residual_slot_out(h_global[:, -1], h_ar[1], 1),
-                                subseq_len, temperature=final_temperature)
+                                h_slot[0], h_slot[1],
+                                subseq_len, temperature=final_temperature,
+                                h_m_u=h_slot_u[0] if guided else None,
+                                h_c_u=h_slot_u[1] if guided else None,
+                                cfg_w=partner_cfg)
                             continue
                         for i in (0, 1):
                             if sampling[i]:
                                 # slot positions: melody at -2, chord at -1
+                                if guided:
+                                    alt, alt_w, mode = h_slot_u[i], partner_cfg, 'cfg'
+                                else:
+                                    alt = h_ar[i] if joint_mix > 0 else None
+                                    alt_w, mode = joint_mix, ctc_mix_mode
                                 cur[i] = model.local_sampling(
-                                    model.residual_slot_out(
-                                        h_global[:, -2 if i == 0 else -1], h_ar[i], i),
+                                    h_slot[i],
                                     max_subseq_len=subseq_len,
                                     temperature=final_temperature, token_type_id=i,
-                                    h_alt=h_ar[i] if joint_mix > 0 else None,
-                                    alt_weight=joint_mix, mix_mode=ctc_mix_mode)
+                                    h_alt=alt, alt_weight=alt_w, mix_mode=mode)
                     order = []
                 else:
                     lead = {'m': 0, 'c': 1, 'alt': t % 2}[ctc_leader]

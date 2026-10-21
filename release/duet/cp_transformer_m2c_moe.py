@@ -475,6 +475,10 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         the follower's denoised distribution keep a share of its own
         autoregressive draft instead of discarding it. Off by default
         (alt_weight 0 is byte-identical to the plain path).
+        cfg (2026-10-21, partner guidance): h_alt is the same row with
+        the other stream cut off, and alt_weight the guidance weight w;
+        the step samples softmax(alt + w * (h - alt)) over the valid
+        tokens, so w=1 is the plain path and w>1 leans on the partner.
 
         prefix ([B, P] tokens, optional): forced tokens -- wherever
         prefix[:, step] is not pad, that token is emitted instead of a
@@ -565,6 +569,11 @@ class RoFormerSymbolicTransformer(L.LightningModule):
                 if not use_alt:
                     return F.softmax(logits / temp, dim=-1)
                 w = float(alt_weight)
+                if mix_mode == 'cfg':
+                    # invalid tokens are -inf in both; keep them -inf
+                    guided = torch.where(
+                        valid, logits_alt + w * (logits - logits_alt), logits)
+                    return F.softmax(guided / temp, dim=-1)
                 if mix_mode == 'geo':
                     return F.softmax(((1.0 - w) * logits + w * logits_alt) / temp,
                                      dim=-1)
