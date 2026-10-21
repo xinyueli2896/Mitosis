@@ -29,13 +29,17 @@ fi
 # Default checkpoints: the released files, or your own run directories.
 case "$SYSTEM" in
     duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense|no_draft|ss_finetuned|ss_scratch) ;;
-    duet_joint|duet_jointmix|duet_k0|duet_bestar) ;;
+    duet_joint|duet_jointmix|duet_k0|duet_bestar|duet_prevmix|duet_v2mix) ;;
     *) echo "generate.sh covers the in-house systems; see scripts/external/ for $SYSTEM" >&2; exit 1 ;;
 esac
 # The decode variants re-decode the paper's duet checkpoint (duet_bestar:
 # its best_ar/ weights, selected on the clean-row loss alone).
 CKPT_SYS="$SYSTEM"
-case "$SYSTEM" in duet_joint|duet_jointmix|duet_k0|duet_bestar) CKPT_SYS=duet ;; esac
+case "$SYSTEM" in
+    duet_joint|duet_jointmix|duet_k0|duet_bestar) CKPT_SYS=duet ;;
+    duet_prevmix) CKPT_SYS=duet_prev ;;
+    duet_v2mix)   CKPT_SYS=duet_v2 ;;
+esac
 # duet_v2c48: duet_v2's run under the _c48 task, fed chord prompts on program 48
 CHORD_SUB=chord
 if [[ "$SYSTEM" == duet_v2c48 ]]; then
@@ -112,7 +116,7 @@ if [[ -n "${SHARD:-}" ]]; then
 fi
 
 case "$SYSTEM" in
-duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense|duet_joint|duet_jointmix|duet_k0|duet_bestar)
+duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense|duet_joint|duet_jointmix|duet_k0|duet_bestar|duet_prevmix|duet_v2mix)
     # Draft-and-denoise, leader alternating by frame (ctc_alt): the
     # leader's draft is sampled from its autoregressive head and written
     # into its draft token, one denoise pass reads out both streams.
@@ -132,10 +136,12 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense|duet_joint|duet_jointmix|duet
     #                  duet checkpoint's backbone vs w/o draft tokens)
     #   duet_bestar    duet_joint on the best_ar/ weights
     #   duet_v2, duet_v2c48, duet_prev   the retrains, joint decode
+    #   duet_prevmix, duet_v2mix         duet_prev / duet_v2 with
+    #                  duet_jointmix's AR-head mix
     SCHED=ctc_alt; REFINE_STEPS=4; JOINT_MIX=0
     case "$SYSTEM" in
         duet_stale|duet_joint|duet_bestar|duet_v2|duet_v2c48|duet_prev) SCHED=joint ;;
-        duet_jointmix) SCHED=joint; JOINT_MIX=0.5 ;;
+        duet_jointmix|duet_prevmix|duet_v2mix) SCHED=joint; JOINT_MIX=0.5 ;;
         duet_k0)  SCHED=refine; REFINE_STEPS=0 ;;
     esac
     SHAPE=(--moe-num-experts 4 --moe-topk 2)

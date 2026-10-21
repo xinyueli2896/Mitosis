@@ -127,6 +127,8 @@ GROUPS = [
         ('A3jm',      'Duet, joint + AR mix',       'Duet\njoint mix'),
         ('A3K0',      'Duet, AR heads only',        'Duet\nK0'),
         ('A3ar',      'Duet, best AR weights',      'Duet\nbest AR'),
+        ('A3fm',      'Duet, t-1 + AR mix',         'Duet\nt-1 mix'),
+        ('A3v2m',     'Duet v2 + AR mix',           'Duet\nv2 mix'),
     ]),
 ]
 # systems drawn but left out of the best-of comparison whatever their
