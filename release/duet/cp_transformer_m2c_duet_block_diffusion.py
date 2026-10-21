@@ -163,7 +163,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  sc_draft_temp=0.0, sc_k_consistent=False,
                  sym_k=False, mask_k_prob=None, sc_val=False,
                  sc_ar_free_run=False, stale_draft_every=0,
-                 draft_k0=False, **kwargs):
+                 draft_k0=False, residual_refine=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- stale-snapshot drafts ---------------------------------------
@@ -494,6 +494,27 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             self.k_emb_m.weight.zero_()
             self.k_emb_c.weight.zero_()
 
+        # residual_refine (2026-10-21): a query slot's output is its
+        # stream's AR context for the same frame (clean row 2t / 2t+1,
+        # which sees both streams through t-1) plus a correction read
+        # off the slot, h = h_ar + res_proj(h_slot). res_proj is zero-
+        # initialised, so at step 0 every slot predicts exactly what its
+        # AR head does and the leaderless refine starts at AR-heads-only
+        # quality; it moves away only where the slot's view of the
+        # partner's draft lowers the loss. The projections are the flag
+        # (load_model detects them); the buffer records it for the logs.
+        self.residual_refine = bool(residual_refine)
+        if self.residual_refine:
+            self.res_proj_m = nn.Linear(self.hidden_size, self.hidden_size)
+            self.res_proj_c = nn.Linear(self.hidden_size, self.hidden_size)
+            with torch.no_grad():
+                for lin in (self.res_proj_m, self.res_proj_c):
+                    lin.weight.zero_()
+                    lin.bias.zero_()
+        self.register_buffer(
+            'residual_refine_flag',
+            torch.tensor(int(self.residual_refine), dtype=torch.long))
+
         # --- v1.1 training-scheme flags -------------------------------
         # slot_rope_aligned: apply RoPE to the two query slots at rotary
         # index 2*T_query+2 / 2*T_query+3 -- the phase they naturally
@@ -580,6 +601,10 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             torch.tensor(self.query_block, dtype=torch.long),
         )
         if self.query_block > 1:
+            if self.residual_refine:
+                raise ValueError(
+                    'residual_refine reads the AR row of the slot\'s own '
+                    'frame; block mode (A.8) is not wired for it.')
             if self.slot_sees_prev_frame:
                 raise ValueError(
                     'slot_sees_prev_frame is defined for the per-frame '
@@ -1225,6 +1250,12 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         h_clean_global = h_global[:, :seq_len]
         h_query_global = h_global[:, seq_len:]             # [B, 2Q, H]
         self._last_slot_h = h_query_global                 # A.11 head input
+        if self.residual_refine:
+            # pair j's AR rows: 2*t_j predicts melody t_j, 2*t_j+1 chord
+            rows = torch.tensor([2 * t_j + mod for t_j in tq for mod in (0, 1)],
+                                device=h_global.device)
+            h_query_global = self.residual_slot_out(
+                h_query_global, h_global[:, rows])
         if getattr(self, '_stash_h', False):
             # for the free-running draft (sc_ar_free_run) and for
             # diag_a12_draft: the content hidden states the decode's
@@ -1242,6 +1273,23 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         query_logits = self.local_decode(h_query_global, emb_query_flat)
 
         return ar_logits, query_logits, aux_loss
+
+    def residual_slot_out(self, h_slot, h_ar, mod=None):
+        """residual_refine: the slot hidden the local decoder reads.
+
+        h_slot, h_ar: [B, H] for one stream (mod 0 melody, 1 chord), or
+        [B, 2Q, H] with mod=None, pairs in (melody, chord) order. A no-op
+        without residual_refine.
+        """
+        if not self.residual_refine:
+            return h_slot
+        if mod is not None:
+            proj = self.res_proj_m if mod == 0 else self.res_proj_c
+            return h_ar + proj(h_slot)
+        out = torch.empty_like(h_slot)
+        out[:, 0::2] = h_ar[:, 0::2] + self.res_proj_m(h_slot[:, 0::2])
+        out[:, 1::2] = h_ar[:, 1::2] + self.res_proj_c(h_slot[:, 1::2])
+        return out
 
     def _coerce_k(self, k, batch_size, device):
         """Accept int / None / LongTensor[B] and return LongTensor[B]."""
@@ -2048,6 +2096,13 @@ if __name__ == '__main__':
                              'joint decode state: both slots drafted, both '
                              'tagged k=0, both scored. Use with '
                              '--self_cond_prob 1 and --sc_val.')
+    parser.add_argument('--residual_refine', action='store_true',
+                        default=False,
+                        help='A query slot outputs its stream\'s AR context '
+                             'for the same frame plus a zero-initialised '
+                             'correction read off the slot, so the refine '
+                             'starts exactly at AR-heads-only and moves '
+                             'away only where reading the partner helps.')
     parser.add_argument('--sc_val', action='store_true', default=False,
                         help='A.12: present VALIDATION the draft state '
                              'instead of the masked one -- run the probe '
@@ -2234,6 +2289,8 @@ if __name__ == '__main__':
         if getattr(a, 'moe_expert_lora_rank', 0) > 0:
             abbr += f'E{a.moe_expert_lora_rank}'  # low-rank experts over
                                                # one shared FFN
+        if getattr(a, 'residual_refine', False):
+            abbr += 'R'                        # slot = AR row + correction
         return abbr
 
     tag = f'_{args.run_tag}' if args.run_tag else ''
@@ -2301,6 +2358,7 @@ if __name__ == '__main__':
         mask_k_prob=args.mask_k_prob,
         sc_val=bool(args.sc_val),
         draft_k0=bool(args.draft_k0),
+        residual_refine=bool(args.residual_refine),
         agree_head=bool(args.agree_head),
         cross_lora_rank=args.cross_lora_rank,
         moe_expert_lora_rank=args.moe_expert_lora_rank,
@@ -2333,7 +2391,8 @@ if __name__ == '__main__':
           f'sc_k_consistent={bool(args.sc_k_consistent)}  '
           f'sym_k={bool(args.sym_k)}  '
           f'mask_k_prob={args.mask_k_prob}  sc_val={bool(args.sc_val)}  '
-          f'draft_k0={bool(args.draft_k0)}'
+          f'draft_k0={bool(args.draft_k0)}  '
+          f'residual_refine={bool(args.residual_refine)}'
           f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
           f'query_loss_weight={args.query_loss_weight}  '
@@ -2511,6 +2570,7 @@ if __name__ == '__main__':
                     'mask_k_prob': args.mask_k_prob,
                     'sc_val': bool(args.sc_val),
                     'draft_k0': bool(args.draft_k0),
+                    'residual_refine': bool(args.residual_refine),
                     'agree_head': bool(args.agree_head),
                     'cross_lora_rank': args.cross_lora_rank,
                     'moe_expert_lora_rank': args.moe_expert_lora_rank,

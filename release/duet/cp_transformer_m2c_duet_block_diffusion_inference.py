@@ -157,6 +157,12 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
             break
     print(f'[load_model] slot_sees_prev_frame={slot_sees_prev_frame}'
           f'{" (A.9/A.3f: slot reads frame t-1)" if slot_sees_prev_frame else ""}')
+    # residual_refine: the projections are real parameters, so their
+    # presence IS the flag. Building without them would read the slot
+    # hidden raw, which the run never trained to stand alone.
+    residual_refine = any(k.endswith('res_proj_m.weight') for k in state_dict_keys)
+    print(f'[load_model] residual_refine={residual_refine}'
+          f'{" (slot = AR row + correction)" if residual_refine else ""}')
     # A.3c: conditional-slot training share, informational (decode is
     # chosen by A3_SCHEDULE; ctc_* is the matching schedule).
     for k in state_dict_keys:
@@ -219,6 +225,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         slot_rope_aligned=slot_rope_aligned,
         time_rope_aligned=time_rope_aligned,
         slot_sees_prev_frame=slot_sees_prev_frame,
+        residual_refine=residual_refine,
         moe_modality_bias=moe_modality_bias,
         moe_modality_gates=moe_modality_gates,
         moe_modality_hard_route=moe_modality_hard_route,
@@ -815,7 +822,8 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                             if sampling[i]:
                                 # slot positions: melody at -2, chord at -1
                                 cur[i] = model.local_sampling(
-                                    h_global[:, -2 if i == 0 else -1],
+                                    model.residual_slot_out(
+                                        h_global[:, -2 if i == 0 else -1], h_ar[i], i),
                                     max_subseq_len=subseq_len,
                                     temperature=final_temperature, token_type_id=i,
                                     h_alt=h_ar[i] if joint_mix > 0 else None,
@@ -838,7 +846,8 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                     h_in = torch.cat([h_clean_padded, slots[0], slots[1]], dim=1)
                     h_global, _ = model._run_global_stack(h_in, T_query=T_query)
                     # slot positions: melody at -2, chord at -1
-                    h_pred = h_global[:, -2 if fo == 0 else -1]
+                    h_pred = model.residual_slot_out(
+                        h_global[:, -2 if fo == 0 else -1], h_ar[fo], fo)
                     new_fo = model.local_sampling(
                         h_pred, max_subseq_len=subseq_len,
                         temperature=final_temperature, token_type_id=fo,
@@ -846,7 +855,8 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                         alt_weight=ctc_follower_mix, mix_mode=ctc_mix_mode)
                     if ctc_denoise_leader and sampling[ld]:
                         # the leader's slot denoises its draft in the same forward
-                        h_lead = h_global[:, -2 if ld == 0 else -1]
+                        h_lead = model.residual_slot_out(
+                            h_global[:, -2 if ld == 0 else -1], h_ar[ld], ld)
                         cur[ld] = model.local_sampling(h_lead, max_subseq_len=subseq_len,
                                                        temperature=final_temperature,
                                                        token_type_id=ld)
@@ -884,8 +894,11 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                     h_m_pred = h_global[:, clean_len - 2]
                     h_c_pred = h_global[:, clean_len - 1]
                 else:
-                    h_m_pred = h_global[:, -2]
-                    h_c_pred = h_global[:, -1]
+                    clean_len = h_clean.shape[1]
+                    h_m_pred = model.residual_slot_out(
+                        h_global[:, -2], h_global[:, clean_len - 2], 0)
+                    h_c_pred = model.residual_slot_out(
+                        h_global[:, -1], h_global[:, clean_len - 1], 1)
 
                 # Temperature annealing across rounds: exploration early,
                 # near-greedy at the committed round. Linear interpolation
