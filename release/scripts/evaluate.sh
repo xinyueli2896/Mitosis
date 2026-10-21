@@ -19,13 +19,17 @@
 #
 # DATASET=nottingham scores temp/E1_nottingham/ and writes the same files
 # with E1_nottingham_ in place of E1_.
+#
+# EXTRA_ROOTS="dir1 dir2 ..." also looks for each system's folder there,
+# after OUT_ROOT, when its samples live in another run's output tree;
+# the first complete one is scored. Prompts still come from OUT_ROOT.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 need "$PROMPTS/.ready" "Generate at least one system first."
 SONG_IDS=$(ls "$PROMPTS/mel" | sed 's/\.mid$//' | sort | tr '\n' ' ')
 
 layout() { case "$1" in S1|S-scratch) echo single ;; *) echo duet_multi ;; esac; }
 complete() {   # every song has >= N_SAMPLES samples in the system's layout
-    local root="$OUT_ROOT/$1" sid n
+    local root="$2/$1" sid n
     [[ -d "$root" ]] || return 1
     for sid in $SONG_IDS; do
         case "$(layout "$1")" in
@@ -38,8 +42,13 @@ complete() {   # every song has >= N_SAMPLES samples in the system's layout
 
 SRC=(); SCORED=()
 for s in $ALL_SYSTEMS; do
-    id=$(system_id "$s")
-    if complete "$id"; then SRC+=(--source "$id:$(layout "$id"):$OUT_ROOT/$id"); SCORED+=("$id")
+    id=$(system_id "$s"); found=
+    for r in "$OUT_ROOT" ${EXTRA_ROOTS:-}; do
+        if complete "$id" "$r"; then found="$r/$id"; break; fi
+    done
+    if [[ -n "$found" ]]; then
+        SRC+=(--source "$id:$(layout "$id"):$found"); SCORED+=("$id")
+        [[ "$found" == "$OUT_ROOT/$id" ]] || echo "[evaluate] $s ($id): from $found"
     else echo "[evaluate] $s ($id): incomplete or missing, not scored"; fi
 done
 [[ ${#SCORED[@]} -gt 0 ]] || { echo "ERROR: no complete system under $OUT_ROOT" >&2; exit 1; }
