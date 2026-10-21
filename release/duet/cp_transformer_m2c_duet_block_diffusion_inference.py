@@ -709,6 +709,23 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     mel_frames = []
     chord_frames = []
 
+    # A3_LOCK_PROGRAM=1: each stream samples only the MIDI program its
+    # given (prompt) frames carry most often, per batch item, so a
+    # program-tagged model keeps melody and chords on their own programs
+    # (e.g. chords on 48) instead of drifting to the other stream's or a
+    # stray one. Without it every program 0..127 stays a legal token.
+    # Streams whose prompt is silent stay unconstrained.
+    lock_program = (_os.environ.get('A3_LOCK_PROGRAM', '0') == '1'
+                    and getattr(model, 'preserve_program', False))
+    prog_counts = torch.zeros(2, B, 128, device=device)
+    model._program_lock = None
+
+    def _count_programs(frame, i):
+        progs = frame[:, 0::2]
+        ok = progs < 128
+        prog_counts[i].scatter_add_(1, progs.clamp(max=127) * ok,
+                                    ok.to(prog_counts.dtype))
+
     for t in range(gen_length):
         if t % 10 == 0:
             print(f'[gen] step {t}/{gen_length}  (K_refine={K})')
@@ -729,10 +746,20 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
             m_frame = resolve_frame(m_action, B, subseq_len, tokenizer, device)
             m_tokens = m_frame
             m_action_h = model._encode_frame(m_frame, 0).to(dtype=dtype)  # [B, 1, H]
+            if lock_program:
+                _count_programs(m_frame, 0)
         if not c_sampling:
             c_frame = resolve_frame(c_action, B, subseq_len, tokenizer, device)
             c_tokens = c_frame
             c_action_h = model._encode_frame(c_frame, 1).to(dtype=dtype)
+            if lock_program:
+                _count_programs(c_frame, 1)
+        if lock_program:
+            seen = prog_counts.sum(-1) > 0                       # [2, B]
+            lock = torch.where(seen, prog_counts.argmax(-1),
+                               torch.full(seen.shape, -1, dtype=torch.long,
+                                          device=device))
+            model._program_lock = {0: lock[0], 1: lock[1]}
 
         if need_model:
             # Build the clean prefix once per step.
@@ -971,6 +998,11 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
         c_h = model._encode_frame(c_tokens, 1).to(dtype=dtype)
         h_buffer = torch.cat([h_buffer, m_h, c_h], dim=1)
 
+    if lock_program and model._program_lock is not None:
+        print('[gen] A3_LOCK_PROGRAM: melody program(s) '
+              f'{sorted(set(model._program_lock[0].tolist()))}, chord program(s) '
+              f'{sorted(set(model._program_lock[1].tolist()))} (-1 = unlocked)')
+    model._program_lock = None
     return mel_frames, chord_frames
 
 

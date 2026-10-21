@@ -514,6 +514,14 @@ class RoFormerSymbolicTransformer(L.LightningModule):
                         # non-drum side samples 0..126. Constraining
                         # further would re-introduce the squash.
                         valid[:, 0:128] = True
+                        # decode-time program lock (A3_LOCK_PROGRAM in the
+                        # duet diffusion decode): [B] program per item for
+                        # this stream, -1 = unconstrained
+                        lock = (getattr(self, '_program_lock', None) or {}).get(token_type_id)
+                        if lock is not None:
+                            rows = lock >= 0
+                            valid[rows, 0:128] = False
+                            valid[rows, lock[rows]] = True
                     elif token_type_id == 0:      # melody
                         valid[:, 24] = True
                     elif token_type_id == 1:    # chord

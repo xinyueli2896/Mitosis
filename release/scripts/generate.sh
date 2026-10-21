@@ -124,7 +124,9 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|dense|duet_joint|d
     # duet_stale has no leader (joint): one forward drafts both streams
     # from their autoregressive heads, both drafts go into the draft
     # tokens, one refine pass reads out both -- the regime it trains on.
-    # Temperature 1, no nucleus cut.
+    # Temperature 1, no nucleus cut. Each stream samples only the program
+    # its prompt carries (LOCK_PROGRAM=0 lifts that), so a program-tagged
+    # model keeps chords on 48 and an untagged one keeps both on theirs.
     #
     # Variants (README "Improving Duet's co-generation"), all leaderless:
     #   duet_joint     the paper checkpoint, joint decode: both streams
@@ -154,6 +156,7 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|dense|duet_joint|d
     [[ "$SYSTEM" == dense ]] && SHAPE=(--moe-num-experts 1 --moe-topk 1 --moe-intermediate-size 6144)
     MELCHORD_CP=4 A3_SCHEDULE=$SCHED A3_REFINE_STEPS=$REFINE_STEPS A3_FINAL_TEMP=1.0 A3_TOP_P=1.0 \
     A3_JOINT_MIX=$JOINT_MIX A3_JOINT_ROUNDS=$JOINT_ROUNDS A3_CTC_MIX_MODE=geo \
+    A3_LOCK_PROGRAM="${LOCK_PROGRAM:-1}" \
     python cp_transformer_m2c_duet_block_diffusion_combined.py \
         --ckpt "$CKPT" --mel-folder "$PDIR/mel" --chord-folder "$PDIR/$CHORD_SUB" \
         --output-dir "$OUT" --modes co \
