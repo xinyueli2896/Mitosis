@@ -78,6 +78,7 @@ system_id() {
         duet_bestar)   echo A3ar ;;
         duet_prevmix)  echo A3fm ;;
         duet_v2mix)    echo A3v2m ;;
+        duet_prevk0)   echo A3fK0 ;;
         dense)         echo D1 ;;
         no_draft)      echo A1 ;;
         ss_finetuned)  echo S1 ;;
@@ -90,9 +91,10 @@ system_id() {
 # Duet variants (README "Improving Duet's co-generation"), all decoded
 # without a leader: three retrains (duet_v2, duet_v2c48, duet_prev) and
 # four decodes of the paper's duet checkpoint, plus the AR-head mix on
-# two of the retrains (duet_prevmix, duet_v2mix).
+# two of the retrains (duet_prevmix, duet_v2mix) and duet_prev's AR
+# heads alone (duet_prevk0).
 # Scored when complete, kept out of Table 1 and Figure 2.
-DUET_VARIANTS="duet_v2 duet_v2c48 duet_prev duet_joint duet_jointmix duet_k0 duet_bestar duet_prevmix duet_v2mix"
+DUET_VARIANTS="duet_v2 duet_v2c48 duet_prev duet_joint duet_jointmix duet_k0 duet_bestar duet_prevmix duet_v2mix duet_prevk0"
 ALL_SYSTEMS="duet duet_stale dense no_draft ss_finetuned ss_scratch wholesong amt $DUET_VARIANTS"
 
 # Number of visible GPUs (CUDA_VISIBLE_DEVICES, else what torch sees).

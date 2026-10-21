@@ -175,6 +175,7 @@ one more forward reads both refined frames out (`A3_SCHEDULE=joint`).
 | `duet_v2c48` | `A3v2c48` | `duet_v2` with the chord stream on program 48, the single-stream models' tag (`prepare_data.sh chord48`, task `melchord_nottingham_c48`); the same notes, only the program token differs |
 | `duet_prevmix` | `A3fm` | `duet_prev`'s checkpoint with `duet_jointmix`'s decode |
 | `duet_v2mix` | `A3v2m` | `duet_v2`'s checkpoint with `duet_jointmix`'s decode |
+| `duet_prevk0` | `A3fK0` | `duet_prev`'s checkpoint, AR heads only (control for `A3f`'s refine pass) |
 
 `duet_stale` (above) is the closest earlier attempt at the joint
 regime. It differs from `duet_v2` in the t-1 mask, drafts from a frozen
