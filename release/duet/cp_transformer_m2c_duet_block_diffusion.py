@@ -282,7 +282,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  sym_k=False, mask_k_prob=None, sc_val=False,
                  sc_ar_free_run=False, stale_draft_every=0,
                  draft_k0=False, residual_refine=False, hold_tokens=0,
-                 **kwargs):
+                 query_onset_weight=0.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- stale-snapshot drafts ---------------------------------------
@@ -639,6 +639,17 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         # the checkpoint (the decode must build frames the same way);
         # hold_rows_init_flag records the one-time embedding init.
         self.hold_tokens = int(hold_tokens)
+        # query_onset_weight=w (2026-10-21): draw the training query
+        # frames with weight 1 + w * (share of batch items with an onset
+        # in either stream at that frame) instead of uniformly. Most
+        # frames are EOS in both streams -- a trivial query target -- so
+        # a uniform draw spends most of the refine's gradient there. The
+        # frames stay distinct and shared across the batch (T_query
+        # defines the attention mask); validation keeps its fixed frame.
+        self.query_onset_weight = float(query_onset_weight)
+        self.register_buffer(
+            'query_onset_weight_flag',
+            torch.tensor(self.query_onset_weight, dtype=torch.float32))
         self.register_buffer(
             'hold_tokens_flag', torch.tensor(self.hold_tokens, dtype=torch.long))
         self.register_buffer(
@@ -1550,6 +1561,17 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
              else min(max(int(self.query_pairs), 1), T_full - 1))
         if tq is not None:
             pass
+        elif self.training and self.query_onset_weight > 0 and Q < T_full - 1:
+            # onset-weighted draw (see query_onset_weight in __init__)
+            has_on = torch.zeros(batch_size, T_full, dtype=torch.bool,
+                                 device=x.device)
+            for xs in (x_mel, x_acc):
+                on, _, _, _ = onset_notes(xs, self.tokenizer.pad_token)
+                has_on |= on.any(dim=-1)
+            w = 1.0 + self.query_onset_weight * has_on.float().mean(dim=0)
+            pick = torch.multinomial(w[1:], Q, replacement=False) + 1
+            tq = tuple(sorted(int(t) for t in pick.tolist()))
+            self._last_query_onset_frac = has_on[:, list(tq)].float().mean().detach()
         elif self.training:
             if Q >= T_full - 1:
                 # A.9: every frame, no sampling -- the query objective
@@ -1948,6 +1970,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.log('train_query_kept_frac', self._last_query_kept_frac)
         self.log('train_query_pairs', float(self._last_n_pairs))
         self.log('train_ctc_frac', getattr(self, '_last_ctc_frac', torch.zeros(())))
+        if self.query_onset_weight > 0:
+            self.log('train_query_onset_frac', getattr(self, '_last_query_onset_frac', torch.zeros(())))
         if self.agree_head:
             self.log('train_agree_loss', self._last_agree_loss)
             self.log('train_agree_acc', self._last_agree_acc)
@@ -2293,6 +2317,10 @@ if __name__ == '__main__':
                              'correction read off the slot, so the refine '
                              'starts exactly at AR-heads-only and moves '
                              'away only where reading the partner helps.')
+    parser.add_argument('--query_onset_weight', type=float, default=0.0,
+                        help='Draw training query frames with weight 1 + w * '
+                             '(share of items with an onset in either stream '
+                             'at the frame) instead of uniformly. 0 = uniform.')
     parser.add_argument('--hold_tokens', type=int, default=0,
                         help='Prefix every frame of both streams with up to '
                              'N held notes (pitches still sounding from an '
@@ -2489,6 +2517,8 @@ if __name__ == '__main__':
             abbr += 'R'                        # slot = AR row + correction
         if getattr(a, 'hold_tokens', 0):
             abbr += f'H{a.hold_tokens}'        # held-note prefix per frame
+        if getattr(a, 'query_onset_weight', 0) > 0:
+            abbr += f'O{a.query_onset_weight:g}'  # onset-weighted query frames
         return abbr
 
     tag = f'_{args.run_tag}' if args.run_tag else ''
@@ -2558,6 +2588,7 @@ if __name__ == '__main__':
         draft_k0=bool(args.draft_k0),
         residual_refine=bool(args.residual_refine),
         hold_tokens=args.hold_tokens,
+        query_onset_weight=args.query_onset_weight,
         agree_head=bool(args.agree_head),
         cross_lora_rank=args.cross_lora_rank,
         moe_expert_lora_rank=args.moe_expert_lora_rank,
@@ -2592,7 +2623,8 @@ if __name__ == '__main__':
           f'mask_k_prob={args.mask_k_prob}  sc_val={bool(args.sc_val)}  '
           f'draft_k0={bool(args.draft_k0)}  '
           f'residual_refine={bool(args.residual_refine)}  '
-          f'hold_tokens={args.hold_tokens}'
+          f'hold_tokens={args.hold_tokens}  '
+          f'query_onset_weight={args.query_onset_weight}'
           f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
           f'query_loss_weight={args.query_loss_weight}  '
@@ -2772,6 +2804,7 @@ if __name__ == '__main__':
                     'draft_k0': bool(args.draft_k0),
                     'residual_refine': bool(args.residual_refine),
                     'hold_tokens': args.hold_tokens,
+                    'query_onset_weight': args.query_onset_weight,
                     'agree_head': bool(args.agree_head),
                     'cross_lora_rank': args.cross_lora_rank,
                     'moe_expert_lora_rank': args.moe_expert_lora_rank,

@@ -126,6 +126,7 @@ GROUPS = [
         ('A3v3',      'Duet v3',                    'Duet\nv3'),
         ('A3v3r',     'Duet v3, residual refine',   'Duet\nv3r'),
         ('A3v3h',     'Duet v3, held-note tokens',  'Duet\nv3h'),
+        ('A3v3o',     'Duet v3, onset-weighted queries', 'Duet\nv3o'),
         ('A3v3rK0',   'Duet v3r, AR heads only',    'Duet\nv3r K0'),
         ('A3v3rr3',   'Duet v3r, 3 refine rounds',  'Duet\nv3r r3'),
         ('A3jt',      'Duet, joint decode',         'Duet\njoint'),

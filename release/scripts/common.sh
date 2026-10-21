@@ -75,6 +75,7 @@ system_id() {
         duet_v3)       echo A3v3 ;;
         duet_v3r)      echo A3v3r ;;
         duet_v3h)      echo A3v3h ;;
+        duet_v3o)      echo A3v3o ;;
         duet_v3rk0)    echo A3v3rK0 ;;
         duet_v3rr3)    echo A3v3rr3 ;;
         duet_joint)    echo A3jt ;;
@@ -100,7 +101,7 @@ system_id() {
 # two of the retrains (duet_prevmix, duet_v2mix) and duet_prev's AR
 # heads alone (duet_prevk0) and its refine run 3 rounds (duet_prevr3).
 # Scored when complete, kept out of Table 1 and Figure 2.
-DUET_VARIANTS="duet_v2 duet_v2c48 duet_prev duet_v3 duet_joint duet_jointmix duet_k0 duet_bestar duet_prevmix duet_v2mix duet_prevk0 duet_prevr3 duet_v3r duet_v3rk0 duet_v3rr3 duet_v3h"
+DUET_VARIANTS="duet_v2 duet_v2c48 duet_prev duet_v3 duet_joint duet_jointmix duet_k0 duet_bestar duet_prevmix duet_v2mix duet_prevk0 duet_prevr3 duet_v3r duet_v3rk0 duet_v3rr3 duet_v3h duet_v3o"
 ALL_SYSTEMS="duet duet_stale dense no_draft ss_finetuned ss_scratch wholesong amt $DUET_VARIANTS"
 
 # Number of visible GPUs (CUDA_VISIBLE_DEVICES, else what torch sees).
