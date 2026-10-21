@@ -44,7 +44,7 @@ if _MOE_ROOT not in _sys.path:
 
 import torch
 
-from cp_transformer_m2c_duet_block_diffusion import M2CDuetBlockDiffusion
+from cp_transformer_m2c_duet_block_diffusion import M2CDuetBlockDiffusion, JF_ORDERS
 from cp_transformer_m2c_moe import TRAIN_LENGTH
 from cp_transformer_m2c_jointattn_inference import (  # noqa: F401
     decode_m2c_frames,
@@ -170,6 +170,16 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
             hold_tokens = int(sd_tmp[k].item())
             break
     print(f'[load_model] hold_tokens={hold_tokens}')
+    # joint_frame: buffer VALUE (order code); the head reads both rows of
+    # a frame and samples the merged frame, so the decode must know.
+    joint_frame = ''
+    for k in state_dict_keys:
+        if k.endswith('joint_frame_flag'):
+            sd_tmp = ck['state_dict'] if 'state_dict' in ck else ck
+            code = int(sd_tmp[k].item())
+            joint_frame = {v: n for n, v in JF_ORDERS.items()}.get(code, '')
+            break
+    print(f'[load_model] joint_frame={joint_frame or "off"}')
     print(f'[load_model] residual_refine={residual_refine}'
           f'{" (slot = AR row + correction)" if residual_refine else ""}')
     # A.3c: conditional-slot training share, informational (decode is
@@ -236,6 +246,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         slot_sees_prev_frame=slot_sees_prev_frame,
         residual_refine=residual_refine,
         hold_tokens=hold_tokens,
+        joint_frame=joint_frame,
         moe_modality_bias=moe_modality_bias,
         moe_modality_gates=moe_modality_gates,
         moe_modality_hard_route=moe_modality_hard_route,
@@ -679,6 +690,11 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     assert 0.0 <= joint_mix <= 1.0, joint_mix
     joint_rounds = int(_os.environ.get('A3_JOINT_ROUNDS', '1'))
     assert joint_rounds >= 1, joint_rounds
+    jf = bool(getattr(model, 'joint_frame', ''))
+    if jf and not joint:
+        raise ValueError('joint_frame checkpoints decode with A3_SCHEDULE=joint')
+    if jf and getattr(model, 'hold_tokens', 0):
+        raise ValueError('joint_frame is not wired for hold_tokens')
     if joint:
         print(f'[gen] A3_SCHEDULE=joint: leaderless draft-and-denoise '
               f'(both drafts committed, one refine forward), '
@@ -873,12 +889,20 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                 # the AR heads' contexts, kept for the follower draft mix
                 h_ar = {0: h_global[:, clean_len - 2], 1: h_global[:, clean_len - 1]}
                 cur = {0: m_tokens, 1: c_tokens}
-                if m_sampling:
+                if jf and m_sampling != c_sampling:
+                    raise NotImplementedError(
+                        'joint_frame decodes co-generation only (both '
+                        'streams sampled, or both given)')
+                if jf:
+                    # one joint draw for both streams' frame t
+                    cur[0], cur[1], _, _ = model.joint_sampling(
+                        h_ar[0], h_ar[1], subseq_len, temperature=temperature)
+                if m_sampling and not jf:
                     cur[0] = model.local_sampling(h_global[:, clean_len - 2],
                                                   max_subseq_len=subseq_len,
                                                   temperature=temperature,
                                                   token_type_id=0)
-                if c_sampling:
+                if c_sampling and not jf:
                     cur[1] = model.local_sampling(h_global[:, clean_len - 1],
                                                   max_subseq_len=subseq_len,
                                                   temperature=temperature,
@@ -895,6 +919,12 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                                              0, K, i, B) for i in (0, 1)]
                         h_in = torch.cat([h_clean_padded, slots[0], slots[1]], dim=1)
                         h_global, _ = model._run_global_stack(h_in, T_query=T_query)
+                        if jf:
+                            cur[0], cur[1], _, _ = model.joint_sampling(
+                                model.residual_slot_out(h_global[:, -2], h_ar[0], 0),
+                                model.residual_slot_out(h_global[:, -1], h_ar[1], 1),
+                                subseq_len, temperature=final_temperature)
+                            continue
                         for i in (0, 1):
                             if sampling[i]:
                                 # slot positions: melody at -2, chord at -1

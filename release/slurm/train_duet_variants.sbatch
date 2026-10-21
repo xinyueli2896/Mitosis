@@ -42,7 +42,8 @@ else
     export SYSTEMS="${SYSTEMS:-duet_v2 duet_prev}"
 fi
 
-if [[ " $SYSTEMS " == *" duet_v2c48 "* && ! -f duet/data/nottingham_chord48_cp4_v2.pt ]]; then
+if [[ "$DATASET" == nottingham && ( " $SYSTEMS " == *" duet_v2c48 "* || " $SYSTEMS " == *" duet_jf"* ) \
+      && ! -f duet/data/nottingham_chord48_cp4_v2.pt ]]; then
     bash scripts/prepare_data.sh chord48
 fi
 
