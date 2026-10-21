@@ -41,17 +41,43 @@ case "$SYSTEM" in
     duet_v2mix)   CKPT_SYS=duet_v2 ;;
     duet_v3rk0|duet_v3rr3) CKPT_SYS=duet_v3r ;;
 esac
-# duet_v2c48: duet_v2's run under the _c48 task, fed chord prompts on program 48
-CHORD_SUB=chord
+# duet_v2c48: duet_v2's run under the _c48 task (chord stream on 48)
+MEL_DATA="data/${DUET_DATA}_melody_cp4_v2.pt"
+CHORD_DATA="data/${DUET_DATA}_chord_cp4_v2.pt"
 if [[ "$SYSTEM" == duet_v2c48 ]]; then
-    CKPT_SYS=duet_v2; TASK="${TASK}_c48"; CHORD_SUB=chord48
-    if [[ ! -d "$PROMPTS/chord48" ]]; then
+    CKPT_SYS=duet_v2; TASK="${TASK}_c48"
+    CHORD_DATA="data/nottingham_chord48_cp4_v2.pt"
+fi
+
+# Two-stream prompts carry each stream on the MIDI program it was TRAINED
+# on: the models keep the real program as a token (preserve_program), so
+# a model trained with chords on 48 must be prompted with chords on 48.
+# The program is the most common one in the training tensor (cached
+# beside it); MEL_PROGRAM / CHORD_PROGRAM override it, e.g. for a
+# checkpoint trained on other data than the local files.
+train_program() {   # <.pt> -> the most common program among its notes
+    local pt="$1" cache="$1.program"
+    if [[ ! -s "$cache" ]]; then
+        need "$pt" "No training tensor to read the program from; set MEL_PROGRAM / CHORD_PROGRAM."
+        python - "$pt" > "$cache.$$" <<'PY'
+import collections, sys, torch
+p = torch.load(sys.argv[1]).view(-1, 4)[:, 0]
+print(collections.Counter(p[p < 128].tolist()).most_common(1)[0][0])
+PY
+        mv -f "$cache.$$" "$cache"
+    fi
+    cat "$cache"
+}
+retag_prompts() {   # <src sub> <program> -> prompts/<src>_p<program>, built once
+    local src="$1" prog="$2" dst="$PROMPTS/${1}_p$2"
+    if [[ ! -d "$dst" ]]; then
         # built aside and renamed in one step: sharded calls start together
-        _tmp=$(mktemp -d "$PROMPTS/chord48.XXXXXX")
-        cp -f "$PROMPTS"/chord/*.mid "$_tmp/"
-        python - "$_tmp" <<'PY'
+        local tmp; tmp=$(mktemp -d "$dst.XXXXXX")
+        cp -f "$PROMPTS/$src"/*.mid "$tmp/"
+        python - "$tmp" "$prog" <<'PY'
 import glob, os, sys
 import mido
+prog = int(sys.argv[2])
 for f in sorted(glob.glob(os.path.join(sys.argv[1], '*.mid'))):
     m = mido.MidiFile(f)
     for tr in m.tracks:
@@ -59,12 +85,22 @@ for f in sorted(glob.glob(os.path.join(sys.argv[1], '*.mid'))):
             continue
         tr[:] = [x for x in tr if x.type != 'program_change']
         ch = next(x.channel for x in tr if x.type == 'note_on')
-        tr.insert(0, mido.Message('program_change', program=48, channel=ch, time=0))
+        tr.insert(0, mido.Message('program_change', program=prog, channel=ch, time=0))
     m.save(f)
 PY
-        mv -T "$_tmp" "$PROMPTS/chord48" 2>/dev/null || rm -rf "$_tmp"
+        mv -T "$tmp" "$dst" 2>/dev/null || rm -rf "$tmp"
     fi
-fi
+    echo "${1}_p$2"
+}
+MEL_SUB=mel; CHORD_SUB=chord
+case "$SYSTEM" in ss_finetuned|ss_scratch) ;; *)
+    MEL_PROGRAM="${MEL_PROGRAM:-$(train_program "$MEL_DATA")}"
+    CHORD_PROGRAM="${CHORD_PROGRAM:-$(train_program "$CHORD_DATA")}"
+    MEL_SUB=$(retag_prompts mel "$MEL_PROGRAM")
+    CHORD_SUB=$(retag_prompts chord "$CHORD_PROGRAM")
+    echo "[generate] $SYSTEM: prompts on the trained programs, melody $MEL_PROGRAM, chord $CHORD_PROGRAM"
+    ;;
+esac
 if [[ -z "${CKPT:-}" && "$DATASET" == pop909 && "$CKPT_SYS" == duet && "$SYSTEM" == duet_bestar ]]; then
     echo "ERROR: the released duet checkpoint has no best_ar/; pass CKPT=<run dir>/best_ar" >&2; exit 1
 elif [[ -z "${CKPT:-}" && "$DATASET" == pop909 && "$CKPT_SYS" =~ ^(duet|dense|no_draft|ss_finetuned|ss_scratch)$ ]]; then
@@ -103,13 +139,13 @@ PDIR="$PROMPTS"
 if [[ -n "${SHARD:-}" ]]; then
     PDIR="$PROMPTS/shards/${SYSTEM}_${SHARD/\//of}"
     mkdir -p "$PDIR"
-    for sub in mel $CHORD_SUB merged_tagged; do
+    for sub in mel $MEL_SUB $CHORD_SUB merged_tagged; do
         mkdir -p "$PDIR/$sub"
         find "$PDIR/$sub" -maxdepth 1 -name '*.mid' -type l -delete
     done
     SONGS=$(shard $(for f in "$PROMPTS"/mel/*.mid; do basename "$f" .mid; done))
     for s in $SONGS; do
-        for sub in mel $CHORD_SUB merged_tagged; do
+        for sub in mel $MEL_SUB $CHORD_SUB merged_tagged; do
             ln -sf "$(readlink -f "$PROMPTS/$sub/$s.mid")" "$PDIR/$sub/$s.mid"
         done
     done
@@ -158,7 +194,7 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|dense|duet_joint|d
     A3_JOINT_MIX=$JOINT_MIX A3_JOINT_ROUNDS=$JOINT_ROUNDS A3_CTC_MIX_MODE=geo \
     A3_LOCK_PROGRAM="${LOCK_PROGRAM:-1}" \
     python cp_transformer_m2c_duet_block_diffusion_combined.py \
-        --ckpt "$CKPT" --mel-folder "$PDIR/mel" --chord-folder "$PDIR/$CHORD_SUB" \
+        --ckpt "$CKPT" --mel-folder "$PDIR/$MEL_SUB" --chord-folder "$PDIR/$CHORD_SUB" \
         --output-dir "$OUT" --modes co \
         --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
         --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 4 --skip-existing \
@@ -166,7 +202,7 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|dense|duet_joint|d
     ;;
 no_draft)
     MELCHORD_CP=4 python cp_transformer_m2c_intra_cross_attn_combined.py \
-        --ckpt "$CKPT" --mel-folder "$PDIR/mel" --chord-folder "$PDIR/chord" \
+        --ckpt "$CKPT" --mel-folder "$PDIR/$MEL_SUB" --chord-folder "$PDIR/$CHORD_SUB" \
         --output-dir "$OUT" --modes co \
         --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
         --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 4 --skip-existing \
