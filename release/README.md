@@ -173,9 +173,11 @@ one more forward reads both refined frames out (`A3_SCHEDULE=joint`).
 | `duet_prev` | `A3f` | retrain: paper recipe + `--slot_sees_prev_frame` |
 | `duet_v2` | `A3v2` | retrain for the joint decode: `--slot_sees_prev_frame`; both slots drafted every pair, from the AR heads the way the decode samples (`--self_cond_prob 1 --sc_ar_frac 1 --sc_ar_free_run --sc_draft_temp 1`), tagged k=0 and scored (`--draft_k0`); validation in the same state (`--sc_val`) |
 | `duet_v2c48` | `A3v2c48` | `duet_v2` with the chord stream on program 48, the single-stream models' tag (`prepare_data.sh chord48`, task `melchord_nottingham_c48`); the same notes, only the program token differs |
+| `duet_v3` | `A3v3` | retrain so the leaderless refine has something to learn: `--slot_sees_prev_frame`; an unmasked draft token always holds an AR-sampled draft, never the true frame (`--self_cond_prob 1 --sc_ar_frac 1 --sc_ar_free_run --sc_draft_temp 1`); one commitment level for both slots, masked only at k=K (`--sym_k --sc_k_consistent`); 8 query pairs per sequence (`--query_pairs 8`); validation on drafts (`--sc_val`) |
 | `duet_prevmix` | `A3fm` | `duet_prev`'s checkpoint with `duet_jointmix`'s decode |
 | `duet_v2mix` | `A3v2m` | `duet_v2`'s checkpoint with `duet_jointmix`'s decode |
 | `duet_prevk0` | `A3fK0` | `duet_prev`'s checkpoint, AR heads only (control for `A3f`'s refine pass) |
+| `duet_prevr3` | `A3fr3` | `duet_prev`'s checkpoint, joint refine repeated 3 rounds (`A3_JOINT_ROUNDS=3`), each reading the last round's frames |
 
 `duet_stale` (above) is the closest earlier attempt at the joint
 regime. It differs from `duet_v2` in the t-1 mask, drafts from a frozen

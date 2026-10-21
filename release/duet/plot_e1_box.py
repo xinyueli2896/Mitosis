@@ -123,6 +123,7 @@ GROUPS = [
         ('A3v2',      'Duet v2',                    'Duet\nv2'),
         ('A3v2c48',   'Duet v2, chords prog. 48',   'Duet\nv2 c48'),
         ('A3f',       'Duet, slot sees t-1',        'Duet\nt-1'),
+        ('A3v3',      'Duet v3',                    'Duet\nv3'),
         ('A3jt',      'Duet, joint decode',         'Duet\njoint'),
         ('A3jm',      'Duet, joint + AR mix',       'Duet\njoint mix'),
         ('A3K0',      'Duet, AR heads only',        'Duet\nK0'),
@@ -130,6 +131,7 @@ GROUPS = [
         ('A3fm',      'Duet, t-1 + AR mix',         'Duet\nt-1 mix'),
         ('A3v2m',     'Duet v2 + AR mix',           'Duet\nv2 mix'),
         ('A3fK0',     'Duet t-1, AR heads only',    'Duet\nt-1 K0'),
+        ('A3fr3',     'Duet t-1, 3 refine rounds',  'Duet\nt-1 r3'),
     ]),
 ]
 # systems drawn but left out of the best-of comparison whatever their

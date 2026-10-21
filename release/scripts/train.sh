@@ -6,6 +6,7 @@
 #   bash scripts/train.sh duet_v2         # Duet trained for the leaderless joint decode (see README)
 #   bash scripts/train.sh duet_v2c48      # duet_v2 with the chord stream on program 48
 #   bash scripts/train.sh duet_prev       # Duet, query slots also read frame t-1
+#   bash scripts/train.sh duet_v3         # Duet trained so the leaderless refine can beat its AR heads
 #   bash scripts/train.sh dense           # Duet w/o MoE: one dense FFN of width 6144
 #   bash scripts/train.sh no_draft        # Duet w/o draft tokens
 #   bash scripts/train.sh ss_finetuned    # single-stream backbone, finetuned
@@ -22,7 +23,7 @@
 # Knobs (environment): MAX_LR, LR_TOTAL_STEPS, BATCH_SIZE (per GPU),
 # RUN_TAG (run-name suffix), WANDB=1 (log to Weights & Biases).
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-SYSTEM="${1:?usage: train.sh duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense|no_draft|ss_finetuned|ss_scratch}"
+SYSTEM="${1:?usage: train.sh duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|dense|no_draft|ss_finetuned|ss_scratch}"
 system_id "$SYSTEM" >/dev/null
 
 NGPUS="$(n_gpus)"
@@ -38,7 +39,7 @@ launch() {   # launch <script.py> args...: python on one GPU, torchrun on severa
 wandb_flag() { [[ "${WANDB:-0}" == "1" ]] && echo "$1" || echo "$2"; }
 
 case "$SYSTEM" in
-duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense)
+duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|dense)
     # Both Duet streams read cp4 tensors: MAX_POLYPHONY is the tokenizer's
     # budget and MELCHORD_CP selects data/${DUET_DATA}_*_cp${MELCHORD_CP}_v2.pt.
     # The checkpoint does not record it, so keep the two in step.
@@ -61,6 +62,7 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense)
     # first refresh.
     DRAFT=(--self_cond_prob 0.5)
     MRQL=0      # --mask_revealed_query_loss
+    QP=1        # --query_pairs
     if [[ "$SYSTEM" != dense ]]; then
         EXPERTS=(--moe_num_experts 4 --moe_topk 2)
         ABBR=$SYSTEM; STEPS="${LR_TOTAL_STEPS:-50000}"; LIMIT_VAL=25
@@ -84,6 +86,19 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense)
             DRAFT=(--slot_sees_prev_frame --self_cond_prob 1.0
                    --sc_ar_frac 1.0 --sc_ar_free_run --sc_draft_temp 1.0
                    --draft_k0 --sc_val) ;;
+        duet_v3)
+            # duet_v2's fixes without its k=0-only states: the slot reads
+            # t-1; a draft token never holds the true frame -- unmasked it
+            # always carries an AR-sampled draft (decode's sampler, temp
+            # 1), so the refine has nothing to copy and must correct; one
+            # commitment level per pair for both slots (the joint decode
+            # moves them together), masked only at k=K, a whole draft at
+            # every k<K (--sc_k_consistent); 8 query pairs per sequence
+            # instead of 1, 8x the refine gradient.
+            DRAFT=(--slot_sees_prev_frame --self_cond_prob 1.0
+                   --sc_ar_frac 1.0 --sc_ar_free_run --sc_draft_temp 1.0
+                   --sym_k --sc_k_consistent --sc_val)
+            QP=8 ;;
         esac
     else
         # compute-matched dense arm: one expert of width 6144 = two active 3072-wide experts
@@ -121,7 +136,7 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|dense)
         --gate_init_bias -10.0 --query_loss_weight 2.0 "${DRAFT[@]}" \
         --time_rope_aligned 1 --moe_modality_bias 0 --moe_modality_gates 1 \
         --moe_modality_hard_route 0 --token_level_mask 0 --mask_revealed_query_loss "$MRQL" \
-        --query_pairs 1 --query_block 1 --decoy_corruption 0 \
+        --query_pairs "$QP" --query_block 1 --decoy_corruption 0 \
         --decoy_mask_residual 0.25 --decoy_lag_bins 1:2,3:11,12:19 \
         --model_abbr "$ABBR" --diffusion_K 4 --step_ckpt_every 5000 \
         ${RUN_TAG:+--run_tag "$RUN_TAG"} $(wandb_flag --wandb "") \

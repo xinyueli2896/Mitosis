@@ -660,10 +660,12 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     # for the ctc follower mix. Symmetric: both streams are mixed alike.
     joint_mix = float(_os.environ.get('A3_JOINT_MIX', '0'))
     assert 0.0 <= joint_mix <= 1.0, joint_mix
+    joint_rounds = int(_os.environ.get('A3_JOINT_ROUNDS', '1'))
+    assert joint_rounds >= 1, joint_rounds
     if joint:
         print(f'[gen] A3_SCHEDULE=joint: leaderless draft-and-denoise '
               f'(both drafts committed, one refine forward), '
-              f'AR mix {joint_mix} ({ctc_mix_mode})')
+              f'AR mix {joint_mix} ({ctc_mix_mode}), {joint_rounds} round(s)')
     elif schedule.startswith('ctc'):
         base, _, lead = schedule.partition('_')
         ctc_passes = 2 if base == 'ctc2' else 1
@@ -800,21 +802,24 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                 sampling = {0: m_sampling, 1: c_sampling}
                 if joint:
                     # both drafts committed (k=0), no leader; a given
-                    # stream keeps its action frame, as in the seed
-                    slots = [_build_slot(model, 'committed', None,
-                                         model._encode_frame(cur[i], i).to(dtype=dtype),
-                                         0, K, i, B) for i in (0, 1)]
-                    h_in = torch.cat([h_clean_padded, slots[0], slots[1]], dim=1)
-                    h_global, _ = model._run_global_stack(h_in, T_query=T_query)
-                    for i in (0, 1):
-                        if sampling[i]:
-                            # slot positions: melody at -2, chord at -1
-                            cur[i] = model.local_sampling(
-                                h_global[:, -2 if i == 0 else -1],
-                                max_subseq_len=subseq_len,
-                                temperature=final_temperature, token_type_id=i,
-                                h_alt=h_ar[i] if joint_mix > 0 else None,
-                                alt_weight=joint_mix, mix_mode=ctc_mix_mode)
+                    # stream keeps its action frame, as in the seed.
+                    # A3_JOINT_ROUNDS=n repeats the refine, each round
+                    # reading the previous round's refined frames.
+                    for _r in range(joint_rounds):
+                        slots = [_build_slot(model, 'committed', None,
+                                             model._encode_frame(cur[i], i).to(dtype=dtype),
+                                             0, K, i, B) for i in (0, 1)]
+                        h_in = torch.cat([h_clean_padded, slots[0], slots[1]], dim=1)
+                        h_global, _ = model._run_global_stack(h_in, T_query=T_query)
+                        for i in (0, 1):
+                            if sampling[i]:
+                                # slot positions: melody at -2, chord at -1
+                                cur[i] = model.local_sampling(
+                                    h_global[:, -2 if i == 0 else -1],
+                                    max_subseq_len=subseq_len,
+                                    temperature=final_temperature, token_type_id=i,
+                                    h_alt=h_ar[i] if joint_mix > 0 else None,
+                                    alt_weight=joint_mix, mix_mode=ctc_mix_mode)
                     order = []
                 else:
                     lead = {'m': 0, 'c': 1, 'alt': t % 2}[ctc_leader]
