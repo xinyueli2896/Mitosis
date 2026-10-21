@@ -463,6 +463,7 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         h_alt=None,
         alt_weight: float = 0.0,
         mix_mode: str = 'linear',
+        prefix=None,
     ):
         """Sample one frame's sub-tokens from the global hidden state h.
 
@@ -474,9 +475,16 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         the follower's denoised distribution keep a share of its own
         autoregressive draft instead of discarding it. Off by default
         (alt_weight 0 is byte-identical to the plain path).
+
+        prefix ([B, P] tokens, optional): forced tokens -- wherever
+        prefix[:, step] is not pad, that token is emitted instead of a
+        sample (the held-note prefix of a hold_tokens frame). Without an
+        argument, a decode can set self._hold_prefix = {type_id: [B, S]}.
         """
         batch_size, _ = h.shape
         device = h.device
+        if prefix is None:
+            prefix = (getattr(self, '_hold_prefix', None) or {}).get(token_type_id)
         y = torch.zeros((batch_size, 0), dtype=torch.long, device=device)
         emb = h[:, None, :]   # [B, 1, H]
         use_alt = h_alt is not None and alt_weight > 0.0
@@ -596,6 +604,10 @@ class RoFormerSymbolicTransformer(L.LightningModule):
                 probs = probs / probs_sum
                 y_next = torch.multinomial(probs, 1)
 
+            if prefix is not None and step < prefix.shape[1]:
+                forced = prefix[:, step:step + 1]
+                y_next = torch.where(forced != self.tokenizer.pad_token,
+                                     forced, y_next)
             y_next[eos_triggered] = self.tokenizer.pad_token
             eos_triggered = eos_triggered | (
                 y_next.squeeze(1) == self.tokenizer.eos_token

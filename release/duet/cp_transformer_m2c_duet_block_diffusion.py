@@ -141,6 +141,124 @@ from cp_transformer_m2c_moe import (
 from cp_transformer_m2c_duet_block import M2CDuetBlockAttn, normalize_T_query
 from cp_transformer_m2c_jointattn import _rope_freqs
 from tasks import get_task, TASKS, MELCHORD_TAG
+from preprocess_large_midi_dataset import DURATION_TEMPLATES
+
+
+# --- held-note tokens (hold_tokens, 2026-10-21) -------------------------
+# A frame lists only note ONSETS, so a chord held for a bar shows up in
+# one frame and the following frames are empty: the partner's draft
+# token says "nothing new" on most frames of a leaderless decode. With
+# hold_tokens=H each frame of each stream is prefixed with up to H
+# "held" notes -- the pitches still sounding from an earlier onset, the
+# lowest first -- so every frame states what is sounding. A held note
+# is (stream program, HOLD_BASE + pitch): the pitch-duration slot at the
+# duration index one past the last template (24), ids 3200..3327, which
+# the vocabulary already reserves (n_normal_tokens = 24*128 + 256) and
+# no data uses. Held notes are a deterministic function of the earlier
+# frames, so they are never scored and never sampled: training adds them
+# on the fly from the .pt onsets (no new dataset), the decode forces
+# them as each frame's prefix, and the midi writer skips them (duration
+# index 24 is past DURATION_TEMPLATES).
+HOLD_DUR_IDX = len(DURATION_TEMPLATES)                    # 24
+HOLD_BASE = (HOLD_DUR_IDX + 1) * 128                      # 3200
+_DUR_FRAMES = torch.as_tensor(DURATION_TEMPLATES, dtype=torch.long)
+
+
+def is_held_token(tok):
+    return (tok >= HOLD_BASE) & (tok < HOLD_BASE + 128)
+
+
+def held_pair_mask(frames):
+    """[..., S] tokens -> bool mask of the held pairs (program + pitch)."""
+    m = torch.zeros_like(frames, dtype=torch.bool)
+    hp = is_held_token(frames[..., 1::2])
+    m[..., 1::2] = hp
+    m[..., 0::2] = hp
+    return m
+
+
+def onset_notes(frames, pad_token):
+    """[..., S] tokens -> (is_note, program, pitch, duration in frames),
+    each [..., S/2], for the onset notes (held notes excluded)."""
+    prog, pd = frames[..., 0::2], frames[..., 1::2]
+    is_note = (prog < 128) & (pd >= 128) & (pd < HOLD_BASE) & (pd != pad_token)
+    pitch = pd % 128
+    dur_idx = (pd // 128 - 1).clamp(0, HOLD_DUR_IDX - 1)
+    dfr = _DUR_FRAMES.to(frames.device)[dur_idx]
+    return is_note, prog, pitch, dfr
+
+
+def pack_held_frames(held, prog, onset, max_held, tokenizer):
+    """Build frames with their held notes in front.
+
+    held   [N, 128] bool  pitches sounding from an earlier onset
+    prog   [N] long       the stream's program for the held pairs
+    onset  [N, S] tokens  the onset frame (notes, then EOS / pad)
+    -> [N, 2*max_held + S]: held pairs (lowest pitches, at most
+    max_held), the onset notes, an EOS pair if there is room, pad.
+    """
+    N, S = onset.shape
+    pad, eos = tokenizer.pad_token, tokenizer.eos_token
+    dev = onset.device
+    pitch_idx = torch.arange(128, device=dev).expand(N, 128)
+    key = torch.where(held, pitch_idx, torch.full_like(pitch_idx, 1000))
+    low = key.sort(dim=-1).values[:, :max_held]            # [N, Hm]
+    h_ok = low < 128
+    h_pairs = torch.stack([
+        torch.where(h_ok, prog.view(N, 1).expand(N, max_held), torch.full_like(low, pad)),
+        torch.where(h_ok, HOLD_BASE + low.clamp(max=127), torch.full_like(low, pad)),
+    ], dim=-1)                                             # [N, Hm, 2]
+    o_pairs = onset.view(N, S // 2, 2)
+    o_ok = (o_pairs[..., 0] < 128) & (o_pairs[..., 1] != pad)
+    o_pairs = torch.where(o_ok.unsqueeze(-1), o_pairs, torch.full_like(o_pairs, pad))
+    eos_pair = torch.tensor([eos, pad], device=dev).view(1, 1, 2).expand(N, 1, 2)
+    pairs = torch.cat([h_pairs, o_pairs, eos_pair], dim=1)  # [N, Hm+S/2+1, 2]
+    ok = torch.cat([h_ok, o_ok, torch.ones(N, 1, dtype=torch.bool, device=dev)], dim=1)
+    n = pairs.shape[1]
+    order = (~ok).long() * n + torch.arange(n, device=dev)  # valid first, stable
+    idx = order.argsort(dim=1)[:, :max_held + S // 2]
+    out = pairs.gather(1, idx.unsqueeze(-1).expand(-1, -1, 2))
+    out_ok = ok.gather(1, idx)
+    out = torch.where(out_ok.unsqueeze(-1), out, torch.full_like(out, pad))
+    return out.reshape(N, 2 * max_held + S)
+
+
+def stream_program(frames, pad_token):
+    """[B, T, S] -> [B] the most common onset program per item (0 if none)."""
+    is_note, prog, _, _ = onset_notes(frames, pad_token)
+    B = frames.shape[0]
+    counts = torch.zeros(B, 128, device=frames.device)
+    p = torch.where(is_note, prog, torch.zeros_like(prog)).reshape(B, -1)
+    counts.scatter_add_(1, p, is_note.reshape(B, -1).float())
+    return counts.argmax(-1)
+
+
+def add_held_tokens(x, max_held, tokenizer):
+    """[B, T, S] onset frames -> [B, T, 2*max_held + S] with held notes.
+
+    A note is held at frame u when it started at s < u < s + duration.
+    """
+    B, T, S = x.shape
+    pad = tokenizer.pad_token
+    is_note, _, pitch, dfr = onset_notes(x, pad)            # [B, T, P]
+    P = is_note.shape[-1]
+    t = torch.arange(T, device=x.device).view(1, T, 1).expand(B, T, P)
+    start = (t + 1).clamp(max=T)
+    end = (t + dfr).clamp(max=T)
+    live = is_note & (end > start)
+    b = torch.arange(B, device=x.device).view(B, 1, 1).expand(B, T, P)
+    diff = torch.zeros(B * (T + 1) * 128, device=x.device)
+    w = live.float().reshape(-1)
+    base = (b * (T + 1)).reshape(-1)
+    pt = pitch.reshape(-1)
+    diff.scatter_add_(0, (base + start.reshape(-1)) * 128 + pt, w)
+    diff.scatter_add_(0, (base + end.reshape(-1)) * 128 + pt, -w)
+    held = diff.view(B, T + 1, 128)[:, :T].cumsum(dim=1) > 0.5   # [B, T, 128]
+    prog = stream_program(x, pad).view(B, 1).expand(B, T)
+    out = pack_held_frames(held.reshape(B * T, 128), prog.reshape(B * T),
+                           x.reshape(B * T, S), max_held, tokenizer)
+    return out.view(B, T, -1)
+
 
 
 class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
@@ -163,7 +281,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  sc_draft_temp=0.0, sc_k_consistent=False,
                  sym_k=False, mask_k_prob=None, sc_val=False,
                  sc_ar_free_run=False, stale_draft_every=0,
-                 draft_k0=False, residual_refine=False, **kwargs):
+                 draft_k0=False, residual_refine=False, hold_tokens=0,
+                 **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- stale-snapshot drafts ---------------------------------------
@@ -515,6 +634,20 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             'residual_refine_flag',
             torch.tensor(int(self.residual_refine), dtype=torch.long))
 
+        # hold_tokens=H (see HOLD_BASE above): up to H held notes in
+        # front of every frame of both streams. The buffer carries H into
+        # the checkpoint (the decode must build frames the same way);
+        # hold_rows_init_flag records the one-time embedding init.
+        self.hold_tokens = int(hold_tokens)
+        self.register_buffer(
+            'hold_tokens_flag', torch.tensor(self.hold_tokens, dtype=torch.long))
+        self.register_buffer(
+            'hold_rows_init_flag', torch.tensor(0, dtype=torch.long))
+        if self.hold_tokens:
+            if self.tokenizer.with_velocity:
+                raise ValueError('hold_tokens uses the free pitch-duration '
+                                 'ids 3200..3327, which with_velocity fills.')
+
         # --- v1.1 training-scheme flags -------------------------------
         # slot_rope_aligned: apply RoPE to the two query slots at rotary
         # index 2*T_query+2 / 2*T_query+3 -- the phase they naturally
@@ -600,7 +733,12 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             'query_block_flag',
             torch.tensor(self.query_block, dtype=torch.long),
         )
+        if self.hold_tokens and (self.token_level_mask or self.decoy_corruption):
+            raise ValueError('hold_tokens is wired for the frame-level slot '
+                             'only (no token_level_mask / decoy_corruption).')
         if self.query_block > 1:
+            if self.hold_tokens:
+                raise ValueError('hold_tokens is not wired for block mode (A.8).')
             if self.residual_refine:
                 raise ValueError(
                     'residual_refine reads the AR row of the slot\'s own '
@@ -781,11 +919,28 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         print(f'[A.4] frame mask row {self.frame_mask_token} initialised to '
               f'the mean of {real.shape[0]} real token embeddings')
 
+    def _init_hold_rows(self):
+        """hold_tokens: the held ids 3200+p arrive untrained (no data used
+        them). Start each at the mean of its pitch's onset embeddings over
+        the 24 durations, so a held C4 begins as "a C4"; once, after the
+        warm start, recorded in hold_rows_init_flag so a resume keeps the
+        trained rows."""
+        if not self.hold_tokens or bool(self.hold_rows_init_flag.item()):
+            return
+        with torch.no_grad():
+            emb = self.local_embedding.weight
+            onset = emb[128:HOLD_BASE].view(HOLD_DUR_IDX, 128, -1)
+            emb[HOLD_BASE:HOLD_BASE + 128] = onset.mean(dim=0)
+            self.hold_rows_init_flag.fill_(1)
+        print(f'[hold] held-note rows {HOLD_BASE}..{HOLD_BASE + 127} '
+              f'initialised from the onset rows')
+
     def on_train_start(self):
         hook = getattr(super(), 'on_train_start', None)
         if callable(hook):
             hook()
         self._init_frame_mask_row()
+        self._init_hold_rows()
 
     def on_train_batch_start(self, batch, batch_idx):
         hook = getattr(super(), 'on_train_batch_start', None)
@@ -1367,6 +1522,9 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
     def loss(self, x_mel, x_acc, batch_pitch_shift):
         # Preprocess + interleave (identical to parent).
         x_mel, x_acc = self.preprocess(x_mel, batch_pitch_shift, y=x_acc)
+        if self.hold_tokens:
+            x_mel = add_held_tokens(x_mel, self.hold_tokens, self.tokenizer)
+            x_acc = add_held_tokens(x_acc, self.hold_tokens, self.tokenizer)
         batch_size, seq_len, subseq_len = x_mel.shape
 
         stacked = torch.stack([x_mel, x_acc], dim=2)
@@ -1577,15 +1735,25 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                             hg = probe._last_h_clean_global
                             t_draft = (self.sc_draft_temp if dtemp is None
                                        else float(dtemp))
+                            # hold_tokens: the frame's held notes are
+                            # known, so they are forced as the prefix
+                            # exactly as the decode forces them
+                            def _pref(row):
+                                if not self.hold_tokens:
+                                    return None
+                                return torch.where(held_pair_mask(row), row,
+                                                   torch.full_like(row, self.tokenizer.pad_token))
                             ar_toks_m = torch.stack([
                                 probe.local_sampling(
                                     hg[:, 2 * t], max_subseq_len=subseq_len,
-                                    temperature=t_draft, token_type_id=0)
+                                    temperature=t_draft, token_type_id=0,
+                                    prefix=_pref(x[:, 2 * t]))
                                 for t in tq], dim=1)          # [B, Q, S]
                             ar_toks_c = torch.stack([
                                 probe.local_sampling(
                                     hg[:, 2 * t + 1], max_subseq_len=subseq_len,
-                                    temperature=t_draft, token_type_id=1)
+                                    temperature=t_draft, token_type_id=1,
+                                    prefix=_pref(x[:, 2 * t + 1]))
                                 for t in tq], dim=1)
                         else:
                             ar_toks_m = self._draft_from_logits(
@@ -1609,6 +1777,18 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                             self._last_ar_draft_m = ar_toks_m.clone()
                             self._last_ar_draft_c = ar_toks_c.clone()
                             self._last_use_ar_m = use_ar_m.clone()
+                    if self.hold_tokens:
+                        # a teacher-forced draft's held positions are
+                        # unscored guesses: put the true held notes back
+                        for nm, mod in (('m', 0), ('c', 1)):
+                            tgt = torch.stack([x[:, 2 * t + mod] for t in tq], dim=1)
+                            cur = sc_toks_m if mod == 0 else sc_toks_c
+                            cur = torch.where(held_pair_mask(tgt), tgt, torch.where(
+                                is_held_token(cur), torch.full_like(cur, self.tokenizer.pad_token), cur))
+                            if mod == 0:
+                                sc_toks_m = cur
+                            else:
+                                sc_toks_c = cur
                     # A.4 corrupts at the TOKEN level, so it needs the
                     # draft tokens themselves, not their encoding; the
                     # frame-level branch needs the encoding.
@@ -1657,6 +1837,9 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         ).view(batch_size, full_seq_len, subseq_len)
 
         non_pad_ar = (targets_ar != self.tokenizer.pad_token).float()
+        if self.hold_tokens:
+            # held notes follow from the history: never scored
+            non_pad_ar = non_pad_ar * (~held_pair_mask(targets_ar)).float()
         is_eos_ar = (targets_ar == self.tokenizer.eos_token).float() * non_pad_ar
         is_content_ar = non_pad_ar * (1.0 - is_eos_ar)
 
@@ -1685,6 +1868,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             reduction='none',
         ).view(batch_size, 2 * n_pairs, subseq_len)
         non_pad_q = (targets_query != self.tokenizer.pad_token).float()
+        if self.hold_tokens:
+            non_pad_q = non_pad_q * (~held_pair_mask(targets_query)).float()
         keep_q = self._query_loss_keep_mask(non_pad_q)
         # A.11: no reconstruction on a corrupted partner (ELECTRA's split).
         agree_loss = torch.zeros((), device=x.device)
@@ -2108,6 +2293,12 @@ if __name__ == '__main__':
                              'correction read off the slot, so the refine '
                              'starts exactly at AR-heads-only and moves '
                              'away only where reading the partner helps.')
+    parser.add_argument('--hold_tokens', type=int, default=0,
+                        help='Prefix every frame of both streams with up to '
+                             'N held notes (pitches still sounding from an '
+                             'earlier onset), so each frame states what is '
+                             'sounding; derived on the fly, never scored, '
+                             'forced at decode. 0 = off.')
     parser.add_argument('--sc_val', action='store_true', default=False,
                         help='A.12: present VALIDATION the draft state '
                              'instead of the masked one -- run the probe '
@@ -2296,6 +2487,8 @@ if __name__ == '__main__':
                                                # one shared FFN
         if getattr(a, 'residual_refine', False):
             abbr += 'R'                        # slot = AR row + correction
+        if getattr(a, 'hold_tokens', 0):
+            abbr += f'H{a.hold_tokens}'        # held-note prefix per frame
         return abbr
 
     tag = f'_{args.run_tag}' if args.run_tag else ''
@@ -2364,6 +2557,7 @@ if __name__ == '__main__':
         sc_val=bool(args.sc_val),
         draft_k0=bool(args.draft_k0),
         residual_refine=bool(args.residual_refine),
+        hold_tokens=args.hold_tokens,
         agree_head=bool(args.agree_head),
         cross_lora_rank=args.cross_lora_rank,
         moe_expert_lora_rank=args.moe_expert_lora_rank,
@@ -2397,7 +2591,8 @@ if __name__ == '__main__':
           f'sym_k={bool(args.sym_k)}  '
           f'mask_k_prob={args.mask_k_prob}  sc_val={bool(args.sc_val)}  '
           f'draft_k0={bool(args.draft_k0)}  '
-          f'residual_refine={bool(args.residual_refine)}'
+          f'residual_refine={bool(args.residual_refine)}  '
+          f'hold_tokens={args.hold_tokens}'
           f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
           f'query_loss_weight={args.query_loss_weight}  '
@@ -2576,6 +2771,7 @@ if __name__ == '__main__':
                     'sc_val': bool(args.sc_val),
                     'draft_k0': bool(args.draft_k0),
                     'residual_refine': bool(args.residual_refine),
+                    'hold_tokens': args.hold_tokens,
                     'agree_head': bool(args.agree_head),
                     'cross_lora_rank': args.cross_lora_rank,
                     'moe_expert_lora_rank': args.moe_expert_lora_rank,

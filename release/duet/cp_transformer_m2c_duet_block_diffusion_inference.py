@@ -161,6 +161,15 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
     # presence IS the flag. Building without them would read the slot
     # hidden raw, which the run never trained to stand alone.
     residual_refine = any(k.endswith('res_proj_m.weight') for k in state_dict_keys)
+    # hold_tokens: buffer VALUE (H); the decode must build frames with the
+    # same held-note prefix the run trained on.
+    hold_tokens = 0
+    for k in state_dict_keys:
+        if k.endswith('hold_tokens_flag'):
+            sd_tmp = ck['state_dict'] if 'state_dict' in ck else ck
+            hold_tokens = int(sd_tmp[k].item())
+            break
+    print(f'[load_model] hold_tokens={hold_tokens}')
     print(f'[load_model] residual_refine={residual_refine}'
           f'{" (slot = AR row + correction)" if residual_refine else ""}')
     # A.3c: conditional-slot training share, informational (decode is
@@ -226,6 +235,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         time_rope_aligned=time_rope_aligned,
         slot_sees_prev_frame=slot_sees_prev_frame,
         residual_refine=residual_refine,
+        hold_tokens=hold_tokens,
         moe_modality_bias=moe_modality_bias,
         moe_modality_gates=moe_modality_gates,
         moe_modality_hard_route=moe_modality_hard_route,
@@ -726,6 +736,42 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
         prog_counts[i].scatter_add_(1, progs.clamp(max=127) * ok,
                                     ok.to(prog_counts.dtype))
 
+    # hold_tokens checkpoints: every frame carries its held notes in
+    # front (see HOLD_BASE in the model module). They follow from the
+    # committed history -- sound_end[i, b, p] is the frame where stream
+    # i's latest note of pitch p stops -- so the decode builds them: given
+    # frames are packed with them, sampled frames get them as a forced
+    # prefix (model._hold_prefix, read by local_sampling). Frames grow
+    # from subseq_len to subseq_len + 2*H tokens; the midi writer skips
+    # held notes (duration index past the templates).
+    hold = int(getattr(model, 'hold_tokens', 0))
+    S_on = subseq_len
+    model._hold_prefix = None
+    if hold:
+        from cp_transformer_m2c_duet_block_diffusion import (
+            pack_held_frames, onset_notes, held_pair_mask)
+        subseq_len = S_on + 2 * hold
+        sound_end = torch.full((2, B, 128), -1, dtype=torch.long, device=device)
+        print(f'[gen] hold_tokens={hold}: frames carry their held notes '
+              f'({S_on} -> {subseq_len} tokens)')
+
+    def _with_held(frame, i, t):
+        if not hold or frame.shape[1] != S_on:
+            return frame
+        return pack_held_frames(sound_end[i] > t, prog_counts[i].argmax(-1),
+                                frame, hold, tokenizer)
+
+    def _held_prefix(i, t):
+        empty = torch.full((B, S_on), tokenizer.pad_token, dtype=torch.long,
+                           device=device)
+        f = _with_held(empty, i, t)
+        return torch.where(held_pair_mask(f), f, torch.full_like(f, tokenizer.pad_token))
+
+    def _commit_onsets(frame, i, t):
+        is_note, _, pitch, dfr = onset_notes(frame, tokenizer.pad_token)
+        end = torch.where(is_note, t + dfr, torch.full_like(dfr, -1))
+        sound_end[i].scatter_reduce_(1, pitch, end, reduce='amax')
+
     for t in range(gen_length):
         if t % 10 == 0:
             print(f'[gen] step {t}/{gen_length}  (K_refine={K})')
@@ -744,22 +790,26 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
         c_action_h = None
         if not m_sampling:
             m_frame = resolve_frame(m_action, B, subseq_len, tokenizer, device)
+            if lock_program or hold:
+                _count_programs(m_frame, 0)
+            m_frame = _with_held(m_frame, 0, t)
             m_tokens = m_frame
             m_action_h = model._encode_frame(m_frame, 0).to(dtype=dtype)  # [B, 1, H]
-            if lock_program:
-                _count_programs(m_frame, 0)
         if not c_sampling:
             c_frame = resolve_frame(c_action, B, subseq_len, tokenizer, device)
+            if lock_program or hold:
+                _count_programs(c_frame, 1)
+            c_frame = _with_held(c_frame, 1, t)
             c_tokens = c_frame
             c_action_h = model._encode_frame(c_frame, 1).to(dtype=dtype)
-            if lock_program:
-                _count_programs(c_frame, 1)
         if lock_program:
             seen = prog_counts.sum(-1) > 0                       # [2, B]
             lock = torch.where(seen, prog_counts.argmax(-1),
                                torch.full(seen.shape, -1, dtype=torch.long,
                                           device=device))
             model._program_lock = {0: lock[0], 1: lock[1]}
+        if hold:
+            model._hold_prefix = {0: _held_prefix(0, t), 1: _held_prefix(1, t)}
 
         if need_model:
             # Build the clean prefix once per step.
@@ -986,9 +1036,12 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                 c_tokens = last_c_tokens
 
         if m_tokens is None:
-            m_tokens = resolve_frame(m_action, B, subseq_len, tokenizer, device)
+            m_tokens = _with_held(resolve_frame(m_action, B, subseq_len, tokenizer, device), 0, t)
         if c_tokens is None:
-            c_tokens = resolve_frame(c_action, B, subseq_len, tokenizer, device)
+            c_tokens = _with_held(resolve_frame(c_action, B, subseq_len, tokenizer, device), 1, t)
+        if hold:
+            _commit_onsets(m_tokens, 0, t)
+            _commit_onsets(c_tokens, 1, t)
 
         mel_frames.append(m_tokens)
         chord_frames.append(c_tokens)
@@ -1003,6 +1056,7 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
               f'{sorted(set(model._program_lock[0].tolist()))}, chord program(s) '
               f'{sorted(set(model._program_lock[1].tolist()))} (-1 = unlocked)')
     model._program_lock = None
+    model._hold_prefix = None
     return mel_frames, chord_frames
 
 
