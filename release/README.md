@@ -330,6 +330,30 @@ done
 sbatch --export=$E --dependency=afterok$GEN slurm/run.sbatch evaluate.sh
 ```
 
+## Audio data: MAESTRO v3 (performance MIDI + EnCodec codes)
+
+For the audio-symbolic work, `duet/maestro_paired.py` turns the official
+MAESTRO v3 release (WAV + MIDI, 108 GB zip) into an aligned pair. The
+Hugging Face `ZzWaang/music-jepa-maestro` set holds log-mel features,
+not audio, so the codec cannot read it.
+
+- Symbolic: the repository's roll format (cp16 by default), on a time
+  grid of `GRID_HZ` frames per second (25 = 40 ms; MAESTRO has no beat
+  grid), sustain pedal folded into note offsets. Durations count grid
+  frames, not sixteenth notes.
+- Audio: EnCodec 32 kHz (MusicGen's codec), 50 Hz x 4 codebooks, so one
+  symbolic frame covers exactly `50 / GRID_HZ` codec frames.
+- One set of files per MAESTRO split under `duet/data/maestro_g25_cp16_*`;
+  `MaestroPairedDataset` yields aligned crops of both, and `FramedDataset`
+  reads the symbolic half alone.
+
+```bash
+R=/scratch/$USER/maestro-v3.0.0
+J1=$(sbatch --parsable --export=ALL,MAESTRO_ROOT=$R slurm/maestro_download.sbatch)
+J2=$(sbatch --parsable --dependency=afterok:$J1 --export=ALL,MAESTRO_ROOT=$R slurm/maestro_encode.sbatch)
+J3=$(sbatch --parsable --dependency=afterok:$J2 --export=ALL,MAESTRO_ROOT=$R slurm/maestro_pack.sbatch)
+```
+
 ## Things that fail silently if changed
 
 - **Polyphony.** The duet models read tensors tokenized with at most four
