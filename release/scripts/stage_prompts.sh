@@ -3,8 +3,10 @@
 # generation scripts; safe to run by hand).
 #
 #   prompts/mel/<id>.mid            melody stream, also the scoring reference
-#   prompts/chord/<id>.mid          chord stream, program 0 (the duet models
-#                                   were trained on untagged chords)
+#   prompts/chord/<id>.mid          chord stream, program 0; generate.sh
+#                                   derives prompts/{mel,chord}_p<program>
+#                                   from these on the program each
+#                                   two-stream model was trained with
 #   prompts/merged_tagged/<id>.mid  both streams in one file, chords on
 #                                   program 48, for the single-stream models
 #

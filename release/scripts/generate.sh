@@ -16,7 +16,7 @@
 # Keep N_SAMPLES >= 2: with a single sample the duet generators write
 # <song>/co.mid instead of the <song>/co/sample_<i>.mid layout evaluate.sh reads.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-SYSTEM="${1:?usage: generate.sh duet|duet_stale|dense|no_draft|ss_finetuned|ss_scratch}"
+SYSTEM="${1:?usage: generate.sh duet|duet_stale|dense|no_draft|ss_finetuned|ss_scratch|<a duet variant>}"
 ID="$(system_id "$SYSTEM")"
 # SHARD=K/N: this call takes every N-th song (see slurm/infer_nottingham.sbatch).
 # Run stage_prompts.sh once first; parallel calls would race to stage.
@@ -28,17 +28,96 @@ fi
 
 # Default checkpoints: the released files, or your own run directories.
 case "$SYSTEM" in
-    duet|duet_stale|dense|no_draft|ss_finetuned|ss_scratch) ;;
+    duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|dense|no_draft|ss_finetuned|ss_scratch) ;;
+    duet_joint|duet_jointmix|duet_k0|duet_bestar|duet_prevmix|duet_v2mix|duet_prevk0|duet_prevr3|duet_v3rk0|duet_v3rr3|duet_v3g15|duet_v3g2|duet_jfmg15|duet_jfmg2) ;;
     *) echo "generate.sh covers the in-house systems; see scripts/external/ for $SYSTEM" >&2; exit 1 ;;
 esac
-if [[ -z "${CKPT:-}" && "$DATASET" == pop909 && "$SYSTEM" != duet_stale ]]; then
-    CKPT="ckpt/$SYSTEM"
+# The decode variants re-decode the paper's duet checkpoint (duet_bestar:
+# its best_ar/ weights, selected on the clean-row loss alone).
+CKPT_SYS="$SYSTEM"
+case "$SYSTEM" in
+    duet_joint|duet_jointmix|duet_k0|duet_bestar) CKPT_SYS=duet ;;
+    duet_prevmix|duet_prevk0|duet_prevr3) CKPT_SYS=duet_prev ;;
+    duet_v2mix)   CKPT_SYS=duet_v2 ;;
+    duet_v3rk0|duet_v3rr3) CKPT_SYS=duet_v3r ;;
+    duet_v3g15|duet_v3g2) CKPT_SYS=duet_v3g ;;
+    duet_jfmg15|duet_jfmg2) CKPT_SYS=duet_jfmg ;;
+esac
+# duet_v2c48: duet_v2's run under the _c48 task (chord stream on 48)
+MEL_DATA="data/${DUET_DATA}_melody_cp4_v2.pt"
+CHORD_DATA="data/${DUET_DATA}_chord_cp4_v2.pt"
+if [[ "$SYSTEM" == duet_v2c48 ]]; then
+    CKPT_SYS=duet_v2; TASK="${TASK}_c48"
+    CHORD_DATA="data/nottingham_chord48_cp4_v2.pt"
+fi
+# duet_jf / duet_jfr: on Nottingham trained with chords on 48 (_c48 task)
+if [[ "$SYSTEM" == duet_jf* && "$DATASET" == nottingham ]]; then
+    TASK="${TASK}_c48"
+    CHORD_DATA="data/nottingham_chord48_cp4_v2.pt"
+fi
+
+# Two-stream prompts carry each stream on the MIDI program it was TRAINED
+# on: the models keep the real program as a token (preserve_program), so
+# a model trained with chords on 48 must be prompted with chords on 48.
+# The program is the most common one in the training tensor (cached
+# beside it); MEL_PROGRAM / CHORD_PROGRAM override it, e.g. for a
+# checkpoint trained on other data than the local files.
+train_program() {   # <.pt> -> the most common program among its notes
+    local pt="$1" cache="$1.program"
+    if [[ ! -s "$cache" ]]; then
+        need "$pt" "No training tensor to read the program from; set MEL_PROGRAM / CHORD_PROGRAM."
+        python - "$pt" > "$cache.$$" <<'PY'
+import collections, sys, torch
+p = torch.load(sys.argv[1]).view(-1, 4)[:, 0]
+print(collections.Counter(p[p < 128].tolist()).most_common(1)[0][0])
+PY
+        mv -f "$cache.$$" "$cache"
+    fi
+    cat "$cache"
+}
+retag_prompts() {   # <src sub> <program> -> prompts/<src>_p<program>, built once
+    local src="$1" prog="$2" dst="$PROMPTS/${1}_p$2"
+    if [[ ! -d "$dst" ]]; then
+        # built aside and renamed in one step: sharded calls start together
+        local tmp; tmp=$(mktemp -d "$dst.XXXXXX")
+        cp -f "$PROMPTS/$src"/*.mid "$tmp/"
+        python - "$tmp" "$prog" <<'PY'
+import glob, os, sys
+import mido
+prog = int(sys.argv[2])
+for f in sorted(glob.glob(os.path.join(sys.argv[1], '*.mid'))):
+    m = mido.MidiFile(f)
+    for tr in m.tracks:
+        if not any(x.type == 'note_on' for x in tr):
+            continue
+        tr[:] = [x for x in tr if x.type != 'program_change']
+        ch = next(x.channel for x in tr if x.type == 'note_on')
+        tr.insert(0, mido.Message('program_change', program=prog, channel=ch, time=0))
+    m.save(f)
+PY
+        mv -T "$tmp" "$dst" 2>/dev/null || rm -rf "$tmp"
+    fi
+    echo "${1}_p$2"
+}
+MEL_SUB=mel; CHORD_SUB=chord
+case "$SYSTEM" in ss_finetuned|ss_scratch) ;; *)
+    MEL_PROGRAM="${MEL_PROGRAM:-$(train_program "$MEL_DATA")}"
+    CHORD_PROGRAM="${CHORD_PROGRAM:-$(train_program "$CHORD_DATA")}"
+    MEL_SUB=$(retag_prompts mel "$MEL_PROGRAM")
+    CHORD_SUB=$(retag_prompts chord "$CHORD_PROGRAM")
+    echo "[generate] $SYSTEM: prompts on the trained programs, melody $MEL_PROGRAM, chord $CHORD_PROGRAM"
+    ;;
+esac
+if [[ -z "${CKPT:-}" && "$DATASET" == pop909 && "$CKPT_SYS" == duet && "$SYSTEM" == duet_bestar ]]; then
+    echo "ERROR: the released duet checkpoint has no best_ar/; pass CKPT=<run dir>/best_ar" >&2; exit 1
+elif [[ -z "${CKPT:-}" && "$DATASET" == pop909 && "$CKPT_SYS" =~ ^(duet|dense|no_draft|ss_finetuned|ss_scratch)$ ]]; then
+    CKPT="ckpt/$CKPT_SYS"
 elif [[ -z "${CKPT:-}" ]]; then
     # No released Nottingham checkpoints: default to the run directory
     # train.sh wrote for this system (without RUN_TAG; pass CKPT=
     # for a tagged run or when several batch sizes were trained).
-    case "$SYSTEM" in
-        duet|duet_stale|dense) _pat="ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_${SYSTEM}_${TASK}_batch_*_schedule" ;;
+    case "$CKPT_SYS" in
+        duet|duet_stale|duet_v2|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|dense) _pat="ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_${CKPT_SYS}_${TASK}_batch_*_schedule" ;;
         no_draft)     _pat="ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_${TASK}_batch_*_schedule" ;;
         ss_finetuned) _pat="ckpt/cp_transformer_v0.42_size*_pop909ft_${SS_RUN_TAG}_batch_*_schedule" ;;
         ss_scratch)   _pat="ckpt/cp_transformer_v0.42_size*_pop909scratch_${SS_RUN_TAG}_batch_*_schedule" ;;
@@ -48,6 +127,7 @@ elif [[ -z "${CKPT:-}" ]]; then
         echo "ERROR: expected one run directory matching $_pat, found ${#_runs[@]}." \
              "Train it (DATASET=$DATASET scripts/train.sh $SYSTEM) or pass CKPT=<run dir>." >&2; exit 1; }
     CKPT="${_runs[0]}"
+    [[ "$SYSTEM" == duet_bestar ]] && CKPT="$CKPT/best_ar"
 fi
 need "$CKPT" "Download the checkpoints (scripts/download.sh) or pass CKPT=<your run dir>."
 # A directory holding a single checkpoint (a released model) is resolved
@@ -66,13 +146,13 @@ PDIR="$PROMPTS"
 if [[ -n "${SHARD:-}" ]]; then
     PDIR="$PROMPTS/shards/${SYSTEM}_${SHARD/\//of}"
     mkdir -p "$PDIR"
-    for sub in mel chord merged_tagged; do
+    for sub in mel $MEL_SUB $CHORD_SUB merged_tagged; do
         mkdir -p "$PDIR/$sub"
         find "$PDIR/$sub" -maxdepth 1 -name '*.mid' -type l -delete
     done
     SONGS=$(shard $(for f in "$PROMPTS"/mel/*.mid; do basename "$f" .mid; done))
     for s in $SONGS; do
-        for sub in mel chord merged_tagged; do
+        for sub in mel $MEL_SUB $CHORD_SUB merged_tagged; do
             ln -sf "$(readlink -f "$PROMPTS/$sub/$s.mid")" "$PDIR/$sub/$s.mid"
         done
     done
@@ -80,20 +160,60 @@ if [[ -n "${SHARD:-}" ]]; then
 fi
 
 case "$SYSTEM" in
-duet|duet_stale|dense)
+duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|dense|duet_joint|duet_jointmix|duet_k0|duet_bestar|duet_prevmix|duet_v2mix|duet_prevk0|duet_prevr3|duet_v3rk0|duet_v3rr3|duet_v3g15|duet_v3g2|duet_jfmg15|duet_jfmg2)
     # Draft-and-denoise, leader alternating by frame (ctc_alt): the
     # leader's draft is sampled from its autoregressive head and written
     # into its draft token, one denoise pass reads out both streams.
     # duet_stale has no leader (joint): one forward drafts both streams
     # from their autoregressive heads, both drafts go into the draft
     # tokens, one refine pass reads out both -- the regime it trains on.
-    # Temperature 1, no nucleus cut.
-    SCHED=ctc_alt; [[ "$SYSTEM" == duet_stale ]] && SCHED=joint
+    # Temperature 1, no nucleus cut. Each stream samples only the program
+    # its prompt carries (LOCK_PROGRAM=0 lifts that), so a program-tagged
+    # model keeps chords on 48 and an untagged one keeps both on theirs.
+    #
+    # Variants (README "Improving Duet's co-generation"), all leaderless:
+    #   duet_joint     the paper checkpoint, joint decode: both streams
+    #                  drafted by their AR heads, both drafts in the draft
+    #                  tokens, one refine forward reads both frames out
+    #   duet_jointmix  duet_joint, each stream sampled from the product
+    #                  of its refined distribution and its own AR head's
+    #                  (the head that sees frame t-1), equal weights
+    #   duet_k0        AR heads only, no draft tokens read (control: the
+    #                  duet checkpoint's backbone vs w/o draft tokens)
+    #   duet_bestar    duet_joint on the best_ar/ weights
+    #   duet_v2, duet_v2c48, duet_prev, duet_v3   the retrains, joint decode
+    #   duet_prevmix, duet_v2mix         duet_prev / duet_v2 with
+    #                  duet_jointmix's AR-head mix
+    #   duet_prevk0    duet_prev with duet_k0's AR heads only
+    #   duet_prevr3    duet_prev, joint refine repeated 3 rounds
+    #   duet_v3h       held-note-token retrain, joint decode (the decode
+    #                  builds each frame's held notes from the history)
+    #   duet_jf, duet_jfr  joint-frame retrains, joint decode: each frame
+    #                  of both streams is one draw from the joint head
+    #   duet_v3r       residual-refine retrain, joint decode; duet_v3rk0
+    #                  its AR heads only, duet_v3rr3 its refine x3
+    #   duet_jfm       masked joint frame, joint decode: each frame's note
+    #                  slots unmasked over 4 rounds, most confident first
+    #   duet_v3g, duet_jfmg  partner-dropout retrains, joint decode, no
+    #                  guidance; duet_v3g15/2, duet_jfmg15/2 the same
+    #                  checkpoints with partner guidance w = 1.5 / 2
+    SCHED=ctc_alt; REFINE_STEPS=4; JOINT_MIX=0; JOINT_ROUNDS=1; PARTNER_CFG=1
+    case "$SYSTEM" in
+        duet_stale|duet_joint|duet_bestar|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg) SCHED=joint ;;
+        duet_v3g15|duet_jfmg15) SCHED=joint; PARTNER_CFG=1.5 ;;
+        duet_v3g2|duet_jfmg2) SCHED=joint; PARTNER_CFG=2 ;;
+        duet_prevr3|duet_v3rr3) SCHED=joint; JOINT_ROUNDS=3 ;;
+        duet_jointmix|duet_prevmix|duet_v2mix) SCHED=joint; JOINT_MIX=0.5 ;;
+        duet_k0|duet_prevk0|duet_v3rk0) SCHED=refine; REFINE_STEPS=0 ;;
+    esac
     SHAPE=(--moe-num-experts 4 --moe-topk 2)
     [[ "$SYSTEM" == dense ]] && SHAPE=(--moe-num-experts 1 --moe-topk 1 --moe-intermediate-size 6144)
-    MELCHORD_CP=4 A3_SCHEDULE=$SCHED A3_REFINE_STEPS=4 A3_FINAL_TEMP=1.0 A3_TOP_P=1.0 \
+    MELCHORD_CP=4 A3_SCHEDULE=$SCHED A3_REFINE_STEPS=$REFINE_STEPS A3_FINAL_TEMP=1.0 A3_TOP_P=1.0 \
+    A3_JOINT_MIX=$JOINT_MIX A3_JOINT_ROUNDS=$JOINT_ROUNDS A3_CTC_MIX_MODE=geo \
+    A3_PARTNER_CFG=$PARTNER_CFG A3_MASK_STEPS="${MASK_STEPS:-4}" \
+    A3_LOCK_PROGRAM="${LOCK_PROGRAM:-1}" \
     python cp_transformer_m2c_duet_block_diffusion_combined.py \
-        --ckpt "$CKPT" --mel-folder "$PDIR/mel" --chord-folder "$PDIR/chord" \
+        --ckpt "$CKPT" --mel-folder "$PDIR/$MEL_SUB" --chord-folder "$PDIR/$CHORD_SUB" \
         --output-dir "$OUT" --modes co \
         --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
         --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 4 --skip-existing \
@@ -101,7 +221,7 @@ duet|duet_stale|dense)
     ;;
 no_draft)
     MELCHORD_CP=4 python cp_transformer_m2c_intra_cross_attn_combined.py \
-        --ckpt "$CKPT" --mel-folder "$PDIR/mel" --chord-folder "$PDIR/chord" \
+        --ckpt "$CKPT" --mel-folder "$PDIR/$MEL_SUB" --chord-folder "$PDIR/$CHORD_SUB" \
         --output-dir "$OUT" --modes co \
         --prompt-length "$PROMPT_LENGTH" --gen-length "$GEN_LENGTH" \
         --temperature 1.0 --n-samples "$N_SAMPLES" --max-polyphony 4 --skip-existing \

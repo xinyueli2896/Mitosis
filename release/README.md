@@ -141,6 +141,80 @@ Duet's init. Its decode has no leader (`A3_SCHEDULE=joint`): one forward
 drafts both streams from their AR heads, both drafts are written into
 the draft tokens, and one more forward reads both refined frames out.
 
+## Improving Duet's co-generation
+
+Duet's generations fall short of its own ablations and of the finetuned
+single-stream model, and they lose on every rhythm row (harmonic rhythm,
+onset grid, duration). Three things in the code bear on it:
+
+- **A draft token never sees the previous frame.** A query slot for
+  frame t reads clean history through t-2 (`_build_masks`). The AR
+  heads, which write the drafts, see t-1, and so do both ablations. But
+  every committed frame is read out of a slot. Whether a note was just
+  struck or is still sounding is exactly what onset and duration
+  statistics measure.
+- **The decode reads the slots in a state training barely visits.** In
+  the leaderless joint decode, both draft tokens hold AR samples tagged
+  k=0. The paper's training puts a draft in a slot a quarter of the time
+  (a coin at rate k/K masks half of them), and that draft is a
+  query-head argmax rather than an AR sample.
+- **Best-val scores both slots masked**, a state no decode reads from.
+
+Every variant below decodes without a leader: one forward drafts both
+streams from their AR heads, both drafts go into the draft tokens, and
+one more forward reads both refined frames out (`A3_SCHEDULE=joint`).
+
+| Script name | Output id | What changes |
+|---|---|---|
+| `duet_joint` | `A3jt` | the paper's duet checkpoint, joint decode |
+| `duet_jointmix` | `A3jm` | as `duet_joint`, each stream sampled from the product of its refined distribution and its own AR head's (`A3_JOINT_MIX=0.5`, geo), so both see frame t-1 |
+| `duet_k0` | `A3K0` | AR heads only, draft tokens unused (control) |
+| `duet_bestar` | `A3ar` | `duet_joint` on `<run>/best_ar/`, the weights best on the clean-row loss |
+| `duet_prev` | `A3f` | retrain: paper recipe + `--slot_sees_prev_frame` |
+| `duet_v2` | `A3v2` | retrain for the joint decode: `--slot_sees_prev_frame`; both slots drafted every pair, from the AR heads the way the decode samples (`--self_cond_prob 1 --sc_ar_frac 1 --sc_ar_free_run --sc_draft_temp 1`), tagged k=0 and scored (`--draft_k0`); validation in the same state (`--sc_val`) |
+| `duet_v2c48` | `A3v2c48` | `duet_v2` with the chord stream on program 48, the single-stream models' tag (`prepare_data.sh chord48`, task `melchord_nottingham_c48`); the same notes, only the program token differs |
+| `duet_v3` | `A3v3` | retrain so the leaderless refine has something to learn: `--slot_sees_prev_frame`; an unmasked draft token always holds an AR-sampled draft, never the true frame (`--self_cond_prob 1 --sc_ar_frac 1 --sc_ar_free_run --sc_draft_temp 1`); one commitment level for both slots, masked only at k=K (`--sym_k --sc_k_consistent`); 8 query pairs per sequence (`--query_pairs 8`; both losses are token means, so this lowers the query term's variance without changing its weight against the AR loss); validation on drafts (`--sc_val`) |
+| `duet_v3r` | `A3v3r` | `duet_v3` + `--residual_refine`: each draft token outputs its stream's AR-head context for the same frame plus a zero-initialised correction read off the slot, so the leaderless refine starts exactly at AR-heads-only and moves away only where reading the partner's draft lowers the loss; the AR context is detached there, so the query loss never trains the AR rows and the AR/query balance stays as in `duet_v3` |
+| `duet_v3h` | `A3v3h` | `duet_v3` + `--hold_tokens 4`: every frame of both streams starts with up to 4 held notes (pitches still sounding from an earlier onset, ids 3200+pitch), so a held chord is visible on every frame -- including to the partner's draft token -- not only on the frame it starts. Built from the `.pt` onsets on the fly, never scored, forced as each frame's prefix at decode; the midi writer skips them |
+| `duet_v3o` | `A3v3o` | `duet_v3` + `--query_onset_weight 4`: the 8 training query frames are drawn with weight 1 + 4 x (share of batch items with a note starting there in either stream) instead of uniformly, so fewer go to frames where both streams' target is just EOS. Training-side only; validation and the decode are unchanged |
+| `duet_jf` | `A3jf` | `duet_v3` + `--joint_frame s1`: frame t of both streams comes out of ONE local decoder pass, `[melody row, chord row, merged notes]`, where both rows see both streams through t-1 (no leader) and each note carries its stream's program and token type. The pretrained local decoder learned harmony on merged frames; split into two per-stream decoders, the Duet had to relearn it through the cross-stream gates. Notes in the corpus order (velocity, program, pitch, duration), the order the backbone and S1 trained on. The streams must be on different programs, so Nottingham trains on the program-48 chord tensor (`_c48` task); the decode draws each frame jointly, then refines it once through the draft tokens |
+| `duet_jfr` | `A3jfr` | `duet_jf` with a fresh random note order inside every training frame (`--joint_frame random`): any-order, so no stream is ever sampled first by construction |
+| `duet_jfm` | `A3jfm` | `duet_v3` + `--joint_frame masked`: the joint head without any order. Frame t is a fixed grid of 4 note slots per stream (the stream's program, then a pitch-duration or EOS for "no note"; notes lowest first), and the local decoder attends both ways over `[melody row, chord row, slots]`. Training masks a uniform 1 to 8 of the slots per frame and scores those; the decode starts all masked and unmasks over `A3_MASK_STEPS` rounds (default 4, cosine schedule), most confident first with a fading Gumbel draw. The model picks the order across both streams frame by frame, and several notes land per round, unlike `duet_jfr`'s one note at a time |
+| `duet_v3g` | `A3v3g` | `duet_v3` + `--partner_drop_prob 0.1`: each training item loses the other stream with prob 0.1 -- every cross-stream gate in every layer scaled to 0, in all of the step's forwards -- so the same weights also learn each stream alone. Decoded without guidance, which isolates the dropout's own effect |
+| `duet_jfmg` | `A3jfmg` | `duet_jfm` + `--partner_drop_prob 0.1` |
+| `duet_v3g15`, `duet_v3g2` | `A3v3g15`, `A3v3g2` | `duet_v3g`'s checkpoint with partner guidance (`A3_PARTNER_CFG` = 1.5, 2): every global-stack forward of the joint decode runs twice, as is and with the streams cut off from each other, and each token is drawn from uncond + w (cond - uncond). About twice the decode cost |
+| `duet_jfmg15`, `duet_jfmg2` | `A3jfmg15`, `A3jfmg2` | `duet_jfmg`'s checkpoint with partner guidance 1.5 and 2 |
+| `duet_v3rk0` | `A3v3rK0` | `duet_v3r`'s checkpoint, AR heads only (its control) |
+| `duet_v3rr3` | `A3v3rr3` | `duet_v3r`'s checkpoint, joint refine repeated 3 rounds |
+| `duet_prevmix` | `A3fm` | `duet_prev`'s checkpoint with `duet_jointmix`'s decode |
+| `duet_v2mix` | `A3v2m` | `duet_v2`'s checkpoint with `duet_jointmix`'s decode |
+| `duet_prevk0` | `A3fK0` | `duet_prev`'s checkpoint, AR heads only (control for `A3f`'s refine pass) |
+| `duet_prevr3` | `A3fr3` | `duet_prev`'s checkpoint, joint refine repeated 3 rounds (`A3_JOINT_ROUNDS=3`), each reading the last round's frames |
+
+`duet_stale` (above) is the closest earlier attempt at the joint
+regime. It differs from `duet_v2` in the t-1 mask, drafts from a frozen
+copy, k tags drawn uniformly with half the drafts masked, and validation
+on masked slots.
+
+Two whole-node jobs run them (8 GPUs; `DATASET` defaults to nottingham):
+
+```bash
+# decodes of the existing checkpoint, every GPU taking an eighth of the songs
+sbatch slurm/infer_duet_variants.sbatch
+# the retrains, two GPUs each, then their samples
+T=$(sbatch --parsable slurm/train_duet_variants.sbatch)
+sbatch --dependency=afterok:$T --export=ALL,SYSTEMS="duet_v2 duet_v2c48 duet_prev" slurm/infer_duet_variants.sbatch
+```
+
+With `--export=ALL,DATASET=pop909` the same jobs run on POP909: the
+decodes use the released checkpoint and leave out `duet_bestar` (it has
+no best_ar/; `CKPT_duet_bestar=<run dir>/best_ar` adds it), and the
+retrains are `duet_v2` and `duet_prev`.
+`evaluate.sh` scores every variant that is complete. Table 1 and
+Figure 2 leave them out; `figures/<tag>_quality_variants.tex` is Table 1
+with them added, and `results/<tag>_table_twosided.md` tests each one
+against Duet.
+
 ## Training everything on one machine
 
 `scripts/train_all.sh` trains all six systems on one multi-GPU machine
@@ -254,6 +328,33 @@ for s in duet dense no_draft ss_finetuned ss_scratch; do
     GEN="$GEN:$G"
 done
 sbatch --export=$E --dependency=afterok$GEN slurm/run.sbatch evaluate.sh
+```
+
+## Audio data: MAESTRO v3 (performance MIDI + EnCodec codes)
+
+For the audio-symbolic work, `duet/maestro_paired.py` turns the official
+MAESTRO v3 release (WAV + MIDI, 108 GB zip) into an aligned pair. The
+Hugging Face `ZzWaang/music-jepa-maestro` set holds log-mel features,
+not audio, so the codec cannot read it.
+
+- Symbolic: the repository's roll format (cp16 by default), one step per
+  sixteenth at a nominal tempo `BPM` (default 125, a 0.12 s step;
+  MAESTRO has no beat grid, so the performance is read as if it were at
+  that tempo). The cp checkpoint saw only frame counts, so any BPM suits
+  it. The sustain pedal is folded into note offsets.
+- Audio: EnCodec 32 kHz (MusicGen's codec), 50 Hz x 4 codebooks, kept as
+  one continuous stream. Step s owns codec frames
+  `floor(s*750/BPM)` up to `floor((s+1)*750/BPM)`: exactly 6 per step
+  at 125 BPM (6.25 at 120, a repeating 6, 6, 6, 7).
+- One set of files per MAESTRO split under `duet/data/maestro_bpm125_cp16_*`;
+  `MaestroPairedDataset` yields aligned crops of both plus each step's
+  codec-frame boundaries, and `FramedDataset` reads the symbolic half alone.
+
+```bash
+R=/scratch/$USER/maestro-v3.0.0
+J1=$(sbatch --parsable --export=ALL,MAESTRO_ROOT=$R slurm/maestro_download.sbatch)
+J2=$(sbatch --parsable --dependency=afterok:$J1 --export=ALL,MAESTRO_ROOT=$R slurm/maestro_encode.sbatch)
+J3=$(sbatch --parsable --dependency=afterok:$J2 --export=ALL,MAESTRO_ROOT=$R slurm/maestro_pack.sbatch)
 ```
 
 ## Things that fail silently if changed

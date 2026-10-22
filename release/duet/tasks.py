@@ -157,6 +157,18 @@ TASKS = {
         mod_a_default_program=24,
         mod_b_default_program=0,
     ),
+    'melchord_nottingham_c48': TaskConfig(
+        name='melchord_nottingham_c48',
+        mod_a_label='mel',
+        mod_b_label='chord',
+        # melchord_nottingham with the chord stream on program 48 (the
+        # single-stream models' tag) instead of 0; same tunes, same order
+        # and split. Built by `prepare_data.sh chord48`.
+        mod_a_path=f'data/nottingham_melody_cp{MELCHORD_CP}_v2.pt',
+        mod_b_path=f'data/nottingham_chord48_cp{MELCHORD_CP}_v2.pt',
+        mod_a_default_program=24,
+        mod_b_default_program=48,
+    ),
     'melchord_pop909_nottingham': TaskConfig(
         name='melchord_pop909_nottingham',
         mod_a_label='mel',
