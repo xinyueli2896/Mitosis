@@ -15,14 +15,14 @@
 #
 # Knobs: MAESTRO_ROOT (default duet/data/maestro-v3.0.0; put it on scratch,
 # it needs ~230 GB during unzip), CODES_DIR (data/maestro_encodec32k),
-# GRID_HZ (25: 40 ms frames, 2 codec frames each), MAX_POLYPHONY (16),
+# GRID_HZ (8: a 16th at 120 BPM = 0.125 s, 6.25 codec frames), MAX_POLYPHONY (16),
 # PEDAL (1: offsets extended through the sustain pedal).
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 STAGE="${1:?usage: maestro.sh download|encode|pack}"
 
 MAESTRO_ROOT="${MAESTRO_ROOT:-$DUET/data/maestro-v3.0.0}"
 CODES_DIR="${CODES_DIR:-data/maestro_encodec32k}"
-GRID_HZ="${GRID_HZ:-25}"
+GRID_HZ="${GRID_HZ:-8}"
 MAX_POLYPHONY="${MAX_POLYPHONY:-16}"
 PEDAL="${PEDAL:-1}"
 URL=https://storage.googleapis.com/magentadata/datasets/maestro/v3.0.0/maestro-v3.0.0.zip

@@ -5,15 +5,16 @@ preprocess_large_midi_dataset.py writes and FramedDataset reads):
 [T, P*4] uint8 rows of (program, pitch, duration index, velocity) per
 note slot, 254 marking EOS and 255 padding, so a cp checkpoint's
 tokenizer reads it unchanged. MAESTRO has no beat grid, so a frame is
-a fixed slice of time (GRID_HZ, default 25 Hz = 40 ms) instead of a
-sixteenth note, and durations are counted in those frames before
-being snapped to DURATION_TEMPLATES.
+a fixed slice of time, GRID_HZ frames per second. The default, 8 Hz, is
+a sixteenth note at 120 BPM (0.125 s), so durations keep the meaning
+the cp checkpoint learned: the MIDI is read as if it were at 120 BPM.
 
 The audio side is EnCodec 32 kHz (MusicGen's codec): 50 Hz, 4
-codebooks of 2048. 50 / GRID_HZ must be an integer R, so symbolic frame
-j covers exactly audio frames [R*j, R*(j+1)). Both sides start at
-t = 0 of the recording (MAESTRO's MIDI is captured by the Disklavier in
-the same session, aligned to about 3 ms).
+codebooks of 2048, kept as one continuous stream. Symbolic step s owns
+codec frames [n(s), n(s+1)) with n(s) = floor(s * 50 / GRID_HZ); at
+8 Hz that is 6.25 frames per step, a repeating 6, 6, 6, 7 pattern. Both
+sides start at t = 0 of the recording (MAESTRO's MIDI is captured by
+the Disklavier in the same session, aligned to about 3 ms).
 
 Stages (each run under SLURM, see slurm/maestro_*.sbatch):
 
@@ -21,7 +22,7 @@ Stages (each run under SLURM, see slurm/maestro_*.sbatch):
           Resumable, and shardable over GPUs with --shard i --num_shards n.
   pack    MIDI -> rolls, and the per-piece codes, into one file per split:
             data/<name>_<split>.pt                  rolls   [sum T, P*4] uint8
-            data/<name>_<split>.codes.pt            codes   [sum T*R, 4] int16
+            data/<name>_<split>.codes.pt            codes   [sum n(T), 4] int16
             data/<name>_<split>.length.pt           T per piece
             data/<name>_<split>.pitch_shift_range.pt zeros (audio cannot be shifted)
             data/<name>_<split>.txt                 idx, csv split, midi path
@@ -33,6 +34,7 @@ import argparse
 import csv
 import json
 import math
+from fractions import Fraction
 import os
 import sys
 
@@ -50,10 +52,16 @@ SPLITS = ('train', 'validation', 'test')
 
 
 def frames_per_grid(grid_hz):
-    r = CODEC_HZ / grid_hz
-    if abs(r - round(r)) > 1e-9 or r < 1:
-        raise ValueError(f'GRID_HZ={grid_hz}: 50 / GRID_HZ must be a whole number (50, 25, 12.5, 10, ...)')
-    return int(round(r))
+    """Codec frames per symbolic step, as an exact fraction (8 Hz -> 25/4)."""
+    r = Fraction(CODEC_HZ) / Fraction(str(grid_hz))
+    if r < 1:
+        raise ValueError(f'GRID_HZ={grid_hz}: a step must cover at least one codec frame (GRID_HZ <= 50)')
+    return r
+
+
+def step_bounds(s, r):
+    """n(s): first codec frame of step s (works on ints and long tensors)."""
+    return s * r.numerator // r.denominator
 
 
 def read_index(root):
@@ -219,15 +227,15 @@ def stage_pack(args):
     if missing:
         sys.exit(f'{len(missing)} pieces have no codes in {args.codes_dir} (first: {missing[:5]}); run the encode stage first')
     os.makedirs('data', exist_ok=True)
-    summary = {'grid_hz': args.grid_hz, 'codec_frames_per_grid': R, 'max_polyphony': args.max_polyphony,
+    summary = {'grid_hz': args.grid_hz, 'codec_frames_per_step': [R.numerator, R.denominator], 'max_polyphony': args.max_polyphony,
                'pedal': args.pedal, 'codec': args.codec, 'splits': {}}
 
     def one(r):
         codes = np.load(os.path.join(args.codes_dir, f"{r['idx']}.npy"))
-        T = len(codes) // R  # whole symbolic frames the audio covers
+        T = len(codes) * R.denominator // R.numerator  # whole steps the audio covers
         roll, dropped, kept = midi_to_roll(os.path.join(args.root, r['midi_filename']),
                                            args.grid_hz, args.max_polyphony, T, pedal=args.pedal)
-        return roll, codes[:T * R], dropped, kept
+        return roll, codes[:step_bounds(T, R)], dropped, kept
 
     for split in SPLITS:
         part = [r for r in rows if r['split'] == split]
@@ -256,17 +264,26 @@ def stage_pack(args):
 class MaestroPairedDataset(IterableDataset):
     """Aligned random crops of rolls and codes, in FramedDataset's style.
 
-    Yields (rolls [B, L, P*4] uint8, codes [B, L*R, 4] long) per batch,
-    where L = target_length symbolic frames and R codec frames per
-    symbolic frame. Splits are MAESTRO's own (one file per split), so
-    there is no modulo split, and no pitch shift: the audio is fixed.
+    Yields (rolls [B, L, P*4] uint8, codes [B, L*R, 4] long,
+    bounds [B, L+1] long) per batch, where L = target_length steps and
+    R codec frames per step. bounds[b, j] is the first codec frame of
+    step j inside the crop, so step j owns codes[b, bounds[b, j]:bounds[b, j+1]]
+    (the bridge mask and the per-step pooling read it). L*R must be a
+    whole number (at 8 Hz, L a multiple of 4) so every crop has the
+    same audio length. Crops start on multiples of R's denominator by
+    default, which fixes the 6, 6, 6, 7 phase; bounds stays correct
+    for any sample_step. Splits are MAESTRO's own (one file per split),
+    so there is no modulo split, and no pitch shift: the audio is fixed.
     """
 
-    def __init__(self, file_path, target_length, batch_size, random_order=True, repeat=True, sample_step=1):
+    def __init__(self, file_path, target_length, batch_size, random_order=True, repeat=True, sample_step=None):
         self.file_path = file_path
         with open(file_path.rsplit('_', 1)[0] + '.json') as f:
             meta = json.load(f)
-        self.R = meta['codec_frames_per_grid']
+        self.R = Fraction(*meta['codec_frames_per_step'])
+        if (target_length * self.R).denominator != 1:
+            raise ValueError(f'target_length={target_length} x {self.R} codec frames per step is not whole; '
+                             f'use a multiple of {self.R.denominator}')
         self.length = torch.load(file_path[:-3] + '.length.pt', weights_only=True)
         self.start = torch.cumsum(self.length, dim=0) - self.length
         self.valid_indices = torch.arange(len(self.length))[self.length >= target_length]
@@ -274,7 +291,8 @@ class MaestroPairedDataset(IterableDataset):
         self.batch_size = batch_size
         self.random_order = random_order
         self.repeat = repeat
-        self.sample_step = sample_step
+        self.sample_step = sample_step or self.R.denominator
+        self.code_start = torch.cumsum(step_bounds(self.length, self.R), dim=0) - step_bounds(self.length, self.R)
         self.rolls = self.codes = None
         print('Metadata for dataset', file_path, 'loaded. Valid pieces:', len(self.valid_indices),
               'of', len(self.length), 'codec frames per frame:', self.R)
@@ -283,18 +301,21 @@ class MaestroPairedDataset(IterableDataset):
         if self.rolls is None:
             self.rolls = torch.load(self.file_path, weights_only=True)
             self.codes = torch.load(self.file_path[:-3] + '.codes.pt', weights_only=True)
-            assert len(self.codes) == len(self.rolls) * self.R, (len(self.codes), len(self.rolls), self.R)
+            assert len(self.codes) == int(step_bounds(self.length, self.R).sum()), (len(self.codes), self.R)
             print('Data for dataset', self.file_path, 'loaded.')
         L, R = self.target_length, self.R
+        n_aud = int(L * R)
         while True:
             order = torch.randperm(len(self.valid_indices)) if self.random_order else torch.arange(len(self.valid_indices))
             for i in range(0, len(order), self.batch_size):
                 ids = self.valid_indices[order[i:i + self.batch_size]]
-                starts = torch.floor(torch.rand(len(ids)) * (self.length[ids] - L + 1) / self.sample_step).long() \
-                    * self.sample_step + self.start[ids]
-                sym = starts[:, None] + torch.arange(L)[None]
-                aud = (starts * R)[:, None] + torch.arange(L * R)[None]
-                yield self.rolls[sym], self.codes[aud].long()
+                local = torch.floor(torch.rand(len(ids)) * ((self.length[ids] - L) // self.sample_step + 1)).long() \
+                    * self.sample_step
+                sym = (self.start[ids] + local)[:, None] + torch.arange(L)[None]
+                a0 = step_bounds(local, R)
+                aud = (self.code_start[ids] + a0)[:, None] + torch.arange(n_aud)[None]
+                bounds = step_bounds(local[:, None] + torch.arange(L + 1)[None], R) - a0[:, None]
+                yield self.rolls[sym], self.codes[aud].long(), bounds
             if not self.repeat:
                 break
 
@@ -308,7 +329,7 @@ def main():
     ap.add_argument('--shard', type=int, default=0)
     ap.add_argument('--num_shards', type=int, default=1)
     ap.add_argument('--batch', type=int, default=8, help='encode: windows per forward pass')
-    ap.add_argument('--grid_hz', type=float, default=25.0)
+    ap.add_argument('--grid_hz', type=float, default=8.0, help='steps per second; 8 = a 16th at 120 BPM')
     ap.add_argument('--max_polyphony', type=int, default=16)
     ap.add_argument('--pedal', type=int, default=1, help='pack: extend offsets through the sustain pedal')
     ap.add_argument('--name', default=None, help='pack: default maestro_g<grid>_cp<P>')
