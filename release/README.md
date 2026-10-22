@@ -337,16 +337,16 @@ MAESTRO v3 release (WAV + MIDI, 108 GB zip) into an aligned pair. The
 Hugging Face `ZzWaang/music-jepa-maestro` set holds log-mel features,
 not audio, so the codec cannot read it.
 
-- Symbolic: the repository's roll format (cp16 by default) on a time
-  grid of `GRID_HZ` steps per second. The default, 8, is a sixteenth at
-  120 BPM (0.125 s), so durations keep the cp checkpoint's meaning; the
-  MIDI is read as if it were at 120 BPM (MAESTRO has no beat grid).
-  The sustain pedal is folded into note offsets.
+- Symbolic: the repository's roll format (cp16 by default), one step per
+  sixteenth at a nominal tempo `BPM` (default 125, a 0.12 s step;
+  MAESTRO has no beat grid, so the performance is read as if it were at
+  that tempo). The cp checkpoint saw only frame counts, so any BPM suits
+  it. The sustain pedal is folded into note offsets.
 - Audio: EnCodec 32 kHz (MusicGen's codec), 50 Hz x 4 codebooks, kept as
   one continuous stream. Step s owns codec frames
-  `floor(s*50/GRID_HZ)` up to `floor((s+1)*50/GRID_HZ)`: 6.25 per step
-  at 8 Hz, a repeating 6, 6, 6, 7 pattern.
-- One set of files per MAESTRO split under `duet/data/maestro_g8_cp16_*`;
+  `floor(s*750/BPM)` up to `floor((s+1)*750/BPM)`: exactly 6 per step
+  at 125 BPM (6.25 at 120, a repeating 6, 6, 6, 7).
+- One set of files per MAESTRO split under `duet/data/maestro_bpm125_cp16_*`;
   `MaestroPairedDataset` yields aligned crops of both plus each step's
   codec-frame boundaries, and `FramedDataset` reads the symbolic half alone.
 

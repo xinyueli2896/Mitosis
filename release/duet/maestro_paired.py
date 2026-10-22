@@ -5,14 +5,16 @@ preprocess_large_midi_dataset.py writes and FramedDataset reads):
 [T, P*4] uint8 rows of (program, pitch, duration index, velocity) per
 note slot, 254 marking EOS and 255 padding, so a cp checkpoint's
 tokenizer reads it unchanged. MAESTRO has no beat grid, so a frame is
-a fixed slice of time, GRID_HZ frames per second. The default, 8 Hz, is
-a sixteenth note at 120 BPM (0.125 s), so durations keep the meaning
-the cp checkpoint learned: the MIDI is read as if it were at 120 BPM.
+a fixed slice of time: a sixteenth note at a nominal tempo BPM, read as
+if the whole performance were at that tempo. The cp checkpoint only
+ever saw frame counts (its corpus was tokenized in beat time), so BPM
+only sets how many seconds a frame lasts. The default, 125 BPM, makes a
+step 0.12 s, exactly 6 codec frames.
 
 The audio side is EnCodec 32 kHz (MusicGen's codec): 50 Hz, 4
 codebooks of 2048, kept as one continuous stream. Symbolic step s owns
-codec frames [n(s), n(s+1)) with n(s) = floor(s * 50 / GRID_HZ); at
-8 Hz that is 6.25 frames per step, a repeating 6, 6, 6, 7 pattern. Both
+codec frames [n(s), n(s+1)) with n(s) = floor(s * 50 * 15 / BPM): 6
+each at 125 BPM, and at e.g. 120 BPM 6.25, a repeating 6, 6, 6, 7. Both
 sides start at t = 0 of the recording (MAESTRO's MIDI is captured by
 the Disklavier in the same session, aligned to about 3 ms).
 
@@ -51,11 +53,16 @@ N_CODEBOOKS = 4
 SPLITS = ('train', 'validation', 'test')
 
 
-def frames_per_grid(grid_hz):
-    """Codec frames per symbolic step, as an exact fraction (8 Hz -> 25/4)."""
-    r = Fraction(CODEC_HZ) / Fraction(str(grid_hz))
+def steps_per_second(bpm):
+    """Sixteenth notes per second at a nominal tempo, exact (125 BPM -> 25/3)."""
+    return Fraction(str(bpm)) * 4 / 60
+
+
+def frames_per_step(bpm):
+    """Codec frames per symbolic step, exact (125 BPM -> 6, 120 BPM -> 25/4)."""
+    r = Fraction(CODEC_HZ) / steps_per_second(bpm)
     if r < 1:
-        raise ValueError(f'GRID_HZ={grid_hz}: a step must cover at least one codec frame (GRID_HZ <= 50)')
+        raise ValueError(f'BPM={bpm}: a step must cover at least one codec frame (BPM <= 750)')
     return r
 
 
@@ -207,8 +214,8 @@ def midi_to_roll(path, grid_hz, max_polyphony, n_frames, pedal=True):
             dropped += 1
             continue
         dur = max(1, int(round(end * grid_hz)) - t)
-        # piano is program 0; the grid is time, so the duration index
-        # counts GRID_HZ frames, not sixteenth notes
+        # piano is program 0; the duration index counts steps, which are
+        # sixteenths at the nominal tempo
         roll[t, count[t]] = [0, int(pitch), int(np.searchsorted(boundaries, dur)), int(vel)]
         count[t] += 1
     for t in np.nonzero(count)[0]:
@@ -221,20 +228,21 @@ def midi_to_roll(path, grid_hz, max_polyphony, n_frames, pedal=True):
 
 def stage_pack(args):
     from joblib import Parallel, delayed
-    R = frames_per_grid(args.grid_hz)
+    R = frames_per_step(args.bpm)
+    grid_hz = float(steps_per_second(args.bpm))
     rows = read_index(args.root)
     missing = [r['idx'] for r in rows if not os.path.isfile(os.path.join(args.codes_dir, f"{r['idx']}.npy"))]
     if missing:
         sys.exit(f'{len(missing)} pieces have no codes in {args.codes_dir} (first: {missing[:5]}); run the encode stage first')
     os.makedirs('data', exist_ok=True)
-    summary = {'grid_hz': args.grid_hz, 'codec_frames_per_step': [R.numerator, R.denominator], 'max_polyphony': args.max_polyphony,
+    summary = {'bpm': args.bpm, 'step_seconds': 1 / grid_hz, 'codec_frames_per_step': [R.numerator, R.denominator], 'max_polyphony': args.max_polyphony,
                'pedal': args.pedal, 'codec': args.codec, 'splits': {}}
 
     def one(r):
         codes = np.load(os.path.join(args.codes_dir, f"{r['idx']}.npy"))
         T = len(codes) * R.denominator // R.numerator  # whole steps the audio covers
         roll, dropped, kept = midi_to_roll(os.path.join(args.root, r['midi_filename']),
-                                           args.grid_hz, args.max_polyphony, T, pedal=args.pedal)
+                                           grid_hz, args.max_polyphony, T, pedal=args.pedal)
         return roll, codes[:step_bounds(T, R)], dropped, kept
 
     for split in SPLITS:
@@ -250,7 +258,7 @@ def stage_pack(args):
                 f.write(f"{r['idx']}\t{r['split']}\t{r['midi_filename']}\n")
         dropped = sum(x[2] for x in res)
         kept = sum(x[3] for x in res)
-        hours = sum(len(x[0]) for x in res) / args.grid_hz / 3600
+        hours = sum(len(x[0]) for x in res) / grid_hz / 3600
         summary['splits'][split] = {'pieces': len(res), 'hours': round(hours, 2),
                                     'notes': kept, 'notes_dropped_over_polyphony': dropped}
         print(f'{split}: {len(res)} pieces, {hours:.1f} h, {kept} notes, '
@@ -269,10 +277,10 @@ class MaestroPairedDataset(IterableDataset):
     R codec frames per step. bounds[b, j] is the first codec frame of
     step j inside the crop, so step j owns codes[b, bounds[b, j]:bounds[b, j+1]]
     (the bridge mask and the per-step pooling read it). L*R must be a
-    whole number (at 8 Hz, L a multiple of 4) so every crop has the
-    same audio length. Crops start on multiples of R's denominator by
-    default, which fixes the 6, 6, 6, 7 phase; bounds stays correct
-    for any sample_step. Splits are MAESTRO's own (one file per split),
+    whole number (any L at 125 BPM; at 120 BPM, a multiple of 4) so every
+    crop has the same audio length. Crops start on multiples of R's
+    denominator by default, which fixes the phase of a 6, 6, 6, 7
+    pattern; bounds stays correct for any sample_step. Splits are MAESTRO's own (one file per split),
     so there is no modulo split, and no pitch shift: the audio is fixed.
     """
 
@@ -329,7 +337,7 @@ def main():
     ap.add_argument('--shard', type=int, default=0)
     ap.add_argument('--num_shards', type=int, default=1)
     ap.add_argument('--batch', type=int, default=8, help='encode: windows per forward pass')
-    ap.add_argument('--grid_hz', type=float, default=8.0, help='steps per second; 8 = a 16th at 120 BPM')
+    ap.add_argument('--bpm', type=float, default=125.0, help='nominal tempo; one step is a 16th at it (125: 0.12 s = 6 codec frames)')
     ap.add_argument('--max_polyphony', type=int, default=16)
     ap.add_argument('--pedal', type=int, default=1, help='pack: extend offsets through the sustain pedal')
     ap.add_argument('--name', default=None, help='pack: default maestro_g<grid>_cp<P>')
@@ -338,9 +346,9 @@ def main():
     if args.stage == 'encode':
         stage_encode(args)
     else:
-        frames_per_grid(args.grid_hz)
+        frames_per_step(args.bpm)
         if args.name is None:
-            args.name = f"maestro_g{args.grid_hz:g}_cp{args.max_polyphony}".replace('.', 'p')
+            args.name = f"maestro_bpm{args.bpm:g}_cp{args.max_polyphony}".replace('.', 'p')
         stage_pack(args)
 
 

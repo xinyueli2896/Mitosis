@@ -9,20 +9,20 @@
 #             features, not audio, so the codec cannot use it.
 #   encode    every WAV -> EnCodec 32 kHz codes, one .npy per piece in
 #             $CODES_DIR, sharded over all visible GPUs. Resumable.
-#   pack      MIDI -> rolls on a GRID_HZ time grid (cp$MAX_POLYPHONY), cut
+#   pack      MIDI -> rolls, one step per 16th at a nominal BPM (cp$MAX_POLYPHONY), cut
 #             to the audio's length, packed with the codes into one set
 #             of files per MAESTRO split (see duet/maestro_paired.py).
 #
 # Knobs: MAESTRO_ROOT (default duet/data/maestro-v3.0.0; put it on scratch,
 # it needs ~230 GB during unzip), CODES_DIR (data/maestro_encodec32k),
-# GRID_HZ (8: a 16th at 120 BPM = 0.125 s, 6.25 codec frames), MAX_POLYPHONY (16),
+# BPM (125: a step is 0.12 s, exactly 6 codec frames), MAX_POLYPHONY (16),
 # PEDAL (1: offsets extended through the sustain pedal).
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 STAGE="${1:?usage: maestro.sh download|encode|pack}"
 
 MAESTRO_ROOT="${MAESTRO_ROOT:-$DUET/data/maestro-v3.0.0}"
 CODES_DIR="${CODES_DIR:-data/maestro_encodec32k}"
-GRID_HZ="${GRID_HZ:-8}"
+BPM="${BPM:-125}"
 MAX_POLYPHONY="${MAX_POLYPHONY:-16}"
 PEDAL="${PEDAL:-1}"
 URL=https://storage.googleapis.com/magentadata/datasets/maestro/v3.0.0/maestro-v3.0.0.zip
@@ -59,7 +59,7 @@ encode)
     ;;
 pack)
     python maestro_paired.py pack --root "$MAESTRO_ROOT" --codes_dir "$CODES_DIR" \
-        --grid_hz "$GRID_HZ" --max_polyphony "$MAX_POLYPHONY" --pedal "$PEDAL"
+        --bpm "$BPM" --max_polyphony "$MAX_POLYPHONY" --pedal "$PEDAL"
     ;;
 *) echo "unknown stage '$STAGE' (download encode pack)" >&2; exit 1 ;;
 esac
