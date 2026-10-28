@@ -310,9 +310,25 @@ if __name__ == '__main__':
     n_gpus = max(torch.cuda.device_count(), 1)
     suffix = 'vel' if with_velocity else ''
     model_name = f'cp_transformer_v0.42{suffix}_size{model_size}_batch_{batch_size * n_gpus}_schedule'
+    # Defaults reproduce the beat-time backbone. A time-grid corpus from
+    # preprocess_time_grid.py (data/<name>.notes.pt) is read sparse, and
+    # validates on its own held-out split unless CP_VAL_DATA says otherwise.
+    train_data = os.environ.get('CP_TRAIN_DATA', 'data/la_cp16_v2.pt')
+    train_length = int(os.environ.get('CP_TRAIN_LENGTH', TRAIN_LENGTH))
+    if 'CP_RUN_NAME' in os.environ:
+        model_name = os.environ['CP_RUN_NAME'] + f'_size{model_size}{suffix}_batch_{batch_size * n_gpus}'
     net = RoFormerSymbolicTransformer(size=model_size, max_lr=max_lr, with_velocity=with_velocity)
-    train_set_loader = DataLoader(FramedDataset('data/la_cp16_v2.pt', TRAIN_LENGTH, batch_size), batch_size=None, num_workers=1, persistent_workers=True)
-    val_set_loader = DataLoader(FramedDataset('data/rwc_cp16_v2.pt', TRAIN_LENGTH, batch_size), batch_size=None, num_workers=1, persistent_workers=True)
+    if train_data.endswith('.notes.pt'):
+        from preprocess_time_grid import SparseFramedDataset
+        val_data = os.environ.get('CP_VAL_DATA', train_data)
+        train_set = SparseFramedDataset(train_data, train_length, batch_size, split='train')
+        val_set = SparseFramedDataset(val_data, train_length, batch_size, split='val' if val_data == train_data else 'all')
+    else:
+        train_set = FramedDataset(train_data, train_length, batch_size)
+        val_set = FramedDataset(os.environ.get('CP_VAL_DATA', 'data/rwc_cp16_v2.pt'), train_length, batch_size)
+    print(f'run {model_name}: train {train_data}, {train_length} frames per sample')
+    train_set_loader = DataLoader(train_set, batch_size=None, num_workers=1, persistent_workers=True)
+    val_set_loader = DataLoader(val_set, batch_size=None, num_workers=1, persistent_workers=True)
     checkpoint_callback = L.callbacks.ModelCheckpoint(monitor='val_loss',
                                                       save_top_k=10,
                                                       save_last=True,

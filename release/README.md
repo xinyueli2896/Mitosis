@@ -341,24 +341,39 @@ MAESTRO v3 release (WAV + MIDI, 108 GB zip) into an aligned pair. The
 Hugging Face `ZzWaang/music-jepa-maestro` set holds log-mel features,
 not audio, so the codec cannot read it.
 
-- Symbolic: the repository's roll format (cp16 by default), one step per
-  sixteenth at a nominal tempo `BPM` (default 125, a 0.12 s step;
-  MAESTRO has no beat grid, so the performance is read as if it were at
-  that tempo). The cp checkpoint saw only frame counts, so any BPM suits
-  it. The sustain pedal is folded into note offsets.
+- Symbolic: the time-grid tokenization of `duet/preprocess_time_grid.py`,
+  the repository's cp format (cp16 by default) with frames of fixed
+  absolute time. MAESTRO has no tempo, so a frame is not a note value:
+  `FRAME_HZ` defaults to 50, one symbolic frame per codec frame (20 ms).
+  The sustain pedal is folded into note offsets.
 - Audio: EnCodec 32 kHz (MusicGen's codec), 50 Hz x 4 codebooks, kept as
-  one continuous stream. Step s owns codec frames
-  `floor(s*750/BPM)` up to `floor((s+1)*750/BPM)`: exactly 6 per step
-  at 125 BPM (6.25 at 120, a repeating 6, 6, 6, 7).
-- One set of files per MAESTRO split under `duet/data/maestro_bpm125_cp16_*`;
-  `MaestroPairedDataset` yields aligned crops of both plus each step's
-  codec-frame boundaries, and `FramedDataset` reads the symbolic half alone.
+  one continuous stream, so symbolic frame f and codec frame f cover the
+  same 20 ms.
+- One set of files per MAESTRO split under `duet/data/maestro_t50_cp16_*`;
+  `MaestroPairedDataset` yields aligned crops of both plus each frame's
+  codec-frame boundaries (trivial at 50 Hz), and `FramedDataset` reads the
+  symbolic half alone.
 
 ```bash
 R=/scratch/$USER/maestro-v3.0.0
 J1=$(sbatch --parsable --export=ALL,MAESTRO_ROOT=$R slurm/maestro_download.sbatch)
 J2=$(sbatch --parsable --dependency=afterok:$J1 --export=ALL,MAESTRO_ROOT=$R slurm/maestro_encode.sbatch)
 J3=$(sbatch --parsable --dependency=afterok:$J2 --export=ALL,MAESTRO_ROOT=$R slurm/maestro_pack.sbatch)
+```
+
+### A cp backbone on the time grid
+
+The released backbone is tokenized in beat time (one frame per
+sixteenth), which MAESTRO and audio cannot provide. `scripts/pretrain_time.sh`
+pretrains the same architecture on the time grid instead: any MIDI corpus
+is tokenized at `FRAME_HZ=50` (frames of 20 ms, MIDI read in seconds,
+tempo ignored), stored sparse because most 20 ms frames are empty, and
+densified per crop by `SparseFramedDataset`. Training uses 30 s crops
+(1500 frames, MusicGen's context) and the velocity tokenizer.
+
+```bash
+J1=$(sbatch --parsable --export=ALL,MIDI_DIR=/path/to/midis,CORPUS=time50_cp16 slurm/pretrain_time_prep.sbatch)
+sbatch --dependency=afterok:$J1 --export=ALL,CORPUS=time50_cp16 slurm/pretrain_time_train.sbatch
 ```
 
 ## Things that fail silently if changed
