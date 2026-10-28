@@ -15,6 +15,8 @@
 #   bash scripts/train.sh duet_jfm        # duet_v3 with the masked joint frame (note slots unmasked in rounds)
 #   bash scripts/train.sh duet_v3g        # duet_v3 trained with partner dropout, for partner guidance
 #   bash scripts/train.sh duet_jfmg       # duet_jfm trained with partner dropout
+#   bash scripts/train.sh duet_jfme       # duet_jfm trained to fix its own visible notes
+#   bash scripts/train.sh duet_jfmeg      # duet_jfme trained with partner dropout
 #   bash scripts/train.sh dense           # Duet w/o MoE: one dense FFN of width 6144
 #   bash scripts/train.sh no_draft        # Duet w/o draft tokens
 #   bash scripts/train.sh ss_finetuned    # single-stream backbone, finetuned
@@ -31,7 +33,7 @@
 # Knobs (environment): MAX_LR, LR_TOTAL_STEPS, BATCH_SIZE (per GPU),
 # RUN_TAG (run-name suffix), WANDB=1 (log to Weights & Biases).
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-SYSTEM="${1:?usage: train.sh duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|dense|no_draft|ss_finetuned|ss_scratch}"
+SYSTEM="${1:?usage: train.sh duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|dense|no_draft|ss_finetuned|ss_scratch}"
 system_id "$SYSTEM" >/dev/null
 
 NGPUS="$(n_gpus)"
@@ -47,7 +49,7 @@ launch() {   # launch <script.py> args...: python on one GPU, torchrun on severa
 wandb_flag() { [[ "${WANDB:-0}" == "1" ]] && echo "$1" || echo "$2"; }
 
 case "$SYSTEM" in
-duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|dense)
+duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|dense)
     # Both Duet streams read cp4 tensors: MAX_POLYPHONY is the tokenizer's
     # budget and MELCHORD_CP selects data/${DUET_DATA}_*_cp${MELCHORD_CP}_v2.pt.
     # The checkpoint does not record it, so keep the two in step.
@@ -101,7 +103,7 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|
             DRAFT=(--slot_sees_prev_frame --self_cond_prob 1.0
                    --sc_ar_frac 1.0 --sc_ar_free_run --sc_draft_temp 1.0
                    --draft_k0 --sc_val) ;;
-        duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg)
+        duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg)
             # duet_v2's fixes without its k=0-only states: the slot reads
             # t-1; a draft token never holds the true frame -- unmasked it
             # always carries an AR-sampled draft (decode's sampler, temp
@@ -137,10 +139,15 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|
             # of note slots per stream, filled by masked prediction over
             # A3_MASK_STEPS rounds at decode, most confident first
             if [[ "$SYSTEM" == duet_jfm* ]]; then DRAFT+=(--joint_frame masked); fi
-            # duet_v3g / duet_jfmg: 10% of items train with the other
-            # stream cut off (every cross-stream gate 0), which partner
-            # guidance (A3_PARTNER_CFG) contrasts at decode
-            if [[ "$SYSTEM" == duet_v3g || "$SYSTEM" == duet_jfmg ]]; then
+            # duet_jfme / duet_jfmeg: the masked joint frame trained to
+            # correct itself -- half the masked slots take the model's own
+            # sample, every slot is scored (fill the masked, keep or fix
+            # the visible), so the decode can edit committed notes
+            if [[ "$SYSTEM" == duet_jfme* ]]; then DRAFT+=(--jm_edit_prob "${JM_EDIT_PROB:-0.5}"); fi
+            # duet_v3g / duet_jfmg / duet_jfmeg: 10% of items train with
+            # the other stream cut off (every cross-stream gate 0), which
+            # partner guidance (A3_PARTNER_CFG) contrasts at decode
+            if [[ "$SYSTEM" == duet_v3g || "$SYSTEM" == duet_jfmg || "$SYSTEM" == duet_jfmeg ]]; then
                 DRAFT+=(--partner_drop_prob 0.1)
             fi ;;
         esac

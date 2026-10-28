@@ -444,7 +444,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  sc_ar_free_run=False, stale_draft_every=0,
                  draft_k0=False, residual_refine=False, hold_tokens=0,
                  query_onset_weight=0.0, joint_frame='',
-                 partner_drop_prob=0.0, **kwargs):
+                 partner_drop_prob=0.0, jm_edit_prob=0.0,
+                 jm_edit_weight=1.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- stale-snapshot drafts ---------------------------------------
@@ -842,6 +843,32 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             self.jm_mask_emb = nn.Parameter(torch.zeros(self.hidden_size))
             self.register_buffer('jm_mask_init_flag', torch.tensor(0, dtype=torch.long))
         self.jm_steps = 4          # decode rounds (A3_MASK_STEPS)
+        # jm_edit_prob=p (2026-10-28, self-correcting masked frame): in
+        # training, a first no-grad pass fills the masked slots from the
+        # model itself, and each masked slot takes that sample with prob
+        # p (else stays masked); the second pass is scored on EVERY
+        # slot -- fill the masked ones, keep or fix the visible ones --
+        # so the visible notes are a mix of real notes and the model's
+        # own plausible mistakes it cannot tell apart, and it learns to
+        # judge each in context (SUNDAE-style unrolled denoising, inside
+        # the frame). jm_edit_weight scales the visible-slot term.
+        self.jm_edit_prob = float(jm_edit_prob)
+        self.jm_edit_weight = float(jm_edit_weight)
+        if self.jm_edit_prob > 0 and self.joint_frame != 'masked':
+            raise ValueError('jm_edit_prob needs joint_frame=masked')
+        self.register_buffer(
+            'jm_edit_prob_flag',
+            torch.tensor(self.jm_edit_prob, dtype=torch.float32))
+        # masked-frame decode knobs, set by the inference script
+        # (A3_MASK_ORDER / _REFINE / _REFINE_MODE / _EDIT / _EDIT_MARGIN);
+        # these defaults are the plain decode the training drafts use
+        self.jm_order = 'conf'     # 'conf' most confident first, 'random'
+        self.jm_refine = 0         # extra rounds after the frame is full
+        self.jm_refine_mode = 'stream'   # 'stream' | 'conf' | 'edit'
+        self.jm_edit = False       # edit visible notes (jm_edit_prob ckpts)
+        self.jm_edit_margin = 1.0  # nats the new note must win by
+        self.jm_edit_cap = 0       # edits per frame and round, 0 = 2P/4
+        self.jm_stats = {'frames': 0, 'edits': 0, 'refined': 0}
         self.register_buffer(
             'hold_tokens_flag', torch.tensor(self.hold_tokens, dtype=torch.long))
         self.register_buffer(
@@ -1662,19 +1689,27 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             joint, jtypes = jf[:2]
             jmask = jf[2] if len(jf) > 2 else None    # masked frame only
             L = joint.shape[-1]
-            ar_logits = self.joint_local_decode(
-                h_clean_global[:, 0::2].reshape(-1, H),
-                h_clean_global[:, 1::2].reshape(-1, H),
-                joint.reshape(-1, L), jtypes.reshape(-1, L),
-                None if jmask is None else jmask.reshape(-1, L),
-            ).view(batch_size, T_full, L, -1)
             tq_idx = torch.tensor(tq, device=x.device)
-            query_logits = self.joint_local_decode(
-                h_query_global[:, 0::2].reshape(-1, H),
-                h_query_global[:, 1::2].reshape(-1, H),
-                joint[:, tq_idx].reshape(-1, L), jtypes[:, tq_idx].reshape(-1, L),
-                None if jmask is None else jmask[:, tq_idx].reshape(-1, L),
-            ).view(batch_size, n_pairs, L, -1)
+            rows = (
+                (h_clean_global, joint, jtypes, jmask, T_full),
+                (h_query_global, joint[:, tq_idx], jtypes[:, tq_idx],
+                 None if jmask is None else jmask[:, tq_idx], n_pairs))
+            out, self._jm_edit_state = [], []
+            for hg, jt, ty, jm, n in rows:
+                h_m_, h_c_ = hg[:, 0::2].reshape(-1, H), hg[:, 1::2].reshape(-1, H)
+                jt, ty = jt.reshape(-1, L), ty.reshape(-1, L)
+                jm = None if jm is None else jm.reshape(-1, L)
+                if jm is not None and self.jm_edit_prob > 0:
+                    # self-correction: some masked slots now hold the
+                    # model's own sample; _jf_loss scores every slot
+                    jt_in, jm = self._jm_corrupt(h_m_, h_c_, jt, ty, jm)
+                    self._jm_edit_state.append(
+                        (jm.view(batch_size, n, L),
+                         (jt_in != jt).view(batch_size, n, L)))
+                    jt = jt_in
+                out.append(self.joint_local_decode(
+                    h_m_, h_c_, jt, ty, jm).view(batch_size, n, L, -1))
+            ar_logits, query_logits = out
             return ar_logits, query_logits, aux_loss
 
         ar_logits = self.local_decode(h_clean_global, emb)
@@ -1755,6 +1790,33 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         out = self.local_decoder(seq, attention_mask=both_ways)[0]
         return self.final_decoder(out[:, 2:])
 
+    def _jm_valid(self, dev):
+        """[V] bool: what a pitch-duration slot may hold (a pitch-duration
+        token or EOS)."""
+        valid = torch.zeros(self.tokenizer.n_tokens, dtype=torch.bool, device=dev)
+        valid[128:HOLD_BASE] = True
+        valid[self.tokenizer.eos_token] = True
+        return valid
+
+    def _jm_corrupt(self, h_m, h_c, joint, types, mask):
+        """jm_edit_prob training corruption, [N, L] -> (joint_in, mask_in):
+        a no-grad pass samples every masked slot (temperature 1, the
+        decode's sampler), and each masked slot takes its sample with prob
+        jm_edit_prob, the rest staying masked. Validation draws are seeded
+        so val_loss stays comparable across checks."""
+        gen = None
+        if not self.training:
+            gen = torch.Generator(device=joint.device).manual_seed(1)
+        with torch.no_grad():
+            lg = self._jm_logits(h_m.detach(), h_c.detach(), joint, types, mask).float()
+            lg = lg.masked_fill(~self._jm_valid(lg.device).view(1, 1, -1), float('-inf'))
+            V = lg.shape[-1]
+            tok = torch.multinomial(F.softmax(lg, dim=-1).view(-1, V), 1,
+                                    generator=gen).view(joint.shape)
+        u = torch.rand(joint.shape, device=joint.device, generator=gen)
+        swap = mask & (u < self.jm_edit_prob)
+        return torch.where(swap, tok, joint), mask & ~swap
+
     def jm_train_mask(self, joint, generator=None):
         """[B, T, 2S] -> bool mask: per frame a uniform 1..2P of the
         2P pitch-duration tokens (odd positions), at random."""
@@ -1768,14 +1830,109 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         m[..., 1::2] = rank < n
         return m
 
+    def _jm_guided(self, h_m, h_c, joint, types, mask, h_m_u, h_c_u, cfg_w):
+        """[N, P2, V] float logits at the pitch-duration slots, partner-
+        guided when h_m_u / h_c_u are given, invalid tokens at -inf."""
+        lg = self._jm_logits(h_m, h_c, joint, types, mask)[:, 1::2].float()
+        if h_m_u is not None and h_c_u is not None:
+            lu = self._jm_logits(h_m_u, h_c_u, joint, types, mask)[:, 1::2].float()
+            lg = lu + float(cfg_w) * (lg - lu)
+        return lg.masked_fill(~self._jm_valid(lg.device).view(1, 1, -1), float('-inf'))
+
+    def _jm_edit_slots(self, lg, pd, visible):
+        """Edit visible notes (jm_edit_prob checkpoints): a visible slot
+        takes the model's argmax where it beats the current note by more
+        than jm_edit_margin nats, at most jm_edit_cap per frame (default
+        a quarter of the slots, largest gains first). [N, P2] -> [N, P2]."""
+        logp = F.log_softmax(lg, dim=-1)
+        best, cand = logp.max(dim=-1)
+        gain = best - logp.gather(-1, pd.unsqueeze(-1)).squeeze(-1)
+        ok = visible & (cand != pd) & (gain > self.jm_edit_margin)
+        P2 = pd.shape[-1]
+        cap = min(int(self.jm_edit_cap) or max(1, P2 // 4), P2)
+        top = torch.where(ok, gain, torch.full_like(gain, float('-inf'))).topk(cap, dim=-1).indices
+        sel = torch.zeros_like(ok).scatter(-1, top, True) & ok
+        self.jm_stats['edits'] += int(sel.sum())
+        return torch.where(sel, cand, pd)
+
+    def _jm_fill(self, joint, mask, types, steps, temperature, guide, edit):
+        """Unmask whatever pitch-duration slots `mask` holds over `steps`
+        rounds: each round predicts every masked slot, samples it, and
+        reveals all but a cosine-scheduled share of them, most confident
+        first (jm_order='conf', a Gumbel draw on the confidences that
+        fades over the rounds) or in a random order (jm_order='random',
+        MDLM-style ancestral order); the last round fills the rest. With
+        edit, the middle rounds may also change visible notes."""
+        import math
+        still = mask[:, 1::2].clone()
+        n0 = still.sum(-1, keepdim=True).double()
+        for r in range(steps):
+            if not bool(still.any()):
+                break
+            lg = self._jm_guided(guide[0], guide[1], joint, types, mask, *guide[2:])
+            V = lg.shape[-1]
+            if temperature == 0:
+                tok = lg.argmax(-1)
+            else:
+                probs = F.softmax(lg / temperature, dim=-1)
+                tok = torch.multinomial(probs.view(-1, V), 1).view(still.shape)
+            if self.jm_order == 'random':
+                score = torch.rand(still.shape, device=lg.device)
+            else:
+                score = F.log_softmax(lg, dim=-1).gather(-1, tok.unsqueeze(-1)).squeeze(-1)
+                fade = 1.0 - (r + 1) / steps
+                if fade > 0 and temperature > 0:
+                    g = -torch.log(-torch.log(torch.rand_like(score).clamp(1e-9, 1 - 1e-9)))
+                    score = score + fade * g
+            conf = torch.where(still, score, torch.full_like(score, float('inf')))
+            n_left = torch.floor(n0 * math.cos(math.pi / 2 * (r + 1) / steps)).long()
+            n_masked = still.sum(-1, keepdim=True)
+            keep_masked = torch.minimum(n_left, (n_masked - 1).clamp_min(0))
+            rank = conf.argsort(dim=-1).argsort(dim=-1)
+            new_still = still & (rank < keep_masked)
+            reveal = still & ~new_still
+            pd = joint[:, 1::2]
+            if edit and 0 < r < steps - 1:
+                pd = self._jm_edit_slots(lg, pd, ~still)
+            joint[:, 1::2] = torch.where(reveal, tok, pd)
+            mask[:, 1::2] = new_still
+            still = new_still
+        return joint, mask
+
+    def _jm_low_conf(self, joint, types, guide, k):
+        """[N, P2] bool: per frame the k slots whose current note the model
+        likes least, each scored with only itself masked (all 2P scored in
+        one batched pass)."""
+        N, L = joint.shape
+        P2 = L // 2
+        dev = joint.device
+        jj = joint.repeat_interleave(P2, dim=0)
+        tt = types.repeat_interleave(P2, dim=0)
+        slot = torch.arange(N * P2, device=dev) % P2
+        mm = torch.zeros_like(jj, dtype=torch.bool)
+        mm[torch.arange(N * P2, device=dev), 2 * slot + 1] = True
+        rep = [None if g is None else g.repeat_interleave(P2, dim=0) for g in guide[:4]]
+        lg = self._jm_guided(rep[0], rep[1], jj, tt, mm, rep[2], rep[3], guide[4])
+        logp = F.log_softmax(lg, dim=-1)
+        rows = torch.arange(N * P2, device=dev)
+        cur = jj[:, 1::2][rows, slot]
+        s = logp[rows, slot, cur].view(N, P2)
+        low = s.argsort(dim=-1)[:, :k]
+        return torch.zeros(N, P2, dtype=torch.bool, device=dev).scatter(-1, low, True)
+
     def masked_sampling(self, h_m, h_c, subseq_len, temperature=1.0,
                         h_m_u=None, h_c_u=None, cfg_w=1.0):
         """joint_frame='masked' decode of one frame: all 2P slots start
-        masked; each of jm_steps rounds predicts every masked slot,
-        samples it, and keeps the most confident (cosine schedule, a
-        Gumbel draw on the confidences that fades over the rounds), so
-        the last round fills the rest. Same return as joint_sampling."""
-        import math
+        masked and are filled over jm_steps rounds (_jm_fill). Then
+        jm_refine more rounds revise the full frame, by jm_refine_mode:
+          'stream' re-mask one whole stream and fill it again given the
+                   other (alternating, a random stream first per frame:
+                   block Gibbs, no leader)
+          'conf'   re-mask the quarter of slots the model likes least,
+                   each scored with only itself masked, and fill them
+          'edit'   one pass with nothing masked, visible notes changed
+                   where the model prefers another (jm_edit_prob ckpts)
+        Same return as joint_sampling."""
         N, dev = h_m.shape[0], h_m.device
         S = subseq_len
         L = 2 * S
@@ -1787,43 +1944,33 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         joint[:, S::2] = progs[1]
         mask = torch.zeros(N, L, dtype=torch.bool, device=dev)
         mask[:, 1::2] = True
-        V = self.tokenizer.n_tokens
-        valid = torch.zeros(V, dtype=torch.bool, device=dev)
-        valid[128:HOLD_BASE] = True
-        valid[eos] = True
-        guide = h_m_u is not None and h_c_u is not None
+        guided = h_m_u is not None and h_c_u is not None
+        guide = (h_m, h_c, h_m_u if guided else None, h_c_u if guided else None, cfg_w)
         steps = max(int(self.jm_steps), 1)
+        edit = bool(self.jm_edit)
+        joint, mask = self._jm_fill(joint, mask, types, steps, temperature, guide, edit)
+        self.jm_stats['frames'] += N
         P2 = S
-        for r in range(steps):
-            lg = self._jm_logits(h_m, h_c, joint, types, mask)[:, 1::2].float()
-            if guide:
-                lu = self._jm_logits(h_m_u, h_c_u, joint, types, mask)[:, 1::2].float()
-                lg = lu + float(cfg_w) * (lg - lu)
-            lg = lg.masked_fill(~valid.view(1, 1, V), float('-inf'))
-            if temperature == 0:
-                tok = lg.argmax(-1)
-            else:
-                probs = F.softmax(lg / temperature, dim=-1)
-                tok = torch.multinomial(probs.view(-1, V), 1).view(N, P2)
-            logp = F.log_softmax(lg, dim=-1).gather(-1, tok.unsqueeze(-1)).squeeze(-1)
-            still = mask[:, 1::2]
-            fade = 1.0 - (r + 1) / steps
-            if fade > 0 and temperature > 0:
-                g = -torch.log(-torch.log(torch.rand_like(logp).clamp(1e-9, 1 - 1e-9)))
-                logp = logp + fade * g
-            conf = torch.where(still, logp, torch.full_like(logp, float('inf')))
-            n_left = int(math.floor(P2 * math.cos(math.pi / 2 * (r + 1) / steps)))
-            n_masked = still.sum(-1, keepdim=True)
-            keep_masked = torch.minimum(torch.full_like(n_masked, n_left),
-                                        (n_masked - 1).clamp_min(0))
-            rank = conf.argsort(dim=-1).argsort(dim=-1)
-            new_still = still & (rank < keep_masked)
-            reveal = still & ~new_still
-            pd = joint[:, 1::2]
-            joint[:, 1::2] = torch.where(reveal, tok, pd)
-            mask[:, 1::2] = new_still
-            if not bool(new_still.any()):
-                break
+        if self.jm_refine > 0:
+            first = torch.randint(0, 2, (N, 1), device=dev)
+            slot_stream = types[:, 1::2]
+            for r in range(int(self.jm_refine)):
+                if self.jm_refine_mode == 'edit':
+                    lg = self._jm_guided(h_m, h_c, joint, types, mask, *guide[2:])
+                    joint[:, 1::2] = self._jm_edit_slots(
+                        lg, joint[:, 1::2], torch.ones_like(mask[:, 1::2]))
+                    continue
+                if self.jm_refine_mode == 'stream':
+                    sel = slot_stream == (first + r) % 2
+                elif self.jm_refine_mode == 'conf':
+                    sel = self._jm_low_conf(joint, types, guide, max(1, P2 // 4))
+                else:
+                    raise ValueError(f'jm_refine_mode {self.jm_refine_mode!r}')
+                before = joint[:, 1::2].clone()
+                mask[:, 1::2] = sel
+                joint, mask = self._jm_fill(joint, mask, types, steps, temperature,
+                                            guide, edit)
+                self.jm_stats['refined'] += int((joint[:, 1::2] != before).sum())
         mel, chord = split_masked_frame(joint, S, self.tokenizer)
         return mel, chord, joint, types
 
@@ -2466,7 +2613,18 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         B, T, L = joint.shape
         V = self.tokenizer.n_tokens
         pad, eos = self.tokenizer.pad_token, self.tokenizer.eos_token
-        if len(jf) > 2:
+        edit = len(jf) > 2 and self.jm_edit_prob > 0
+        if edit:
+            # self-correction: score the still-masked slots (fill) and,
+            # weighted jm_edit_weight, every visible pitch-duration slot
+            # (keep the real notes, fix the model's own samples)
+            joint_full = joint
+            odd = (torch.arange(L, device=joint.device) % 2 == 1).view(1, 1, L)
+            tq_idx_ = torch.tensor(tq, device=joint.device)
+            (fill_ar, wrong_ar), (fill_q, _) = self._jm_edit_state
+            judge_ar, judge_q = odd & ~fill_ar, odd & ~fill_q
+            joint = torch.where(fill_ar, joint_full, torch.full_like(joint_full, pad))
+        elif len(jf) > 2:
             # masked frame: score the [MASK]ed slots only
             joint = torch.where(jf[2], joint, torch.full_like(joint, pad))
         dev = joint.device
@@ -2487,7 +2645,29 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
 
         ar_loss, ar_loss_content, ar_loss_eos = _ce(ar_logits, joint, jtypes)
         tq_idx = torch.tensor(tq, device=dev)
-        query_loss, _, _ = _ce(query_logits, joint[:, tq_idx], jtypes[:, tq_idx])
+        if edit:
+            joint_q = torch.where(fill_q, joint_full[:, tq_idx],
+                                  torch.full_like(fill_q, pad, dtype=joint.dtype))
+            query_loss, _, _ = _ce(query_logits, joint_q, jtypes[:, tq_idx])
+            tgt_j_ar = torch.where(judge_ar, joint_full, torch.full_like(joint_full, pad))
+            tgt_j_q = torch.where(judge_q, joint_full[:, tq_idx],
+                                  torch.full_like(judge_q, pad, dtype=joint.dtype))
+            judge_ar_loss, _, _ = _ce(ar_logits, tgt_j_ar, jtypes)
+            judge_q_loss, _, _ = _ce(query_logits, tgt_j_q, jtypes[:, tq_idx])
+            ar_loss = ar_loss + self.jm_edit_weight * judge_ar_loss
+            query_loss = query_loss + self.jm_edit_weight * judge_q_loss
+            with torch.no_grad():
+                # on the AR rows: how often a wrong visible note is fixed,
+                # a right one kept, and how many visible notes were wrong
+                pred = ar_logits.argmax(-1)
+                ok = pred == joint_full
+                right = judge_ar & ~wrong_ar
+                self._last_jm_judge_loss = judge_ar_loss.detach()
+                self._last_jm_fix_acc = (ok & wrong_ar).sum() / wrong_ar.sum().clamp_min(1)
+                self._last_jm_keep_acc = (ok & right).sum() / right.sum().clamp_min(1)
+                self._last_jm_wrong_frac = wrong_ar.sum() / judge_ar.sum().clamp_min(1)
+        else:
+            query_loss, _, _ = _ce(query_logits, joint[:, tq_idx], jtypes[:, tq_idx])
 
         self._last_agree_loss = torch.zeros((), device=dev)
         self._last_agree_acc = torch.zeros((), device=dev)
@@ -2532,6 +2712,11 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             self.log('train_agree_loss', self._last_agree_loss)
             self.log('train_agree_acc', self._last_agree_acc)
             self.log('train_agree_frac', self._last_agree_frac)
+        if self.jm_edit_prob > 0:
+            self.log('train_jm_judge_loss', self._last_jm_judge_loss)
+            self.log('train_jm_fix_acc', self._last_jm_fix_acc)
+            self.log('train_jm_keep_acc', self._last_jm_keep_acc)
+            self.log('train_jm_wrong_frac', self._last_jm_wrong_frac)
         return loss
 
     def on_before_optimizer_step(self, optimizer):
@@ -2556,6 +2741,9 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.log('val_query_loss', self._last_query_loss)
         self.log('val_query_kept_frac', self._last_query_kept_frac)
         self.log('val_moe_aux_loss', aux_loss.detach())
+        if self.jm_edit_prob > 0:
+            self.log('val_jm_fix_acc', self._last_jm_fix_acc)
+            self.log('val_jm_keep_acc', self._last_jm_keep_acc)
         return loss
 
 
@@ -2888,6 +3076,16 @@ if __name__ == '__main__':
                              'masked = no order: a fixed grid of note slots '
                              'filled by masked prediction over A3_MASK_STEPS '
                              'rounds, most confident first.')
+    parser.add_argument('--jm_edit_prob', type=float, default=0.0,
+                        help='joint_frame=masked only: self-correction '
+                             'training. Each masked slot takes the model\'s '
+                             'own (no-grad) sample with this prob, and every '
+                             'slot is scored, so visible notes may be wrong '
+                             'and the model learns to fix them (decode: '
+                             'A3_MASK_EDIT, A3_MASK_REFINE_MODE=edit).')
+    parser.add_argument('--jm_edit_weight', type=float, default=1.0,
+                        help='weight of the visible-slot (keep/fix) term '
+                             'under --jm_edit_prob')
     parser.add_argument('--partner_drop_prob', type=float, default=0.0,
                         help='per item, drop the other stream (all '
                              'cross-stream gates 0) with this prob in '
@@ -3165,6 +3363,8 @@ if __name__ == '__main__':
         query_onset_weight=args.query_onset_weight,
         joint_frame=args.joint_frame,
         partner_drop_prob=args.partner_drop_prob,
+        jm_edit_prob=args.jm_edit_prob,
+        jm_edit_weight=args.jm_edit_weight,
         agree_head=bool(args.agree_head),
         cross_lora_rank=args.cross_lora_rank,
         moe_expert_lora_rank=args.moe_expert_lora_rank,
@@ -3202,7 +3402,9 @@ if __name__ == '__main__':
           f'hold_tokens={args.hold_tokens}  '
           f'query_onset_weight={args.query_onset_weight}  '
           f'joint_frame={args.joint_frame or "off"}  '
-          f'partner_drop_prob={args.partner_drop_prob}'
+          f'partner_drop_prob={args.partner_drop_prob}  '
+          f'jm_edit_prob={args.jm_edit_prob}'
+          f'{f" (weight {args.jm_edit_weight})" if args.jm_edit_prob > 0 else ""}'
           f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
           f'query_loss_weight={args.query_loss_weight}  '
@@ -3384,6 +3586,8 @@ if __name__ == '__main__':
                     'hold_tokens': args.hold_tokens,
                     'query_onset_weight': args.query_onset_weight,
                     'joint_frame': args.joint_frame,
+                    'jm_edit_prob': args.jm_edit_prob,
+                    'jm_edit_weight': args.jm_edit_weight,
                     'agree_head': bool(args.agree_head),
                     'cross_lora_rank': args.cross_lora_rank,
                     'moe_expert_lora_rank': args.moe_expert_lora_rank,

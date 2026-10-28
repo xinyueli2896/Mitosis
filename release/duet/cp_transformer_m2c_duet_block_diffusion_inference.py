@@ -716,9 +716,38 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     guided = partner_cfg != 1.0
     # A3_MASK_STEPS=n: rounds of the masked joint frame's decode
     # (joint_frame='masked'); 4 by default, 1 fills every slot at once.
+    # A3_MASK_ORDER=conf|random: unmask most confident first (MaskGIT)
+    # or in a random order (MDLM-style ancestral order).
+    # A3_MASK_REFINE=R, A3_MASK_REFINE_MODE=stream|conf|edit: R more
+    # rounds once the frame is full -- re-mask one whole stream and fill
+    # it again given the other (alternating, random first), re-mask the
+    # least-liked quarter of slots, or edit visible notes in place.
+    # A3_MASK_EDIT=0|1: edit visible notes during the unmasking rounds;
+    # A3_MASK_EDIT_MARGIN=nats the new note must win by. Edits read the
+    # visible-slot outputs only a --jm_edit_prob checkpoint trained, so
+    # they default on for one and are refused for any other.
     if getattr(model, 'joint_frame', '') == 'masked':
         model.jm_steps = int(_os.environ.get('A3_MASK_STEPS', '4'))
-        print(f'[gen] masked joint frame: {model.jm_steps} unmasking round(s)')
+        model.jm_order = _os.environ.get('A3_MASK_ORDER', 'conf')
+        model.jm_refine = int(_os.environ.get('A3_MASK_REFINE', '0'))
+        model.jm_refine_mode = _os.environ.get('A3_MASK_REFINE_MODE', 'stream')
+        trained_edit = float(getattr(model, 'jm_edit_prob_flag', torch.zeros(())).item())
+        # unset or empty: on exactly for a --jm_edit_prob checkpoint
+        model.jm_edit = (_os.environ.get('A3_MASK_EDIT', '')
+                         or ('1' if trained_edit > 0 else '0')) == '1'
+        model.jm_edit_margin = float(_os.environ.get('A3_MASK_EDIT_MARGIN', '1.0'))
+        assert model.jm_order in ('conf', 'random'), model.jm_order
+        assert model.jm_refine_mode in ('stream', 'conf', 'edit'), model.jm_refine_mode
+        if trained_edit <= 0 and (model.jm_edit or (
+                model.jm_refine > 0 and model.jm_refine_mode == 'edit')):
+            raise ValueError('A3_MASK_EDIT / A3_MASK_REFINE_MODE=edit need a '
+                             'checkpoint trained with --jm_edit_prob')
+        print(f'[gen] masked joint frame: {model.jm_steps} unmasking round(s), '
+              f'order {model.jm_order}, {model.jm_refine} refine round(s)'
+              f'{f" ({model.jm_refine_mode})" if model.jm_refine else ""}, '
+              f'edits {"on" if model.jm_edit else "off"}'
+              f'{f" (margin {model.jm_edit_margin})" if model.jm_edit else ""}'
+              f' [checkpoint jm_edit_prob={trained_edit}]')
     if joint:
         print(f'[gen] A3_SCHEDULE=joint: leaderless draft-and-denoise '
               f'(both drafts committed, one refine forward), '
@@ -1141,6 +1170,12 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
               f'{sorted(set(model._program_lock[1].tolist()))} (-1 = unlocked)')
     model._program_lock = None
     model._hold_prefix = None
+    st = getattr(model, 'jm_stats', None)
+    if jf and st and st['frames']:
+        # running totals over the call (seed and refine draws alike)
+        print(f'[gen] masked frame: {st["frames"]} frame draws, '
+              f'{st["edits"] / st["frames"]:.3f} edits and '
+              f'{st["refined"] / st["frames"]:.3f} refine changes per draw')
     return mel_frames, chord_frames
 
 

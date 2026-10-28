@@ -85,6 +85,17 @@ system_id() {
         duet_v3g2)     echo A3v3g2 ;;
         duet_jfmg15)   echo A3jfmg15 ;;
         duet_jfmg2)    echo A3jfmg2 ;;
+        duet_jfmg15s8)      echo A3jfmg15s8 ;;
+        duet_jfmg15rnd)     echo A3jfmg15rnd ;;
+        duet_jfmg15s8rnd)   echo A3jfmg15s8rnd ;;
+        duet_jfmg15R2)      echo A3jfmg15R2 ;;
+        duet_jfmg15s8R2)    echo A3jfmg15s8R2 ;;
+        duet_jfmg15rndR2)   echo A3jfmg15rndR2 ;;
+        duet_jfmg15s8rndR2) echo A3jfmg15s8rndR2 ;;
+        duet_jfme)     echo A3jfme ;;
+        duet_jfmeg)    echo A3jfmeg ;;
+        duet_jfmeg15)  echo A3jfmeg15 ;;
+        duet_jfmeg15ne) echo A3jfmeg15ne ;;
         duet_v3rk0)    echo A3v3rK0 ;;
         duet_v3rr3)    echo A3v3rr3 ;;
         duet_joint)    echo A3jt ;;
@@ -104,13 +115,16 @@ system_id() {
         *) echo "unknown system '$1' (duet duet_stale dense no_draft ss_finetuned ss_scratch wholesong amt; variants: $DUET_VARIANTS)" >&2; return 1 ;;
     esac
 }
+# decode-only sweep of duet_jfmg's checkpoint at guidance 1.5: steps 8
+# (s8), random unmasking order (rnd), 2 stream-refine rounds (R2)
+JFMG15_SWEEP="duet_jfmg15s8 duet_jfmg15rnd duet_jfmg15s8rnd duet_jfmg15R2 duet_jfmg15s8R2 duet_jfmg15rndR2 duet_jfmg15s8rndR2"
 # Duet variants (README "Improving Duet's co-generation"), all decoded
 # without a leader: three retrains (duet_v2, duet_v2c48, duet_prev) and
 # four decodes of the paper's duet checkpoint, plus the AR-head mix on
 # two of the retrains (duet_prevmix, duet_v2mix) and duet_prev's AR
 # heads alone (duet_prevk0) and its refine run 3 rounds (duet_prevr3).
 # Scored when complete, kept out of Table 1 and Figure 2.
-DUET_VARIANTS="duet_v2 duet_v2c48 duet_prev duet_v3 duet_joint duet_jointmix duet_k0 duet_bestar duet_prevmix duet_v2mix duet_prevk0 duet_prevr3 duet_v3r duet_v3rk0 duet_v3rr3 duet_v3h duet_v3o duet_jf duet_jfr duet_jfm duet_v3g duet_jfmg duet_v3g15 duet_v3g2 duet_jfmg15 duet_jfmg2"
+DUET_VARIANTS="duet_v2 duet_v2c48 duet_prev duet_v3 duet_joint duet_jointmix duet_k0 duet_bestar duet_prevmix duet_v2mix duet_prevk0 duet_prevr3 duet_v3r duet_v3rk0 duet_v3rr3 duet_v3h duet_v3o duet_jf duet_jfr duet_jfm duet_v3g duet_jfmg duet_v3g15 duet_v3g2 duet_jfmg15 duet_jfmg2 $JFMG15_SWEEP duet_jfme duet_jfmeg duet_jfmeg15 duet_jfmeg15ne"
 ALL_SYSTEMS="duet duet_stale dense no_draft ss_finetuned ss_scratch wholesong amt $DUET_VARIANTS"
 
 # Number of visible GPUs (CUDA_VISIBLE_DEVICES, else what torch sees).
