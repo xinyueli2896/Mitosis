@@ -341,18 +341,15 @@ MAESTRO v3 release (WAV + MIDI, 108 GB zip) into an aligned pair. The
 Hugging Face `ZzWaang/music-jepa-maestro` set holds log-mel features,
 not audio, so the codec cannot read it.
 
-- Symbolic: the time-grid tokenization of `duet/preprocess_time_grid.py`,
-  the repository's cp format (cp16 by default) with frames of fixed
-  absolute time. MAESTRO has no tempo, so a frame is not a note value:
-  `FRAME_HZ` defaults to 50, one symbolic frame per codec frame (20 ms).
-  The sustain pedal is folded into note offsets.
+- Symbolic: the MIDI as a note corpus in milliseconds (sustain pedal
+  folded into offsets), tokenized at load time exactly as the time-grid
+  cp transformer below was pretrained. MAESTRO has no tempo, and nothing
+  here uses one.
 - Audio: EnCodec 32 kHz (MusicGen's codec), 50 Hz x 4 codebooks, kept as
-  one continuous stream, so symbolic frame f and codec frame f cover the
-  same 20 ms.
-- One set of files per MAESTRO split under `duet/data/maestro_t50_cp16_*`;
-  `MaestroPairedDataset` yields aligned crops of both plus each frame's
-  codec-frame boundaries (trivial at 50 Hz), and `FramedDataset` reads the
-  symbolic half alone.
+  one continuous stream.
+- One set of files per MAESTRO split under `duet/data/maestro_*`;
+  `MaestroPairedDataset` yields aligned crops, symbolic frame s over codec
+  frames K*s .. K*s+K-1.
 
 ```bash
 R=/scratch/$USER/maestro-v3.0.0
@@ -361,19 +358,39 @@ J2=$(sbatch --parsable --dependency=afterok:$J1 --export=ALL,MAESTRO_ROOT=$R slu
 J3=$(sbatch --parsable --dependency=afterok:$J2 --export=ALL,MAESTRO_ROOT=$R slurm/maestro_pack.sbatch)
 ```
 
-### A cp backbone on the time grid
+### A cp backbone on time-based frames
 
-The released backbone is tokenized in beat time (one frame per
-sixteenth), which MAESTRO and audio cannot provide. `scripts/pretrain_time.sh`
-pretrains the same architecture on the time grid instead: any MIDI corpus
-is tokenized at `FRAME_HZ=50` (frames of 20 ms, MIDI read in seconds,
-tempo ignored), stored sparse because most 20 ms frames are empty, and
-densified per crop by `SparseFramedDataset`. Training uses 30 s crops
-(1500 frames, MusicGen's context) and the velocity tokenizer.
+The released backbone is tokenized in beat time (one frame per sixteenth,
+read from MIDI ticks), which cannot line up with audio and has no answer
+for performance MIDI. `duet/cp_transformer_time.py` is the same
+architecture on time-based frames (`duet/preprocess_time_grid.py`):
+
+- A symbolic frame is `FRAME_CODEC` EnCodec frames of 20 ms (default 6 =
+  120 ms), so frame s covers codec frames 6s .. 6s+5 exactly. Each note
+  carries its onset offset inside the frame, so onsets keep 20 ms
+  precision; durations count 20 ms units. `FRAME_CODEC=1` is one frame
+  per codec frame.
+- A note is two tokens: program x velocity (16 bins) x onset offset, then
+  pitch x duration. Notes inside a frame are in time order (offset, then
+  pitch).
+- Corpora are stored once as notes in milliseconds (memory-mapped, any
+  size) and tokenized at load time, so frame size and polyphony are
+  training knobs, and training crops get a random time stretch (+-10%)
+  on top of pitch shift.
+- Validation logs `val_note_loss` (note tokens only) beside `val_loss`;
+  checkpoints are selected on it, since empty frames make many targets an
+  easy EOS.
+
+Pretrain on performance MIDI (transcribed piano such as Aria-MIDI or
+GiantMIDI-Piano, plus MAESTRO's train split); a quantized corpus read in
+seconds is metronomic. From release/:
 
 ```bash
-J1=$(sbatch --parsable --export=ALL,MIDI_DIR=/path/to/midis,CORPUS=time50_cp16 slurm/pretrain_time_prep.sbatch)
-sbatch --dependency=afterok:$J1 --export=ALL,CORPUS=time50_cp16 slurm/pretrain_time_train.sbatch
+C="--export=ALL,CORPUS=time_piano,MIDI_DIRS=/data/aria-midi /data/giantmidi,MAESTRO_ROOT=$R"
+J1=$(sbatch --parsable "$C" slurm/pretrain_time_prep.sbatch)
+sbatch --dependency=afterok:$J1 "$C" slurm/pretrain_time_stats.sbatch     # read data/time_piano.stats_cp16.json
+sbatch --export=ALL,CORPUS=time_piano,FRAME_CODEC=6 slurm/pretrain_time_train.sbatch
+sbatch --export=ALL,CORPUS=time_piano,CKPT=ckpt/<run>/last.ckpt slurm/pretrain_time_sample.sbatch
 ```
 
 ## Things that fail silently if changed

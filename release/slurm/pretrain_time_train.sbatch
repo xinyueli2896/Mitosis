@@ -1,11 +1,10 @@
 #!/bin/bash
-# Time-grid pretraining, stage 2 of 2: train the cp transformer (same
-# architecture as the beat-time backbone, velocity tokenizer by default)
-# on duet/data/$CORPUS.notes.pt, 30 s crops (1500 frames), on all 8 GPUs.
-# A resubmitted job resumes from the run's last.ckpt. See
-# pretrain_time_prep.sbatch for the chain.
-#
-# Knobs (see scripts/pretrain_time.sh): CORPUS, MODEL_SIZE, VELOCITY, BATCH_SIZE, TRAIN_LENGTH.
+# Time-grid pretraining 3/3: train the cp transformer on time frames
+# (duet/cp_transformer_time.py) on all 8 GPUs. Checkpoints in
+# duet/ckpt/cp_time_<corpus>_<ms>ms_cp<P>_size<S>_batch_<B>/, selected on
+# val_note_loss; a resubmitted job resumes from last.ckpt. Knobs: CORPUS,
+# FRAME_CODEC, MAX_POLYPHONY, MODEL_SIZE, BATCH_SIZE, TRAIN_LENGTH,
+# MAX_STEPS, STRETCH, WANDB (scripts/pretrain_time.sh).
 #SBATCH --job-name=pretrain_time_train
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1

@@ -1,51 +1,65 @@
 #!/usr/bin/env bash
-# Pretrain a cp transformer on the time-grid tokenization: one frame per
-# 20 ms, the frame of MusicGen's EnCodec 32 kHz, so a symbolic frame and
-# a codec frame cover the same time with no tempo involved. Same
-# architecture as the beat-time backbone; only the data changes (see
-# duet/preprocess_time_grid.py).
+# Pretrain the cp transformer on time-based frames, so that symbolic frames
+# line up with MusicGen's EnCodec frames (20 ms) and MAESTRO's performance
+# MIDI needs no tempo. See duet/preprocess_time_grid.py for the
+# tokenization and duet/cp_transformer_time.py for the model.
 #
-#   prep   MIDI_DIR (any folder of .mid/.midi, searched recursively)
-#          -> duet/data/$CORPUS.notes.pt and friends (sparse; CPU)
-#   train  cp_transformer.py on that corpus, its own held-out split
-#          (index % 10 == 1) for validation. Uses every visible GPU;
-#          resubmitting resumes from the run's last.ckpt.
+#   prep    MIDI folders (and optionally MAESTRO's train split) -> one note
+#           corpus in milliseconds, duet/data/$CORPUS.*. CPU.
+#   stats   for several frame sizes: empty frames, notes per frame, notes
+#           dropped by the polyphony budget. CPU, minutes. Read this before
+#           fixing FRAME_CODEC and MAX_POLYPHONY.
+#   train   the time-grid cp transformer on $CORPUS (its own held-out
+#           split validates). Every visible GPU; resubmitting resumes.
+#   sample  continue held-out prompts with a checkpoint, write MIDI to listen to.
 #
-# Knobs: CORPUS (name, default time50_cp16), FRAME_HZ (50), MAX_POLYPHONY
-# (16), PEDAL (1), MAX_FILES (all), MODEL_SIZE (1 = 12 layers, width 768,
-# the size of the beat-time backbone), VELOCITY (1: the with_velocity
-# tokenizer, 16 velocity bins, which rendering audio needs), BATCH_SIZE
-# (per GPU, default 4), TRAIN_LENGTH (1500 frames = 30 s, MusicGen's
-# context; the model holds at most 1535).
+# Knobs:
+#   MIDI_DIRS      space-separated MIDI folders (prep). Prefer performance
+#                  MIDI (transcribed piano such as Aria-MIDI or
+#                  GiantMIDI-Piano): a quantized corpus read in seconds is
+#                  metronomic and teaches the wrong timing.
+#   MAESTRO_ROOT   also take MAESTRO v3's train split (prep; val/test stay out)
+#   CORPUS         corpus name (default time_corpus)
+#   FRAME_CODEC    codec frames per symbolic frame (default 6 = 120 ms, with
+#                  each note's onset offset inside it; 1 = one frame per 20 ms)
+#   MAX_POLYPHONY  notes per frame (default 16)
+#   MODEL_SIZE     0-3 (default 1: 12 layers, width 768, as the beat-time backbone)
+#   BATCH_SIZE     per GPU (default 8); TRAIN_LENGTH frames per crop (default 384)
+#   MAX_STEPS (500000), STRETCH (0.1: random time stretch +-10%), WANDB (0)
+#   CKPT, OUT      checkpoint and output folder (sample)
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-STAGE="${1:?usage: pretrain_time.sh prep|train}"
+STAGE="${1:?usage: pretrain_time.sh prep|stats|train|sample}"
 
-CORPUS="${CORPUS:-time50_cp16}"
-FRAME_HZ="${FRAME_HZ:-50}"
+CORPUS="${CORPUS:-time_corpus}"
+FRAME_CODEC="${FRAME_CODEC:-6}"
 MAX_POLYPHONY="${MAX_POLYPHONY:-16}"
-PEDAL="${PEDAL:-1}"
-MODEL_SIZE="${MODEL_SIZE:-1}"
-VELOCITY="${VELOCITY:-1}"
-BATCH_SIZE="${BATCH_SIZE:-4}"
-TRAIN_LENGTH="${TRAIN_LENGTH:-1500}"
+need() { [[ -f "$1" ]] || { echo "missing $1: $2" >&2; exit 1; }; }
 
 case "$STAGE" in
 prep)
-    : "${MIDI_DIR:?set MIDI_DIR to the MIDI folder to tokenize}"
-    python preprocess_time_grid.py --midi_dir "$MIDI_DIR" --name "$CORPUS" --frame_hz "$FRAME_HZ" \
-        --max_polyphony "$MAX_POLYPHONY" --pedal "$PEDAL" ${MAX_FILES:+--max_files "$MAX_FILES"}
+    [[ -n "${MIDI_DIRS:-}${MAESTRO_ROOT:-}" ]] || { echo "set MIDI_DIRS and/or MAESTRO_ROOT" >&2; exit 1; }
+    args=(--name "$CORPUS" --pedal "${PEDAL:-1}")
+    [[ -n "${MIDI_DIRS:-}" ]] && args+=(--midi_dir $MIDI_DIRS)
+    [[ -n "${MAESTRO_ROOT:-}" ]] && args+=(--maestro_root "$MAESTRO_ROOT")
+    [[ -n "${MAX_FILES:-}" ]] && args+=(--max_files "$MAX_FILES")
+    python preprocess_time_grid.py prep "${args[@]}"
+    ;;
+stats)
+    need "data/$CORPUS.notes.bin" "run 'pretrain_time.sh prep' first"
+    python preprocess_time_grid.py stats --name "$CORPUS" --max_polyphony "$MAX_POLYPHONY" \
+        --frame_codec ${FRAME_CODECS:-1 3 6 12}
     ;;
 train)
-    need() { [[ -f "$1" ]] || { echo "missing $1: $2" >&2; exit 1; }; }
-    need "data/$CORPUS.notes.pt" "run 'pretrain_time.sh prep' first"
-    # cp_transformer.py takes a negative size for the velocity tokenizer
-    size_arg=$MODEL_SIZE; [[ "$VELOCITY" == 1 ]] && size_arg=$(( -MODEL_SIZE - 1 ))
-    export CP_TRAIN_DATA="data/$CORPUS.notes.pt" CP_TRAIN_LENGTH="$TRAIN_LENGTH" CP_RUN_NAME="cp_$CORPUS"
-    resume=()
-    for run in ckpt/cp_${CORPUS}_size${MODEL_SIZE}*_batch_*/; do
-        [[ -f "${run}last.ckpt" ]] && resume=("${run}last.ckpt") && echo "resuming ${run}last.ckpt" && break
-    done
-    python cp_transformer.py "$BATCH_SIZE" "$size_arg" "${resume[@]}"
+    need "data/$CORPUS.notes.bin" "run 'pretrain_time.sh prep' first"
+    python cp_transformer_time.py train --data "data/$CORPUS" --frame_codec "$FRAME_CODEC" \
+        --max_polyphony "$MAX_POLYPHONY" --size "${MODEL_SIZE:-1}" --batch_size "${BATCH_SIZE:-8}" \
+        --train_length "${TRAIN_LENGTH:-384}" --max_steps "${MAX_STEPS:-500000}" --stretch "${STRETCH:-0.1}" \
+        --wandb "${WANDB:-0}"
     ;;
-*) echo "unknown stage '$STAGE' (prep train)" >&2; exit 1 ;;
+sample)
+    : "${CKPT:?set CKPT to a checkpoint (ckpt/<run>/*.ckpt)}"
+    python cp_transformer_time.py sample --ckpt "$CKPT" --data "data/$CORPUS" \
+        --out "${OUT:-temp/time_samples/$(basename "$(dirname "$CKPT")")}" --n "${N:-4}"
+    ;;
+*) echo "unknown stage '$STAGE' (prep stats train sample)" >&2; exit 1 ;;
 esac

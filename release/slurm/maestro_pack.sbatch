@@ -1,11 +1,12 @@
 #!/bin/bash
-# MAESTRO v3 stage 3 of 3: tokenize the MIDI on the time grid (default
-# FRAME_HZ=50: one frame per 20 ms codec frame; cp16, sustain pedal applied), cut it to the audio, and
-# pack rolls + codes per split into duet/data/maestro_t<FRAME_HZ>_cp<P>_*.
-# CPU only. The log prints, per split, hours and the share of notes
-# dropped over the polyphony budget; raise MAX_POLYPHONY if it is not small.
+# MAESTRO v3 stage 3 of 3: read each piece's MIDI into a note corpus in
+# milliseconds (sustain pedal folded in), cut it to its audio, and pack it
+# with the codes per official split into duet/data/maestro_<split>.*. CPU
+# only. Tokenization happens at load time (MaestroPairedDataset), with
+# the time-grid cp transformer's own frame size and polyphony budget, so
+# one pack serves every tokenizer setting.
 #
-#   sbatch --export=ALL,MAESTRO_ROOT=...,FRAME_HZ=25 slurm/maestro_pack.sbatch
+#   sbatch --export=ALL,MAESTRO_ROOT=... slurm/maestro_pack.sbatch
 #SBATCH --job-name=maestro_pack
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1

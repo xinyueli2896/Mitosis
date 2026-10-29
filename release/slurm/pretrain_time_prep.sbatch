@@ -1,20 +1,27 @@
 #!/bin/bash
-# Time-grid pretraining, stage 1 of 2: tokenize a MIDI corpus at one
-# frame per 20 ms (the EnCodec 32 kHz frame) into duet/data/$CORPUS.*.
-# CPU only. The log ends with pieces, hours and the share of notes
-# dropped over cp$MAX_POLYPHONY. From release/:
+# Time-grid pretraining 1/3: read MIDI folders (and MAESTRO's train split)
+# into one note corpus in milliseconds, duet/data/$CORPUS.*. CPU. The log
+# ends with pieces, hours, and the share of pieces with pedal and with
+# flat velocity (a sign of sequenced, not performed, MIDI).
 #
-#   J1=$(sbatch --parsable --export=ALL,MIDI_DIR=/path/to/midis,CORPUS=time50_cp16 slurm/pretrain_time_prep.sbatch)
-#   sbatch --dependency=afterok:$J1 --export=ALL,CORPUS=time50_cp16 slurm/pretrain_time_train.sbatch
+# The chain, from release/ (each stage a plain sbatch; afterok holds the
+# rest if one fails):
 #
-# Knobs (see scripts/pretrain_time.sh): MIDI_DIR, CORPUS, FRAME_HZ, MAX_POLYPHONY, PEDAL, MAX_FILES.
+#   C="--export=ALL,CORPUS=time_piano,MIDI_DIRS=/data/aria-midi /data/giantmidi,MAESTRO_ROOT=$R"
+#   J1=$(sbatch --parsable "$C" slurm/pretrain_time_prep.sbatch)
+#   sbatch --dependency=afterok:$J1 "$C" slurm/pretrain_time_stats.sbatch
+#
+# read duet/data/time_piano.stats_cp16.json, pick FRAME_CODEC / MAX_POLYPHONY, then
+#   sbatch --export=ALL,CORPUS=time_piano,FRAME_CODEC=6 slurm/pretrain_time_train.sbatch
+# and, on a checkpoint (paths are relative to duet/):
+#   sbatch --export=ALL,CORPUS=time_piano,CKPT=ckpt/<run>/last.ckpt slurm/pretrain_time_sample.sbatch
 #SBATCH --job-name=pretrain_time_prep
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=128G
-#SBATCH --time=12:00:00
+#SBATCH --mem=64G
+#SBATCH --time=24:00:00
 #SBATCH --account=deploy
 #SBATCH --qos=deploy
 set -eo pipefail
