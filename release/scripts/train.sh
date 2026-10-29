@@ -17,6 +17,7 @@
 #   bash scripts/train.sh duet_jfmg       # duet_jfm trained with partner dropout
 #   bash scripts/train.sh duet_jfme       # duet_jfm trained to fix its own visible notes
 #   bash scripts/train.sh duet_jfmeg      # duet_jfme trained with partner dropout
+#   bash scripts/train.sh duet_jfms       # separable masked frame: each stream also trained alone
 #   bash scripts/train.sh dense           # Duet w/o MoE: one dense FFN of width 6144
 #   bash scripts/train.sh no_draft        # Duet w/o draft tokens
 #   bash scripts/train.sh ss_finetuned    # single-stream backbone, finetuned
@@ -33,7 +34,7 @@
 # Knobs (environment): MAX_LR, LR_TOTAL_STEPS, BATCH_SIZE (per GPU),
 # RUN_TAG (run-name suffix), WANDB=1 (log to Weights & Biases).
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-SYSTEM="${1:?usage: train.sh duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|dense|no_draft|ss_finetuned|ss_scratch}"
+SYSTEM="${1:?usage: train.sh duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|duet_jfms|dense|no_draft|ss_finetuned|ss_scratch}"
 system_id "$SYSTEM" >/dev/null
 
 NGPUS="$(n_gpus)"
@@ -49,7 +50,7 @@ launch() {   # launch <script.py> args...: python on one GPU, torchrun on severa
 wandb_flag() { [[ "${WANDB:-0}" == "1" ]] && echo "$1" || echo "$2"; }
 
 case "$SYSTEM" in
-duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|dense)
+duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|duet_jfms|dense)
     # Both Duet streams read cp4 tensors: MAX_POLYPHONY is the tokenizer's
     # budget and MELCHORD_CP selects data/${DUET_DATA}_*_cp${MELCHORD_CP}_v2.pt.
     # The checkpoint does not record it, so keep the two in step.
@@ -103,7 +104,7 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|
             DRAFT=(--slot_sees_prev_frame --self_cond_prob 1.0
                    --sc_ar_frac 1.0 --sc_ar_free_run --sc_draft_temp 1.0
                    --draft_k0 --sc_val) ;;
-        duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg)
+        duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|duet_jfms)
             # duet_v2's fixes without its k=0-only states: the slot reads
             # t-1; a draft token never holds the true frame -- unmasked it
             # always carries an AR-sampled draft (decode's sampler, temp
@@ -144,6 +145,14 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|
             # sample, every slot is scored (fill the masked, keep or fix
             # the visible), so the decode can edit committed notes
             if [[ "$SYSTEM" == duet_jfme* ]]; then DRAFT+=(--jm_edit_prob "${JM_EDIT_PROB:-0.5}"); fi
+            # duet_jfms: separable masked frame -- 25% of items train with
+            # the partner cut off at BOTH levels (global gates 0 and a
+            # block-diagonal local mask), so each stream also learns to
+            # write its frames alone: A3_SOLO decodes, and the checkpoint
+            # splits into two single-stream models (export_single_stream.py)
+            if [[ "$SYSTEM" == duet_jfms ]]; then
+                DRAFT+=(--partner_drop_prob "${PARTNER_DROP:-0.25}" --jm_separable 1)
+            fi
             # duet_v3g / duet_jfmg / duet_jfmeg: 10% of items train with
             # the other stream cut off (every cross-stream gate 0), which
             # partner guidance (A3_PARTNER_CFG) contrasts at decode

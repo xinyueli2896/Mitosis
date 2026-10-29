@@ -445,7 +445,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  draft_k0=False, residual_refine=False, hold_tokens=0,
                  query_onset_weight=0.0, joint_frame='',
                  partner_drop_prob=0.0, jm_edit_prob=0.0,
-                 jm_edit_weight=1.0, **kwargs):
+                 jm_edit_weight=1.0, jm_separable=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- stale-snapshot drafts ---------------------------------------
@@ -859,6 +859,20 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.register_buffer(
             'jm_edit_prob_flag',
             torch.tensor(self.jm_edit_prob, dtype=torch.float32))
+        # jm_separable (2026-10-29, separable masked frame): on the items
+        # partner dropout cuts off, the local decoder's attention is also
+        # block-diagonal -- melody slots read only [h_m, melody slots],
+        # chord slots only [h_c, chord slots] -- so with the global gates
+        # at 0 too, each stream writes its frame with no partner at
+        # either level. Such a checkpoint runs one stream alone
+        # (A3_SOLO=1), its partner guidance contrasts against a pass with
+        # no partner anywhere, and it splits into two single-stream
+        # models (export_single_stream.py).
+        if jm_separable and (self.joint_frame != 'masked' or self.partner_drop_prob <= 0):
+            raise ValueError('jm_separable needs joint_frame=masked and partner_drop_prob > 0')
+        self.register_buffer(
+            'jm_separable_flag', torch.tensor(int(bool(jm_separable)), dtype=torch.long))
+        self.jm_solo = False       # decode each stream alone (A3_SOLO)
         # masked-frame decode knobs, set by the inference script
         # (A3_MASK_ORDER / _REFINE / _REFINE_MODE / _EDIT / _EDIT_MARGIN);
         # these defaults are the plain decode the training drafts use
@@ -1695,20 +1709,25 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                 (h_query_global, joint[:, tq_idx], jtypes[:, tq_idx],
                  None if jmask is None else jmask[:, tq_idx], n_pairs))
             out, self._jm_edit_state = [], []
+            # jm_separable: the partner-dropped items get the block mask
+            alone = None
+            if self.jm_separable_flag.item() and self._partner_keep is not None:
+                alone = self._partner_keep.to(x.device) == 0          # [B]
             for hg, jt, ty, jm, n in rows:
                 h_m_, h_c_ = hg[:, 0::2].reshape(-1, H), hg[:, 1::2].reshape(-1, H)
                 jt, ty = jt.reshape(-1, L), ty.reshape(-1, L)
                 jm = None if jm is None else jm.reshape(-1, L)
+                blk = None if alone is None else alone.repeat_interleave(n)
                 if jm is not None and self.jm_edit_prob > 0:
                     # self-correction: some masked slots now hold the
                     # model's own sample; _jf_loss scores every slot
-                    jt_in, jm = self._jm_corrupt(h_m_, h_c_, jt, ty, jm)
+                    jt_in, jm = self._jm_corrupt(h_m_, h_c_, jt, ty, jm, blk)
                     self._jm_edit_state.append(
                         (jm.view(batch_size, n, L),
                          (jt_in != jt).view(batch_size, n, L)))
                     jt = jt_in
                 out.append(self.joint_local_decode(
-                    h_m_, h_c_, jt, ty, jm).view(batch_size, n, L, -1))
+                    h_m_, h_c_, jt, ty, jm, blk).view(batch_size, n, L, -1))
             ar_logits, query_logits = out
             return ar_logits, query_logits, aux_loss
 
@@ -1767,27 +1786,39 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.jf_prog.copy_(torch.tensor(progs, device=self.jf_prog.device))
         print(f'[joint_frame] stream programs: melody {progs[0]}, chord {progs[1]}')
 
-    def joint_local_decode(self, h_m, h_c, joint, types, mask=None):
+    def joint_local_decode(self, h_m, h_c, joint, types, mask=None, block=None):
         """Teacher-forced joint frame: [N, H] x2, [N, L] x2 -> [N, L, V].
         joint_frame='masked': mask [N, L] marks the [MASK]ed tokens and
-        the pass attends both ways."""
+        the pass attends both ways; block [N] bool (jm_separable) makes
+        those rows' attention block-diagonal by stream."""
         if self.joint_frame == 'masked':
-            return self._jm_logits(h_m, h_c, joint, types, mask)
+            return self._jm_logits(h_m, h_c, joint, types, mask, block)
         emb = self.local_embedding(joint) + self.token_type_embeddings(types)
         seq = torch.cat([h_m.unsqueeze(1), h_c.unsqueeze(1), emb[:, :-1]], dim=1)
         out = self.local_decoder(seq, attention_mask=self.buffered_future_mask(seq))[0]
         return self.final_decoder(out[:, 1:])
 
-    def _jm_logits(self, h_m, h_c, joint, types, mask):
-        """Masked joint frame, both-way attention: -> [N, 2S, V]."""
+    def _jm_logits(self, h_m, h_c, joint, types, mask, block=None):
+        """Masked joint frame, both-way attention: -> [N, 2S, V].
+        block [N] bool: those rows attend within their own stream only
+        (h_m + melody slots, h_c + chord slots), the layout and positions
+        unchanged, so a blocked row's melody outputs do not depend on
+        anything of the chord's."""
         typ = self.token_type_embeddings(types)
         emb = self.local_embedding(joint) + typ
         emb = torch.where(mask.unsqueeze(-1),
                           self.jm_mask_emb.to(emb.dtype) + typ, emb)
         seq = torch.cat([h_m.unsqueeze(1), h_c.unsqueeze(1), emb], dim=1)
-        n = seq.shape[1]
-        both_ways = torch.zeros(n, n, device=seq.device, dtype=seq.dtype)
-        out = self.local_decoder(seq, attention_mask=both_ways)[0]
+        N, n = seq.shape[0], seq.shape[1]
+        if block is not None and bool(block.any()):
+            sid = torch.cat([torch.tensor([0, 1], device=seq.device).view(1, 2).expand(N, 2),
+                             types.to(seq.device)], dim=1)               # [N, n]
+            other = sid.unsqueeze(2) != sid.unsqueeze(1)                 # [N, n, n]
+            am = torch.zeros(N, 1, n, n, device=seq.device, dtype=seq.dtype)
+            am = am.masked_fill((other & block.view(N, 1, 1)).unsqueeze(1), float('-inf'))
+        else:
+            am = torch.zeros(n, n, device=seq.device, dtype=seq.dtype)
+        out = self.local_decoder(seq, attention_mask=am)[0]
         return self.final_decoder(out[:, 2:])
 
     def _jm_valid(self, dev):
@@ -1798,7 +1829,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         valid[self.tokenizer.eos_token] = True
         return valid
 
-    def _jm_corrupt(self, h_m, h_c, joint, types, mask):
+    def _jm_corrupt(self, h_m, h_c, joint, types, mask, block=None):
         """jm_edit_prob training corruption, [N, L] -> (joint_in, mask_in):
         a no-grad pass samples every masked slot (temperature 1, the
         decode's sampler), and each masked slot takes its sample with prob
@@ -1808,7 +1839,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         if not self.training:
             gen = torch.Generator(device=joint.device).manual_seed(1)
         with torch.no_grad():
-            lg = self._jm_logits(h_m.detach(), h_c.detach(), joint, types, mask).float()
+            lg = self._jm_logits(h_m.detach(), h_c.detach(), joint, types, mask, block).float()
             lg = lg.masked_fill(~self._jm_valid(lg.device).view(1, 1, -1), float('-inf'))
             V = lg.shape[-1]
             tok = torch.multinomial(F.softmax(lg, dim=-1).view(-1, V), 1,
@@ -1832,10 +1863,17 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
 
     def _jm_guided(self, h_m, h_c, joint, types, mask, h_m_u, h_c_u, cfg_w):
         """[N, P2, V] float logits at the pitch-duration slots, partner-
-        guided when h_m_u / h_c_u are given, invalid tokens at -inf."""
-        lg = self._jm_logits(h_m, h_c, joint, types, mask)[:, 1::2].float()
+        guided when h_m_u / h_c_u are given, invalid tokens at -inf. A
+        jm_separable checkpoint's unconditional pass is block-masked too
+        (no partner at either level), and A3_SOLO block-masks every pass."""
+        N = joint.shape[0]
+        sep = bool(self.jm_separable_flag.item())
+        all_blk = torch.ones(N, dtype=torch.bool, device=joint.device)
+        lg = self._jm_logits(h_m, h_c, joint, types, mask,
+                             all_blk if self.jm_solo else None)[:, 1::2].float()
         if h_m_u is not None and h_c_u is not None:
-            lu = self._jm_logits(h_m_u, h_c_u, joint, types, mask)[:, 1::2].float()
+            lu = self._jm_logits(h_m_u, h_c_u, joint, types, mask,
+                                 all_blk if sep else None)[:, 1::2].float()
             lg = lu + float(cfg_w) * (lg - lu)
         return lg.masked_fill(~self._jm_valid(lg.device).view(1, 1, -1), float('-inf'))
 
@@ -1948,7 +1986,16 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         guide = (h_m, h_c, h_m_u if guided else None, h_c_u if guided else None, cfg_w)
         steps = max(int(self.jm_steps), 1)
         edit = bool(self.jm_edit)
-        joint, mask = self._jm_fill(joint, mask, types, steps, temperature, guide, edit)
+        if self.jm_solo:
+            # each stream alone: block-masked passes, and each stream's
+            # slots unmasked on a schedule of their own, so neither
+            # stream's confidences decide when the other's notes land
+            for st in (0, 1):
+                mask[:, 1::2] = types[:, 1::2] == st
+                joint, mask = self._jm_fill(joint, mask, types, steps, temperature,
+                                            guide, False)
+        else:
+            joint, mask = self._jm_fill(joint, mask, types, steps, temperature, guide, edit)
         self.jm_stats['frames'] += N
         P2 = S
         if self.jm_refine > 0:
@@ -3083,6 +3130,12 @@ if __name__ == '__main__':
                              'slot is scored, so visible notes may be wrong '
                              'and the model learns to fix them (decode: '
                              'A3_MASK_EDIT, A3_MASK_REFINE_MODE=edit).')
+    parser.add_argument('--jm_separable', type=int, default=0,
+                        help='joint_frame=masked + partner_drop_prob only: the '
+                             'partner-dropped items also get a block-diagonal '
+                             'local attention mask, so each stream learns its '
+                             'frame with no partner at either level (solo '
+                             'decode A3_SOLO=1, export_single_stream.py)')
     parser.add_argument('--jm_edit_weight', type=float, default=1.0,
                         help='weight of the visible-slot (keep/fix) term '
                              'under --jm_edit_prob')
@@ -3365,6 +3418,7 @@ if __name__ == '__main__':
         partner_drop_prob=args.partner_drop_prob,
         jm_edit_prob=args.jm_edit_prob,
         jm_edit_weight=args.jm_edit_weight,
+        jm_separable=bool(args.jm_separable),
         agree_head=bool(args.agree_head),
         cross_lora_rank=args.cross_lora_rank,
         moe_expert_lora_rank=args.moe_expert_lora_rank,
@@ -3403,7 +3457,7 @@ if __name__ == '__main__':
           f'query_onset_weight={args.query_onset_weight}  '
           f'joint_frame={args.joint_frame or "off"}  '
           f'partner_drop_prob={args.partner_drop_prob}  '
-          f'jm_edit_prob={args.jm_edit_prob}'
+          f'jm_edit_prob={args.jm_edit_prob}  jm_separable={bool(args.jm_separable)}'
           f'{f" (weight {args.jm_edit_weight})" if args.jm_edit_prob > 0 else ""}'
           f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
@@ -3588,6 +3642,7 @@ if __name__ == '__main__':
                     'joint_frame': args.joint_frame,
                     'jm_edit_prob': args.jm_edit_prob,
                     'jm_edit_weight': args.jm_edit_weight,
+                    'jm_separable': bool(args.jm_separable),
                     'agree_head': bool(args.agree_head),
                     'cross_lora_rank': args.cross_lora_rank,
                     'moe_expert_lora_rank': args.moe_expert_lora_rank,

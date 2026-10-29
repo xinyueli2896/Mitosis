@@ -714,6 +714,19 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
             print('[gen] WARNING: this checkpoint never trained without the '
                   'partner stream; its unconditional branch is off-distribution')
     guided = partner_cfg != 1.0
+    # A3_SOLO=1 (jm_separable checkpoints): every stream alone -- every
+    # global-stack forward with the cross-stream gates at 0 and every
+    # local pass block-masked, so each stream is generated exactly as
+    # its own single-stream model would (export_single_stream.py).
+    solo = _os.environ.get('A3_SOLO', '0') == '1'
+    model.jm_solo = solo
+    solo_keep = None
+    if solo:
+        if not bool(getattr(model, 'jm_separable_flag', torch.zeros(())).item()):
+            raise ValueError('A3_SOLO needs a checkpoint trained with --jm_separable')
+        if guided or joint_mix > 0 or not joint:
+            raise ValueError('A3_SOLO decodes with A3_SCHEDULE=joint, no guidance, no AR mix')
+        print('[gen] A3_SOLO: each stream generated alone (no partner at either level)')
     # A3_MASK_STEPS=n: rounds of the masked joint frame's decode
     # (joint_frame='masked'); 4 by default, 1 fills every slot at once.
     # A3_MASK_ORDER=conf|random: unmask most confident first (MaskGIT)
@@ -742,6 +755,9 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                 model.jm_refine > 0 and model.jm_refine_mode == 'edit')):
             raise ValueError('A3_MASK_EDIT / A3_MASK_REFINE_MODE=edit need a '
                              'checkpoint trained with --jm_edit_prob')
+        if model.jm_solo and model.jm_refine > 0 and model.jm_refine_mode != 'stream':
+            raise ValueError('A3_SOLO refines with A3_MASK_REFINE_MODE=stream only '
+                             '(the other modes rank both streams\' slots together)')
         print(f'[gen] masked joint frame: {model.jm_steps} unmasking round(s), '
               f'order {model.jm_order}, {model.jm_refine} refine round(s)'
               f'{f" ({model.jm_refine_mode})" if model.jm_refine else ""}, '
@@ -937,7 +953,10 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                 slot_c = _build_slot(model, 'sample' if c_sampling else 'committed',
                                      None, c_action_h, K, K, 1, B)
                 h_in = torch.cat([h_clean_padded, slot_m, slot_c], dim=1)
-                h_global, _ = model._run_global_stack(h_in, T_query=T_query)
+                if solo and solo_keep is None:
+                    solo_keep = torch.zeros(B, device=device)
+                h_global, _ = model._run_global_stack(h_in, T_query=T_query,
+                                                      partner_keep=solo_keep)
                 clean_len = h_clean.shape[1]
                 # the AR heads' contexts, kept for the follower draft mix
                 h_ar = {0: h_global[:, clean_len - 2], 1: h_global[:, clean_len - 1]}
@@ -985,7 +1004,8 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                                              model._encode_frame(cur[i], i).to(dtype=dtype),
                                              0, K, i, B) for i in (0, 1)]
                         h_in = torch.cat([h_clean_padded, slots[0], slots[1]], dim=1)
-                        h_global, _ = model._run_global_stack(h_in, T_query=T_query)
+                        h_global, _ = model._run_global_stack(h_in, T_query=T_query,
+                                                              partner_keep=solo_keep)
                         h_slot = {i: model.residual_slot_out(
                             h_global[:, -2 if i == 0 else -1], h_ar[i], i) for i in (0, 1)}
                         h_slot_u = None
