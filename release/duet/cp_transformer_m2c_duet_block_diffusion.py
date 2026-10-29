@@ -141,6 +141,285 @@ from cp_transformer_m2c_moe import (
 from cp_transformer_m2c_duet_block import M2CDuetBlockAttn, normalize_T_query
 from cp_transformer_m2c_jointattn import _rope_freqs
 from tasks import get_task, TASKS, MELCHORD_TAG
+from preprocess_large_midi_dataset import DURATION_TEMPLATES
+
+
+# --- held-note tokens (hold_tokens, 2026-10-21) -------------------------
+# A frame lists only note ONSETS, so a chord held for a bar shows up in
+# one frame and the following frames are empty: the partner's draft
+# token says "nothing new" on most frames of a leaderless decode. With
+# hold_tokens=H each frame of each stream is prefixed with up to H
+# "held" notes -- the pitches still sounding from an earlier onset, the
+# lowest first -- so every frame states what is sounding. A held note
+# is (stream program, HOLD_BASE + pitch): the pitch-duration slot at the
+# duration index one past the last template (24), ids 3200..3327, which
+# the vocabulary already reserves (n_normal_tokens = 24*128 + 256) and
+# no data uses. Held notes are a deterministic function of the earlier
+# frames, so they are never scored and never sampled: training adds them
+# on the fly from the .pt onsets (no new dataset), the decode forces
+# them as each frame's prefix, and the midi writer skips them (duration
+# index 24 is past DURATION_TEMPLATES).
+HOLD_DUR_IDX = len(DURATION_TEMPLATES)                    # 24
+HOLD_BASE = (HOLD_DUR_IDX + 1) * 128                      # 3200
+_DUR_FRAMES = torch.as_tensor(DURATION_TEMPLATES, dtype=torch.long)
+
+
+def is_held_token(tok):
+    return (tok >= HOLD_BASE) & (tok < HOLD_BASE + 128)
+
+
+def held_pair_mask(frames):
+    """[..., S] tokens -> bool mask of the held pairs (program + pitch)."""
+    m = torch.zeros_like(frames, dtype=torch.bool)
+    hp = is_held_token(frames[..., 1::2])
+    m[..., 1::2] = hp
+    m[..., 0::2] = hp
+    return m
+
+
+def onset_notes(frames, pad_token):
+    """[..., S] tokens -> (is_note, program, pitch, duration in frames),
+    each [..., S/2], for the onset notes (held notes excluded)."""
+    prog, pd = frames[..., 0::2], frames[..., 1::2]
+    is_note = (prog < 128) & (pd >= 128) & (pd < HOLD_BASE) & (pd != pad_token)
+    pitch = pd % 128
+    dur_idx = (pd // 128 - 1).clamp(0, HOLD_DUR_IDX - 1)
+    dfr = _DUR_FRAMES.to(frames.device)[dur_idx]
+    return is_note, prog, pitch, dfr
+
+
+def pack_held_frames(held, prog, onset, max_held, tokenizer):
+    """Build frames with their held notes in front.
+
+    held   [N, 128] bool  pitches sounding from an earlier onset
+    prog   [N] long       the stream's program for the held pairs
+    onset  [N, S] tokens  the onset frame (notes, then EOS / pad)
+    -> [N, 2*max_held + S]: held pairs (lowest pitches, at most
+    max_held), the onset notes, an EOS pair if there is room, pad.
+    """
+    N, S = onset.shape
+    pad, eos = tokenizer.pad_token, tokenizer.eos_token
+    dev = onset.device
+    pitch_idx = torch.arange(128, device=dev).expand(N, 128)
+    key = torch.where(held, pitch_idx, torch.full_like(pitch_idx, 1000))
+    low = key.sort(dim=-1).values[:, :max_held]            # [N, Hm]
+    h_ok = low < 128
+    h_pairs = torch.stack([
+        torch.where(h_ok, prog.view(N, 1).expand(N, max_held), torch.full_like(low, pad)),
+        torch.where(h_ok, HOLD_BASE + low.clamp(max=127), torch.full_like(low, pad)),
+    ], dim=-1)                                             # [N, Hm, 2]
+    o_pairs = onset.view(N, S // 2, 2)
+    o_ok = (o_pairs[..., 0] < 128) & (o_pairs[..., 1] != pad)
+    o_pairs = torch.where(o_ok.unsqueeze(-1), o_pairs, torch.full_like(o_pairs, pad))
+    eos_pair = torch.tensor([eos, pad], device=dev).view(1, 1, 2).expand(N, 1, 2)
+    pairs = torch.cat([h_pairs, o_pairs, eos_pair], dim=1)  # [N, Hm+S/2+1, 2]
+    ok = torch.cat([h_ok, o_ok, torch.ones(N, 1, dtype=torch.bool, device=dev)], dim=1)
+    n = pairs.shape[1]
+    order = (~ok).long() * n + torch.arange(n, device=dev)  # valid first, stable
+    idx = order.argsort(dim=1)[:, :max_held + S // 2]
+    out = pairs.gather(1, idx.unsqueeze(-1).expand(-1, -1, 2))
+    out_ok = ok.gather(1, idx)
+    out = torch.where(out_ok.unsqueeze(-1), out, torch.full_like(out, pad))
+    return out.reshape(N, 2 * max_held + S)
+
+
+def stream_program(frames, pad_token):
+    """[B, T, S] -> [B] the most common onset program per item (0 if none)."""
+    is_note, prog, _, _ = onset_notes(frames, pad_token)
+    B = frames.shape[0]
+    counts = torch.zeros(B, 128, device=frames.device)
+    p = torch.where(is_note, prog, torch.zeros_like(prog)).reshape(B, -1)
+    counts.scatter_add_(1, p, is_note.reshape(B, -1).float())
+    return counts.argmax(-1)
+
+
+def add_held_tokens(x, max_held, tokenizer):
+    """[B, T, S] onset frames -> [B, T, 2*max_held + S] with held notes.
+
+    A note is held at frame u when it started at s < u < s + duration.
+    """
+    B, T, S = x.shape
+    pad = tokenizer.pad_token
+    is_note, _, pitch, dfr = onset_notes(x, pad)            # [B, T, P]
+    P = is_note.shape[-1]
+    t = torch.arange(T, device=x.device).view(1, T, 1).expand(B, T, P)
+    start = (t + 1).clamp(max=T)
+    end = (t + dfr).clamp(max=T)
+    live = is_note & (end > start)
+    b = torch.arange(B, device=x.device).view(B, 1, 1).expand(B, T, P)
+    diff = torch.zeros(B * (T + 1) * 128, device=x.device)
+    w = live.float().reshape(-1)
+    base = (b * (T + 1)).reshape(-1)
+    pt = pitch.reshape(-1)
+    diff.scatter_add_(0, (base + start.reshape(-1)) * 128 + pt, w)
+    diff.scatter_add_(0, (base + end.reshape(-1)) * 128 + pt, -w)
+    held = diff.view(B, T + 1, 128)[:, :T].cumsum(dim=1) > 0.5   # [B, T, 128]
+    prog = stream_program(x, pad).view(B, 1).expand(B, T)
+    out = pack_held_frames(held.reshape(B * T, 128), prog.reshape(B * T),
+                           x.reshape(B * T, S), max_held, tokenizer)
+    return out.view(B, T, -1)
+
+
+
+# --- joint frame (joint_frame, 2026-10-21) ------------------------------
+# The two streams keep their own global rows, but frame t of BOTH is
+# produced by one local decoder pass: the input is [h_m, h_c, notes...]
+# where h_m / h_c are the two streams' rows for frame t (each sees both
+# streams through t-1, so neither stream leads), and the notes are the
+# union of the two frames, each pair carrying its stream's program and
+# token type. That is how the pretrained local decoder saw music -- one
+# merged frame -- so the within-frame harmony it learned is reused
+# instead of relearned through the cross-stream gates. Orders:
+#   's1'     the corpus sort (velocity, program, pitch, duration), the
+#            exact order the backbone and S1 trained on
+#   'random' a fresh permutation per frame (any-order)
+#   'masked' (2026-10-21) no order at all: see MASKED JOINT FRAME below
+JF_ORDERS = {'s1': 1, 'random': 2, 'masked': 3}
+
+
+# --- masked joint frame (joint_frame='masked', 2026-10-21) -------------
+# The same [h_m, h_c, frame] head, but the frame is a FIXED grid of 2P
+# note slots -- P per stream, the stream's notes lowest pitch first (the
+# corpus order within one program), then EOS slots meaning "no note" --
+# and it is decoded by masked prediction, not left to right: the local
+# decoder attends both ways, a [MASK] embedding stands in for the
+# unknown slots, and every masked slot is predicted at once. Slot i is
+# two tokens, (stream program, pitch-duration or EOS); only the second
+# is ever masked or scored. Training masks a uniform 1..2P of the slots
+# per frame. The decode starts all masked and unmasks over
+# A3_MASK_STEPS rounds, most confident first (MaskGIT), so the order is
+# chosen per frame by the model across both streams: no stream is ever
+# sampled first by construction, and several notes land per round.
+
+
+def merge_masked_frames(tok_m, tok_c, progs, tokenizer):
+    """[B, T, S] x2 (program, pitch-dur pairs) -> the masked joint
+    grid (joint [B, T, 2S], types [B, T, 2S]): P slots per stream, each
+    (program, pitch-dur), notes lowest first, EOS for an empty slot."""
+    B, T, S = tok_m.shape
+    P = S // 2
+    pad, eos = tokenizer.pad_token, tokenizer.eos_token
+    dev = tok_m.device
+    grids, types = [], []
+    for st, tok in enumerate((tok_m, tok_c)):
+        pr, pd = tok[..., 0::2], tok[..., 1::2]
+        is_note = (pr != pad) & (pr != eos) & (pd != pad) & (pd >= 128)
+        key = torch.where(is_note, (pd % 128) * 64 + pd // 128,
+                          torch.full_like(pd, 1 << 30))
+        idx = key.argsort(dim=-1, stable=True)
+        pd = pd.gather(-1, idx)
+        ok = is_note.gather(-1, idx)
+        pd = torch.where(ok, pd, torch.full_like(pd, eos))
+        prog = torch.full_like(pd, int(progs[st]))
+        grids.append(torch.stack([prog, pd], dim=-1).view(B, T, S))
+        types.append(torch.full((B, T, S), st, dtype=torch.long, device=dev))
+    return torch.cat(grids, dim=-1), torch.cat(types, dim=-1)
+
+
+def split_masked_frame(joint, S, tokenizer):
+    """[N, 2S] masked grid -> (mel [N, S], chord [N, S]) in the frame
+    format: the stream's notes in slot order, EOS pair, pad."""
+    N = joint.shape[0]
+    P = S // 2
+    pad, eos = tokenizer.pad_token, tokenizer.eos_token
+    out = []
+    for st in (0, 1):
+        g = joint[:, st * S:(st + 1) * S].view(N, P, 2)
+        note = g[..., 1] != eos
+        idx = (~note).long().argsort(dim=-1, stable=True)   # notes first
+        g = g.gather(1, idx.unsqueeze(-1).expand(-1, -1, 2))
+        n = note.sum(-1)
+        frame = torch.full((N, P, 2), pad, dtype=joint.dtype, device=joint.device)
+        pos = torch.arange(P, device=joint.device).view(1, P)
+        keep = pos < n.view(N, 1)
+        frame = torch.where(keep.unsqueeze(-1), g, frame)
+        rows = torch.nonzero(n < P).squeeze(-1)
+        frame[rows, n[rows], 0] = eos
+        out.append(frame.reshape(N, S))
+    return out[0], out[1]
+
+
+def merge_joint_frames(raw_m, raw_c, tok_m, tok_c, order, tokenizer):
+    """Merge two streams' frames into one joint frame.
+
+    raw_*  [B, T, 4P] the .pt tuples (program, pitch, duration, velocity)
+    tok_*  [B, T, 2P] the same frames after preprocess (program, pitch-dur)
+    -> (joint [B, T, 4P] tokens, types [B, T, 4P] 0 = melody, 1 = chord;
+       the EOS pair and padding are type 0). Notes first in `order`, then
+       an EOS pair if fewer than 2P notes, then pad.
+    """
+    B, T, S = tok_m.shape
+    P = S // 2
+    pad, eos = tokenizer.pad_token, tokenizer.eos_token
+    dev = tok_m.device
+    pairs = torch.cat([tok_m.view(B, T, P, 2), tok_c.view(B, T, P, 2)], dim=2)
+    stream = torch.cat([torch.zeros(P, dtype=torch.long, device=dev),
+                        torch.ones(P, dtype=torch.long, device=dev)])
+    stream = stream.view(1, 1, 2 * P).expand(B, T, 2 * P)
+    prog = pairs[..., 0]
+    is_note = (prog != pad) & (prog != eos) & (pairs[..., 1] != pad)
+    if order == 'random':
+        key = torch.rand(B, T, 2 * P, device=dev)
+    elif order == 's1':
+        raw = torch.cat([raw_m.long().view(B, T, P, 4),
+                         raw_c.long().view(B, T, P, 4)], dim=2)
+        # lexsort((dur, pitch, prog, vel)) in preprocess_large_midi_dataset
+        key = (((raw[..., 3] * 256 + raw[..., 0]) * 256 + raw[..., 1]) * 256
+               + raw[..., 2]).double()
+    else:
+        raise ValueError(f'joint_frame order {order!r}')
+    key = torch.where(is_note, key, torch.full_like(key, float('inf')))
+    idx = key.argsort(dim=-1, stable=True)
+    pairs = pairs.gather(2, idx.unsqueeze(-1).expand(-1, -1, -1, 2))
+    stream = stream.gather(2, idx)
+    n = is_note.sum(-1, keepdim=True)                       # [B, T, 1]
+    pos = torch.arange(2 * P, device=dev).view(1, 1, -1)
+    note_here = pos < n
+    eos_here = pos == n
+    filler = torch.full_like(pairs[..., 0], pad)
+    tok0 = torch.where(note_here, pairs[..., 0],
+                       torch.where(eos_here, torch.full_like(filler, eos), filler))
+    tok1 = torch.where(note_here, pairs[..., 1], filler)
+    joint = torch.stack([tok0, tok1], dim=-1).view(B, T, 4 * P)
+    typ = torch.where(note_here, stream, torch.zeros_like(stream))
+    types = typ.unsqueeze(-1).expand(-1, -1, -1, 2).reshape(B, T, 4 * P)
+    return joint, types
+
+
+def split_joint_frame(joint, types, S, tokenizer):
+    """Inverse of merge_joint_frames for one batch of frames.
+
+    joint, types [N, L] -> (mel [N, S], chord [N, S]): each stream's notes
+    in their joint order, at most S/2 (extra notes are dropped), then an
+    EOS pair if there is room, then pad.
+    """
+    N, L = joint.shape
+    P = S // 2
+    pad, eos = tokenizer.pad_token, tokenizer.eos_token
+    pairs = joint.view(N, L // 2, 2)
+    ptype = types.view(N, L // 2, 2)[..., 0]
+    prog = pairs[..., 0]
+    # notes before the frame's EOS only
+    after = (prog == eos).long().cumsum(-1) > 0
+    is_note = (prog != pad) & (prog != eos) & (pairs[..., 1] != pad) & ~after
+    out = []
+    for s in (0, 1):
+        sel = is_note & (ptype == s)
+        rank = sel.long().cumsum(-1) - 1                    # slot in the stream
+        keep = sel & (rank < P)
+        frame = torch.full((N, P + 1, 2), pad, dtype=joint.dtype, device=joint.device)
+        slot = torch.where(keep, rank, torch.full_like(rank, P))   # P = dump
+        frame.scatter_(1, slot.unsqueeze(-1).expand(-1, -1, 2),
+                       torch.where(keep.unsqueeze(-1), pairs, torch.full_like(pairs, pad)))
+        frame = frame[:, :P]
+        cnt = keep.sum(-1)                                  # [N]
+        has_room = cnt < P
+        rows = torch.nonzero(has_room).squeeze(-1)
+        frame[rows, cnt[rows], 0] = eos
+        frame[rows, cnt[rows], 1] = pad
+        out.append(frame.reshape(N, S))
+    return out[0], out[1]
+
 
 
 class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
@@ -162,7 +441,11 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  agree_loss_weight=0.3, sc_ar_frac=0.0,
                  sc_draft_temp=0.0, sc_k_consistent=False,
                  sym_k=False, mask_k_prob=None, sc_val=False,
-                 sc_ar_free_run=False, stale_draft_every=0, **kwargs):
+                 sc_ar_free_run=False, stale_draft_every=0,
+                 draft_k0=False, residual_refine=False, hold_tokens=0,
+                 query_onset_weight=0.0, joint_frame='',
+                 partner_drop_prob=0.0, jm_edit_prob=0.0,
+                 jm_edit_weight=1.0, jm_separable=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- stale-snapshot drafts ---------------------------------------
@@ -355,6 +638,22 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.register_buffer(
             'sc_val_flag', torch.tensor(1 if sc_val else 0, dtype=torch.long))
         self.sc_val = bool(sc_val)
+        # draft_k0 (2026-10-20): train every query pair in the state the
+        # leaderless joint decode (A3_SCHEDULE=joint) reads its output
+        # from -- both slots hold a draft, both tagged k=0, each slot
+        # predicts its own stream's true frame. The k draw is pinned to
+        # 0 for both slots, so the Bernoulli coin never masks; with
+        # self_cond_prob 1 every slot then carries the probe's draft
+        # (sc_ar_frac / sc_ar_free_run / sc_draft_temp choose how it is
+        # drawn), and a drafted slot is never `revealed`, so both slots
+        # are scored. Pair with sc_val so validation measures the same
+        # state.
+        if draft_k0 and cond_slot_prob > 0:
+            raise ValueError('draft_k0 pins both slots at k=0; '
+                             'cond_slot_prob would override it.')
+        self.draft_k0 = bool(draft_k0)
+        self.register_buffer(
+            'draft_k0_flag', torch.tensor(int(self.draft_k0), dtype=torch.long))
         if agree_head and cond_slot_prob <= 0:
             raise ValueError(
                 'agree_head needs cond_slot_prob > 0: the head is defined '
@@ -477,6 +776,122 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             self.k_emb_m.weight.zero_()
             self.k_emb_c.weight.zero_()
 
+        # residual_refine (2026-10-21): a query slot's output is its
+        # stream's AR context for the same frame (clean row 2t / 2t+1,
+        # which sees both streams through t-1) plus a correction read
+        # off the slot, h = h_ar + res_proj(h_slot). res_proj is zero-
+        # initialised, so at step 0 every slot predicts exactly what its
+        # AR head does and the leaderless refine starts at AR-heads-only
+        # quality; it moves away only where the slot's view of the
+        # partner's draft lowers the loss. The projections are the flag
+        # (load_model detects them); the buffer records it for the logs.
+        self.residual_refine = bool(residual_refine)
+        if self.residual_refine:
+            self.res_proj_m = nn.Linear(self.hidden_size, self.hidden_size)
+            self.res_proj_c = nn.Linear(self.hidden_size, self.hidden_size)
+            with torch.no_grad():
+                for lin in (self.res_proj_m, self.res_proj_c):
+                    lin.weight.zero_()
+                    lin.bias.zero_()
+        self.register_buffer(
+            'residual_refine_flag',
+            torch.tensor(int(self.residual_refine), dtype=torch.long))
+
+        # hold_tokens=H (see HOLD_BASE above): up to H held notes in
+        # front of every frame of both streams. The buffer carries H into
+        # the checkpoint (the decode must build frames the same way);
+        # hold_rows_init_flag records the one-time embedding init.
+        self.hold_tokens = int(hold_tokens)
+        # query_onset_weight=w (2026-10-21): draw the training query
+        # frames with weight 1 + w * (share of batch items with an onset
+        # in either stream at that frame) instead of uniformly. Most
+        # frames are EOS in both streams -- a trivial query target -- so
+        # a uniform draw spends most of the refine's gradient there. The
+        # frames stay distinct and shared across the batch (T_query
+        # defines the attention mask); validation keeps its fixed frame.
+        self.query_onset_weight = float(query_onset_weight)
+        self.register_buffer(
+            'query_onset_weight_flag',
+            torch.tensor(self.query_onset_weight, dtype=torch.float32))
+        # partner_drop_prob=p (2026-10-21): in training, each batch item
+        # loses the other stream with prob p -- every cross-stream gate
+        # scaled to 0 in every layer, in all of the step's forwards --
+        # so the same weights also learn each stream on its own. The
+        # decode contrasts the two (A3_PARTNER_CFG, partner guidance).
+        self.partner_drop_prob = float(partner_drop_prob)
+        self.register_buffer(
+            'partner_drop_prob_flag',
+            torch.tensor(self.partner_drop_prob, dtype=torch.float32))
+        self._partner_keep = None
+        # joint_frame (see JF_ORDERS above): frame t of both streams from
+        # one local decoder pass over the merged frame. The flag carries
+        # the order into the checkpoint; jf_prog holds the two streams'
+        # programs (set from the first training batch), which is how a
+        # sampled note is told apart at decode -- they must differ.
+        self.joint_frame = joint_frame or ''
+        if self.joint_frame and self.joint_frame not in JF_ORDERS:
+            raise ValueError(f'joint_frame must be one of {sorted(JF_ORDERS)}')
+        self.register_buffer(
+            'joint_frame_flag',
+            torch.tensor(JF_ORDERS.get(self.joint_frame, 0), dtype=torch.long))
+        self.register_buffer(
+            'jf_prog', torch.full((2,), -1, dtype=torch.long))
+        if self.joint_frame == 'masked':
+            # [MASK] for a slot's pitch-duration token; set to the mean
+            # real pitch-duration embedding once the warm start has
+            # loaded (_init_jm_mask), recorded in jm_mask_init_flag
+            self.jm_mask_emb = nn.Parameter(torch.zeros(self.hidden_size))
+            self.register_buffer('jm_mask_init_flag', torch.tensor(0, dtype=torch.long))
+        self.jm_steps = 4          # decode rounds (A3_MASK_STEPS)
+        # jm_edit_prob=p (2026-10-28, self-correcting masked frame): in
+        # training, a first no-grad pass fills the masked slots from the
+        # model itself, and each masked slot takes that sample with prob
+        # p (else stays masked); the second pass is scored on EVERY
+        # slot -- fill the masked ones, keep or fix the visible ones --
+        # so the visible notes are a mix of real notes and the model's
+        # own plausible mistakes it cannot tell apart, and it learns to
+        # judge each in context (SUNDAE-style unrolled denoising, inside
+        # the frame). jm_edit_weight scales the visible-slot term.
+        self.jm_edit_prob = float(jm_edit_prob)
+        self.jm_edit_weight = float(jm_edit_weight)
+        if self.jm_edit_prob > 0 and self.joint_frame != 'masked':
+            raise ValueError('jm_edit_prob needs joint_frame=masked')
+        self.register_buffer(
+            'jm_edit_prob_flag',
+            torch.tensor(self.jm_edit_prob, dtype=torch.float32))
+        # jm_separable (2026-10-29, separable masked frame): on the items
+        # partner dropout cuts off, the local decoder's attention is also
+        # block-diagonal -- melody slots read only [h_m, melody slots],
+        # chord slots only [h_c, chord slots] -- so with the global gates
+        # at 0 too, each stream writes its frame with no partner at
+        # either level. Such a checkpoint runs one stream alone
+        # (A3_SOLO=1), its partner guidance contrasts against a pass with
+        # no partner anywhere, and it splits into two single-stream
+        # models (export_single_stream.py).
+        if jm_separable and (self.joint_frame != 'masked' or self.partner_drop_prob <= 0):
+            raise ValueError('jm_separable needs joint_frame=masked and partner_drop_prob > 0')
+        self.register_buffer(
+            'jm_separable_flag', torch.tensor(int(bool(jm_separable)), dtype=torch.long))
+        self.jm_solo = False       # decode each stream alone (A3_SOLO)
+        # masked-frame decode knobs, set by the inference script
+        # (A3_MASK_ORDER / _REFINE / _REFINE_MODE / _EDIT / _EDIT_MARGIN);
+        # these defaults are the plain decode the training drafts use
+        self.jm_order = 'conf'     # 'conf' most confident first, 'random'
+        self.jm_refine = 0         # extra rounds after the frame is full
+        self.jm_refine_mode = 'stream'   # 'stream' | 'conf' | 'edit'
+        self.jm_edit = False       # edit visible notes (jm_edit_prob ckpts)
+        self.jm_edit_margin = 1.0  # nats the new note must win by
+        self.jm_edit_cap = 0       # edits per frame and round, 0 = 2P/4
+        self.jm_stats = {'frames': 0, 'edits': 0, 'refined': 0}
+        self.register_buffer(
+            'hold_tokens_flag', torch.tensor(self.hold_tokens, dtype=torch.long))
+        self.register_buffer(
+            'hold_rows_init_flag', torch.tensor(0, dtype=torch.long))
+        if self.hold_tokens:
+            if self.tokenizer.with_velocity:
+                raise ValueError('hold_tokens uses the free pitch-duration '
+                                 'ids 3200..3327, which with_velocity fills.')
+
         # --- v1.1 training-scheme flags -------------------------------
         # slot_rope_aligned: apply RoPE to the two query slots at rotary
         # index 2*T_query+2 / 2*T_query+3 -- the phase they naturally
@@ -562,7 +977,28 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             'query_block_flag',
             torch.tensor(self.query_block, dtype=torch.long),
         )
+        if self.joint_frame:
+            bad = [n for n, on in (
+                ('hold_tokens', self.hold_tokens),
+                ('token_level_mask', self.token_level_mask),
+                ('decoy_corruption', self.decoy_corruption),
+                ('mask_revealed_query_loss', self.mask_revealed_query_loss),
+                ('agree_head', self.agree_head),
+                ('cond_slot_prob', self.cond_slot_prob > 0),
+                ('query_block', self.query_block > 1),
+                ('with_velocity', self.with_velocity)) if on]
+            if bad:
+                raise ValueError(f'joint_frame is not wired for {bad}')
+        if self.hold_tokens and (self.token_level_mask or self.decoy_corruption):
+            raise ValueError('hold_tokens is wired for the frame-level slot '
+                             'only (no token_level_mask / decoy_corruption).')
         if self.query_block > 1:
+            if self.hold_tokens:
+                raise ValueError('hold_tokens is not wired for block mode (A.8).')
+            if self.residual_refine:
+                raise ValueError(
+                    'residual_refine reads the AR row of the slot\'s own '
+                    'frame; block mode (A.8) is not wired for it.')
             if self.slot_sees_prev_frame:
                 raise ValueError(
                     'slot_sees_prev_frame is defined for the per-frame '
@@ -739,11 +1175,39 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         print(f'[A.4] frame mask row {self.frame_mask_token} initialised to '
               f'the mean of {real.shape[0]} real token embeddings')
 
+    def _init_hold_rows(self):
+        """hold_tokens: the held ids 3200+p arrive untrained (no data used
+        them). Start each at the mean of its pitch's onset embeddings over
+        the 24 durations, so a held C4 begins as "a C4"; once, after the
+        warm start, recorded in hold_rows_init_flag so a resume keeps the
+        trained rows."""
+        if not self.hold_tokens or bool(self.hold_rows_init_flag.item()):
+            return
+        with torch.no_grad():
+            emb = self.local_embedding.weight
+            onset = emb[128:HOLD_BASE].view(HOLD_DUR_IDX, 128, -1)
+            emb[HOLD_BASE:HOLD_BASE + 128] = onset.mean(dim=0)
+            self.hold_rows_init_flag.fill_(1)
+        print(f'[hold] held-note rows {HOLD_BASE}..{HOLD_BASE + 127} '
+              f'initialised from the onset rows')
+
+    def _init_jm_mask(self):
+        if self.joint_frame != 'masked' or bool(self.jm_mask_init_flag.item()):
+            return
+        with torch.no_grad():
+            self.jm_mask_emb.copy_(
+                self.local_embedding.weight[128:HOLD_BASE].mean(dim=0))
+            self.jm_mask_init_flag.fill_(1)
+        print('[joint_frame masked] mask embedding initialised to the mean '
+              'pitch-duration embedding')
+
     def on_train_start(self):
         hook = getattr(super(), 'on_train_start', None)
         if callable(hook):
             hook()
         self._init_frame_mask_row()
+        self._init_hold_rows()
+        self._init_jm_mask()
 
     def on_train_batch_start(self, batch, batch_idx):
         hook = getattr(super(), 'on_train_batch_start', None)
@@ -940,8 +1404,11 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             return non_pad_q
         return non_pad_q * (~revealed).to(non_pad_q.dtype)
 
-    def _run_global_stack(self, h, T_query):
+    def _run_global_stack(self, h, T_query, partner_keep=None):
         """Override: slot-aligned (v1.1) / time-aligned (v1.2) RoPE.
+
+        partner_keep: see M2CDuetBlockLayer.forward (None reads the
+        model's _partner_keep, which the training loss sets).
 
         v1.1 (slot_rope_aligned): clean positions keep rotary index ==
         physical index (0..L-3); the two slots get index 2*T_query+2 and
@@ -964,8 +1431,10 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         slots never attend those rows (frame >= T_query is masked for
         slot queries), and clean rows never attend the slots.
         """
+        if partner_keep is None:
+            partner_keep = getattr(self, '_partner_keep', None)
         if not (self.slot_rope_aligned or self.time_rope_aligned):
-            return super()._run_global_stack(h, T_query)
+            return super()._run_global_stack(h, T_query, partner_keep=partner_keep)
         B, L, H = h.shape
         tq = normalize_T_query(T_query)
         clean_len = L - 2 * len(tq)
@@ -983,7 +1452,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         sin = sin_b[:, :, positions]
         total_aux = torch.zeros((), device=h.device, dtype=h.dtype)
         for layer in self.global_layers:
-            h, aux = layer(h, T_query, cos, sin, clean_len)
+            h, aux = layer(h, T_query, cos, sin, clean_len,
+                           partner_keep=partner_keep)
             total_aux = total_aux + aux
         return h, total_aux / max(len(self.global_layers), 1)
 
@@ -993,7 +1463,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
     def forward(self, x, T_query=None, k_m=None, k_c=None,
                 sc_mask_m=None, sc_emb_m=None,
                 sc_mask_c=None, sc_emb_c=None,
-                sc_toks_m=None, sc_toks_c=None):
+                sc_toks_m=None, sc_toks_c=None, jf=None):
         """x: [B, 2*T_full, subseq_len] interleaved ground-truth sequence.
 
         T_query (int, optional): frame the query slots predict.
@@ -1208,11 +1678,58 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         h_clean_global = h_global[:, :seq_len]
         h_query_global = h_global[:, seq_len:]             # [B, 2Q, H]
         self._last_slot_h = h_query_global                 # A.11 head input
+        if self.residual_refine:
+            # pair j's AR rows: 2*t_j predicts melody t_j, 2*t_j+1 chord.
+            # Detached: the AR rows are trained by the AR loss alone.
+            # Both losses are token means, so without the stop-gradient
+            # each query frame's AR row would also take the query loss
+            # (weight query_loss_weight over 2Q frames vs 1 over 2T) --
+            # ~100x the per-frame AR weight on the 8 sampled frames.
+            rows = torch.tensor([2 * t_j + mod for t_j in tq for mod in (0, 1)],
+                                device=h_global.device)
+            h_query_global = self.residual_slot_out(
+                h_query_global, h_global[:, rows].detach())
         if getattr(self, '_stash_h', False):
             # for the free-running draft (sc_ar_free_run) and for
             # diag_a12_draft: the content hidden states the decode's
             # local_sampling reads
             self._last_h_clean_global = h_clean_global.detach()
+
+        if self.joint_frame:
+            # jf = (joint [B, T, L], types [B, T, L]) from
+            # merge_joint_frames; without it (the draft probe) no logits.
+            if jf is None:
+                return None, None, aux_loss
+            joint, jtypes = jf[:2]
+            jmask = jf[2] if len(jf) > 2 else None    # masked frame only
+            L = joint.shape[-1]
+            tq_idx = torch.tensor(tq, device=x.device)
+            rows = (
+                (h_clean_global, joint, jtypes, jmask, T_full),
+                (h_query_global, joint[:, tq_idx], jtypes[:, tq_idx],
+                 None if jmask is None else jmask[:, tq_idx], n_pairs))
+            out, self._jm_edit_state = [], []
+            # jm_separable: the partner-dropped items get the block mask
+            alone = None
+            if self.jm_separable_flag.item() and self._partner_keep is not None:
+                alone = self._partner_keep.to(x.device) == 0          # [B]
+            for hg, jt, ty, jm, n in rows:
+                h_m_, h_c_ = hg[:, 0::2].reshape(-1, H), hg[:, 1::2].reshape(-1, H)
+                jt, ty = jt.reshape(-1, L), ty.reshape(-1, L)
+                jm = None if jm is None else jm.reshape(-1, L)
+                blk = None if alone is None else alone.repeat_interleave(n)
+                if jm is not None and self.jm_edit_prob > 0:
+                    # self-correction: some masked slots now hold the
+                    # model's own sample; _jf_loss scores every slot
+                    jt_in, jm = self._jm_corrupt(h_m_, h_c_, jt, ty, jm, blk)
+                    self._jm_edit_state.append(
+                        (jm.view(batch_size, n, L),
+                         (jt_in != jt).view(batch_size, n, L)))
+                    jt = jt_in
+                out.append(self.joint_local_decode(
+                    h_m_, h_c_, jt, ty, jm, blk).view(batch_size, n, L, -1))
+            ar_logits, query_logits = out
+            return ar_logits, query_logits, aux_loss
 
         ar_logits = self.local_decode(h_clean_global, emb)
 
@@ -1225,6 +1742,372 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         query_logits = self.local_decode(h_query_global, emb_query_flat)
 
         return ar_logits, query_logits, aux_loss
+
+    def residual_slot_out(self, h_slot, h_ar, mod=None):
+        """residual_refine: the slot hidden the local decoder reads.
+
+        h_slot, h_ar: [B, H] for one stream (mod 0 melody, 1 chord), or
+        [B, 2Q, H] with mod=None, pairs in (melody, chord) order. A no-op
+        without residual_refine.
+        """
+        if not self.residual_refine:
+            return h_slot
+        if mod is not None:
+            proj = self.res_proj_m if mod == 0 else self.res_proj_c
+            return h_ar + proj(h_slot)
+        out = torch.empty_like(h_slot)
+        out[:, 0::2] = h_ar[:, 0::2] + self.res_proj_m(h_slot[:, 0::2])
+        out[:, 1::2] = h_ar[:, 1::2] + self.res_proj_c(h_slot[:, 1::2])
+        return out
+
+    def _jf_set_programs(self, tok_m, tok_c):
+        """joint_frame: record each stream's program from the first
+        batch that has notes in both. The decode tells a sampled note's
+        stream by its program, so the two must differ (Nottingham: train
+        on the program-48 chord tensor)."""
+        if int(self.jf_prog.min()) >= 0:
+            return
+        pad, eos = self.tokenizer.pad_token, self.tokenizer.eos_token
+        progs = []
+        for tok in (tok_m, tok_c):
+            pr = tok[..., 0::2]
+            ok = (pr != pad) & (pr != eos)
+            if not bool(ok.any()):
+                progs.append(-1)
+                continue
+            progs.append(int(pr[ok].mode().values.item()))
+        if progs[0] < 0 or progs[1] < 0:
+            return
+        if progs[0] == progs[1] and self.joint_frame != 'masked':
+            raise ValueError(
+                f'joint_frame needs the two streams on different '
+                f'programs, both are on {progs[0]} (Nottingham: use the '
+                f'program-48 chord tensor)')
+        self.jf_prog.copy_(torch.tensor(progs, device=self.jf_prog.device))
+        print(f'[joint_frame] stream programs: melody {progs[0]}, chord {progs[1]}')
+
+    def joint_local_decode(self, h_m, h_c, joint, types, mask=None, block=None):
+        """Teacher-forced joint frame: [N, H] x2, [N, L] x2 -> [N, L, V].
+        joint_frame='masked': mask [N, L] marks the [MASK]ed tokens and
+        the pass attends both ways; block [N] bool (jm_separable) makes
+        those rows' attention block-diagonal by stream."""
+        if self.joint_frame == 'masked':
+            return self._jm_logits(h_m, h_c, joint, types, mask, block)
+        emb = self.local_embedding(joint) + self.token_type_embeddings(types)
+        seq = torch.cat([h_m.unsqueeze(1), h_c.unsqueeze(1), emb[:, :-1]], dim=1)
+        out = self.local_decoder(seq, attention_mask=self.buffered_future_mask(seq))[0]
+        return self.final_decoder(out[:, 1:])
+
+    def _jm_logits(self, h_m, h_c, joint, types, mask, block=None):
+        """Masked joint frame, both-way attention: -> [N, 2S, V].
+        block [N] bool: those rows attend within their own stream only
+        (h_m + melody slots, h_c + chord slots), the layout and positions
+        unchanged, so a blocked row's melody outputs do not depend on
+        anything of the chord's."""
+        typ = self.token_type_embeddings(types)
+        emb = self.local_embedding(joint) + typ
+        emb = torch.where(mask.unsqueeze(-1),
+                          self.jm_mask_emb.to(emb.dtype) + typ, emb)
+        seq = torch.cat([h_m.unsqueeze(1), h_c.unsqueeze(1), emb], dim=1)
+        N, n = seq.shape[0], seq.shape[1]
+        if block is not None and bool(block.any()):
+            sid = torch.cat([torch.tensor([0, 1], device=seq.device).view(1, 2).expand(N, 2),
+                             types.to(seq.device)], dim=1)               # [N, n]
+            other = sid.unsqueeze(2) != sid.unsqueeze(1)                 # [N, n, n]
+            am = torch.zeros(N, 1, n, n, device=seq.device, dtype=seq.dtype)
+            am = am.masked_fill((other & block.view(N, 1, 1)).unsqueeze(1), float('-inf'))
+        else:
+            am = torch.zeros(n, n, device=seq.device, dtype=seq.dtype)
+        out = self.local_decoder(seq, attention_mask=am)[0]
+        return self.final_decoder(out[:, 2:])
+
+    def _jm_valid(self, dev):
+        """[V] bool: what a pitch-duration slot may hold (a pitch-duration
+        token or EOS)."""
+        valid = torch.zeros(self.tokenizer.n_tokens, dtype=torch.bool, device=dev)
+        valid[128:HOLD_BASE] = True
+        valid[self.tokenizer.eos_token] = True
+        return valid
+
+    def _jm_corrupt(self, h_m, h_c, joint, types, mask, block=None):
+        """jm_edit_prob training corruption, [N, L] -> (joint_in, mask_in):
+        a no-grad pass samples every masked slot (temperature 1, the
+        decode's sampler), and each masked slot takes its sample with prob
+        jm_edit_prob, the rest staying masked. Validation draws are seeded
+        so val_loss stays comparable across checks."""
+        gen = None
+        if not self.training:
+            gen = torch.Generator(device=joint.device).manual_seed(1)
+        with torch.no_grad():
+            lg = self._jm_logits(h_m.detach(), h_c.detach(), joint, types, mask, block).float()
+            lg = lg.masked_fill(~self._jm_valid(lg.device).view(1, 1, -1), float('-inf'))
+            V = lg.shape[-1]
+            tok = torch.multinomial(F.softmax(lg, dim=-1).view(-1, V), 1,
+                                    generator=gen).view(joint.shape)
+        u = torch.rand(joint.shape, device=joint.device, generator=gen)
+        swap = mask & (u < self.jm_edit_prob)
+        return torch.where(swap, tok, joint), mask & ~swap
+
+    def jm_train_mask(self, joint, generator=None):
+        """[B, T, 2S] -> bool mask: per frame a uniform 1..2P of the
+        2P pitch-duration tokens (odd positions), at random."""
+        B, T, L = joint.shape
+        P2 = L // 2
+        dev = joint.device
+        u = torch.rand(B, T, P2, device=dev, generator=generator)
+        rank = u.argsort(dim=-1).argsort(dim=-1)
+        n = torch.randint(1, P2 + 1, (B, T, 1), device=dev, generator=generator)
+        m = torch.zeros(B, T, L, dtype=torch.bool, device=dev)
+        m[..., 1::2] = rank < n
+        return m
+
+    def _jm_guided(self, h_m, h_c, joint, types, mask, h_m_u, h_c_u, cfg_w):
+        """[N, P2, V] float logits at the pitch-duration slots, partner-
+        guided when h_m_u / h_c_u are given, invalid tokens at -inf. A
+        jm_separable checkpoint's unconditional pass is block-masked too
+        (no partner at either level), and A3_SOLO block-masks every pass."""
+        N = joint.shape[0]
+        sep = bool(self.jm_separable_flag.item())
+        all_blk = torch.ones(N, dtype=torch.bool, device=joint.device)
+        lg = self._jm_logits(h_m, h_c, joint, types, mask,
+                             all_blk if self.jm_solo else None)[:, 1::2].float()
+        if h_m_u is not None and h_c_u is not None:
+            lu = self._jm_logits(h_m_u, h_c_u, joint, types, mask,
+                                 all_blk if sep else None)[:, 1::2].float()
+            lg = lu + float(cfg_w) * (lg - lu)
+        return lg.masked_fill(~self._jm_valid(lg.device).view(1, 1, -1), float('-inf'))
+
+    def _jm_edit_slots(self, lg, pd, visible):
+        """Edit visible notes (jm_edit_prob checkpoints): a visible slot
+        takes the model's argmax where it beats the current note by more
+        than jm_edit_margin nats, at most jm_edit_cap per frame (default
+        a quarter of the slots, largest gains first). [N, P2] -> [N, P2]."""
+        logp = F.log_softmax(lg, dim=-1)
+        best, cand = logp.max(dim=-1)
+        gain = best - logp.gather(-1, pd.unsqueeze(-1)).squeeze(-1)
+        ok = visible & (cand != pd) & (gain > self.jm_edit_margin)
+        P2 = pd.shape[-1]
+        cap = min(int(self.jm_edit_cap) or max(1, P2 // 4), P2)
+        top = torch.where(ok, gain, torch.full_like(gain, float('-inf'))).topk(cap, dim=-1).indices
+        sel = torch.zeros_like(ok).scatter(-1, top, True) & ok
+        self.jm_stats['edits'] += int(sel.sum())
+        return torch.where(sel, cand, pd)
+
+    def _jm_fill(self, joint, mask, types, steps, temperature, guide, edit):
+        """Unmask whatever pitch-duration slots `mask` holds over `steps`
+        rounds: each round predicts every masked slot, samples it, and
+        reveals all but a cosine-scheduled share of them, most confident
+        first (jm_order='conf', a Gumbel draw on the confidences that
+        fades over the rounds) or in a random order (jm_order='random',
+        MDLM-style ancestral order); the last round fills the rest. With
+        edit, the middle rounds may also change visible notes."""
+        import math
+        still = mask[:, 1::2].clone()
+        n0 = still.sum(-1, keepdim=True).double()
+        for r in range(steps):
+            if not bool(still.any()):
+                break
+            lg = self._jm_guided(guide[0], guide[1], joint, types, mask, *guide[2:])
+            V = lg.shape[-1]
+            if temperature == 0:
+                tok = lg.argmax(-1)
+            else:
+                probs = F.softmax(lg / temperature, dim=-1)
+                tok = torch.multinomial(probs.view(-1, V), 1).view(still.shape)
+            if self.jm_order == 'random':
+                score = torch.rand(still.shape, device=lg.device)
+            else:
+                score = F.log_softmax(lg, dim=-1).gather(-1, tok.unsqueeze(-1)).squeeze(-1)
+                fade = 1.0 - (r + 1) / steps
+                if fade > 0 and temperature > 0:
+                    g = -torch.log(-torch.log(torch.rand_like(score).clamp(1e-9, 1 - 1e-9)))
+                    score = score + fade * g
+            conf = torch.where(still, score, torch.full_like(score, float('inf')))
+            n_left = torch.floor(n0 * math.cos(math.pi / 2 * (r + 1) / steps)).long()
+            n_masked = still.sum(-1, keepdim=True)
+            keep_masked = torch.minimum(n_left, (n_masked - 1).clamp_min(0))
+            rank = conf.argsort(dim=-1).argsort(dim=-1)
+            new_still = still & (rank < keep_masked)
+            reveal = still & ~new_still
+            pd = joint[:, 1::2]
+            if edit and 0 < r < steps - 1:
+                pd = self._jm_edit_slots(lg, pd, ~still)
+            joint[:, 1::2] = torch.where(reveal, tok, pd)
+            mask[:, 1::2] = new_still
+            still = new_still
+        return joint, mask
+
+    def _jm_low_conf(self, joint, types, guide, k):
+        """[N, P2] bool: per frame the k slots whose current note the model
+        likes least, each scored with only itself masked (all 2P scored in
+        one batched pass)."""
+        N, L = joint.shape
+        P2 = L // 2
+        dev = joint.device
+        jj = joint.repeat_interleave(P2, dim=0)
+        tt = types.repeat_interleave(P2, dim=0)
+        slot = torch.arange(N * P2, device=dev) % P2
+        mm = torch.zeros_like(jj, dtype=torch.bool)
+        mm[torch.arange(N * P2, device=dev), 2 * slot + 1] = True
+        rep = [None if g is None else g.repeat_interleave(P2, dim=0) for g in guide[:4]]
+        lg = self._jm_guided(rep[0], rep[1], jj, tt, mm, rep[2], rep[3], guide[4])
+        logp = F.log_softmax(lg, dim=-1)
+        rows = torch.arange(N * P2, device=dev)
+        cur = jj[:, 1::2][rows, slot]
+        s = logp[rows, slot, cur].view(N, P2)
+        low = s.argsort(dim=-1)[:, :k]
+        return torch.zeros(N, P2, dtype=torch.bool, device=dev).scatter(-1, low, True)
+
+    def masked_sampling(self, h_m, h_c, subseq_len, temperature=1.0,
+                        h_m_u=None, h_c_u=None, cfg_w=1.0):
+        """joint_frame='masked' decode of one frame: all 2P slots start
+        masked and are filled over jm_steps rounds (_jm_fill). Then
+        jm_refine more rounds revise the full frame, by jm_refine_mode:
+          'stream' re-mask one whole stream and fill it again given the
+                   other (alternating, a random stream first per frame:
+                   block Gibbs, no leader)
+          'conf'   re-mask the quarter of slots the model likes least,
+                   each scored with only itself masked, and fill them
+          'edit'   one pass with nothing masked, visible notes changed
+                   where the model prefers another (jm_edit_prob ckpts)
+        Same return as joint_sampling."""
+        N, dev = h_m.shape[0], h_m.device
+        S = subseq_len
+        L = 2 * S
+        eos = self.tokenizer.eos_token
+        progs = [max(int(p), 0) for p in self.jf_prog.tolist()]
+        types = torch.arange(L, device=dev).div(S, rounding_mode='floor').view(1, L).expand(N, L)
+        joint = torch.full((N, L), eos, dtype=torch.long, device=dev)
+        joint[:, 0:S:2] = progs[0]
+        joint[:, S::2] = progs[1]
+        mask = torch.zeros(N, L, dtype=torch.bool, device=dev)
+        mask[:, 1::2] = True
+        guided = h_m_u is not None and h_c_u is not None
+        guide = (h_m, h_c, h_m_u if guided else None, h_c_u if guided else None, cfg_w)
+        steps = max(int(self.jm_steps), 1)
+        edit = bool(self.jm_edit)
+        if self.jm_solo:
+            # each stream alone: block-masked passes, and each stream's
+            # slots unmasked on a schedule of their own, so neither
+            # stream's confidences decide when the other's notes land
+            for st in (0, 1):
+                mask[:, 1::2] = types[:, 1::2] == st
+                joint, mask = self._jm_fill(joint, mask, types, steps, temperature,
+                                            guide, False)
+        else:
+            joint, mask = self._jm_fill(joint, mask, types, steps, temperature, guide, edit)
+        self.jm_stats['frames'] += N
+        P2 = S
+        if self.jm_refine > 0:
+            first = torch.randint(0, 2, (N, 1), device=dev)
+            slot_stream = types[:, 1::2]
+            for r in range(int(self.jm_refine)):
+                if self.jm_refine_mode == 'edit':
+                    lg = self._jm_guided(h_m, h_c, joint, types, mask, *guide[2:])
+                    joint[:, 1::2] = self._jm_edit_slots(
+                        lg, joint[:, 1::2], torch.ones_like(mask[:, 1::2]))
+                    continue
+                if self.jm_refine_mode == 'stream':
+                    sel = slot_stream == (first + r) % 2
+                elif self.jm_refine_mode == 'conf':
+                    sel = self._jm_low_conf(joint, types, guide, max(1, P2 // 4))
+                else:
+                    raise ValueError(f'jm_refine_mode {self.jm_refine_mode!r}')
+                before = joint[:, 1::2].clone()
+                mask[:, 1::2] = sel
+                joint, mask = self._jm_fill(joint, mask, types, steps, temperature,
+                                            guide, edit)
+                self.jm_stats['refined'] += int((joint[:, 1::2] != before).sum())
+        mel, chord = split_masked_frame(joint, S, self.tokenizer)
+        return mel, chord, joint, types
+
+    def joint_sampling(self, h_m, h_c, subseq_len, temperature=1.0,
+                       h_m_u=None, h_c_u=None, cfg_w=1.0):
+        """Sample one joint frame from the two streams' rows.
+
+        -> (melody [N, S], chord [N, S], joint [N, 2S], types [N, 2S]).
+        A program step may pick either stream's program (while that
+        stream has room) or EOS; the program fixes the pair's stream.
+        h_m_u / h_c_u (partner guidance): the same rows computed with the
+        streams cut off from each other; each step then samples from
+        uncond + cfg_w * (cond - uncond), both decoded on the same prefix.
+        """
+        if self.joint_frame == 'masked':
+            return self.masked_sampling(h_m, h_c, subseq_len, temperature,
+                                        h_m_u=h_m_u, h_c_u=h_c_u, cfg_w=cfg_w)
+        N = h_m.shape[0]
+        dev = h_m.device
+        S = subseq_len
+        P, L = S // 2, 2 * S
+        pad, eos = self.tokenizer.pad_token, self.tokenizer.eos_token
+        progs = [int(p) for p in self.jf_prog.tolist()]
+        assert min(progs) >= 0 and progs[0] != progs[1], (
+            f'joint_frame programs not set: {progs}')
+        V = self.tokenizer.n_tokens
+        guide = h_m_u is not None and h_c_u is not None
+        seq = torch.cat([h_m.unsqueeze(1), h_c.unsqueeze(1)], dim=1)
+        if guide:
+            # cond rows 0..N-1, uncond rows N..2N-1, one decoder call
+            seq = torch.cat([seq, torch.cat([h_m_u.unsqueeze(1),
+                                             h_c_u.unsqueeze(1)], dim=1)], dim=0)
+        ys, ts = [], []
+        count = torch.zeros(N, 2, dtype=torch.long, device=dev)
+        done = torch.zeros(N, dtype=torch.bool, device=dev)
+        cur_t = torch.zeros(N, dtype=torch.long, device=dev)
+        pitch_ok = torch.zeros(V, dtype=torch.bool, device=dev)
+        pitch_ok[128:128 * 25] = True
+        for step in range(L):
+            h = self.local_decoder(seq, attention_mask=self.buffered_future_mask(seq))[0]
+            logits = self.final_decoder(h[:, -1]).float()
+            if guide:
+                logits_c, logits_u = logits[:N], logits[N:]
+                logits = logits_u + float(cfg_w) * (logits_c - logits_u)
+            if step % 2 == 0:
+                valid = torch.zeros(N, V, dtype=torch.bool, device=dev)
+                valid[:, progs[0]] = count[:, 0] < P
+                valid[:, progs[1]] = count[:, 1] < P
+                valid[:, eos] = True
+            else:
+                valid = pitch_ok.view(1, V).expand(N, V)
+            logits = logits.masked_fill(~valid, float('-inf'))
+            if temperature == 0:
+                nxt = logits.argmax(-1)
+            else:
+                probs = F.softmax(logits / temperature, dim=-1)
+                top_p = getattr(self, 'sampling_top_p', None)
+                if top_p is not None and 0.0 < top_p < 1.0:
+                    sp, si = probs.sort(dim=-1, descending=True)
+                    sp = sp.masked_fill((sp.cumsum(-1) - sp) > top_p, 0.0)
+                    probs = torch.zeros_like(probs).scatter(-1, si, sp)
+                    probs = probs / probs.sum(-1, keepdim=True)
+                nxt = torch.multinomial(probs, 1).squeeze(-1)
+            if step % 2 == 0:
+                cur_t = (nxt == progs[1]).long()
+                is_n = (nxt != eos) & ~done
+                count.scatter_add_(1, cur_t.unsqueeze(-1), is_n.long().unsqueeze(-1))
+                typ = torch.where(nxt == eos, torch.zeros_like(cur_t), cur_t)
+            else:
+                typ = cur_t
+            nxt = torch.where(done, torch.full_like(nxt, pad), nxt)
+            typ = torch.where(done, torch.zeros_like(typ), typ)
+            if step % 2 == 0:
+                done = done | (nxt == eos)
+            ys.append(nxt)
+            ts.append(typ)
+            if bool(done.all()):
+                break
+            step_emb = (self.local_embedding(nxt)
+                        + self.token_type_embeddings(typ)).unsqueeze(1)
+            if guide:
+                step_emb = torch.cat([step_emb, step_emb], dim=0)
+            seq = torch.cat([seq, step_emb], dim=1)
+        joint = torch.stack(ys, dim=1)
+        types = torch.stack(ts, dim=1)
+        if joint.shape[1] < L:
+            joint = F.pad(joint, (0, L - joint.shape[1]), value=pad)
+            types = F.pad(types, (0, L - types.shape[1]), value=0)
+        mel, chord = split_joint_frame(joint, types, S, self.tokenizer)
+        return mel, chord, joint, types
 
     def _coerce_k(self, k, batch_size, device):
         """Accept int / None / LongTensor[B] and return LongTensor[B]."""
@@ -1295,8 +2178,44 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
     # loss: sample k_m, k_c per item per batch and call forward.
     # ------------------------------------------------------------------
     def loss(self, x_mel, x_acc, batch_pitch_shift):
+        """partner_drop_prob wrapper: draw which items lose the other
+        stream for the whole step (AR rows, draft probe and slots
+        alike), then the loss proper."""
+        if not (self.training and self.partner_drop_prob > 0):
+            return self._loss(x_mel, x_acc, batch_pitch_shift)
+        u = torch.rand(x_mel.shape[0], device=x_mel.device)
+        self._partner_keep = (u >= self.partner_drop_prob).float()
+        try:
+            return self._loss(x_mel, x_acc, batch_pitch_shift)
+        finally:
+            self._partner_keep = None
+
+    def _loss(self, x_mel, x_acc, batch_pitch_shift):
         # Preprocess + interleave (identical to parent).
+        raw_mel, raw_acc = x_mel, x_acc
         x_mel, x_acc = self.preprocess(x_mel, batch_pitch_shift, y=x_acc)
+        jf = None
+        if self.joint_frame:
+            if self.self_cond_prob > 0 and not (
+                    self.sc_ar_free_run and self.sc_ar_frac >= 1.0):
+                raise ValueError('joint_frame drafts come from the joint AR '
+                                 'sampler only: use --sc_ar_free_run '
+                                 '--sc_ar_frac 1 with self-conditioning.')
+            self._jf_set_programs(x_mel, x_acc)
+            if self.joint_frame == 'masked':
+                joint_, jtypes_ = merge_masked_frames(
+                    x_mel, x_acc, self.jf_prog.tolist(), self.tokenizer)
+                # validation masks the same slots every time
+                gen = None
+                if not self.training:
+                    gen = torch.Generator(device=joint_.device).manual_seed(0)
+                jf = (joint_, jtypes_, self.jm_train_mask(joint_, gen))
+            else:
+                jf = merge_joint_frames(raw_mel, raw_acc, x_mel, x_acc,
+                                        self.joint_frame, self.tokenizer)
+        if self.hold_tokens:
+            x_mel = add_held_tokens(x_mel, self.hold_tokens, self.tokenizer)
+            x_acc = add_held_tokens(x_acc, self.hold_tokens, self.tokenizer)
         batch_size, seq_len, subseq_len = x_mel.shape
 
         stacked = torch.stack([x_mel, x_acc], dim=2)
@@ -1322,6 +2241,17 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
              else min(max(int(self.query_pairs), 1), T_full - 1))
         if tq is not None:
             pass
+        elif self.training and self.query_onset_weight > 0 and Q < T_full - 1:
+            # onset-weighted draw (see query_onset_weight in __init__)
+            has_on = torch.zeros(batch_size, T_full, dtype=torch.bool,
+                                 device=x.device)
+            for xs in (x_mel, x_acc):
+                on, _, _, _ = onset_notes(xs, self.tokenizer.pad_token)
+                has_on |= on.any(dim=-1)
+            w = 1.0 + self.query_onset_weight * has_on.float().mean(dim=0)
+            pick = torch.multinomial(w[1:], Q, replacement=False) + 1
+            tq = tuple(sorted(int(t) for t in pick.tolist()))
+            self._last_query_onset_frac = has_on[:, list(tq)].float().mean().detach()
         elif self.training:
             if Q >= T_full - 1:
                 # A.9: every frame, no sampling -- the query objective
@@ -1373,6 +2303,10 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                            < self.mask_k_prob)
                     return torch.where(hit, torch.full_like(lo, K), lo)
                 k_m, k_c = _draw(), _draw()
+            if self.draft_k0:
+                # both slots drafted at k=0: the joint decode's state
+                k_m = torch.zeros_like(k_m)
+                k_c = torch.zeros_like(k_c)
             if self.sym_k:
                 # A.12 symmetric update: ONE level per pair, both slots.
                 # The parallel refine decode moves both slots together --
@@ -1471,70 +2405,107 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                         x, T_query=T_query, k_m=k_full, k_c=k_full,
                     )
                     probe._stash_h = False
-                    V = self.tokenizer.n_tokens
-                    # Validation takes argmax regardless of
-                    # sc_draft_temp, so val_loss is deterministic.
-                    dtemp = None if self.training else 0.0
-                    toks = self._draft_from_logits(q_logits_sc.view(
-                        batch_size, n_pairs, 2, subseq_len, V,
-                    ), temp=dtemp)                      # [B, Q, 2, S]
-                    sc_toks_m = toks[:, :, 0]           # [B, Q, S]
-                    sc_toks_c = toks[:, :, 1]
-                    if getattr(self, '_stash_slots', False):
-                        # audit hook: the QUERY-head draft, before any
-                        # AR-head substitution, so audit_sc_ar_draft can
-                        # show the two sources actually differ.
-                        self._last_q_draft_m = sc_toks_m.clone()
-                        self._last_q_draft_c = sc_toks_c.clone()
-                    if self.sc_ar_frac > 0:
-                        # A.12: the AR clean rows' own draft of frame
-                        # t_j -- row 2*t_j predicts melody t_j, row
-                        # 2*t_j+1 predicts chord t_j (the clean stream
-                        # is shifted one frame right). This is exactly
-                        # what general_inference reads to seed a round
-                        # and to commit a leader.
-                        ar4 = ar_logits_sc.view(
-                            batch_size, full_seq_len, subseq_len, V)
-                        rows_m = torch.tensor(
-                            [2 * t for t in tq], device=x.device)
-                        if self.sc_ar_free_run:
-                            # the decode's own sampler, free-running
-                            # from the content rows, one call per pair
-                            hg = probe._last_h_clean_global
-                            t_draft = (self.sc_draft_temp if dtemp is None
-                                       else float(dtemp))
-                            ar_toks_m = torch.stack([
-                                probe.local_sampling(
-                                    hg[:, 2 * t], max_subseq_len=subseq_len,
-                                    temperature=t_draft, token_type_id=0)
-                                for t in tq], dim=1)          # [B, Q, S]
-                            ar_toks_c = torch.stack([
-                                probe.local_sampling(
-                                    hg[:, 2 * t + 1], max_subseq_len=subseq_len,
-                                    temperature=t_draft, token_type_id=1)
-                                for t in tq], dim=1)
-                        else:
-                            ar_toks_m = self._draft_from_logits(
-                                ar4[:, rows_m], temp=dtemp)
-                            ar_toks_c = self._draft_from_logits(
-                                ar4[:, rows_m + 1], temp=dtemp)
-                        use_ar_m = (torch.rand(batch_size, n_pairs,
-                                               device=x.device)
-                                    < self.sc_ar_frac)
-                        use_ar_c = (torch.rand(batch_size, n_pairs,
-                                               device=x.device)
-                                    < self.sc_ar_frac)
-                        sc_toks_m = torch.where(
-                            use_ar_m.unsqueeze(-1), ar_toks_m, sc_toks_m)
-                        sc_toks_c = torch.where(
-                            use_ar_c.unsqueeze(-1), ar_toks_c, sc_toks_c)
-                        self._last_sc_ar_frac = (
-                            0.5 * (use_ar_m.float().mean()
-                                   + use_ar_c.float().mean()).detach())
+                    if self.joint_frame:
+                        # one joint sample per query frame, read off the
+                        # two AR rows exactly as the decode seeds a frame
+                        hg = probe._last_h_clean_global
+                        t_draft = self.sc_draft_temp if self.training else 0.0
+                        rows_m = torch.tensor([2 * t for t in tq], device=x.device)
+                        H_ = hg.shape[-1]
+                        d_m, d_c, _, _ = probe.joint_sampling(
+                            hg[:, rows_m].reshape(-1, H_),
+                            hg[:, rows_m + 1].reshape(-1, H_),
+                            subseq_len, temperature=t_draft)
+                        sc_toks_m = d_m.view(batch_size, n_pairs, subseq_len)
+                        sc_toks_c = d_c.view(batch_size, n_pairs, subseq_len)
+                        self._last_sc_ar_frac = torch.ones((), device=x.device)
+                    else:
+                        V = self.tokenizer.n_tokens
+                        # Validation takes argmax regardless of
+                        # sc_draft_temp, so val_loss is deterministic.
+                        dtemp = None if self.training else 0.0
+                        toks = self._draft_from_logits(q_logits_sc.view(
+                            batch_size, n_pairs, 2, subseq_len, V,
+                        ), temp=dtemp)                      # [B, Q, 2, S]
+                        sc_toks_m = toks[:, :, 0]           # [B, Q, S]
+                        sc_toks_c = toks[:, :, 1]
                         if getattr(self, '_stash_slots', False):
-                            self._last_ar_draft_m = ar_toks_m.clone()
-                            self._last_ar_draft_c = ar_toks_c.clone()
-                            self._last_use_ar_m = use_ar_m.clone()
+                            # audit hook: the QUERY-head draft, before any
+                            # AR-head substitution, so audit_sc_ar_draft can
+                            # show the two sources actually differ.
+                            self._last_q_draft_m = sc_toks_m.clone()
+                            self._last_q_draft_c = sc_toks_c.clone()
+                        if self.sc_ar_frac > 0:
+                            # A.12: the AR clean rows' own draft of frame
+                            # t_j -- row 2*t_j predicts melody t_j, row
+                            # 2*t_j+1 predicts chord t_j (the clean stream
+                            # is shifted one frame right). This is exactly
+                            # what general_inference reads to seed a round
+                            # and to commit a leader.
+                            ar4 = ar_logits_sc.view(
+                                batch_size, full_seq_len, subseq_len, V)
+                            rows_m = torch.tensor(
+                                [2 * t for t in tq], device=x.device)
+                            if self.sc_ar_free_run:
+                                # the decode's own sampler, free-running
+                                # from the content rows, one call per pair
+                                hg = probe._last_h_clean_global
+                                t_draft = (self.sc_draft_temp if dtemp is None
+                                           else float(dtemp))
+                                # hold_tokens: the frame's held notes are
+                                # known, so they are forced as the prefix
+                                # exactly as the decode forces them
+                                def _pref(row):
+                                    if not self.hold_tokens:
+                                        return None
+                                    return torch.where(held_pair_mask(row), row,
+                                                       torch.full_like(row, self.tokenizer.pad_token))
+                                ar_toks_m = torch.stack([
+                                    probe.local_sampling(
+                                        hg[:, 2 * t], max_subseq_len=subseq_len,
+                                        temperature=t_draft, token_type_id=0,
+                                        prefix=_pref(x[:, 2 * t]))
+                                    for t in tq], dim=1)          # [B, Q, S]
+                                ar_toks_c = torch.stack([
+                                    probe.local_sampling(
+                                        hg[:, 2 * t + 1], max_subseq_len=subseq_len,
+                                        temperature=t_draft, token_type_id=1,
+                                        prefix=_pref(x[:, 2 * t + 1]))
+                                    for t in tq], dim=1)
+                            else:
+                                ar_toks_m = self._draft_from_logits(
+                                    ar4[:, rows_m], temp=dtemp)
+                                ar_toks_c = self._draft_from_logits(
+                                    ar4[:, rows_m + 1], temp=dtemp)
+                            use_ar_m = (torch.rand(batch_size, n_pairs,
+                                                   device=x.device)
+                                        < self.sc_ar_frac)
+                            use_ar_c = (torch.rand(batch_size, n_pairs,
+                                                   device=x.device)
+                                        < self.sc_ar_frac)
+                            sc_toks_m = torch.where(
+                                use_ar_m.unsqueeze(-1), ar_toks_m, sc_toks_m)
+                            sc_toks_c = torch.where(
+                                use_ar_c.unsqueeze(-1), ar_toks_c, sc_toks_c)
+                            self._last_sc_ar_frac = (
+                                0.5 * (use_ar_m.float().mean()
+                                       + use_ar_c.float().mean()).detach())
+                            if getattr(self, '_stash_slots', False):
+                                self._last_ar_draft_m = ar_toks_m.clone()
+                                self._last_ar_draft_c = ar_toks_c.clone()
+                                self._last_use_ar_m = use_ar_m.clone()
+                        if self.hold_tokens:
+                            # a teacher-forced draft's held positions are
+                            # unscored guesses: put the true held notes back
+                            for nm, mod in (('m', 0), ('c', 1)):
+                                tgt = torch.stack([x[:, 2 * t + mod] for t in tq], dim=1)
+                                cur = sc_toks_m if mod == 0 else sc_toks_c
+                                cur = torch.where(held_pair_mask(tgt), tgt, torch.where(
+                                    is_held_token(cur), torch.full_like(cur, self.tokenizer.pad_token), cur))
+                                if mod == 0:
+                                    sc_toks_m = cur
+                                else:
+                                    sc_toks_c = cur
                     # A.4 corrupts at the TOKEN level, so it needs the
                     # draft tokens themselves, not their encoding; the
                     # frame-level branch needs the encoding.
@@ -1567,8 +2538,11 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             x, T_query=T_query, k_m=k_m, k_c=k_c,
             sc_mask_m=sc_mask_m, sc_emb_m=sc_emb_m,
             sc_mask_c=sc_mask_c, sc_emb_c=sc_emb_c,
-            sc_toks_m=sc_toks_m, sc_toks_c=sc_toks_c,
+            sc_toks_m=sc_toks_m, sc_toks_c=sc_toks_c, jf=jf,
         )
+        if self.joint_frame:
+            return self._jf_loss(ar_logits, query_logits, aux_loss, jf, tq,
+                                 k_m, k_c)
         targets_ar = x
         targets_query = torch.cat(
             [x[:, 2 * t_j:2 * t_j + 2] for t_j in tq], dim=1,
@@ -1583,6 +2557,9 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         ).view(batch_size, full_seq_len, subseq_len)
 
         non_pad_ar = (targets_ar != self.tokenizer.pad_token).float()
+        if self.hold_tokens:
+            # held notes follow from the history: never scored
+            non_pad_ar = non_pad_ar * (~held_pair_mask(targets_ar)).float()
         is_eos_ar = (targets_ar == self.tokenizer.eos_token).float() * non_pad_ar
         is_content_ar = non_pad_ar * (1.0 - is_eos_ar)
 
@@ -1611,6 +2588,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             reduction='none',
         ).view(batch_size, 2 * n_pairs, subseq_len)
         non_pad_q = (targets_query != self.tokenizer.pad_token).float()
+        if self.hold_tokens:
+            non_pad_q = non_pad_q * (~held_pair_mask(targets_query)).float()
         keep_q = self._query_loss_keep_mask(non_pad_q)
         # A.11: no reconstruction on a corrupted partner (ELECTRA's split).
         agree_loss = torch.zeros((), device=x.device)
@@ -1672,6 +2651,91 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         )
         return total_loss, aux_loss
 
+    def _jf_loss(self, ar_logits, query_logits, aux_loss, jf, tq, k_m, k_c):
+        """joint_frame losses: the same AR / query split, scored on the
+        merged frames. Per-token weights follow the pair's stream
+        (mel_loss_weight / acc_loss_weight; EOS counts as melody), so
+        both losses stay token means and their balance is unchanged."""
+        joint, jtypes = jf[:2]
+        B, T, L = joint.shape
+        V = self.tokenizer.n_tokens
+        pad, eos = self.tokenizer.pad_token, self.tokenizer.eos_token
+        edit = len(jf) > 2 and self.jm_edit_prob > 0
+        if edit:
+            # self-correction: score the still-masked slots (fill) and,
+            # weighted jm_edit_weight, every visible pitch-duration slot
+            # (keep the real notes, fix the model's own samples)
+            joint_full = joint
+            odd = (torch.arange(L, device=joint.device) % 2 == 1).view(1, 1, L)
+            tq_idx_ = torch.tensor(tq, device=joint.device)
+            (fill_ar, wrong_ar), (fill_q, _) = self._jm_edit_state
+            judge_ar, judge_q = odd & ~fill_ar, odd & ~fill_q
+            joint = torch.where(fill_ar, joint_full, torch.full_like(joint_full, pad))
+        elif len(jf) > 2:
+            # masked frame: score the [MASK]ed slots only
+            joint = torch.where(jf[2], joint, torch.full_like(joint, pad))
+        dev = joint.device
+        w_type = torch.tensor([self.mel_loss_weight, self.acc_loss_weight],
+                              device=dev)
+
+        def _ce(logits, tgt, typ):
+            per = F.cross_entropy(logits.reshape(-1, V).float(), tgt.reshape(-1),
+                                  ignore_index=pad, reduction='none').view(tgt.shape)
+            non_pad = (tgt != pad).float()
+            is_eos = (tgt == eos).float() * non_pad
+            w = w_type[typ] * (1.0 + (self.eos_loss_weight - 1.0) * is_eos) * non_pad
+            loss = (per * w).sum() / w.sum().clamp_min(1.0)
+            content = non_pad * (1.0 - is_eos)
+            return (loss,
+                    (per * content).sum() / content.sum().clamp_min(1.0),
+                    (per * is_eos).sum() / is_eos.sum().clamp_min(1.0))
+
+        ar_loss, ar_loss_content, ar_loss_eos = _ce(ar_logits, joint, jtypes)
+        tq_idx = torch.tensor(tq, device=dev)
+        if edit:
+            joint_q = torch.where(fill_q, joint_full[:, tq_idx],
+                                  torch.full_like(fill_q, pad, dtype=joint.dtype))
+            query_loss, _, _ = _ce(query_logits, joint_q, jtypes[:, tq_idx])
+            tgt_j_ar = torch.where(judge_ar, joint_full, torch.full_like(joint_full, pad))
+            tgt_j_q = torch.where(judge_q, joint_full[:, tq_idx],
+                                  torch.full_like(judge_q, pad, dtype=joint.dtype))
+            judge_ar_loss, _, _ = _ce(ar_logits, tgt_j_ar, jtypes)
+            judge_q_loss, _, _ = _ce(query_logits, tgt_j_q, jtypes[:, tq_idx])
+            ar_loss = ar_loss + self.jm_edit_weight * judge_ar_loss
+            query_loss = query_loss + self.jm_edit_weight * judge_q_loss
+            with torch.no_grad():
+                # on the AR rows: how often a wrong visible note is fixed,
+                # a right one kept, and how many visible notes were wrong
+                pred = ar_logits.argmax(-1)
+                ok = pred == joint_full
+                right = judge_ar & ~wrong_ar
+                self._last_jm_judge_loss = judge_ar_loss.detach()
+                self._last_jm_fix_acc = (ok & wrong_ar).sum() / wrong_ar.sum().clamp_min(1)
+                self._last_jm_keep_acc = (ok & right).sum() / right.sum().clamp_min(1)
+                self._last_jm_wrong_frac = wrong_ar.sum() / judge_ar.sum().clamp_min(1)
+        else:
+            query_loss, _, _ = _ce(query_logits, joint[:, tq_idx], jtypes[:, tq_idx])
+
+        self._last_agree_loss = torch.zeros((), device=dev)
+        self._last_agree_acc = torch.zeros((), device=dev)
+        self._last_agree_frac = torch.zeros((), device=dev)
+        self._last_query_kept_frac = torch.ones((), device=dev)
+        self._last_ar_loss = ar_loss.detach()
+        self._last_ar_loss_content = ar_loss_content.detach()
+        self._last_ar_loss_eos = ar_loss_eos.detach()
+        self._last_query_loss = query_loss.detach()
+        self._last_T_query = tq[0]
+        self._last_n_pairs = len(tq)
+        self._last_mean_k_m = k_m.float().mean().detach()
+        self._last_mean_k_c = k_c.float().mean().detach()
+        if isinstance(aux_loss, torch.Tensor):
+            aux_loss = aux_loss.mean()
+        else:
+            aux_loss = ar_loss.new_zeros(())
+        total = (ar_loss + self.query_loss_weight * query_loss
+                 + self.aux_loss_weight * aux_loss)
+        return total, aux_loss
+
     def training_step(self, batch, batch_idx):
         loss, aux_loss = self.loss(*batch)
         self.log('train_loss', loss)
@@ -1689,10 +2753,17 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.log('train_query_kept_frac', self._last_query_kept_frac)
         self.log('train_query_pairs', float(self._last_n_pairs))
         self.log('train_ctc_frac', getattr(self, '_last_ctc_frac', torch.zeros(())))
+        if self.query_onset_weight > 0:
+            self.log('train_query_onset_frac', getattr(self, '_last_query_onset_frac', torch.zeros(())))
         if self.agree_head:
             self.log('train_agree_loss', self._last_agree_loss)
             self.log('train_agree_acc', self._last_agree_acc)
             self.log('train_agree_frac', self._last_agree_frac)
+        if self.jm_edit_prob > 0:
+            self.log('train_jm_judge_loss', self._last_jm_judge_loss)
+            self.log('train_jm_fix_acc', self._last_jm_fix_acc)
+            self.log('train_jm_keep_acc', self._last_jm_keep_acc)
+            self.log('train_jm_wrong_frac', self._last_jm_wrong_frac)
         return loss
 
     def on_before_optimizer_step(self, optimizer):
@@ -1717,6 +2788,9 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.log('val_query_loss', self._last_query_loss)
         self.log('val_query_kept_frac', self._last_query_kept_frac)
         self.log('val_moe_aux_loss', aux_loss.detach())
+        if self.jm_edit_prob > 0:
+            self.log('val_jm_fix_acc', self._last_jm_fix_acc)
+            self.log('val_jm_keep_acc', self._last_jm_keep_acc)
         return loss
 
 
@@ -2022,6 +3096,60 @@ if __name__ == '__main__':
                              'reads the clean AR rows and cannot see the '
                              'slots at all. Needs --sc_val, or validation '
                              'measures a state nothing trained.')
+    parser.add_argument('--draft_k0', action='store_true', default=False,
+                        help='Train every query pair in the leaderless '
+                             'joint decode state: both slots drafted, both '
+                             'tagged k=0, both scored. Use with '
+                             '--self_cond_prob 1 and --sc_val.')
+    parser.add_argument('--residual_refine', action='store_true',
+                        default=False,
+                        help='A query slot outputs its stream\'s AR context '
+                             'for the same frame plus a zero-initialised '
+                             'correction read off the slot, so the refine '
+                             'starts exactly at AR-heads-only and moves '
+                             'away only where reading the partner helps.')
+    parser.add_argument('--query_onset_weight', type=float, default=0.0,
+                        help='Draw training query frames with weight 1 + w * '
+                             '(share of items with an onset in either stream '
+                             'at the frame) instead of uniformly. 0 = uniform.')
+    parser.add_argument('--joint_frame', type=str, default='',
+                        choices=['', 's1', 'random', 'masked'],
+                        help='Produce frame t of BOTH streams in one local '
+                             'decoder pass over the merged frame, read off '
+                             'the two streams\' rows (no leader). s1 = the '
+                             'corpus note order the backbone trained on, '
+                             'random = a fresh order per frame (both: the '
+                             'streams must be on different programs). '
+                             'masked = no order: a fixed grid of note slots '
+                             'filled by masked prediction over A3_MASK_STEPS '
+                             'rounds, most confident first.')
+    parser.add_argument('--jm_edit_prob', type=float, default=0.0,
+                        help='joint_frame=masked only: self-correction '
+                             'training. Each masked slot takes the model\'s '
+                             'own (no-grad) sample with this prob, and every '
+                             'slot is scored, so visible notes may be wrong '
+                             'and the model learns to fix them (decode: '
+                             'A3_MASK_EDIT, A3_MASK_REFINE_MODE=edit).')
+    parser.add_argument('--jm_separable', type=int, default=0,
+                        help='joint_frame=masked + partner_drop_prob only: the '
+                             'partner-dropped items also get a block-diagonal '
+                             'local attention mask, so each stream learns its '
+                             'frame with no partner at either level (solo '
+                             'decode A3_SOLO=1, export_single_stream.py)')
+    parser.add_argument('--jm_edit_weight', type=float, default=1.0,
+                        help='weight of the visible-slot (keep/fix) term '
+                             'under --jm_edit_prob')
+    parser.add_argument('--partner_drop_prob', type=float, default=0.0,
+                        help='per item, drop the other stream (all '
+                             'cross-stream gates 0) with this prob in '
+                             'training, for partner guidance at decode '
+                             '(A3_PARTNER_CFG)')
+    parser.add_argument('--hold_tokens', type=int, default=0,
+                        help='Prefix every frame of both streams with up to '
+                             'N held notes (pitches still sounding from an '
+                             'earlier onset), so each frame states what is '
+                             'sounding; derived on the fly, never scored, '
+                             'forced at decode. 0 = off.')
     parser.add_argument('--sc_val', action='store_true', default=False,
                         help='A.12: present VALIDATION the draft state '
                              'instead of the masked one -- run the probe '
@@ -2208,6 +3336,14 @@ if __name__ == '__main__':
         if getattr(a, 'moe_expert_lora_rank', 0) > 0:
             abbr += f'E{a.moe_expert_lora_rank}'  # low-rank experts over
                                                # one shared FFN
+        if getattr(a, 'residual_refine', False):
+            abbr += 'R'                        # slot = AR row + correction
+        if getattr(a, 'hold_tokens', 0):
+            abbr += f'H{a.hold_tokens}'        # held-note prefix per frame
+        if getattr(a, 'query_onset_weight', 0) > 0:
+            abbr += f'O{a.query_onset_weight:g}'  # onset-weighted query frames
+        if getattr(a, 'joint_frame', ''):
+            abbr += 'J' if a.joint_frame == 's1' else 'Jr'   # joint frame head
         return abbr
 
     tag = f'_{args.run_tag}' if args.run_tag else ''
@@ -2274,6 +3410,15 @@ if __name__ == '__main__':
         sym_k=bool(args.sym_k),
         mask_k_prob=args.mask_k_prob,
         sc_val=bool(args.sc_val),
+        draft_k0=bool(args.draft_k0),
+        residual_refine=bool(args.residual_refine),
+        hold_tokens=args.hold_tokens,
+        query_onset_weight=args.query_onset_weight,
+        joint_frame=args.joint_frame,
+        partner_drop_prob=args.partner_drop_prob,
+        jm_edit_prob=args.jm_edit_prob,
+        jm_edit_weight=args.jm_edit_weight,
+        jm_separable=bool(args.jm_separable),
         agree_head=bool(args.agree_head),
         cross_lora_rank=args.cross_lora_rank,
         moe_expert_lora_rank=args.moe_expert_lora_rank,
@@ -2305,7 +3450,15 @@ if __name__ == '__main__':
           f'sc_draft_temp={args.sc_draft_temp}  '
           f'sc_k_consistent={bool(args.sc_k_consistent)}  '
           f'sym_k={bool(args.sym_k)}  '
-          f'mask_k_prob={args.mask_k_prob}  sc_val={bool(args.sc_val)}'
+          f'mask_k_prob={args.mask_k_prob}  sc_val={bool(args.sc_val)}  '
+          f'draft_k0={bool(args.draft_k0)}  '
+          f'residual_refine={bool(args.residual_refine)}  '
+          f'hold_tokens={args.hold_tokens}  '
+          f'query_onset_weight={args.query_onset_weight}  '
+          f'joint_frame={args.joint_frame or "off"}  '
+          f'partner_drop_prob={args.partner_drop_prob}  '
+          f'jm_edit_prob={args.jm_edit_prob}  jm_separable={bool(args.jm_separable)}'
+          f'{f" (weight {args.jm_edit_weight})" if args.jm_edit_prob > 0 else ""}'
           f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
           f'query_loss_weight={args.query_loss_weight}  '
@@ -2482,6 +3635,14 @@ if __name__ == '__main__':
                     'sym_k': bool(args.sym_k),
                     'mask_k_prob': args.mask_k_prob,
                     'sc_val': bool(args.sc_val),
+                    'draft_k0': bool(args.draft_k0),
+                    'residual_refine': bool(args.residual_refine),
+                    'hold_tokens': args.hold_tokens,
+                    'query_onset_weight': args.query_onset_weight,
+                    'joint_frame': args.joint_frame,
+                    'jm_edit_prob': args.jm_edit_prob,
+                    'jm_edit_weight': args.jm_edit_weight,
+                    'jm_separable': bool(args.jm_separable),
                     'agree_head': bool(args.agree_head),
                     'cross_lora_rank': args.cross_lora_rank,
                     'moe_expert_lora_rank': args.moe_expert_lora_rank,

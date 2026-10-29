@@ -383,10 +383,16 @@ class M2CDuetBlockLayer(nn.Module):
         self._mask_frame = mask_frame
         return mask_intra, mask_cross, mask_frame
 
-    def forward(self, h, T_query, cos, sin, clean_len):
+    def forward(self, h, T_query, cos, sin, clean_len, partner_keep=None):
         """h: [B, L, H] with L = clean_len + 2*Q. The trailing 2Q
         positions are Q query pairs; pair j is (m-query, c-query) for
         frame T_query[j]. T_query may be an int (Q=1).
+
+        partner_keep ([B] float, optional): per-item scale on the four
+        cross-stream gates. 0 cuts every reading of the other stream
+        (the same-stream pass never reaches it), so the item runs as
+        two single-stream models -- the unconditional branch of
+        partner guidance. None (default) leaves the gates as they are.
 
         Returns (h_out, aux_loss).
         """
@@ -492,6 +498,9 @@ class M2CDuetBlockLayer(nn.Module):
         g_c_c = torch.sigmoid(self.gate_c(h_c_for_gate))
         g_f_m = torch.sigmoid(self.gate_fm(h_m_for_gate))
         g_f_c = torch.sigmoid(self.gate_fc(h_c_for_gate))
+        if partner_keep is not None:
+            keep = partner_keep.to(g_c_m.dtype).view(B, 1, 1)
+            g_c_m, g_c_c, g_f_m, g_f_c = (g * keep for g in (g_c_m, g_c_c, g_f_m, g_f_c))
 
         # Cache for diagnostics.
         self._last_gate_c_m = g_c_m.detach()
@@ -620,18 +629,22 @@ class M2CDuetBlockAttn(RoFormerSymbolicTransformer):
         sos = torch.cat([sos_m, sos_c], dim=1).expand(batch_size, -1, -1)
         return sos.to(device=device, dtype=dtype)
 
-    def _run_global_stack(self, h, T_query):
+    def _run_global_stack(self, h, T_query, partner_keep=None):
         """h: [B, L, H] with L = clean_len + 2*Q (trailing query pairs).
+        partner_keep: see M2CDuetBlockLayer.forward; defaults to the
+        model's _partner_keep (set by the training loss).
 
         Returns (h_global, aux_loss).
         """
+        if partner_keep is None:
+            partner_keep = getattr(self, '_partner_keep', None)
         B, L, H = h.shape
         clean_len = L - 2 * len(normalize_T_query(T_query))
         head_dim = H // self.num_attention_heads
         cos, sin = _rope_freqs(L, head_dim, device=h.device, dtype=h.dtype)
         total_aux = torch.zeros((), device=h.device, dtype=h.dtype)
         for layer in self.global_layers:
-            h, aux = layer(h, T_query, cos, sin, clean_len)
+            h, aux = layer(h, T_query, cos, sin, clean_len, partner_keep=partner_keep)
             total_aux = total_aux + aux
         return h, total_aux / max(len(self.global_layers), 1)
 
