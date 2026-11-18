@@ -12,7 +12,7 @@
 #SBATCH --mem=64G
 #SBATCH --time=08:00:00
 #SBATCH --account=deploy
-#SBATCH --qos=deploy
+#SBATCH --qos=lowprio
 #SBATCH -p lowprio
 set -eo pipefail
 source ~/.bashrc || true

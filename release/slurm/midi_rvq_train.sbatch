@@ -12,7 +12,7 @@
 #SBATCH --exclusive
 #SBATCH --time=72:00:00
 #SBATCH --account=deploy
-#SBATCH --qos=deploy
+#SBATCH --qos=lowprio
 #SBATCH -p lowprio
 #SBATCH --requeue
 set -eo pipefail
