@@ -395,6 +395,43 @@ sbatch --export=ALL,CORPUS=time_piano,FRAME_CODEC=6 slurm/pretrain_time_train.sb
 sbatch --export=ALL,CORPUS=time_piano,CKPT=ckpt/<run>/last.ckpt slurm/pretrain_time_sample.sbatch
 ```
 
+### MIDI as RVQ codes, shaped like EnCodec's
+
+`duet/midi_rvq.py` is a residual-VQ autoencoder for piano MIDI that
+turns MIDI into what EnCodec 32 kHz turns audio into: 4 codes per 20 ms
+frame. MIDI frame f and codec frame f then cover the same 20 ms, so a
+transformer can model both streams as parallel codebooks, with no
+tokenizer to align.
+
+- Input: an 88-key piano roll at 50 Hz with onset, frame and velocity
+  per key (sustain pedal folded into durations; drums dropped).
+- Model: dilated conv stack plus a small transformer on each side, no
+  downsampling, and EMA residual VQ (k-means init, dead-code restarts)
+  with `N_Q` codebooks of `N_CODES` (default 4 x 1024).
+- Output: onset and frame logits and 16 velocity bins per key, read
+  back into notes.
+- Checkpoints are selected on `val_note_f1`: onset within 40 ms, on
+  windows of MAESTRO validation. Offset and velocity F1 are logged
+  alongside, with codes used per codebook.
+- The bar is note F1 well above 0.99. A wrong code in audio is a little
+  noise, but in MIDI it is a wrong note.
+- Rolls at 20 ms cap what is recoverable: two onsets of one key in the
+  same or adjacent frames read as one note. On MAESTRO this is rare.
+
+From release/, after the time corpus and the MAESTRO pack:
+
+```bash
+J1=$(sbatch --parsable --export=ALL,CORPUS=time_piano slurm/midi_rvq_train.sbatch)
+J2=$(sbatch --parsable --dependency=afterok:$J1 --export=ALL,CKPT=ckpt/midi_rvq_time_piano_q4x1024_d512_batch128/ slurm/midi_rvq_eval.sbatch)
+sbatch --dependency=afterok:$J2 --export=ALL,CKPT=ckpt/midi_rvq_time_piano_q4x1024_d512_batch128/ slurm/midi_rvq_export.sbatch
+```
+
+- `eval` writes whole-piece F1 on MAESTRO test as JSON next to the
+  checkpoint.
+- `export` writes `data/maestro_<split>.midi_codes.npy`, where row i is
+  the same 20 ms as row i of `.codes.npy`.
+- A `CKPT` folder means the best `val_note_f1` in it.
+
 ## Things that fail silently if changed
 
 - **Polyphony.** The duet models read tensors tokenized with at most four
