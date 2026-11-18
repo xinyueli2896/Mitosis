@@ -4,7 +4,7 @@
 # MIDI needs no tempo. See duet/preprocess_time_grid.py for the
 # tokenization and duet/cp_transformer_time.py for the model.
 #
-#   prep    MIDI folders (and optionally MAESTRO's train split) -> one note
+#   prep    (now scripts/prep_data.sh) MIDI folders (and optionally MAESTRO's train split) -> one note
 #           corpus in milliseconds, duet/data/$CORPUS.*. CPU.
 #   stats   for several frame sizes: empty frames, notes per frame, notes
 #           dropped by the polyphony budget. CPU, minutes. Read this before
@@ -37,20 +37,15 @@ need() { [[ -f "$1" ]] || { echo "missing $1: $2" >&2; exit 1; }; }
 
 case "$STAGE" in
 prep)
-    [[ -n "${MIDI_DIRS:-}${MAESTRO_ROOT:-}" ]] || { echo "set MIDI_DIRS and/or MAESTRO_ROOT" >&2; exit 1; }
-    args=(--name "$CORPUS" --pedal "${PEDAL:-1}")
-    [[ -n "${MIDI_DIRS:-}" ]] && args+=(--midi_dir $MIDI_DIRS)
-    [[ -n "${MAESTRO_ROOT:-}" ]] && args+=(--maestro_root "$MAESTRO_ROOT")
-    [[ -n "${MAX_FILES:-}" ]] && args+=(--max_files "$MAX_FILES")
-    python preprocess_time_grid.py prep "${args[@]}"
+    exec bash "$ROOT/scripts/prep_data.sh"   # kept for old commands; use prep_data.sh
     ;;
 stats)
-    need "data/$CORPUS.notes.bin" "run 'pretrain_time.sh prep' first"
+    need "data/$CORPUS.notes.bin" "run scripts/prep_data.sh first"
     python preprocess_time_grid.py stats --name "$CORPUS" --max_polyphony "$MAX_POLYPHONY" \
         --frame_codec ${FRAME_CODECS:-1 3 6 12}
     ;;
 train)
-    need "data/$CORPUS.notes.bin" "run 'pretrain_time.sh prep' first"
+    need "data/$CORPUS.notes.bin" "run scripts/prep_data.sh first"
     python cp_transformer_time.py train --data "data/$CORPUS" --frame_codec "$FRAME_CODEC" \
         --max_polyphony "$MAX_POLYPHONY" --size "${MODEL_SIZE:-1}" --batch_size "${BATCH_SIZE:-8}" \
         --train_length "${TRAIN_LENGTH:-384}" --max_steps "${MAX_STEPS:-500000}" --stretch "${STRETCH:-0.1}" \

@@ -13,7 +13,7 @@
 #               composition, heavy quality filters), pruned (821k), unique
 #               (33k), or full (1.19M)
 #   HF_TOKEN    sent if set (the dataset is public)
-# Then build the note corpus with pretrain_time.sh prep, MIDI_DIRS=$ARIA_ROOT/<subset>.
+# Then build the note corpus with scripts/prep_data.sh, MIDI_DIRS=$ARIA_ROOT/<subset>.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 STAGE="${1:?usage: aria.sh download}"
 

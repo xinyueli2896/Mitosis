@@ -389,7 +389,7 @@ seconds is metronomic. From release/:
 
 ```bash
 C="--export=ALL,CORPUS=time_piano,MIDI_DIRS=/data/aria-midi /data/giantmidi,MAESTRO_ROOT=$R"
-J1=$(sbatch --parsable "$C" slurm/pretrain_time_prep.sbatch)
+J1=$(sbatch --parsable "$C" slurm/prep_data.sbatch)
 sbatch --dependency=afterok:$J1 "$C" slurm/pretrain_time_stats.sbatch     # read data/time_piano.stats_cp16.json
 sbatch --export=ALL,CORPUS=time_piano,FRAME_CODEC=6 slurm/pretrain_time_train.sbatch
 sbatch --export=ALL,CORPUS=time_piano,CKPT=ckpt/<run>/last.ckpt slurm/pretrain_time_sample.sbatch
@@ -426,7 +426,7 @@ variant adds MAESTRO train (`MAESTRO_ROOT` at prep). To get Aria:
 ```bash
 A=/scratch/$USER/aria-midi
 J1=$(sbatch --parsable --export=ALL,ARIA_ROOT=$A slurm/aria_download.sbatch)
-J2=$(sbatch --parsable --dependency=afterok:$J1 --export=ALL,CORPUS=aria_dedup,MIDI_DIRS=$A/deduped,MAESTRO_ROOT= slurm/pretrain_time_prep.sbatch)
+J2=$(sbatch --parsable --dependency=afterok:$J1 --export=ALL,CORPUS=aria_dedup,MIDI_DIRS=$A/deduped,MAESTRO_ROOT= slurm/prep_data.sbatch)
 sbatch --dependency=afterok:$J2 --export=ALL,CORPUS=aria_dedup slurm/midi_rvq_train.sbatch
 ```
 

@@ -4,7 +4,7 @@
 #
 #   A=/scratch/$USER/aria-midi
 #   J1=$(sbatch --parsable --export=ALL,ARIA_ROOT=$A slurm/aria_download.sbatch)
-#   J2=$(sbatch --parsable --dependency=afterok:$J1 --export=ALL,CORPUS=aria_dedup,MIDI_DIRS=$A/deduped,MAESTRO_ROOT= slurm/pretrain_time_prep.sbatch)
+#   J2=$(sbatch --parsable --dependency=afterok:$J1 --export=ALL,CORPUS=aria_dedup,MIDI_DIRS=$A/deduped,MAESTRO_ROOT= slurm/prep_data.sbatch)
 #   sbatch --dependency=afterok:$J2 --export=ALL,CORPUS=aria_dedup slurm/midi_rvq_train.sbatch
 #
 # A resubmitted download resumes the partial archive; a finished one is a no-op.

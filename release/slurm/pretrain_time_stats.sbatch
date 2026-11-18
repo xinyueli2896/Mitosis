@@ -3,7 +3,7 @@
 # (default "1 3 6 12", i.e. 20/60/120/240 ms frames) at MAX_POLYPHONY:
 # empty frames, notes per frame, notes the budget drops, context length.
 # Written to duet/data/$CORPUS.stats_cp<P>.json. CPU, minutes. See
-# pretrain_time_prep.sbatch for the chain.
+# prep_data.sbatch for the chain.
 #SBATCH --job-name=pretrain_time_stats
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1

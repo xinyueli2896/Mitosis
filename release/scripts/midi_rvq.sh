@@ -3,7 +3,7 @@
 # the same shape as MusicGen's EnCodec 32 kHz codes, so MIDI frame f and
 # codec frame f are the same 20 ms.
 #
-#   train   on a note corpus (pretrain_time.sh prep or maestro.sh pack),
+#   train   on a note corpus (scripts/prep_data.sh or maestro.sh pack),
 #           validated on MAESTRO's validation split when it is packed.
 #           Every visible GPU; resubmitting resumes from last.ckpt.
 #   eval    whole-piece reconstruction note F1 (onset / +offset / +velocity)
@@ -38,7 +38,7 @@ best_ckpt() {
 case "$STAGE" in
 train)
     CORPUS="${CORPUS:-time_piano}"
-    need "data/$CORPUS.notes.bin" "build it with pretrain_time.sh prep (or maestro.sh pack)"
+    need "data/$CORPUS.notes.bin" "build it with scripts/prep_data.sh (or maestro.sh pack)"
     args=(--data "data/$CORPUS" --n_q "${N_Q:-4}" --n_codes "${N_CODES:-1024}" --dim "${DIM:-128}"
           --d "${WIDTH:-512}" --n_res "${N_RES:-8}" --n_attn "${N_ATTN:-4}" --frames "${FRAMES:-500}"
           --batch_size "${BATCH_SIZE:-16}" --lr "${LR:-3e-4}" --max_steps "${MAX_STEPS:-200000}"
