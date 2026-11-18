@@ -418,6 +418,18 @@ tokenizer to align.
 - Rolls at 20 ms cap what is recoverable: two onsets of one key in the
   same or adjacent frames read as one note. On MAESTRO this is rare.
 
+Corpus. The first codec trains on Aria-MIDI alone: its deduplicated
+subset of 371k transcribed solo-piano files, in real time like MAESTRO.
+It validates on MAESTRO validation when that split is packed. A second
+variant adds MAESTRO train (`MAESTRO_ROOT` at prep). To get Aria:
+
+```bash
+A=/scratch/$USER/aria-midi
+J1=$(sbatch --parsable --export=ALL,ARIA_ROOT=$A slurm/aria_download.sbatch)
+J2=$(sbatch --parsable --dependency=afterok:$J1 --export=ALL,CORPUS=aria_dedup,MIDI_DIRS=$A/deduped,MAESTRO_ROOT= slurm/pretrain_time_prep.sbatch)
+sbatch --dependency=afterok:$J2 --export=ALL,CORPUS=aria_dedup slurm/midi_rvq_train.sbatch
+```
+
 From release/, after the time corpus and the MAESTRO pack:
 
 ```bash
