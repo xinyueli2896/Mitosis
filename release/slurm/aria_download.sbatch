@@ -17,7 +17,6 @@
 #SBATCH --time=12:00:00
 #SBATCH --account=deploy
 #SBATCH --qos=deploy
-#SBATCH -p lowprio
 set -eo pipefail
 source ~/.bashrc || true
 # many ~/.bashrc files return early in batch shells, before conda init
