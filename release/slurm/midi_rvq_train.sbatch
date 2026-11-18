@@ -5,7 +5,7 @@
 # resumes from last.ckpt. Knobs: scripts/midi_rvq.sh.
 #
 #   sbatch --export=ALL,CORPUS=time_piano slurm/midi_rvq_train.sbatch
-#SBATCH --job-name=midi_rvq_train
+#SBATCH --job-name=rvq_train
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --gpus=8
