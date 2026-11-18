@@ -116,6 +116,51 @@ GROUPS = [
         ('WSfv4',     'Whole-Song Gen',             'WSG'),
         ('AMT',       'AMT',                        'AMT'),
     ]),
+    # Duet variants (README "Improving Duet's co-generation"), shown only
+    # where evaluate.sh leaves them in: its variants table, not Table 1
+    # or Figure 2.
+    ('Duet variants', True, [
+        ('A3v2',      'Duet v2',                    'Duet\nv2'),
+        ('A3v2c48',   'Duet v2, chords prog. 48',   'Duet\nv2 c48'),
+        ('A3f',       'Duet, slot sees t-1',        'Duet\nt-1'),
+        ('A3v3',      'Duet v3',                    'Duet\nv3'),
+        ('A3v3r',     'Duet v3, residual refine',   'Duet\nv3r'),
+        ('A3v3h',     'Duet v3, held-note tokens',  'Duet\nv3h'),
+        ('A3v3o',     'Duet v3, onset-weighted queries', 'Duet\nv3o'),
+        ('A3jf',      'Duet, joint-frame head',     'Duet\njf'),
+        ('A3jfr',     'Duet, joint frame, random order', 'Duet\njf rand'),
+        ('A3jfm',     'Duet, masked joint frame',   'Duet\njf mask'),
+        ('A3v3g',     'Duet v3, partner dropout',   'Duet\nv3g'),
+        ('A3v3g15',   'Duet v3g, guidance 1.5',     'Duet\nv3g w1.5'),
+        ('A3v3g2',    'Duet v3g, guidance 2',       'Duet\nv3g w2'),
+        ('A3jfmg',    'Duet, masked frame + partner dropout', 'Duet\njfmg'),
+        ('A3jfmg15',  'Duet jfmg, guidance 1.5',    'Duet\njfmg w1.5'),
+        ('A3jfmg2',   'Duet jfmg, guidance 2',      'Duet\njfmg w2'),
+        ('A3jfmg15s8',      'Duet jfmg15, 8 unmasking rounds',       'Duet\njfmg15 s8'),
+        ('A3jfmg15rnd',     'Duet jfmg15, random unmasking order',   'Duet\njfmg15 rnd'),
+        ('A3jfmg15s8rnd',   'Duet jfmg15, 8 rounds, random order',   'Duet\njfmg15 s8 rnd'),
+        ('A3jfmg15R2',      'Duet jfmg15, 2 stream-refine rounds',   'Duet\njfmg15 R2'),
+        ('A3jfmg15s8R2',    'Duet jfmg15, 8 rounds, 2 refine',       'Duet\njfmg15 s8 R2'),
+        ('A3jfmg15rndR2',   'Duet jfmg15, random order, 2 refine',   'Duet\njfmg15 rnd R2'),
+        ('A3jfmg15s8rndR2', 'Duet jfmg15, 8 rounds, random, 2 refine', 'Duet\njfmg15 s8 rnd R2'),
+        ('A3jfme',    'Duet, self-correcting masked frame', 'Duet\njfme'),
+        ('A3jfmeg',   'Duet jfme + partner dropout',  'Duet\njfmeg'),
+        ('A3jfmeg15', 'Duet jfmeg, guidance 1.5',     'Duet\njfmeg w1.5'),
+        ('A3jfmeg15ne', 'Duet jfmeg15, edits off',    'Duet\njfmeg15 no edit'),
+        ('A3jfms',    'Separable Mask-Frame +PD',   'Sep\nMaskFrame'),
+        ('A3jfms15',  'Separable Mask-Frame +PD, guidance 1.5', 'Sep\nMaskFrame w1.5'),
+        ('A3jfmssolo', 'Separable Mask-Frame, each stream alone', 'Sep\nMaskFrame solo'),
+        ('A3v3rK0',   'Duet v3r, AR heads only',    'Duet\nv3r K0'),
+        ('A3v3rr3',   'Duet v3r, 3 refine rounds',  'Duet\nv3r r3'),
+        ('A3jt',      'Duet, joint decode',         'Duet\njoint'),
+        ('A3jm',      'Duet, joint + AR mix',       'Duet\njoint mix'),
+        ('A3K0',      'Duet, AR heads only',        'Duet\nK0'),
+        ('A3ar',      'Duet, best AR weights',      'Duet\nbest AR'),
+        ('A3fm',      'Duet, t-1 + AR mix',         'Duet\nt-1 mix'),
+        ('A3v2m',     'Duet v2 + AR mix',           'Duet\nv2 mix'),
+        ('A3fK0',     'Duet t-1, AR heads only',    'Duet\nt-1 K0'),
+        ('A3fr3',     'Duet t-1, 3 refine rounds',  'Duet\nt-1 r3'),
+    ]),
 ]
 # systems drawn but left out of the best-of comparison whatever their
 # family says: the finetuned single-stream model starts from the same
@@ -164,6 +209,7 @@ FAMILY_COLOR = {
     'Internal baselines':  PALETTE['slate'],
     'External baselines':  PALETTE['maroon'],
     'Not ranked':          PALETTE['grey'],
+    'Duet variants':       '#f5b72a',
 }
 
 

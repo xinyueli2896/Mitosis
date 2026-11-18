@@ -445,7 +445,11 @@ def create_nottingham_chord(max_polyphony=8):
     create_npy_dataset_from_midi(
         folder,
         max_polyphony,
-        f'nottingham_chord_cp{max_polyphony}_v2',
+        # NOTTINGHAM_CHORD_DATASET renames the output, for a chord
+        # stream read from a re-tagged copy of the corpus (prepare_data.sh
+        # chord48) without overwriting the program-0 tensor
+        os.environ.get('NOTTINGHAM_CHORD_DATASET',
+                       f'nottingham_chord_cp{max_polyphony}_v2'),
         ins_ids=['track-1'],
         scan_subfolders=False,
         filter=False,

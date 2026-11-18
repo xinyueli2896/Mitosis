@@ -44,7 +44,7 @@ if _MOE_ROOT not in _sys.path:
 
 import torch
 
-from cp_transformer_m2c_duet_block_diffusion import M2CDuetBlockDiffusion
+from cp_transformer_m2c_duet_block_diffusion import M2CDuetBlockDiffusion, JF_ORDERS
 from cp_transformer_m2c_moe import TRAIN_LENGTH
 from cp_transformer_m2c_jointattn_inference import (  # noqa: F401
     decode_m2c_frames,
@@ -157,6 +157,31 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
             break
     print(f'[load_model] slot_sees_prev_frame={slot_sees_prev_frame}'
           f'{" (A.9/A.3f: slot reads frame t-1)" if slot_sees_prev_frame else ""}')
+    # residual_refine: the projections are real parameters, so their
+    # presence IS the flag. Building without them would read the slot
+    # hidden raw, which the run never trained to stand alone.
+    residual_refine = any(k.endswith('res_proj_m.weight') for k in state_dict_keys)
+    # hold_tokens: buffer VALUE (H); the decode must build frames with the
+    # same held-note prefix the run trained on.
+    hold_tokens = 0
+    for k in state_dict_keys:
+        if k.endswith('hold_tokens_flag'):
+            sd_tmp = ck['state_dict'] if 'state_dict' in ck else ck
+            hold_tokens = int(sd_tmp[k].item())
+            break
+    print(f'[load_model] hold_tokens={hold_tokens}')
+    # joint_frame: buffer VALUE (order code); the head reads both rows of
+    # a frame and samples the merged frame, so the decode must know.
+    joint_frame = ''
+    for k in state_dict_keys:
+        if k.endswith('joint_frame_flag'):
+            sd_tmp = ck['state_dict'] if 'state_dict' in ck else ck
+            code = int(sd_tmp[k].item())
+            joint_frame = {v: n for n, v in JF_ORDERS.items()}.get(code, '')
+            break
+    print(f'[load_model] joint_frame={joint_frame or "off"}')
+    print(f'[load_model] residual_refine={residual_refine}'
+          f'{" (slot = AR row + correction)" if residual_refine else ""}')
     # A.3c: conditional-slot training share, informational (decode is
     # chosen by A3_SCHEDULE; ctc_* is the matching schedule).
     for k in state_dict_keys:
@@ -219,6 +244,9 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         slot_rope_aligned=slot_rope_aligned,
         time_rope_aligned=time_rope_aligned,
         slot_sees_prev_frame=slot_sees_prev_frame,
+        residual_refine=residual_refine,
+        hold_tokens=hold_tokens,
+        joint_frame=joint_frame,
         moe_modality_bias=moe_modality_bias,
         moe_modality_gates=moe_modality_gates,
         moe_modality_hard_route=moe_modality_hard_route,
@@ -653,9 +681,93 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     # regime the stale-draft model trains on, where BOTH query slots hold
     # a stale AR draft and each slot emits its stream's clean frame.
     joint = schedule == 'joint'
+    # A3_JOINT_MIX=w (2026-10-20): in the joint refine forward, sample
+    # each stream from a per-sub-token mixture of its slot's refined
+    # distribution and its own AR head's (the head that drafted it),
+    # weight w on the AR head; A3_CTC_MIX_MODE picks linear or geo as
+    # for the ctc follower mix. Symmetric: both streams are mixed alike.
+    joint_mix = float(_os.environ.get('A3_JOINT_MIX', '0'))
+    assert 0.0 <= joint_mix <= 1.0, joint_mix
+    joint_rounds = int(_os.environ.get('A3_JOINT_ROUNDS', '1'))
+    assert joint_rounds >= 1, joint_rounds
+    jf = bool(getattr(model, 'joint_frame', ''))
+    if jf and not joint:
+        raise ValueError('joint_frame checkpoints decode with A3_SCHEDULE=joint')
+    if jf and getattr(model, 'hold_tokens', 0):
+        raise ValueError('joint_frame is not wired for hold_tokens')
+    # A3_PARTNER_CFG=w (2026-10-21, partner guidance): every global-stack
+    # forward of the joint decode runs twice, as is and with all the
+    # cross-stream gates at 0 (each stream alone); each sub-token is then
+    # drawn from uncond + w * (cond - uncond). w=1 is the plain decode.
+    # Meaningful for a checkpoint trained with --partner_drop_prob.
+    partner_cfg = float(_os.environ.get('A3_PARTNER_CFG', '1'))
+    if partner_cfg != 1.0:
+        if not joint:
+            raise ValueError('A3_PARTNER_CFG is wired for A3_SCHEDULE=joint only')
+        if joint_mix > 0:
+            raise ValueError('A3_PARTNER_CFG and A3_JOINT_MIX both use the '
+                             'second context; pick one')
+        trained_p = float(getattr(model, 'partner_drop_prob_flag', torch.zeros(())).item())
+        print(f'[gen] A3_PARTNER_CFG={partner_cfg}: partner guidance '
+              f'(checkpoint partner_drop_prob={trained_p})')
+        if trained_p <= 0:
+            print('[gen] WARNING: this checkpoint never trained without the '
+                  'partner stream; its unconditional branch is off-distribution')
+    guided = partner_cfg != 1.0
+    # A3_SOLO=1 (jm_separable checkpoints): every stream alone -- every
+    # global-stack forward with the cross-stream gates at 0 and every
+    # local pass block-masked, so each stream is generated exactly as
+    # its own single-stream model would (export_single_stream.py).
+    solo = _os.environ.get('A3_SOLO', '0') == '1'
+    model.jm_solo = solo
+    solo_keep = None
+    if solo:
+        if not bool(getattr(model, 'jm_separable_flag', torch.zeros(())).item()):
+            raise ValueError('A3_SOLO needs a checkpoint trained with --jm_separable')
+        if guided or joint_mix > 0 or not joint:
+            raise ValueError('A3_SOLO decodes with A3_SCHEDULE=joint, no guidance, no AR mix')
+        print('[gen] A3_SOLO: each stream generated alone (no partner at either level)')
+    # A3_MASK_STEPS=n: rounds of the masked joint frame's decode
+    # (joint_frame='masked'); 4 by default, 1 fills every slot at once.
+    # A3_MASK_ORDER=conf|random: unmask most confident first (MaskGIT)
+    # or in a random order (MDLM-style ancestral order).
+    # A3_MASK_REFINE=R, A3_MASK_REFINE_MODE=stream|conf|edit: R more
+    # rounds once the frame is full -- re-mask one whole stream and fill
+    # it again given the other (alternating, random first), re-mask the
+    # least-liked quarter of slots, or edit visible notes in place.
+    # A3_MASK_EDIT=0|1: edit visible notes during the unmasking rounds;
+    # A3_MASK_EDIT_MARGIN=nats the new note must win by. Edits read the
+    # visible-slot outputs only a --jm_edit_prob checkpoint trained, so
+    # they default on for one and are refused for any other.
+    if getattr(model, 'joint_frame', '') == 'masked':
+        model.jm_steps = int(_os.environ.get('A3_MASK_STEPS', '4'))
+        model.jm_order = _os.environ.get('A3_MASK_ORDER', 'conf')
+        model.jm_refine = int(_os.environ.get('A3_MASK_REFINE', '0'))
+        model.jm_refine_mode = _os.environ.get('A3_MASK_REFINE_MODE', 'stream')
+        trained_edit = float(getattr(model, 'jm_edit_prob_flag', torch.zeros(())).item())
+        # unset or empty: on exactly for a --jm_edit_prob checkpoint
+        model.jm_edit = (_os.environ.get('A3_MASK_EDIT', '')
+                         or ('1' if trained_edit > 0 else '0')) == '1'
+        model.jm_edit_margin = float(_os.environ.get('A3_MASK_EDIT_MARGIN', '1.0'))
+        assert model.jm_order in ('conf', 'random'), model.jm_order
+        assert model.jm_refine_mode in ('stream', 'conf', 'edit'), model.jm_refine_mode
+        if trained_edit <= 0 and (model.jm_edit or (
+                model.jm_refine > 0 and model.jm_refine_mode == 'edit')):
+            raise ValueError('A3_MASK_EDIT / A3_MASK_REFINE_MODE=edit need a '
+                             'checkpoint trained with --jm_edit_prob')
+        if model.jm_solo and model.jm_refine > 0 and model.jm_refine_mode != 'stream':
+            raise ValueError('A3_SOLO refines with A3_MASK_REFINE_MODE=stream only '
+                             '(the other modes rank both streams\' slots together)')
+        print(f'[gen] masked joint frame: {model.jm_steps} unmasking round(s), '
+              f'order {model.jm_order}, {model.jm_refine} refine round(s)'
+              f'{f" ({model.jm_refine_mode})" if model.jm_refine else ""}, '
+              f'edits {"on" if model.jm_edit else "off"}'
+              f'{f" (margin {model.jm_edit_margin})" if model.jm_edit else ""}'
+              f' [checkpoint jm_edit_prob={trained_edit}]')
     if joint:
         print(f'[gen] A3_SCHEDULE=joint: leaderless draft-and-denoise '
-              f'(both drafts committed, one refine forward)')
+              f'(both drafts committed, one refine forward), '
+              f'AR mix {joint_mix} ({ctc_mix_mode}), {joint_rounds} round(s)')
     elif schedule.startswith('ctc'):
         base, _, lead = schedule.partition('_')
         ctc_passes = 2 if base == 'ctc2' else 1
@@ -692,6 +804,59 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     mel_frames = []
     chord_frames = []
 
+    # A3_LOCK_PROGRAM=1: each stream samples only the MIDI program its
+    # given (prompt) frames carry most often, per batch item, so a
+    # program-tagged model keeps melody and chords on their own programs
+    # (e.g. chords on 48) instead of drifting to the other stream's or a
+    # stray one. Without it every program 0..127 stays a legal token.
+    # Streams whose prompt is silent stay unconstrained.
+    lock_program = (_os.environ.get('A3_LOCK_PROGRAM', '0') == '1'
+                    and getattr(model, 'preserve_program', False))
+    prog_counts = torch.zeros(2, B, 128, device=device)
+    model._program_lock = None
+
+    def _count_programs(frame, i):
+        progs = frame[:, 0::2]
+        ok = progs < 128
+        prog_counts[i].scatter_add_(1, progs.clamp(max=127) * ok,
+                                    ok.to(prog_counts.dtype))
+
+    # hold_tokens checkpoints: every frame carries its held notes in
+    # front (see HOLD_BASE in the model module). They follow from the
+    # committed history -- sound_end[i, b, p] is the frame where stream
+    # i's latest note of pitch p stops -- so the decode builds them: given
+    # frames are packed with them, sampled frames get them as a forced
+    # prefix (model._hold_prefix, read by local_sampling). Frames grow
+    # from subseq_len to subseq_len + 2*H tokens; the midi writer skips
+    # held notes (duration index past the templates).
+    hold = int(getattr(model, 'hold_tokens', 0))
+    S_on = subseq_len
+    model._hold_prefix = None
+    if hold:
+        from cp_transformer_m2c_duet_block_diffusion import (
+            pack_held_frames, onset_notes, held_pair_mask)
+        subseq_len = S_on + 2 * hold
+        sound_end = torch.full((2, B, 128), -1, dtype=torch.long, device=device)
+        print(f'[gen] hold_tokens={hold}: frames carry their held notes '
+              f'({S_on} -> {subseq_len} tokens)')
+
+    def _with_held(frame, i, t):
+        if not hold or frame.shape[1] != S_on:
+            return frame
+        return pack_held_frames(sound_end[i] > t, prog_counts[i].argmax(-1),
+                                frame, hold, tokenizer)
+
+    def _held_prefix(i, t):
+        empty = torch.full((B, S_on), tokenizer.pad_token, dtype=torch.long,
+                           device=device)
+        f = _with_held(empty, i, t)
+        return torch.where(held_pair_mask(f), f, torch.full_like(f, tokenizer.pad_token))
+
+    def _commit_onsets(frame, i, t):
+        is_note, _, pitch, dfr = onset_notes(frame, tokenizer.pad_token)
+        end = torch.where(is_note, t + dfr, torch.full_like(dfr, -1))
+        sound_end[i].scatter_reduce_(1, pitch, end, reduce='amax')
+
     for t in range(gen_length):
         if t % 10 == 0:
             print(f'[gen] step {t}/{gen_length}  (K_refine={K})')
@@ -710,12 +875,26 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
         c_action_h = None
         if not m_sampling:
             m_frame = resolve_frame(m_action, B, subseq_len, tokenizer, device)
+            if lock_program or hold:
+                _count_programs(m_frame, 0)
+            m_frame = _with_held(m_frame, 0, t)
             m_tokens = m_frame
             m_action_h = model._encode_frame(m_frame, 0).to(dtype=dtype)  # [B, 1, H]
         if not c_sampling:
             c_frame = resolve_frame(c_action, B, subseq_len, tokenizer, device)
+            if lock_program or hold:
+                _count_programs(c_frame, 1)
+            c_frame = _with_held(c_frame, 1, t)
             c_tokens = c_frame
             c_action_h = model._encode_frame(c_frame, 1).to(dtype=dtype)
+        if lock_program:
+            seen = prog_counts.sum(-1) > 0                       # [2, B]
+            lock = torch.where(seen, prog_counts.argmax(-1),
+                               torch.full(seen.shape, -1, dtype=torch.long,
+                                          device=device))
+            model._program_lock = {0: lock[0], 1: lock[1]}
+        if hold:
+            model._hold_prefix = {0: _held_prefix(0, t), 1: _held_prefix(1, t)}
 
         if need_model:
             # Build the clean prefix once per step.
@@ -774,37 +953,91 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                 slot_c = _build_slot(model, 'sample' if c_sampling else 'committed',
                                      None, c_action_h, K, K, 1, B)
                 h_in = torch.cat([h_clean_padded, slot_m, slot_c], dim=1)
-                h_global, _ = model._run_global_stack(h_in, T_query=T_query)
+                if solo and solo_keep is None:
+                    solo_keep = torch.zeros(B, device=device)
+                h_global, _ = model._run_global_stack(h_in, T_query=T_query,
+                                                      partner_keep=solo_keep)
                 clean_len = h_clean.shape[1]
                 # the AR heads' contexts, kept for the follower draft mix
                 h_ar = {0: h_global[:, clean_len - 2], 1: h_global[:, clean_len - 1]}
+                h_ar_u = None
+                if guided:
+                    # the same forward with each stream alone
+                    alone = torch.zeros(B, device=device)
+                    h_global_u, _ = model._run_global_stack(
+                        h_in, T_query=T_query, partner_keep=alone)
+                    h_ar_u = {0: h_global_u[:, clean_len - 2],
+                              1: h_global_u[:, clean_len - 1]}
                 cur = {0: m_tokens, 1: c_tokens}
-                if m_sampling:
+                if jf and m_sampling != c_sampling:
+                    raise NotImplementedError(
+                        'joint_frame decodes co-generation only (both '
+                        'streams sampled, or both given)')
+                if jf:
+                    # one joint draw for both streams' frame t
+                    cur[0], cur[1], _, _ = model.joint_sampling(
+                        h_ar[0], h_ar[1], subseq_len, temperature=temperature,
+                        h_m_u=h_ar_u[0] if guided else None,
+                        h_c_u=h_ar_u[1] if guided else None, cfg_w=partner_cfg)
+                if m_sampling and not jf:
                     cur[0] = model.local_sampling(h_global[:, clean_len - 2],
                                                   max_subseq_len=subseq_len,
                                                   temperature=temperature,
-                                                  token_type_id=0)
-                if c_sampling:
+                                                  token_type_id=0,
+                                                  h_alt=h_ar_u[0] if guided else None,
+                                                  alt_weight=partner_cfg, mix_mode='cfg')
+                if c_sampling and not jf:
                     cur[1] = model.local_sampling(h_global[:, clean_len - 1],
                                                   max_subseq_len=subseq_len,
                                                   temperature=temperature,
-                                                  token_type_id=1)
+                                                  token_type_id=1,
+                                                  h_alt=h_ar_u[1] if guided else None,
+                                                  alt_weight=partner_cfg, mix_mode='cfg')
                 sampling = {0: m_sampling, 1: c_sampling}
                 if joint:
                     # both drafts committed (k=0), no leader; a given
-                    # stream keeps its action frame, as in the seed
-                    slots = [_build_slot(model, 'committed', None,
-                                         model._encode_frame(cur[i], i).to(dtype=dtype),
-                                         0, K, i, B) for i in (0, 1)]
-                    h_in = torch.cat([h_clean_padded, slots[0], slots[1]], dim=1)
-                    h_global, _ = model._run_global_stack(h_in, T_query=T_query)
-                    for i in (0, 1):
-                        if sampling[i]:
-                            # slot positions: melody at -2, chord at -1
-                            cur[i] = model.local_sampling(
-                                h_global[:, -2 if i == 0 else -1],
-                                max_subseq_len=subseq_len,
-                                temperature=final_temperature, token_type_id=i)
+                    # stream keeps its action frame, as in the seed.
+                    # A3_JOINT_ROUNDS=n repeats the refine, each round
+                    # reading the previous round's refined frames.
+                    for _r in range(joint_rounds):
+                        slots = [_build_slot(model, 'committed', None,
+                                             model._encode_frame(cur[i], i).to(dtype=dtype),
+                                             0, K, i, B) for i in (0, 1)]
+                        h_in = torch.cat([h_clean_padded, slots[0], slots[1]], dim=1)
+                        h_global, _ = model._run_global_stack(h_in, T_query=T_query,
+                                                              partner_keep=solo_keep)
+                        h_slot = {i: model.residual_slot_out(
+                            h_global[:, -2 if i == 0 else -1], h_ar[i], i) for i in (0, 1)}
+                        h_slot_u = None
+                        if guided:
+                            # cut off from each other, a slot no longer
+                            # reads the partner's draft either
+                            h_global_u, _ = model._run_global_stack(
+                                h_in, T_query=T_query, partner_keep=alone)
+                            h_slot_u = {i: model.residual_slot_out(
+                                h_global_u[:, -2 if i == 0 else -1], h_ar_u[i], i)
+                                for i in (0, 1)}
+                        if jf:
+                            cur[0], cur[1], _, _ = model.joint_sampling(
+                                h_slot[0], h_slot[1],
+                                subseq_len, temperature=final_temperature,
+                                h_m_u=h_slot_u[0] if guided else None,
+                                h_c_u=h_slot_u[1] if guided else None,
+                                cfg_w=partner_cfg)
+                            continue
+                        for i in (0, 1):
+                            if sampling[i]:
+                                # slot positions: melody at -2, chord at -1
+                                if guided:
+                                    alt, alt_w, mode = h_slot_u[i], partner_cfg, 'cfg'
+                                else:
+                                    alt = h_ar[i] if joint_mix > 0 else None
+                                    alt_w, mode = joint_mix, ctc_mix_mode
+                                cur[i] = model.local_sampling(
+                                    h_slot[i],
+                                    max_subseq_len=subseq_len,
+                                    temperature=final_temperature, token_type_id=i,
+                                    h_alt=alt, alt_weight=alt_w, mix_mode=mode)
                     order = []
                 else:
                     lead = {'m': 0, 'c': 1, 'alt': t % 2}[ctc_leader]
@@ -823,7 +1056,8 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                     h_in = torch.cat([h_clean_padded, slots[0], slots[1]], dim=1)
                     h_global, _ = model._run_global_stack(h_in, T_query=T_query)
                     # slot positions: melody at -2, chord at -1
-                    h_pred = h_global[:, -2 if fo == 0 else -1]
+                    h_pred = model.residual_slot_out(
+                        h_global[:, -2 if fo == 0 else -1], h_ar[fo], fo)
                     new_fo = model.local_sampling(
                         h_pred, max_subseq_len=subseq_len,
                         temperature=final_temperature, token_type_id=fo,
@@ -831,7 +1065,8 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                         alt_weight=ctc_follower_mix, mix_mode=ctc_mix_mode)
                     if ctc_denoise_leader and sampling[ld]:
                         # the leader's slot denoises its draft in the same forward
-                        h_lead = h_global[:, -2 if ld == 0 else -1]
+                        h_lead = model.residual_slot_out(
+                            h_global[:, -2 if ld == 0 else -1], h_ar[ld], ld)
                         cur[ld] = model.local_sampling(h_lead, max_subseq_len=subseq_len,
                                                        temperature=final_temperature,
                                                        token_type_id=ld)
@@ -869,8 +1104,11 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                     h_m_pred = h_global[:, clean_len - 2]
                     h_c_pred = h_global[:, clean_len - 1]
                 else:
-                    h_m_pred = h_global[:, -2]
-                    h_c_pred = h_global[:, -1]
+                    clean_len = h_clean.shape[1]
+                    h_m_pred = model.residual_slot_out(
+                        h_global[:, -2], h_global[:, clean_len - 2], 0)
+                    h_c_pred = model.residual_slot_out(
+                        h_global[:, -1], h_global[:, clean_len - 1], 1)
 
                 # Temperature annealing across rounds: exploration early,
                 # near-greedy at the committed round. Linear interpolation
@@ -931,9 +1169,12 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
                 c_tokens = last_c_tokens
 
         if m_tokens is None:
-            m_tokens = resolve_frame(m_action, B, subseq_len, tokenizer, device)
+            m_tokens = _with_held(resolve_frame(m_action, B, subseq_len, tokenizer, device), 0, t)
         if c_tokens is None:
-            c_tokens = resolve_frame(c_action, B, subseq_len, tokenizer, device)
+            c_tokens = _with_held(resolve_frame(c_action, B, subseq_len, tokenizer, device), 1, t)
+        if hold:
+            _commit_onsets(m_tokens, 0, t)
+            _commit_onsets(c_tokens, 1, t)
 
         mel_frames.append(m_tokens)
         chord_frames.append(c_tokens)
@@ -943,6 +1184,18 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
         c_h = model._encode_frame(c_tokens, 1).to(dtype=dtype)
         h_buffer = torch.cat([h_buffer, m_h, c_h], dim=1)
 
+    if lock_program and model._program_lock is not None:
+        print('[gen] A3_LOCK_PROGRAM: melody program(s) '
+              f'{sorted(set(model._program_lock[0].tolist()))}, chord program(s) '
+              f'{sorted(set(model._program_lock[1].tolist()))} (-1 = unlocked)')
+    model._program_lock = None
+    model._hold_prefix = None
+    st = getattr(model, 'jm_stats', None)
+    if jf and st and st['frames']:
+        # running totals over the call (seed and refine draws alike)
+        print(f'[gen] masked frame: {st["frames"]} frame draws, '
+              f'{st["edits"] / st["frames"]:.3f} edits and '
+              f'{st["refined"] / st["frames"]:.3f} refine changes per draw')
     return mel_frames, chord_frames
 
 
