@@ -4,7 +4,7 @@
 # F1 well above 0.99, since a wrong MIDI code is a wrong note.
 #
 #   sbatch --export=ALL,CKPT=ckpt/<run>/ slurm/midi_rvq_eval.sbatch
-#SBATCH --job-name=rvq_eval
+#SBATCH --job-name=eval
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --gpus=1
