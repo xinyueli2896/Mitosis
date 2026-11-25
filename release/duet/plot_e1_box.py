@@ -157,6 +157,8 @@ GROUPS = [
         ('DiffusionJoint_cfg15', 'Diffusion Mask-Frame, joint attention, guidance 1.5', 'Diff\nMaskFrame joint w1.5'),
         ('DiffusionGatedJoint', 'Diffusion Mask-Frame, gated joint attention', 'Diff\nMaskFrame gated joint'),
         ('DiffusionGatedJoint_cfg15', 'Diffusion Mask-Frame, gated joint attention, guidance 1.5', 'Diff\nMaskFrame gated joint w1.5'),
+        ('DiffusionGatedJointNoQuery', 'Diffusion Mask-Frame, gated joint attention, no query slots', 'Diff\nMaskFrame gated joint noQ'),
+        ('DiffusionGatedJointNoQuery_cfg15', 'Diffusion Mask-Frame, gated joint attention, no query slots, guidance 1.5', 'Diff\nMaskFrame gated joint noQ w1.5'),
         ('A3v3rK0',   'Duet v3r, AR heads only',    'Duet\nv3r K0'),
         ('A3v3rr3',   'Duet v3r, 3 refine rounds',  'Duet\nv3r r3'),
         ('A3jt',      'Duet, joint decode',         'Duet\njoint'),

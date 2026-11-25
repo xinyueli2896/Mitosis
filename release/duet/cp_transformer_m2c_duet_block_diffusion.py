@@ -484,7 +484,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  partner_drop_prob=0.0, jm_edit_prob=0.0,
                  jm_edit_weight=1.0, jm_separable=False, jm_diffusion=False,
                  jm_t_min=0.0, jm_t_max=1.0, global_joint_attn=False,
-                 ema_decay=0.0, moe_z_loss_weight=0.0, **kwargs):
+                 ema_decay=0.0, moe_z_loss_weight=0.0, no_query=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- stale-snapshot drafts ---------------------------------------
@@ -1068,6 +1068,23 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             'query_block_flag',
             torch.tensor(self.query_block, dtype=torch.long),
         )
+        # no_query (2026-11-25): no draft and no query slots. With the
+        # masked joint frame, melody and chord of frame t are filled
+        # together by the local diffusion, so the global draft-and-refine
+        # route is redundant: train the AR rows only (no query loss, no
+        # self-conditioning probe, a single dummy slot pair that no clean
+        # row attends), and decode with the AR rows only (no refine).
+        self.no_query = bool(no_query)
+        self.register_buffer('no_query_flag',
+                             torch.tensor(int(self.no_query), dtype=torch.long))
+        if self.no_query:
+            if self.joint_frame != 'masked':
+                raise ValueError('no_query needs joint_frame masked')
+            if self.jm_edit_prob > 0:
+                raise ValueError('no_query and jm_edit_prob do not combine')
+            self.self_cond_prob = 0.0
+            self.query_pairs, self.query_block = 1, 1
+            self.query_onset_weight = 0.0
         if self.joint_frame:
             bad = [n for n, on in (
                 ('hold_tokens', self.hold_tokens),
@@ -1871,6 +1888,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                 (h_clean_global, joint, jtypes, jmask, T_full),
                 (h_query_global, joint[:, tq_idx], jtypes[:, tq_idx],
                  None if jmask is None else jmask[:, tq_idx], n_pairs))
+            if self.no_query:
+                rows = rows[:1]
             out, self._jm_edit_state = [], []
             # jm_separable: the partner-dropped items get the block mask
             alone = None
@@ -1891,7 +1910,7 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                     jt = jt_in
                 out.append(self.joint_local_decode(
                     h_m_, h_c_, jt, ty, jm, blk).view(batch_size, n, L, -1))
-            ar_logits, query_logits = out
+            ar_logits, query_logits = out if len(out) == 2 else (out[0], None)
             return ar_logits, query_logits, aux_loss
 
         ar_logits = self.local_decode(h_clean_global, emb)
@@ -2925,6 +2944,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                 self._last_jm_fix_acc = (ok & wrong_ar).sum() / wrong_ar.sum().clamp_min(1)
                 self._last_jm_keep_acc = (ok & right).sum() / right.sum().clamp_min(1)
                 self._last_jm_wrong_frac = wrong_ar.sum() / judge_ar.sum().clamp_min(1)
+        elif query_logits is None:
+            query_loss = ar_loss.new_zeros(())     # no_query
         elif diff:
             query_loss, _, _ = _ce(query_logits, joint[:, tq_idx], jtypes[:, tq_idx],
                                    inv_t[:, tq_idx], joint_full[:, tq_idx])
@@ -3376,6 +3397,9 @@ if __name__ == '__main__':
                              'validation and saved as ema_state_dict, which '
                              'the decode loads (A3_EMA=0 to decode the live '
                              'weights); 0 = off')
+    parser.add_argument('--no_query', type=int, default=0,
+                        help='1 = no draft / query slots: train and decode '
+                             'the AR rows only (needs --joint_frame masked)')
     parser.add_argument('--moe_z_loss_weight', type=float, default=0.0,
                         help='router z-loss weight (ST-MoE, e.g. 1e-3); 0 = off')
     parser.add_argument('--moe_drop_upcycle', type=float, default=0.0,
@@ -3677,6 +3701,7 @@ if __name__ == '__main__':
         global_joint_attn=args.global_joint_attn,
         ema_decay=args.ema_decay,
         moe_z_loss_weight=args.moe_z_loss_weight,
+        no_query=bool(args.no_query),
         agree_head=bool(args.agree_head),
         cross_lora_rank=args.cross_lora_rank,
         moe_expert_lora_rank=args.moe_expert_lora_rank,
@@ -3719,7 +3744,7 @@ if __name__ == '__main__':
           f'jm_diffusion={bool(args.jm_diffusion)}'
           f'{f" (t in [{args.jm_t_min}, {args.jm_t_max}])" if args.jm_diffusion else ""}  '
           f'global_joint_attn={args.global_joint_attn}  ema_decay={args.ema_decay}  '
-          f'moe_z_loss_weight={args.moe_z_loss_weight}  '
+          f'moe_z_loss_weight={args.moe_z_loss_weight}  no_query={bool(args.no_query)}  '
           f'moe_drop_upcycle={args.moe_drop_upcycle}'
           f'{f" (weight {args.jm_edit_weight})" if args.jm_edit_prob > 0 else ""}'
           f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
@@ -3912,6 +3937,7 @@ if __name__ == '__main__':
                     'global_joint_attn': args.global_joint_attn,
                     'ema_decay': args.ema_decay,
                     'moe_z_loss_weight': args.moe_z_loss_weight,
+                    'no_query': bool(args.no_query),
                     'moe_drop_upcycle': args.moe_drop_upcycle,
                     'agree_head': bool(args.agree_head),
                     'cross_lora_rank': args.cross_lora_rank,

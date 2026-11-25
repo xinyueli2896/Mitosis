@@ -21,6 +21,7 @@
 #   bash scripts/train.sh duet_diffusion             # masked frame as proper discrete diffusion (NELBO), AR across frames
 #   bash scripts/train.sh duet_diffusion_joint       # duet_diffusion with one joint self-attention over both streams per global layer
 #   bash scripts/train.sh duet_diffusion_gatedjoint  # duet_diffusion_joint with the gates inside the softmax (closed at init)
+#   bash scripts/train.sh duet_diffusion_gatedjoint_noquery  # gatedjoint without draft / query slots: AR rows + in-frame diffusion only
 #   bash scripts/train.sh dense           # Duet w/o MoE: one dense FFN of width 6144
 #   bash scripts/train.sh no_draft        # Duet w/o draft tokens
 #   bash scripts/train.sh ss_finetuned    # single-stream backbone, finetuned
@@ -37,7 +38,7 @@
 # Knobs (environment): MAX_LR, LR_TOTAL_STEPS, BATCH_SIZE (per GPU),
 # RUN_TAG (run-name suffix), WANDB=1 (log to Weights & Biases).
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-SYSTEM="${1:?usage: train.sh duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|duet_jfms|duet_diffusion|duet_diffusion_joint|duet_diffusion_gatedjoint|dense|no_draft|ss_finetuned|ss_scratch}"
+SYSTEM="${1:?usage: train.sh duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|duet_jfms|duet_diffusion|duet_diffusion_joint|duet_diffusion_gatedjoint|duet_diffusion_gatedjoint_noquery|dense|no_draft|ss_finetuned|ss_scratch}"
 system_id "$SYSTEM" >/dev/null
 
 NGPUS="$(n_gpus)"
@@ -53,7 +54,7 @@ launch() {   # launch <script.py> args...: python on one GPU, torchrun on severa
 wandb_flag() { [[ "${WANDB:-0}" == "1" ]] && echo "$1" || echo "$2"; }
 
 case "$SYSTEM" in
-duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|duet_jfms|duet_diffusion|duet_diffusion_joint|duet_diffusion_gatedjoint|dense)
+duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|duet_jfms|duet_diffusion|duet_diffusion_joint|duet_diffusion_gatedjoint|duet_diffusion_gatedjoint_noquery|dense)
     # Both Duet streams read cp4 tensors: MAX_POLYPHONY is the tokenizer's
     # budget and MELCHORD_CP selects data/${DUET_DATA}_*_cp${MELCHORD_CP}_v2.pt.
     # The checkpoint does not record it, so keep the two in step.
@@ -107,7 +108,7 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|
             DRAFT=(--slot_sees_prev_frame --self_cond_prob 1.0
                    --sc_ar_frac 1.0 --sc_ar_free_run --sc_draft_temp 1.0
                    --draft_k0 --sc_val) ;;
-        duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|duet_jfms|duet_diffusion|duet_diffusion_joint|duet_diffusion_gatedjoint)
+        duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|duet_jfms|duet_diffusion|duet_diffusion_joint|duet_diffusion_gatedjoint|duet_diffusion_gatedjoint_noquery)
             # duet_v2's fixes without its k=0-only states: the slot reads
             # t-1; a draft token never holds the true frame -- unmasked it
             # always carries an AR-sampled draft (decode's sampler, temp
@@ -178,7 +179,15 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|
             # duet_diffusion_gatedjoint: the same joint softmax, with the
             # cross and frame gates as log-biases on the partner's keys
             # (closed at init, so each stream starts as its pretrained self)
-            if [[ "$SYSTEM" == duet_diffusion_gatedjoint ]]; then DRAFT+=(--global_joint_attn 2); fi
+            if [[ "$SYSTEM" == duet_diffusion_gatedjoint* ]]; then DRAFT+=(--global_joint_attn 2); fi
+            # duet_diffusion_gatedjoint_noquery: no draft and no query
+            # slots. The masked joint frame already fills melody and chord
+            # of frame t together, so only the AR rows are trained (no
+            # query loss, no self-conditioning draft) and the decode takes
+            # the AR rows' joint draw as final (no slot refine)
+            if [[ "$SYSTEM" == *_noquery ]]; then
+                DRAFT+=(--no_query 1 --self_cond_prob 0); QP=1
+            fi
             # duet_v3g / duet_jfmg / duet_jfmeg / duet_diffusion: 10% of items train with
             # the other stream cut off (every cross-stream gate 0), which
             # partner guidance (A3_PARTNER_CFG) contrasts at decode

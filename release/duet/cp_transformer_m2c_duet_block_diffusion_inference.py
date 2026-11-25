@@ -189,6 +189,14 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
             global_joint_attn = int(sd_tmp[k].item())
             break
     print(f'[load_model] global_joint_attn={global_joint_attn}')
+    # no_query: trained without draft / query slots -> AR rows only
+    no_query = False
+    for k in state_dict_keys:
+        if k.endswith('no_query_flag'):
+            sd_tmp = ck['state_dict'] if 'state_dict' in ck else ck
+            no_query = bool(int(sd_tmp[k].item()))
+            break
+    print(f'[load_model] no_query={no_query}')
     print(f'[load_model] residual_refine={residual_refine}'
           f'{" (slot = AR row + correction)" if residual_refine else ""}')
     # A.3c: conditional-slot training share, informational (decode is
@@ -257,6 +265,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         hold_tokens=hold_tokens,
         joint_frame=joint_frame,
         global_joint_attn=global_joint_attn,
+        no_query=no_query,
         moe_modality_bias=moe_modality_bias,
         moe_modality_gates=moe_modality_gates,
         moe_modality_hard_route=moe_modality_hard_route,
@@ -716,6 +725,10 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     assert 0.0 <= joint_mix <= 1.0, joint_mix
     joint_rounds = int(_os.environ.get('A3_JOINT_ROUNDS', '1'))
     assert joint_rounds >= 1, joint_rounds
+    if getattr(model, 'no_query', False):
+        # no query slots were trained: the AR rows' joint draw is final
+        joint_rounds = 0
+        print('[gen] no_query checkpoint: AR rows only, no slot refine')
     jf = bool(getattr(model, 'joint_frame', ''))
     if jf and not joint:
         raise ValueError('joint_frame checkpoints decode with A3_SCHEDULE=joint')
