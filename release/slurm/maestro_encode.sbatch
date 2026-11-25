@@ -4,7 +4,7 @@
 # shard per visible GPU, codes cached per piece under CODES_DIR. A
 # resubmitted job only encodes what is missing. Per-shard logs:
 # logs/maestro_encode_shard<i>.log. See maestro_download.sbatch for the chain.
-#SBATCH --job-name=maestro_encode
+#SBATCH --job-name=sym2aud_encode
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --gpus=8

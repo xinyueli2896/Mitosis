@@ -8,7 +8,7 @@
 #   sbatch --dependency=afterok:$J2 --export=ALL,CORPUS=aria_dedup slurm/midi_rvq_train.sbatch
 #
 # A resubmitted download resumes the partial archive; a finished one is a no-op.
-#SBATCH --job-name=aria_download
+#SBATCH --job-name=sym2aud_download
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

@@ -8,7 +8,7 @@
 #   J3=$(sbatch --parsable --dependency=afterok:$J2 --export=ALL,MAESTRO_ROOT=/scratch/$USER/maestro-v3.0.0 slurm/maestro_pack.sbatch)
 #
 # A resubmitted download resumes the partial zip; a finished one is a no-op.
-#SBATCH --job-name=maestro_download
+#SBATCH --job-name=sym2aud_download
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

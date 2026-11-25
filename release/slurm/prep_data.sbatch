@@ -15,7 +15,7 @@
 #   sbatch --export=ALL,CORPUS=time_piano,FRAME_CODEC=6 slurm/pretrain_time_train.sbatch
 # and, on a checkpoint (paths are relative to duet/):
 #   sbatch --export=ALL,CORPUS=time_piano,CKPT=ckpt/<run>/last.ckpt slurm/pretrain_time_sample.sbatch
-#SBATCH --job-name=prep_data
+#SBATCH --job-name=sym2aud_prep
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

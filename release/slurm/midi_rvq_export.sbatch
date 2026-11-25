@@ -4,7 +4,7 @@
 # data/maestro_<split>.codes.npy (EnCodec).
 #
 #   sbatch --export=ALL,CKPT=ckpt/<run>/ slurm/midi_rvq_export.sbatch
-#SBATCH --job-name=export
+#SBATCH --job-name=sym2aud_export
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --gpus=1

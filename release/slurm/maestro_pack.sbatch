@@ -7,7 +7,7 @@
 # one pack serves every tokenizer setting.
 #
 #   sbatch --export=ALL,MAESTRO_ROOT=... slurm/maestro_pack.sbatch
-#SBATCH --job-name=maestro_pack
+#SBATCH --job-name=sym2aud_pack
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
