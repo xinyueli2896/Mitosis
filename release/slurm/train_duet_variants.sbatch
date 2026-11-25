@@ -23,7 +23,7 @@
 # the GPUs this job was given (--gpus=N on the command line), so a
 # 2-GPU job holds one run; lowprio may preempt it, and the requeued job
 # resumes every run from its last.ckpt.
-#SBATCH --job-name=train
+#SBATCH --job-name=mel2cho_train
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --gpus=8

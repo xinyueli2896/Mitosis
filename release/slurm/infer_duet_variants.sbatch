@@ -17,7 +17,7 @@
 # overrides one. Finished samples are skipped, so a resubmitted job
 # resumes. Outputs: duet/temp/E1[_nottingham]/<system id>/. Per-call
 # logs: logs/gen_<dataset>_<system>_<k>.log
-#SBATCH --job-name=infer
+#SBATCH --job-name=mel2cho_infer
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --gpus=8
