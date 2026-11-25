@@ -445,7 +445,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  draft_k0=False, residual_refine=False, hold_tokens=0,
                  query_onset_weight=0.0, joint_frame='',
                  partner_drop_prob=0.0, jm_edit_prob=0.0,
-                 jm_edit_weight=1.0, jm_separable=False, **kwargs):
+                 jm_edit_weight=1.0, jm_separable=False, jm_diffusion=False,
+                 jm_t_min=0.0, jm_t_max=1.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- stale-snapshot drafts ---------------------------------------
@@ -872,6 +873,23 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             raise ValueError('jm_separable needs joint_frame=masked and partner_drop_prob > 0')
         self.register_buffer(
             'jm_separable_flag', torch.tensor(int(bool(jm_separable)), dtype=torch.long))
+        # jm_diffusion (2026-11-25, masked diffusion frame): the masked
+        # frame trained as proper absorbing-state discrete diffusion
+        # (MDLM / BD3-LM, block = one frame, AR across frames): per frame
+        # t ~ U[jm_t_min, jm_t_max] (stratified over the batch), each
+        # pitch-duration slot masked with prob t, and the masked slots'
+        # CE weighted 1/t over every slot, the NELBO of the linear
+        # schedule. Decode: A3_MASK_ORDER=ancestral.
+        self.jm_t_min, self.jm_t_max = float(jm_t_min), float(jm_t_max)
+        if jm_diffusion and self.joint_frame != 'masked':
+            raise ValueError('jm_diffusion needs joint_frame=masked')
+        if jm_diffusion and self.jm_edit_prob > 0:
+            raise ValueError('jm_diffusion and jm_edit_prob do not combine')
+        if not 0.0 <= self.jm_t_min < self.jm_t_max <= 1.0:
+            raise ValueError('need 0 <= jm_t_min < jm_t_max <= 1')
+        self.register_buffer(
+            'jm_diffusion_flag', torch.tensor(int(bool(jm_diffusion)), dtype=torch.long))
+        self._jm_t = None          # [B, T] noise level of the last train mask
         self.jm_solo = False       # decode each stream alone (A3_SOLO)
         # masked-frame decode knobs, set by the inference script
         # (A3_MASK_ORDER / _REFINE / _REFINE_MODE / _EDIT / _EDIT_MARGIN);
@@ -1850,10 +1868,22 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
 
     def jm_train_mask(self, joint, generator=None):
         """[B, T, 2S] -> bool mask: per frame a uniform 1..2P of the
-        2P pitch-duration tokens (odd positions), at random."""
+        2P pitch-duration tokens (odd positions), at random. jm_diffusion:
+        each slot masked with prob t, t per frame (kept in self._jm_t)."""
         B, T, L = joint.shape
         P2 = L // 2
         dev = joint.device
+        if self.jm_diffusion_flag.item():
+            # stratified t over the B*T frames (MDLM's low-discrepancy draw)
+            n = B * T
+            u0 = torch.rand(1, device=dev, generator=generator)
+            u = (u0 + torch.arange(n, device=dev) / n) % 1.0
+            u = u[torch.randperm(n, device=dev, generator=generator)].view(B, T)
+            t = (self.jm_t_min + (self.jm_t_max - self.jm_t_min) * u).clamp_min(1e-3)
+            self._jm_t = t
+            m = torch.zeros(B, T, L, dtype=torch.bool, device=dev)
+            m[..., 1::2] = torch.rand(B, T, P2, device=dev, generator=generator) < t.unsqueeze(-1)
+            return m
         u = torch.rand(B, T, P2, device=dev, generator=generator)
         rank = u.argsort(dim=-1).argsort(dim=-1)
         n = torch.randint(1, P2 + 1, (B, T, 1), device=dev, generator=generator)
@@ -1907,6 +1937,25 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         for r in range(steps):
             if not bool(still.any()):
                 break
+            if self.jm_order == 'ancestral':
+                # the reverse process of jm_diffusion's linear schedule,
+                # t = 1 - r/steps -> 1 - (r+1)/steps: each masked slot is
+                # revealed with prob 1/(steps - r), the last round all; a
+                # round that reveals nothing skips the pass
+                reveal = still & (torch.rand(still.shape, device=still.device)
+                                  < 1.0 / (steps - r))
+                if not bool(reveal.any()):
+                    continue
+                lg = self._jm_guided(guide[0], guide[1], joint, types, mask, *guide[2:])
+                if temperature == 0:
+                    tok = lg.argmax(-1)
+                else:
+                    tok = torch.multinomial(F.softmax(lg / temperature, dim=-1)
+                                            .view(-1, lg.shape[-1]), 1).view(still.shape)
+                joint[:, 1::2] = torch.where(reveal, tok, joint[:, 1::2])
+                still = still & ~reveal
+                mask[:, 1::2] = still
+                continue
             lg = self._jm_guided(guide[0], guide[1], joint, types, mask, *guide[2:])
             V = lg.shape[-1]
             if temperature == 0:
@@ -2673,25 +2722,43 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
             joint = torch.where(fill_ar, joint_full, torch.full_like(joint_full, pad))
         elif len(jf) > 2:
             # masked frame: score the [MASK]ed slots only
+            joint_full = joint
             joint = torch.where(jf[2], joint, torch.full_like(joint, pad))
         dev = joint.device
+        diff = len(jf) > 2 and bool(self.jm_diffusion_flag.item())
+        if diff:
+            # NELBO weights: 1/t on the masked slots, normalised by every
+            # pitch-duration slot of the frame, so E[loss] is a per-slot CE
+            odd_ = (torch.arange(L, device=dev) % 2 == 1).view(1, 1, L)
+            inv_t = (1.0 / self._jm_t).unsqueeze(-1).expand(B, T, L)
         w_type = torch.tensor([self.mel_loss_weight, self.acc_loss_weight],
                               device=dev)
 
-        def _ce(logits, tgt, typ):
+        def _ce(logits, tgt, typ, tw=None, full=None):
             per = F.cross_entropy(logits.reshape(-1, V).float(), tgt.reshape(-1),
                                   ignore_index=pad, reduction='none').view(tgt.shape)
             non_pad = (tgt != pad).float()
             is_eos = (tgt == eos).float() * non_pad
             w = w_type[typ] * (1.0 + (self.eos_loss_weight - 1.0) * is_eos) * non_pad
-            loss = (per * w).sum() / w.sum().clamp_min(1.0)
+            if tw is None:
+                loss = (per * w).sum() / w.sum().clamp_min(1.0)
+            else:
+                # jm_diffusion: masked slots weighted 1/t, over all slots
+                f_np = ((full != pad) & odd_).float()
+                f_w = w_type[typ] * (1.0 + (self.eos_loss_weight - 1.0)
+                                     * (full == eos).float()) * f_np
+                loss = (per * w * tw).sum() / f_w.sum().clamp_min(1.0)
             content = non_pad * (1.0 - is_eos)
             return (loss,
                     (per * content).sum() / content.sum().clamp_min(1.0),
                     (per * is_eos).sum() / is_eos.sum().clamp_min(1.0))
 
-        ar_loss, ar_loss_content, ar_loss_eos = _ce(ar_logits, joint, jtypes)
         tq_idx = torch.tensor(tq, device=dev)
+        if diff:
+            ar_loss, ar_loss_content, ar_loss_eos = _ce(
+                ar_logits, joint, jtypes, inv_t, joint_full)
+        else:
+            ar_loss, ar_loss_content, ar_loss_eos = _ce(ar_logits, joint, jtypes)
         if edit:
             joint_q = torch.where(fill_q, joint_full[:, tq_idx],
                                   torch.full_like(fill_q, pad, dtype=joint.dtype))
@@ -2713,6 +2780,9 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                 self._last_jm_fix_acc = (ok & wrong_ar).sum() / wrong_ar.sum().clamp_min(1)
                 self._last_jm_keep_acc = (ok & right).sum() / right.sum().clamp_min(1)
                 self._last_jm_wrong_frac = wrong_ar.sum() / judge_ar.sum().clamp_min(1)
+        elif diff:
+            query_loss, _, _ = _ce(query_logits, joint[:, tq_idx], jtypes[:, tq_idx],
+                                   inv_t[:, tq_idx], joint_full[:, tq_idx])
         else:
             query_loss, _, _ = _ce(query_logits, joint[:, tq_idx], jtypes[:, tq_idx])
 
@@ -3136,6 +3206,17 @@ if __name__ == '__main__':
                              'local attention mask, so each stream learns its '
                              'frame with no partner at either level (solo '
                              'decode A3_SOLO=1, export_single_stream.py)')
+    parser.add_argument('--jm_diffusion', type=int, default=0,
+                        help='joint_frame=masked only: train the masked frame '
+                             'as proper discrete (absorbing) diffusion, '
+                             'block = frame, AR across frames: t ~ U[jm_t_min, '
+                             'jm_t_max] per frame, each slot masked with prob '
+                             't, masked CE weighted 1/t (NELBO). Decode with '
+                             'A3_MASK_ORDER=ancestral.')
+    parser.add_argument('--jm_t_min', type=float, default=0.0,
+                        help='--jm_diffusion noise range (BD3-LM clipping; '
+                             '0..1 is the plain NELBO)')
+    parser.add_argument('--jm_t_max', type=float, default=1.0)
     parser.add_argument('--jm_edit_weight', type=float, default=1.0,
                         help='weight of the visible-slot (keep/fix) term '
                              'under --jm_edit_prob')
@@ -3419,6 +3500,9 @@ if __name__ == '__main__':
         jm_edit_prob=args.jm_edit_prob,
         jm_edit_weight=args.jm_edit_weight,
         jm_separable=bool(args.jm_separable),
+        jm_diffusion=bool(args.jm_diffusion),
+        jm_t_min=args.jm_t_min,
+        jm_t_max=args.jm_t_max,
         agree_head=bool(args.agree_head),
         cross_lora_rank=args.cross_lora_rank,
         moe_expert_lora_rank=args.moe_expert_lora_rank,
@@ -3457,7 +3541,9 @@ if __name__ == '__main__':
           f'query_onset_weight={args.query_onset_weight}  '
           f'joint_frame={args.joint_frame or "off"}  '
           f'partner_drop_prob={args.partner_drop_prob}  '
-          f'jm_edit_prob={args.jm_edit_prob}  jm_separable={bool(args.jm_separable)}'
+          f'jm_edit_prob={args.jm_edit_prob}  jm_separable={bool(args.jm_separable)}  '
+          f'jm_diffusion={bool(args.jm_diffusion)}'
+          f'{f" (t in [{args.jm_t_min}, {args.jm_t_max}])" if args.jm_diffusion else ""}'
           f'{f" (weight {args.jm_edit_weight})" if args.jm_edit_prob > 0 else ""}'
           f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
@@ -3643,6 +3729,9 @@ if __name__ == '__main__':
                     'jm_edit_prob': args.jm_edit_prob,
                     'jm_edit_weight': args.jm_edit_weight,
                     'jm_separable': bool(args.jm_separable),
+                    'jm_diffusion': bool(args.jm_diffusion),
+                    'jm_t_min': args.jm_t_min,
+                    'jm_t_max': args.jm_t_max,
                     'agree_head': bool(args.agree_head),
                     'cross_lora_rank': args.cross_lora_rank,
                     'moe_expert_lora_rank': args.moe_expert_lora_rank,

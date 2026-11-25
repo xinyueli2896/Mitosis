@@ -729,8 +729,11 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
         print('[gen] A3_SOLO: each stream generated alone (no partner at either level)')
     # A3_MASK_STEPS=n: rounds of the masked joint frame's decode
     # (joint_frame='masked'); 4 by default, 1 fills every slot at once.
-    # A3_MASK_ORDER=conf|random: unmask most confident first (MaskGIT)
-    # or in a random order (MDLM-style ancestral order).
+    # A3_MASK_ORDER=conf|random|ancestral: unmask most confident first
+    # (MaskGIT), in a random order on the cosine count schedule, or by
+    # the reverse process of --jm_diffusion's linear schedule (each
+    # masked slot revealed with prob 1/(steps - r)); unset or empty is
+    # ancestral for a --jm_diffusion checkpoint and conf otherwise.
     # A3_MASK_REFINE=R, A3_MASK_REFINE_MODE=stream|conf|edit: R more
     # rounds once the frame is full -- re-mask one whole stream and fill
     # it again given the other (alternating, random first), re-mask the
@@ -741,7 +744,9 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
     # they default on for one and are refused for any other.
     if getattr(model, 'joint_frame', '') == 'masked':
         model.jm_steps = int(_os.environ.get('A3_MASK_STEPS', '4'))
-        model.jm_order = _os.environ.get('A3_MASK_ORDER', 'conf')
+        diffusion = bool(getattr(model, 'jm_diffusion_flag', torch.zeros(())).item())
+        model.jm_order = (_os.environ.get('A3_MASK_ORDER', '')
+                          or ('ancestral' if diffusion else 'conf'))
         model.jm_refine = int(_os.environ.get('A3_MASK_REFINE', '0'))
         model.jm_refine_mode = _os.environ.get('A3_MASK_REFINE_MODE', 'stream')
         trained_edit = float(getattr(model, 'jm_edit_prob_flag', torch.zeros(())).item())
@@ -749,7 +754,7 @@ def general_inference_diffusion(model, gen_length, B, subseq_len, temperature,
         model.jm_edit = (_os.environ.get('A3_MASK_EDIT', '')
                          or ('1' if trained_edit > 0 else '0')) == '1'
         model.jm_edit_margin = float(_os.environ.get('A3_MASK_EDIT_MARGIN', '1.0'))
-        assert model.jm_order in ('conf', 'random'), model.jm_order
+        assert model.jm_order in ('conf', 'random', 'ancestral'), model.jm_order
         assert model.jm_refine_mode in ('stream', 'conf', 'edit'), model.jm_refine_mode
         if trained_edit <= 0 and (model.jm_edit or (
                 model.jm_refine > 0 and model.jm_refine_mode == 'edit')):
