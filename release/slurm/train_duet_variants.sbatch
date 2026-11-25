@@ -5,6 +5,8 @@
 #
 #   sbatch slurm/train_duet_variants.sbatch                              # Nottingham
 #   sbatch --export=ALL,DATASET=pop909 slurm/train_duet_variants.sbatch  # POP909
+#   sbatch --gpus=2 --export=ALL,DATASET=pop909,SYSTEMS=duet_diffusion_gatedjoint \
+#       slurm/train_duet_variants.sbatch                                 # one run
 #
 #   duet_v2    trained for the leaderless joint decode: slot reads t-1,
 #              both draft tokens hold AR-sampled drafts at k=0, both scored
@@ -17,14 +19,17 @@
 # are left alone: a resubmitted job resumes each run from its last.ckpt.
 # The program-48 chord tensor is built first when missing
 # (prepare_data.sh chord48, CPU, a few minutes).
-# Per-run logs: logs/train_<dataset>_<system>.log.
-#SBATCH --job-name=train_duet_variants
+# Per-run logs: logs/train_<dataset>_<system>.log. The runs pack onto
+# the GPUs this job was given (--gpus=N on the command line), so a
+# 2-GPU job holds one run; lowprio may preempt it, and the requeued job
+# resumes every run from its last.ckpt.
+#SBATCH --job-name=train
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --gpus=8
-#SBATCH --exclusive
-#SBATCH --account=deploy
-#SBATCH --qos=deploy
+#SBATCH --time=72:00:00
+#SBATCH -p lowprio
+#SBATCH --requeue
 set -eo pipefail
 source ~/.bashrc || true
 # many ~/.bashrc files return early in batch shells, before conda init
@@ -42,10 +47,15 @@ else
     export SYSTEMS="${SYSTEMS:-duet_v2 duet_prev}"
 fi
 
-if [[ "$DATASET" == nottingham && ( " $SYSTEMS " == *" duet_v2c48 "* || " $SYSTEMS " == *" duet_jf"* ) \
+if [[ "$DATASET" == nottingham && ( " $SYSTEMS " == *" duet_v2c48 "* || " $SYSTEMS " == *" duet_jf"* \
+        || " $SYSTEMS " == *" duet_diffusion"* ) \
       && ! -f duet/data/nottingham_chord48_cp4_v2.pt ]]; then
     bash scripts/prepare_data.sh chord48
 fi
 
 nvidia-smi --query-gpu=index,name,memory.used --format=csv
+# the GPUs SLURM gave this job, as train_all.sh's GPU list
+if [[ -z "${GPU_IDS:-}" && -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+    export GPU_IDS="${CUDA_VISIBLE_DEVICES//,/ }"
+fi
 bash scripts/train_all.sh
