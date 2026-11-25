@@ -28,9 +28,9 @@ fi
 
 # Default checkpoints: the released files, or your own run directories.
 case "$SYSTEM" in
-    duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|duet_jfms|duet_jfmd|duet_jfmdj|dense|no_draft|ss_finetuned|ss_scratch) ;;
+    duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|duet_jfms|duet_diffusion|duet_diffusion_joint|duet_diffusion_gatedjoint|dense|no_draft|ss_finetuned|ss_scratch) ;;
     duet_joint|duet_jointmix|duet_k0|duet_bestar|duet_prevmix|duet_v2mix|duet_prevk0|duet_prevr3|duet_v3rk0|duet_v3rr3|duet_v3g15|duet_v3g2|duet_jfmg15|duet_jfmg2) ;;
-    duet_jfmg15s8|duet_jfmg15rnd|duet_jfmg15s8rnd|duet_jfmg15R2|duet_jfmg15s8R2|duet_jfmg15rndR2|duet_jfmg15s8rndR2|duet_jfmeg15|duet_jfmeg15ne|duet_jfms15|duet_jfmssolo|duet_jfmd15|duet_jfmd15c|duet_jfmdj15) ;;
+    duet_jfmg15s8|duet_jfmg15rnd|duet_jfmg15s8rnd|duet_jfmg15R2|duet_jfmg15s8R2|duet_jfmg15rndR2|duet_jfmg15s8rndR2|duet_jfmeg15|duet_jfmeg15ne|duet_jfms15|duet_jfmssolo|duet_diffusion_cfg15|duet_diffusion_cfg15_confident|duet_diffusion_joint_cfg15|duet_diffusion_gatedjoint_cfg15) ;;
     *) echo "generate.sh covers the in-house systems; see scripts/external/ for $SYSTEM" >&2; exit 1 ;;
 esac
 # The decode variants re-decode the paper's duet checkpoint (duet_bestar:
@@ -45,8 +45,9 @@ case "$SYSTEM" in
     duet_jfmg15|duet_jfmg2|duet_jfmg15s8|duet_jfmg15rnd|duet_jfmg15s8rnd|duet_jfmg15R2|duet_jfmg15s8R2|duet_jfmg15rndR2|duet_jfmg15s8rndR2) CKPT_SYS=duet_jfmg ;;
     duet_jfmeg15|duet_jfmeg15ne) CKPT_SYS=duet_jfmeg ;;
     duet_jfms15|duet_jfmssolo) CKPT_SYS=duet_jfms ;;
-    duet_jfmd15|duet_jfmd15c) CKPT_SYS=duet_jfmd ;;
-    duet_jfmdj15) CKPT_SYS=duet_jfmdj ;;
+    duet_diffusion_cfg15|duet_diffusion_cfg15_confident) CKPT_SYS=duet_diffusion ;;
+    duet_diffusion_joint_cfg15) CKPT_SYS=duet_diffusion_joint ;;
+    duet_diffusion_gatedjoint_cfg15) CKPT_SYS=duet_diffusion_gatedjoint ;;
 esac
 # duet_v2c48: duet_v2's run under the _c48 task (chord stream on 48)
 MEL_DATA="data/${DUET_DATA}_melody_cp4_v2.pt"
@@ -56,7 +57,7 @@ if [[ "$SYSTEM" == duet_v2c48 ]]; then
     CHORD_DATA="data/nottingham_chord48_cp4_v2.pt"
 fi
 # duet_jf / duet_jfr: on Nottingham trained with chords on 48 (_c48 task)
-if [[ "$SYSTEM" == duet_jf* && "$DATASET" == nottingham ]]; then
+if [[ ( "$SYSTEM" == duet_jf* || "$SYSTEM" == duet_diffusion* ) && "$DATASET" == nottingham ]]; then
     TASK="${TASK}_c48"
     CHORD_DATA="data/nottingham_chord48_cp4_v2.pt"
 fi
@@ -122,7 +123,7 @@ elif [[ -z "${CKPT:-}" ]]; then
     # train.sh wrote for this system (without RUN_TAG; pass CKPT=
     # for a tagged run or when several batch sizes were trained).
     case "$CKPT_SYS" in
-        duet|duet_stale|duet_v2|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|duet_jfms|duet_jfmd|duet_jfmdj|dense) _pat="ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_${CKPT_SYS}_${TASK}_batch_*_schedule" ;;
+        duet|duet_stale|duet_v2|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|duet_jfme|duet_jfmeg|duet_jfms|duet_diffusion|duet_diffusion_joint|duet_diffusion_gatedjoint|dense) _pat="ckpt/m2c_duet_block_diffusion_v1.2_large_gnl12_${CKPT_SYS}_${TASK}_batch_*_schedule" ;;
         no_draft)     _pat="ckpt/m2c_intra_cross_attn_v1.0_large_gnl12_${TASK}_batch_*_schedule" ;;
         ss_finetuned) _pat="ckpt/cp_transformer_v0.42_size*_pop909ft_${SS_RUN_TAG}_batch_*_schedule" ;;
         ss_scratch)   _pat="ckpt/cp_transformer_v0.42_size*_pop909scratch_${SS_RUN_TAG}_batch_*_schedule" ;;
@@ -165,7 +166,7 @@ if [[ -n "${SHARD:-}" ]]; then
 fi
 
 case "$SYSTEM" in
-duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|dense|duet_joint|duet_jointmix|duet_k0|duet_bestar|duet_prevmix|duet_v2mix|duet_prevk0|duet_prevr3|duet_v3rk0|duet_v3rr3|duet_v3g15|duet_v3g2|duet_jfmg15|duet_jfmg2|duet_jfmg15s8|duet_jfmg15rnd|duet_jfmg15s8rnd|duet_jfmg15R2|duet_jfmg15s8R2|duet_jfmg15rndR2|duet_jfmg15s8rndR2|duet_jfme|duet_jfmeg|duet_jfmeg15|duet_jfmeg15ne|duet_jfms|duet_jfms15|duet_jfmssolo|duet_jfmd|duet_jfmd15|duet_jfmd15c|duet_jfmdj|duet_jfmdj15)
+duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|duet_jf|duet_jfr|duet_jfm|duet_v3g|duet_jfmg|dense|duet_joint|duet_jointmix|duet_k0|duet_bestar|duet_prevmix|duet_v2mix|duet_prevk0|duet_prevr3|duet_v3rk0|duet_v3rr3|duet_v3g15|duet_v3g2|duet_jfmg15|duet_jfmg2|duet_jfmg15s8|duet_jfmg15rnd|duet_jfmg15s8rnd|duet_jfmg15R2|duet_jfmg15s8R2|duet_jfmg15rndR2|duet_jfmg15s8rndR2|duet_jfme|duet_jfmeg|duet_jfmeg15|duet_jfmeg15ne|duet_jfms|duet_jfms15|duet_jfmssolo|duet_diffusion|duet_diffusion_cfg15|duet_diffusion_cfg15_confident|duet_diffusion_joint|duet_diffusion_joint_cfg15|duet_diffusion_gatedjoint|duet_diffusion_gatedjoint_cfg15)
     # Draft-and-denoise, leader alternating by frame (ctc_alt): the
     # leader's draft is sampled from its autoregressive head and written
     # into its draft token, one denoise pass reads out both streams.
@@ -217,12 +218,14 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|
     #                  duet_jfms15 at guidance 1.5 (its uncond pass has no
     #                  partner at either level); duet_jfmssolo each stream
     #                  generated alone (A3_SOLO=1), from its own prompt only
-    #   duet_jfmd      masked-diffusion-frame retrain, decoded by the
-    #                  reverse process (ancestral, 4 steps); duet_jfmd15
-    #                  the same at guidance 1.5, duet_jfmd15c at 1.5 with
+    #   duet_diffusion  masked-diffusion-frame retrain, decoded by the
+    #                  reverse process (ancestral, 4 steps);
+    #                  duet_diffusion_cfg15 the same at guidance 1.5,
+    #                  duet_diffusion_cfg15_confident at 1.5 with
     #                  MaskGIT's most-confident-first order instead
-    #   duet_jfmdj     duet_jfmd with joint global attention, same decode;
-    #                  duet_jfmdj15 at guidance 1.5
+    #   duet_diffusion_joint, duet_diffusion_gatedjoint  duet_diffusion
+    #                  with joint (ungated / gated) global attention, same
+    #                  decode; their _cfg15 at guidance 1.5
     SCHED=ctc_alt; REFINE_STEPS=4; JOINT_MIX=0; JOINT_ROUNDS=1; PARTNER_CFG=1
     M_STEPS=4; M_ORDER=conf; M_REFINE=0; M_MODE=stream; M_EDIT=""   # masked frame
     SOLO=0
@@ -241,11 +244,13 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|
         duet_jfms) SCHED=joint ;;
         duet_jfms15) SCHED=joint; PARTNER_CFG=1.5 ;;
         duet_jfmssolo) SCHED=joint; SOLO=1 ;;
-        duet_jfmd) SCHED=joint; M_ORDER=ancestral ;;
-        duet_jfmd15) SCHED=joint; PARTNER_CFG=1.5; M_ORDER=ancestral ;;
-        duet_jfmd15c) SCHED=joint; PARTNER_CFG=1.5 ;;
-        duet_jfmdj) SCHED=joint; M_ORDER=ancestral ;;
-        duet_jfmdj15) SCHED=joint; PARTNER_CFG=1.5; M_ORDER=ancestral ;;
+        duet_diffusion) SCHED=joint; M_ORDER=ancestral ;;
+        duet_diffusion_cfg15) SCHED=joint; PARTNER_CFG=1.5; M_ORDER=ancestral ;;
+        duet_diffusion_cfg15_confident) SCHED=joint; PARTNER_CFG=1.5 ;;
+        duet_diffusion_joint) SCHED=joint; M_ORDER=ancestral ;;
+        duet_diffusion_joint_cfg15) SCHED=joint; PARTNER_CFG=1.5; M_ORDER=ancestral ;;
+        duet_diffusion_gatedjoint) SCHED=joint; M_ORDER=ancestral ;;
+        duet_diffusion_gatedjoint_cfg15) SCHED=joint; PARTNER_CFG=1.5; M_ORDER=ancestral ;;
         duet_prevr3|duet_v3rr3) SCHED=joint; JOINT_ROUNDS=3 ;;
         duet_jointmix|duet_prevmix|duet_v2mix) SCHED=joint; JOINT_MIX=0.5 ;;
         duet_k0|duet_prevk0|duet_v3rk0) SCHED=refine; REFINE_STEPS=0 ;;

@@ -979,13 +979,18 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         # Q/K/V/O kept, gates unused; see M2CDuetBlockLayer). A buffer
         # VALUE that load_model restores: the gated three-pass layer and
         # the joint one read the same weights in different ways.
+        # 1 = joint, 2 = gated joint (the gates bias the partner's keys
+        # inside the softmax).
+        global_joint_attn = int(global_joint_attn)
+        if global_joint_attn not in (0, 1, 2):
+            raise ValueError('global_joint_attn must be 0, 1 or 2')
         self.register_buffer('global_joint_attn_flag',
-                             torch.tensor(int(bool(global_joint_attn)), dtype=torch.long))
+                             torch.tensor(global_joint_attn, dtype=torch.long))
         if global_joint_attn:
             if getattr(self.global_layers[0], 'cross_lora_rank', 0):
                 raise ValueError('global_joint_attn does not combine with cross_lora_rank')
             for layer in self.global_layers:
-                layer.joint_attn = True
+                layer.joint_attn = 'gated' if global_joint_attn == 2 else True
         # --- MoE balance loss over clean tokens only -------------------
         # Training-time only (the aux term is not part of decoding), so
         # it needs no ckpt flag; kept as an attribute for the log line.
@@ -3226,11 +3231,13 @@ if __name__ == '__main__':
                              't, masked CE weighted 1/t (NELBO). Decode with '
                              'A3_MASK_ORDER=ancestral.')
     parser.add_argument('--global_joint_attn', type=int, default=0,
-                        help='every global layer attends with one softmax over '
-                             'both streams (per-stream Q/K/V/O, MM-DiT / MoT '
-                             'style) instead of the gated intra + cross + '
+                        help='1: every global layer attends with one softmax '
+                             'over both streams (per-stream Q/K/V/O, MM-DiT / '
+                             'MoT style) instead of the gated intra + cross + '
                              'frame passes; partner dropout masks the '
-                             'partner\'s keys')
+                             'partner\'s keys. 2: the same, with the cross '
+                             'and frame gates as log-biases on the partner\'s '
+                             'keys inside the softmax (closed at init)')
     parser.add_argument('--jm_t_min', type=float, default=0.0,
                         help='--jm_diffusion noise range (BD3-LM clipping; '
                              '0..1 is the plain NELBO)')
@@ -3521,7 +3528,7 @@ if __name__ == '__main__':
         jm_diffusion=bool(args.jm_diffusion),
         jm_t_min=args.jm_t_min,
         jm_t_max=args.jm_t_max,
-        global_joint_attn=bool(args.global_joint_attn),
+        global_joint_attn=args.global_joint_attn,
         agree_head=bool(args.agree_head),
         cross_lora_rank=args.cross_lora_rank,
         moe_expert_lora_rank=args.moe_expert_lora_rank,
@@ -3563,7 +3570,7 @@ if __name__ == '__main__':
           f'jm_edit_prob={args.jm_edit_prob}  jm_separable={bool(args.jm_separable)}  '
           f'jm_diffusion={bool(args.jm_diffusion)}'
           f'{f" (t in [{args.jm_t_min}, {args.jm_t_max}])" if args.jm_diffusion else ""}  '
-          f'global_joint_attn={bool(args.global_joint_attn)}'
+          f'global_joint_attn={args.global_joint_attn}'
           f'{f" (weight {args.jm_edit_weight})" if args.jm_edit_prob > 0 else ""}'
           f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
@@ -3752,7 +3759,7 @@ if __name__ == '__main__':
                     'jm_diffusion': bool(args.jm_diffusion),
                     'jm_t_min': args.jm_t_min,
                     'jm_t_max': args.jm_t_max,
-                    'global_joint_attn': bool(args.global_joint_attn),
+                    'global_joint_attn': args.global_joint_attn,
                     'agree_head': bool(args.agree_head),
                     'cross_lora_rank': args.cross_lora_rank,
                     'moe_expert_lora_rank': args.moe_expert_lora_rank,

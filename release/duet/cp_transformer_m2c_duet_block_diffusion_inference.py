@@ -182,11 +182,11 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
     print(f'[load_model] joint_frame={joint_frame or "off"}')
     # global_joint_attn: buffer VALUE; the global layers read the same
     # weights through one joint softmax instead of the gated passes.
-    global_joint_attn = False
+    global_joint_attn = 0
     for k in state_dict_keys:
         if k.endswith('global_joint_attn_flag'):
             sd_tmp = ck['state_dict'] if 'state_dict' in ck else ck
-            global_joint_attn = bool(int(sd_tmp[k].item()))
+            global_joint_attn = int(sd_tmp[k].item())
             break
     print(f'[load_model] global_joint_attn={global_joint_attn}')
     print(f'[load_model] residual_refine={residual_refine}'
