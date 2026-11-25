@@ -1,7 +1,9 @@
 #!/bin/bash
 # Generation for the Duet variants of README "Improving Duet's
-# co-generation", one 8-GPU node. Each GPU k takes shard k/8 of the
-# songs for every system, the systems running side by side on it.
+# co-generation", on the GPUs this job was given (--gpus=N on the
+# command line, default 8). Each GPU k takes shard k/N of the songs for
+# every system, the systems running side by side on it. Partition and
+# QOS come from the command line (ciai: -p cscc-gpu-p -q cscc-gpu-qos).
 #
 #   sbatch slurm/infer_duet_variants.sbatch                              # Nottingham
 #   sbatch --export=ALL,DATASET=pop909 slurm/infer_duet_variants.sbatch  # POP909
@@ -15,13 +17,10 @@
 # overrides one. Finished samples are skipped, so a resubmitted job
 # resumes. Outputs: duet/temp/E1[_nottingham]/<system id>/. Per-call
 # logs: logs/gen_<dataset>_<system>_<k>.log
-#SBATCH --job-name=infer_duet_variants
+#SBATCH --job-name=infer
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --gpus=8
-#SBATCH --exclusive
-#SBATCH --account=deploy
-#SBATCH --qos=deploy
 set -eo pipefail
 source ~/.bashrc || true
 # many ~/.bashrc files return early in batch shells, before conda init
@@ -31,7 +30,10 @@ set -u
 ROOT="${SLURM_SUBMIT_DIR:?submit from release/}"
 cd "$ROOT"; mkdir -p logs
 export DATASET="${DATASET:-nottingham}"
-N=8
+# the GPUs SLURM gave this job (all visible ones off SLURM)
+IFS=, read -ra GPU_IDS <<< "${CUDA_VISIBLE_DEVICES:-$(nvidia-smi --query-gpu=index --format=csv,noheader | paste -sd,)}"
+N=${#GPU_IDS[@]}
+echo "[infer] $N GPU(s): ${GPU_IDS[*]}"
 if [[ "$DATASET" == nottingham ]]; then
     SYSTEMS="${SYSTEMS:-duet_joint duet_jointmix duet_k0 duet_bestar}"
 else
@@ -44,7 +46,7 @@ pids=(); names=()
 for ((k = 0; k < N; k++)); do
     for s in $SYSTEMS; do
         v="CKPT_$s"
-        env CUDA_VISIBLE_DEVICES=$k SHARD=$k/$N ${!v:+CKPT="${!v}"} \
+        env CUDA_VISIBLE_DEVICES=${GPU_IDS[$k]} SHARD=$k/$N ${!v:+CKPT="${!v}"} \
             bash scripts/generate.sh "$s" > "logs/gen_${DATASET}_${s}_$k.log" 2>&1 &
         pids+=($!); names+=("$s shard $k")
     done
