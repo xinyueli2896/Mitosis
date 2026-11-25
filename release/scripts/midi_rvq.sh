@@ -12,7 +12,7 @@
 #   listen  original and reconstructed MIDI for N (8) pieces of EVAL_DATA,
 #           first SECONDS_PER_PIECE (60) s each, into duet/$OUT
 #           (default temp/rvq_listen/<run>), with each piece's note F1.
-#           THRESHOLD (0.5) and MIN_GAP (0): onset read-out, best pair from eval.
+#           THRESHOLD (0.8), MIN_GAP (2), FRAME_THRESHOLD (0.5): read-out (eval's best).
 #   export  codes for every piece of each MAESTRO split:
 #           data/maestro_<split>.midi_codes.npy, row-aligned with .codes.npy.
 #
@@ -77,7 +77,7 @@ listen)
     OUT="${OUT:-temp/rvq_listen/$(basename "$(dirname "$C")")}"
     echo "checkpoint $C"
     python midi_rvq.py listen --ckpt "$C" --data "data/$EVAL_DATA" --out "$OUT" --n "${N:-8}" --seconds "${SECONDS_PER_PIECE:-60}" \
-        --threshold "${THRESHOLD:-0.5}" --min_gap "${MIN_GAP:-0}"
+        --threshold "${THRESHOLD:-0.8}" --min_gap "${MIN_GAP:-2}" --frame_threshold "${FRAME_THRESHOLD:-0.5}"
     echo "MIDI in duet/$OUT"
     ;;
 export)

@@ -89,12 +89,13 @@ def notes_to_roll(notes, start_ms, n_frames, stretch=1.0, shift=0, keep_drums=Fa
     return roll
 
 
-def outputs_to_notes(onset_p, frame_p, vel_bin, threshold=0.5, min_gap=0):
+def outputs_to_notes(onset_p, frame_p, vel_bin, threshold=0.5, min_gap=0, frame_threshold=None):
     """Notes [(onset frame, end frame, key, velocity)] from per-key outputs [88, T].
 
     An onset is a run of frames above threshold; with min_gap > 0, an onset
     within min_gap frames after the previous one on the same key is
-    dropped (a smeared onset read twice, not a repeated note).
+    dropped (a smeared onset read twice, not a repeated note). Notes last
+    while frame_p stays above frame_threshold (default: threshold).
     """
     on = onset_p > threshold
     on[:, 1:] &= ~on[:, :-1]  # a run of onset frames is one onset
@@ -106,7 +107,7 @@ def outputs_to_notes(onset_p, frame_p, vel_bin, threshold=0.5, min_gap=0):
                     on[k, t] = False
                 else:
                     last = t
-    act = frame_p > threshold
+    act = frame_p > (threshold if frame_threshold is None else frame_threshold)
     T = on.shape[1]
     notes = []
     for k, t in zip(*np.nonzero(on)):
@@ -416,11 +417,11 @@ def encode_piece(model, notes, n_frames, device, window=1000, context=100):
 
 
 @torch.no_grad()
-def decode_piece(model, codes, device, window=1000, context=100, threshold=0.5, min_gap=0):
+def decode_piece(model, codes, device, window=1000, context=100, threshold=0.5, min_gap=0, frame_threshold=None):
     """Notes [(onset s, end s, pitch, velocity)] from codes [T, n_q], decoded in overlapping windows."""
     on_p, fr_p, vel = decode_probs(model, codes, device, window, context)
     return [(t0 * CODEC_MS / 1000, t1 * CODEC_MS / 1000, k + LOW, v)
-            for t0, t1, k, v in outputs_to_notes(on_p, fr_p, vel, threshold, min_gap)]
+            for t0, t1, k, v in outputs_to_notes(on_p, fr_p, vel, threshold, min_gap, frame_threshold)]
 
 
 @torch.no_grad()
@@ -500,7 +501,8 @@ def listen(args):
         n_frames = int(min(c.length_ms[i], args.seconds * 1000) // CODEC_MS) + 1
         notes = notes[notes['onset_ms'] < n_frames * CODEC_MS]
         codes = encode_piece(model, notes, n_frames, device)
-        est = decode_piece(model, codes, device, threshold=args.threshold, min_gap=args.min_gap)
+        est = decode_piece(model, codes, device, threshold=args.threshold, min_gap=args.min_gap,
+                           frame_threshold=args.frame_threshold)
         ref = roll_to_note_list(notes_to_roll(notes, 0, n_frames))
         f1 = note_f1(ref, [(round(t0 * 50), round(t1 * 50), p - LOW, v) for t0, t1, p, v in est])[2]
         orig = [(int(a['onset_ms']) / 1000, (int(a['onset_ms']) + int(a['dur_ms'])) / 1000, int(a['pitch']),
@@ -531,7 +533,7 @@ def evaluate(args):
         ref = roll_to_note_list(notes_to_roll(c.piece(i), 0, n_frames))
         row = []
         for th, g in combos:
-            est = outputs_to_notes(on_p, fr_p, vel, th, g)
+            est = outputs_to_notes(on_p, fr_p, vel, th, g, args.frame_threshold)
             row.append([note_f1(ref, est, **kw) for kw in ({}, {'with_offset': True}, {'with_velocity': True})])
         rows.append(row)
         print(f'piece {i}: {len(ref)} notes, note F1 ' + ' '.join(f'{x[0][2]:.4f}' for x in row), flush=True)
@@ -610,6 +612,7 @@ def main():
     e.add_argument('--max_pieces', type=int, default=50)
     e.add_argument('--thresholds', type=float, nargs='+', default=[0.5, 0.6, 0.7, 0.8, 0.9])
     e.add_argument('--min_gaps', type=int, nargs='+', default=[0, 2], help='frames; see outputs_to_notes')
+    e.add_argument('--frame_threshold', type=float, default=0.5, help='note length read-out, kept apart from the onset sweep')
     li = sub.add_parser('listen')
     li.add_argument('--ckpt', required=True)
     li.add_argument('--data', required=True)
@@ -619,6 +622,7 @@ def main():
     li.add_argument('--seed', type=int, default=0)
     li.add_argument('--threshold', type=float, default=0.5)
     li.add_argument('--min_gap', type=int, default=0)
+    li.add_argument('--frame_threshold', type=float, default=0.5)
     x = sub.add_parser('export')
     x.add_argument('--ckpt', required=True)
     x.add_argument('--data', required=True)
