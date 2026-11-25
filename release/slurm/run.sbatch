@@ -10,15 +10,18 @@
 #   J1=$(sbatch --parsable --gres=gpu:1 slurm/run.sbatch generate.sh duet)
 #   sbatch --dependency=afterok:$J1 slurm/run.sbatch evaluate.sh
 #
-# Activate your environment in ~/.bashrc or export it before sbatch
-# (--export=ALL is the default).
+# The job activates conda env CONDA_ENV (default mitosis) itself.
 #SBATCH --job-name=duet
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-set -euo pipefail
+set -eo pipefail
+# activate the env here too, so a submit from a plain login shell works
+source ~/.bashrc || true
+command -v conda >/dev/null && eval "$(conda shell.bash hook)" && conda activate "${CONDA_ENV:-mitosis}"
+set -u
 mkdir -p logs
 ROOT="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 STAGE="${1:?usage: sbatch [resources] slurm/run.sbatch <script> [args]}"; shift
