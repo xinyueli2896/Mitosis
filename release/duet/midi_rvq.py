@@ -89,10 +89,23 @@ def notes_to_roll(notes, start_ms, n_frames, stretch=1.0, shift=0, keep_drums=Fa
     return roll
 
 
-def outputs_to_notes(onset_p, frame_p, vel_bin, threshold=0.5):
-    """Notes [(onset frame, end frame, key, velocity)] from per-key outputs [88, T]."""
+def outputs_to_notes(onset_p, frame_p, vel_bin, threshold=0.5, min_gap=0):
+    """Notes [(onset frame, end frame, key, velocity)] from per-key outputs [88, T].
+
+    An onset is a run of frames above threshold; with min_gap > 0, an onset
+    within min_gap frames after the previous one on the same key is
+    dropped (a smeared onset read twice, not a repeated note).
+    """
     on = onset_p > threshold
     on[:, 1:] &= ~on[:, :-1]  # a run of onset frames is one onset
+    if min_gap > 0:
+        for k in np.flatnonzero(on.any(1)):
+            last = -10 ** 9
+            for t in np.flatnonzero(on[k]):
+                if t - last <= min_gap:
+                    on[k, t] = False
+                else:
+                    last = t
     act = frame_p > threshold
     T = on.shape[1]
     notes = []
@@ -403,8 +416,16 @@ def encode_piece(model, notes, n_frames, device, window=1000, context=100):
 
 
 @torch.no_grad()
-def decode_piece(model, codes, device, window=1000, context=100):
+def decode_piece(model, codes, device, window=1000, context=100, threshold=0.5, min_gap=0):
     """Notes [(onset s, end s, pitch, velocity)] from codes [T, n_q], decoded in overlapping windows."""
+    on_p, fr_p, vel = decode_probs(model, codes, device, window, context)
+    return [(t0 * CODEC_MS / 1000, t1 * CODEC_MS / 1000, k + LOW, v)
+            for t0, t1, k, v in outputs_to_notes(on_p, fr_p, vel, threshold, min_gap)]
+
+
+@torch.no_grad()
+def decode_probs(model, codes, device, window=1000, context=100):
+    """Onset and frame probabilities and velocity bins [88, T] from codes [T, n_q]."""
     T = len(codes)
     on_p, fr_p, vel = (np.zeros((N_KEYS, T), np.float32), np.zeros((N_KEYS, T), np.float32), np.zeros((N_KEYS, T), np.int64))
     for s in range(0, T, window):
@@ -412,7 +433,7 @@ def decode_piece(model, codes, device, window=1000, context=100):
         o, f, v = model.decode(torch.from_numpy(np.asarray(codes[a:b], np.int64))[None].to(device))
         e = min(s + window, T)
         on_p[:, s:e], fr_p[:, s:e], vel[:, s:e] = (t[0, :, s - a:e - a].float().cpu().numpy() for t in (o, f, v))
-    return [(t0 * CODEC_MS / 1000, t1 * CODEC_MS / 1000, k + LOW, v) for t0, t1, k, v in outputs_to_notes(on_p, fr_p, vel)]
+    return on_p, fr_p, vel
 
 
 def load(ckpt, device):
@@ -466,25 +487,64 @@ def train(args):
     trainer.fit(model, dl(tr), dl(va), ckpt_path=resume)
 
 
+def listen(args):
+    """Original and reconstructed MIDI side by side for a few pieces: <out>/<n>_<piece>_{orig,recon}.mid."""
+    from preprocess_time_grid import write_midi
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = load(args.ckpt, device)
+    c = Corpus(args.data)
+    os.makedirs(args.out, exist_ok=True)
+    ids = np.random.default_rng(args.seed).permutation(len(c))[:args.n]
+    for n, i in enumerate(ids):
+        notes = c.piece(i)
+        n_frames = int(min(c.length_ms[i], args.seconds * 1000) // CODEC_MS) + 1
+        notes = notes[notes['onset_ms'] < n_frames * CODEC_MS]
+        codes = encode_piece(model, notes, n_frames, device)
+        est = decode_piece(model, codes, device, threshold=args.threshold, min_gap=args.min_gap)
+        ref = roll_to_note_list(notes_to_roll(notes, 0, n_frames))
+        f1 = note_f1(ref, [(round(t0 * 50), round(t1 * 50), p - LOW, v) for t0, t1, p, v in est])[2]
+        orig = [(int(a['onset_ms']) / 1000, (int(a['onset_ms']) + int(a['dur_ms'])) / 1000, int(a['pitch']),
+                 int(a['velocity']), 0) for a in notes if a['program'] != 127]
+        stem = os.path.join(args.out, f'{n:02d}_piece{i}')
+        write_midi(orig, stem + '_orig.mid')
+        write_midi([(t0, t1, p, v, 0) for t0, t1, p, v in est], stem + '_recon.mid')
+        print(f'{stem}_{{orig,recon}}.mid: {len(ref)} notes, note F1 {f1:.4f}', flush=True)
+
+
 def evaluate(args):
-    """Whole-piece reconstruction: encode, decode, note F1 against the input (read at 20 ms)."""
+    """Whole-piece reconstruction: encode, decode, note F1 against the input (read at 20 ms).
+
+    Each piece is decoded once and read out at every (threshold, min_gap)
+    pair; the JSON reports the pair with the best note F1 at top level and
+    every pair under "sweep".
+    """
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = load(args.ckpt, device)
     c = Corpus(args.data)
     ids = np.random.default_rng(0).permutation(len(c))[:args.max_pieces]
-    rows = []
+    combos = [(th, g) for th in args.thresholds for g in args.min_gaps]
+    rows = []  # [pieces, combos, 3 metrics, P/R/F]
     for i in ids:
         n_frames = int(c.length_ms[i] // CODEC_MS) + 1
         codes = encode_piece(model, c.piece(i), n_frames, device)
-        est = [(round(t0 * 50), round(t1 * 50), p - LOW, v) for t0, t1, p, v in decode_piece(model, codes, device)]
+        on_p, fr_p, vel = decode_probs(model, codes, device)
         ref = roll_to_note_list(notes_to_roll(c.piece(i), 0, n_frames))
-        rows.append([note_f1(ref, est, **kw) for kw in ({}, {'with_offset': True}, {'with_velocity': True})])
-        print(f'piece {i}: {len(ref)} notes, note F1 {rows[-1][0][2]:.4f}', flush=True)
-    r = np.array(rows)  # [pieces, 3 metrics, P/R/F]
-    res = {'pieces': len(ids), 'ckpt': args.ckpt, 'data': args.data}
-    for j, m in enumerate(('note', 'note_offset', 'note_velocity')):
-        res[m] = dict(zip(('precision', 'recall', 'f1'), np.round(r[:, j].mean(0), 4).tolist()))
-    print(json.dumps(res, indent=1))
+        row = []
+        for th, g in combos:
+            est = outputs_to_notes(on_p, fr_p, vel, th, g)
+            row.append([note_f1(ref, est, **kw) for kw in ({}, {'with_offset': True}, {'with_velocity': True})])
+        rows.append(row)
+        print(f'piece {i}: {len(ref)} notes, note F1 ' + ' '.join(f'{x[0][2]:.4f}' for x in row), flush=True)
+    r = np.array(rows).mean(0)  # [combos, 3, 3]
+    names = ('note', 'note_offset', 'note_velocity')
+    sweep = [{'threshold': th, 'min_gap': g, **{m: dict(zip(('precision', 'recall', 'f1'), np.round(r[k, j], 4).tolist()))
+                                                for j, m in enumerate(names)}} for k, (th, g) in enumerate(combos)]
+    best = max(range(len(combos)), key=lambda k: r[k, 0, 2])
+    res = {'pieces': len(ids), 'ckpt': args.ckpt, 'data': args.data, **sweep[best], 'sweep': sweep}
+    print(json.dumps({k: v for k, v in res.items() if k != 'sweep'}, indent=1))
+    for x in sweep:
+        print(f"threshold {x['threshold']:.2f} min_gap {x['min_gap']}: note P/R/F1 {x['note']['precision']:.4f} "
+              f"{x['note']['recall']:.4f} {x['note']['f1']:.4f}, +offset F1 {x['note_offset']['f1']:.4f}")
     out = args.ckpt.rsplit('.', 1)[0] + f'.eval_{os.path.basename(args.data)}.json'
     with open(out, 'w') as f:
         json.dump(res, f, indent=1)
@@ -548,11 +608,22 @@ def main():
     e.add_argument('--ckpt', required=True)
     e.add_argument('--data', required=True)
     e.add_argument('--max_pieces', type=int, default=50)
+    e.add_argument('--thresholds', type=float, nargs='+', default=[0.5, 0.6, 0.7, 0.8, 0.9])
+    e.add_argument('--min_gaps', type=int, nargs='+', default=[0, 2], help='frames; see outputs_to_notes')
+    li = sub.add_parser('listen')
+    li.add_argument('--ckpt', required=True)
+    li.add_argument('--data', required=True)
+    li.add_argument('--out', required=True)
+    li.add_argument('--n', type=int, default=8)
+    li.add_argument('--seconds', type=float, default=60.0, help='first N seconds of each piece')
+    li.add_argument('--seed', type=int, default=0)
+    li.add_argument('--threshold', type=float, default=0.5)
+    li.add_argument('--min_gap', type=int, default=0)
     x = sub.add_parser('export')
     x.add_argument('--ckpt', required=True)
     x.add_argument('--data', required=True)
     args = ap.parse_args()
-    {'train': train, 'eval': evaluate, 'export': export}[args.stage](args)
+    {'train': train, 'eval': evaluate, 'listen': listen, 'export': export}[args.stage](args)
 
 
 if __name__ == '__main__':

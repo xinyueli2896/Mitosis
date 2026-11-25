@@ -6,8 +6,13 @@
 #   train   on a note corpus (scripts/prep_data.sh or maestro.sh pack),
 #           validated on MAESTRO's validation split when it is packed.
 #           Every visible GPU; resubmitting resumes from last.ckpt.
-#   eval    whole-piece reconstruction note F1 (onset / +offset / +velocity)
+#   eval    whole-piece reconstruction note F1, swept over onset
+#           thresholds and min_gap (best pair at the JSON's top level); (onset / +offset / +velocity)
 #           on EVAL_DATA, written next to the checkpoint as JSON.
+#   listen  original and reconstructed MIDI for N (8) pieces of EVAL_DATA,
+#           first SECONDS_PER_PIECE (60) s each, into duet/$OUT
+#           (default temp/rvq_listen/<run>), with each piece's note F1.
+#           THRESHOLD (0.5) and MIN_GAP (0): onset read-out, best pair from eval.
 #   export  codes for every piece of each MAESTRO split:
 #           data/maestro_<split>.midi_codes.npy, row-aligned with .codes.npy.
 #
@@ -25,7 +30,7 @@
 #   EVAL_DATA (maestro_test) MAX_PIECES (50)   eval
 #   SPLITS (train validation test)             export: MAESTRO splits
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-STAGE="${1:?usage: midi_rvq.sh train|eval|export}"
+STAGE="${1:?usage: midi_rvq.sh train|eval|listen|export}"
 
 # best_ckpt <file-or-dir>: a file as is; in a folder, the highest val_note_f1.
 best_ckpt() {
@@ -65,6 +70,16 @@ eval)
     echo "checkpoint $C"
     python midi_rvq.py eval --ckpt "$C" --data "data/$EVAL_DATA" --max_pieces "${MAX_PIECES:-50}"
     ;;
+listen)
+    : "${CKPT:?set CKPT to ckpt/<run>/ or a .ckpt}"
+    C=$(best_ckpt "$CKPT"); EVAL_DATA="${EVAL_DATA:-maestro_test}"
+    need "data/$EVAL_DATA.notes.bin" "set EVAL_DATA to a note corpus"
+    OUT="${OUT:-temp/rvq_listen/$(basename "$(dirname "$C")")}"
+    echo "checkpoint $C"
+    python midi_rvq.py listen --ckpt "$C" --data "data/$EVAL_DATA" --out "$OUT" --n "${N:-8}" --seconds "${SECONDS_PER_PIECE:-60}" \
+        --threshold "${THRESHOLD:-0.5}" --min_gap "${MIN_GAP:-0}"
+    echo "MIDI in duet/$OUT"
+    ;;
 export)
     : "${CKPT:?set CKPT to ckpt/<run>/ or a .ckpt}"
     C=$(best_ckpt "$CKPT"); echo "checkpoint $C"
@@ -73,5 +88,5 @@ export)
         python midi_rvq.py export --ckpt "$C" --data "data/maestro_$s"
     done
     ;;
-*) echo "unknown stage '$STAGE' (train eval export)" >&2; exit 1 ;;
+*) echo "unknown stage '$STAGE' (train eval listen export)" >&2; exit 1 ;;
 esac
