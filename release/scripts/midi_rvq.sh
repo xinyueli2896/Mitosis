@@ -15,6 +15,8 @@
 #   CORPUS        training corpus under data/ (default time_piano)
 #   VAL_DATA      validation corpus (default maestro_validation if packed,
 #                 else the corpus's own held-out pieces)
+#   MIX_DATA      a second training corpus mixed into every batch at MIX_FRAC
+#                 (default 0.15), e.g. maestro_train_midi next to aria_dedup
 #   N_Q (4) N_CODES (1024) DIM (128 code size) WIDTH (512) N_RES (8) N_ATTN (4)
 #   FRAMES (500 = 10 s per window) BATCH_SIZE (16 per GPU) LR (3e-4)
 #   MAX_STEPS (200000) VAL_EVERY (2000) WANDB (0) RUN_NAME
@@ -48,6 +50,10 @@ train)
         args+=(--val_data "data/$VAL_DATA")
     else
         echo "validating on held-out pieces of $CORPUS (data/$VAL_DATA.notes.bin not found)"
+    fi
+    if [[ -n "${MIX_DATA:-}" ]]; then
+        need "data/$MIX_DATA.notes.bin" "build it with scripts/prep_data.sh"
+        args+=(--mix_data "data/$MIX_DATA" --mix_frac "${MIX_FRAC:-0.15}")
     fi
     [[ -n "${RUN_NAME:-}" ]] && args+=(--run_name "$RUN_NAME")
     python midi_rvq.py train "${args[@]}"

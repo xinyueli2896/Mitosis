@@ -178,23 +178,23 @@ def write_corpus(prefix, items):
             'share_flat_velocity': round(float(np.mean(np.array(nvel) <= 2)), 3) if nvel else 0.0}
 
 
-def list_inputs(midi_dirs, maestro_root):
-    """(source, absolute path) for every MIDI file; MAESTRO contributes its train split only."""
+def list_inputs(midi_dirs, maestro_root, maestro_split='train'):
+    """(source, absolute path) for every MIDI file; MAESTRO contributes one split (train unless asked)."""
     files = []
     for d in midi_dirs:
         files += [(os.path.basename(os.path.normpath(d)), os.path.join(r, f))
                   for r, _, fs in os.walk(d) for f in fs if f.lower().endswith(('.mid', '.midi'))]
     if maestro_root:
         with open(os.path.join(maestro_root, 'maestro-v3.0.0.csv'), newline='', encoding='utf-8') as f:
-            files += [('maestro-train', os.path.join(maestro_root, r['midi_filename']))
-                      for r in csv.DictReader(f) if r['split'] == 'train']
+            files += [(f'maestro-{maestro_split}', os.path.join(maestro_root, r['midi_filename']))
+                      for r in csv.DictReader(f) if r['split'] == maestro_split]
     return sorted(files)
 
 
 def build_corpus(name, midi_dirs, maestro_root=None, pedal=True, max_minutes=30.0, max_files=None, jobs=-1,
-                 chunk=4096):
+                 chunk=4096, maestro_split='train'):
     from joblib import Parallel, delayed
-    files = list_inputs(midi_dirs, maestro_root)
+    files = list_inputs(midi_dirs, maestro_root, maestro_split)
     if max_files:
         files = files[:max_files]
     print(f'{len(files)} MIDI files', flush=True)
@@ -376,6 +376,8 @@ def main():
     p.add_argument('--name', required=True)
     p.add_argument('--midi_dir', nargs='*', default=[], help='folders searched recursively for .mid/.midi')
     p.add_argument('--maestro_root', default=None, help='also add MAESTRO v3 train-split MIDI (val/test are kept out)')
+    p.add_argument('--maestro_split', default='train', choices=['train', 'validation', 'test'],
+                   help='which MAESTRO split --maestro_root adds (val/test only for separate eval corpora)')
     p.add_argument('--pedal', type=int, default=1)
     p.add_argument('--max_minutes', type=float, default=30.0, help='skip longer pieces (usually broken files)')
     p.add_argument('--max_files', type=int, default=None)
@@ -390,7 +392,7 @@ def main():
         if not args.midi_dir and not args.maestro_root:
             sys.exit('give --midi_dir and/or --maestro_root')
         build_corpus(args.name, args.midi_dir, args.maestro_root, bool(args.pedal), args.max_minutes,
-                     args.max_files, args.jobs)
+                     args.max_files, args.jobs, maestro_split=args.maestro_split)
     else:
         res = corpus_stats(f'data/{args.name}', args.frame_codec, args.max_polyphony, args.max_pieces)
         with open(f'data/{args.name}.stats_cp{args.max_polyphony}.json', 'w') as f:

@@ -3,6 +3,9 @@
 # audio-symbolic work (score-to-performance framing). Three stages, each
 # its own SLURM job (slurm/maestro_{download,encode,pack}.sbatch):
 #
+#   download_midi  the MIDI-only zip (~57 MB, with the csv) into
+#             $MAESTRO_MIDI_ROOT (default duet/data/maestro-v3.0.0-midi), for
+#             MIDI-only corpora (prep_data.sh with MAESTRO_SPLIT).
 #   download  the official WAV+MIDI zip (108 GB) into $MAESTRO_ROOT and
 #             unzip it. Resumes a partial download. The Hugging Face
 #             ZzWaang/music-jepa-maestro set holds 16 kHz log-mel
@@ -19,7 +22,7 @@
 # it needs ~230 GB during unzip), CODES_DIR (data/maestro_encodec32k),
 # PEDAL (1: offsets extended through the sustain pedal).
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-STAGE="${1:?usage: maestro.sh download|encode|pack}"
+STAGE="${1:?usage: maestro.sh download_midi|download|encode|pack}"
 
 MAESTRO_ROOT="${MAESTRO_ROOT:-$DUET/data/maestro-v3.0.0}"
 CODES_DIR="${CODES_DIR:-data/maestro_encodec32k}"
@@ -27,6 +30,20 @@ PEDAL="${PEDAL:-1}"
 URL=https://storage.googleapis.com/magentadata/datasets/maestro/v3.0.0/maestro-v3.0.0.zip
 
 case "$STAGE" in
+download_midi)
+    # MIDI and csv only (~57 MB), for MIDI-only corpora; the audio zip is
+    # needed only for encode/pack. A separate folder, since download treats
+    # an existing csv as a finished download.
+    MIDI_ROOT="${MAESTRO_MIDI_ROOT:-$DUET/data/maestro-v3.0.0-midi}"
+    if [[ -f "$MIDI_ROOT/maestro-v3.0.0.csv" ]]; then echo "already unzipped: $MIDI_ROOT"; exit 0; fi
+    parent="$(dirname "$MIDI_ROOT")"; mkdir -p "$parent"; tmp="$parent/.maestro_midi_tmp"
+    rm -rf "$tmp"; mkdir -p "$tmp"
+    wget -c --tries=10 -O "$parent/maestro-v3.0.0-midi.zip" "${URL%.zip}-midi.zip"
+    unzip -q -o "$parent/maestro-v3.0.0-midi.zip" -d "$tmp"
+    rm -rf "$MIDI_ROOT"; mv "$tmp/maestro-v3.0.0" "$MIDI_ROOT"; rm -rf "$tmp"
+    test -f "$MIDI_ROOT/maestro-v3.0.0.csv"
+    echo "$(find "$MIDI_ROOT" -name '*.mid*' | wc -l) MIDI files in $MIDI_ROOT"
+    ;;
 download)
     if [[ -f "$MAESTRO_ROOT/maestro-v3.0.0.csv" ]]; then
         echo "already unzipped: $MAESTRO_ROOT"; exit 0
@@ -60,5 +77,5 @@ pack)
     python maestro_paired.py pack --root "$MAESTRO_ROOT" --codes_dir "$CODES_DIR" \
         --pedal "$PEDAL"
     ;;
-*) echo "unknown stage '$STAGE' (download encode pack)" >&2; exit 1 ;;
+*) echo "unknown stage '$STAGE' (download_midi download encode pack)" >&2; exit 1 ;;
 esac

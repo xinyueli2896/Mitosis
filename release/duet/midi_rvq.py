@@ -158,22 +158,44 @@ class RollDataset(IterableDataset):
         self.corpus = None
         print(f'{prefix} [{split}]: {len(self.valid)} pieces of >= {n_frames * CODEC_MS / 1000:.1f} s')
 
-    def __iter__(self):
+    def window(self, sid, rng):
+        """One random (stretched, shifted) window of piece sid as a [3, 88, T] roll."""
         if self.corpus is None:
             self.corpus = Corpus(self.prefix)
+        a = rng.uniform(1 - self.stretch, 1 + self.stretch) if self.stretch else 1.0
+        span = max(0.0, self.corpus.length_ms[sid] * a - self.T * CODEC_MS)
+        s0 = round(rng.uniform(0, span) / CODEC_MS) * CODEC_MS
+        sh = int(rng.integers(-self.max_shift, self.max_shift + 1)) if self.max_shift else 0
+        return notes_to_roll(self.corpus.piece(sid), s0, self.T, a, sh, self.keep_drums)
+
+    def __iter__(self):
         rng = np.random.default_rng(self.seed)
         while True:
             order = rng.permutation(self.valid)
             order = np.resize(order, -(-len(order) // self.B) * self.B)  # a short split still fills batches
             for i in range(0, len(order), self.B):
-                rolls = []
-                for sid in order[i:i + self.B]:
-                    a = rng.uniform(1 - self.stretch, 1 + self.stretch) if self.stretch else 1.0
-                    span = max(0.0, self.corpus.length_ms[sid] * a - self.T * CODEC_MS)
-                    s0 = round(rng.uniform(0, span) / CODEC_MS) * CODEC_MS
-                    sh = int(rng.integers(-self.max_shift, self.max_shift + 1)) if self.max_shift else 0
-                    rolls.append(notes_to_roll(self.corpus.piece(sid), s0, self.T, a, sh, self.keep_drums))
-                yield torch.from_numpy(np.stack(rolls))
+                yield torch.from_numpy(np.stack([self.window(sid, rng) for sid in order[i:i + self.B]]))
+
+
+class MixedRollDataset(IterableDataset):
+    """Batches from a main corpus with a fixed share of windows from a second one.
+
+    Pieces are drawn uniformly within each corpus, so a small corpus mixed
+    in by concatenation would almost never be seen (MAESTRO train is ~960
+    of ~372k pieces next to Aria). Here each window comes from the mixed
+    corpus with probability `frac`, whatever the corpus sizes.
+    """
+
+    def __init__(self, main, mix, frac, seed=None):
+        self.main, self.mix, self.frac, self.seed = main, mix, frac, seed
+        self.B = main.B
+
+    def __iter__(self):
+        rng = np.random.default_rng(self.seed)
+        while True:
+            rolls = [self.mix.window(rng.choice(self.mix.valid), rng) if rng.random() < self.frac
+                     else self.main.window(rng.choice(self.main.valid), rng) for _ in range(self.B)]
+            yield torch.from_numpy(np.stack(rolls))
 
 
 # ---------------------------------------------------------------- model
@@ -402,11 +424,19 @@ def load(ckpt, device):
 
 def train(args):
     n_gpus = max(torch.cuda.device_count(), 1)
-    name = args.run_name or (f'midi_rvq_{os.path.basename(args.data)}_q{args.n_q}x{args.n_codes}_d{args.d}'
+    mix = (f'+{os.path.basename(args.mix_data)}{args.mix_frac:g}' if args.mix_data and args.mix_frac > 0 else '')
+    name = args.run_name or (f'midi_rvq_{os.path.basename(args.data)}{mix}_q{args.n_q}x{args.n_codes}_d{args.d}'
                              f'_batch{args.batch_size * n_gpus}')
     model = MidiRVQ(n_q=args.n_q, n_codes=args.n_codes, dim=args.dim, d=args.d, n_res=args.n_res, n_attn=args.n_attn,
                     lr=args.lr, total_steps=args.max_steps)
-    tr = RollDataset(args.data, args.frames, args.batch_size, split='train', stretch=args.stretch)
+    # with a separate validation corpus the main corpus needs no held-out pieces
+    tr = RollDataset(args.data, args.frames, args.batch_size, split='all' if args.val_data else 'train',
+                     stretch=args.stretch)
+    if args.mix_data and args.mix_frac > 0:
+        # the mixed corpus is training data in full (split 'all'); validate on a separate corpus
+        tr = MixedRollDataset(tr, RollDataset(args.mix_data, args.frames, args.batch_size, split='all',
+                                              stretch=args.stretch), args.mix_frac)
+        print(f'training windows: {1 - args.mix_frac:.0%} {args.data}, {args.mix_frac:.0%} {args.mix_data}')
     va = (RollDataset(args.val_data, args.frames, args.batch_size, split='all', seed=0) if args.val_data
           else RollDataset(args.data, args.frames, args.batch_size, split='val', seed=0))
     ckpt = L.callbacks.ModelCheckpoint(monitor='val_note_f1', mode='max', save_top_k=3, save_last=True,
@@ -495,6 +525,8 @@ def main():
     sub = ap.add_subparsers(dest='stage', required=True)
     t = sub.add_parser('train')
     t.add_argument('--data', required=True, help='note corpus prefix (preprocess_time_grid.py), e.g. data/time_piano')
+    t.add_argument('--mix_data', default=None, help='a second training corpus mixed in at --mix_frac, e.g. data/maestro_train_midi')
+    t.add_argument('--mix_frac', type=float, default=0.15, help='share of training windows drawn from --mix_data')
     t.add_argument('--val_data', default=None, help='a separate corpus to validate on, e.g. data/maestro_validation')
     t.add_argument('--n_q', type=int, default=4, help='codebooks (EnCodec 32 kHz has 4)')
     t.add_argument('--n_codes', type=int, default=1024)
