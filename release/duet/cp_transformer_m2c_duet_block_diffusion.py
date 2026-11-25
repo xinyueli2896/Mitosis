@@ -3983,8 +3983,20 @@ if __name__ == '__main__':
             # override the scheme this run's CLI declared -- the
             # [scheme] line above prints BEFORE this load and would lie.
             sd = dict(sd)
-            sd.pop('time_rope_aligned_flag', None)
-            sd.pop('slot_rope_aligned_flag', None)
+            # ...and the same for EVERY config buffer (*_flag, jf_prog):
+            # an init ckpt written by this class carries all of them at
+            # their defaults, and loading those silently turned off
+            # e.g. jm_diffusion and joint_frame for the 2026-11-25 POP909
+            # gatedjoint run (training read the 0 flag; the decode
+            # rebuilt the model without the masked frame). The run's
+            # own CLI values stay; the *_init_flag ones restart at 0,
+            # so their one-time inits run on the warm-started weights.
+            dropped = [k for k in sd if k.endswith('_flag') or k == 'jf_prog']
+            for k in dropped:
+                sd.pop(k)
+            if dropped:
+                print(f'[init] kept this run\'s config: ignored {len(dropped)} '
+                      f'flag buffers of the warm-start ckpt')
             # A.2.moe_permod warm start: a ckpt carrying only the shared
             # gate.weight (the init ckpt, or a trained shared-gate run)
             # seeds BOTH per-modality gates with it, so the gates start
