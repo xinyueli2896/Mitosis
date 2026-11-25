@@ -134,6 +134,17 @@ class M2CDuetBlockLayer(nn.Module):
                     query slots -> the OTHER query slot only.
 
     Clean tokens never see the query slots (no info leak).
+
+    JOINT ATTENTION (joint_attn, set by the model, 2026-11-25). The three
+    passes become ONE softmax over the union of the three masks, still
+    with the per-stream Q/K/V/O (the MM-DiT / Mixture-of-Transformers
+    shape): every row weighs its own stream's keys and the partner's in
+    one distribution, instead of reading each through its own softmax
+    and adding the partner's through a gate. The gates are unused. A
+    query slot also sees itself (the union's diagonal), so no row is
+    empty. partner_keep 0 removes the partner's keys from the row
+    (mask_intra | diagonal), so a dropped item is exactly two
+    single-stream models; the mask is binary, keep > 0 is a full keep.
     """
 
     def __init__(self, hidden_size, num_heads, intermediate_size,
@@ -460,6 +471,9 @@ class M2CDuetBlockLayer(nn.Module):
         # projections; both cross-stream passes read the (possibly
         # corrected) cross tensors, identical to q/k/v at rank 0.
         m_intra, m_cross, m_frame = self._build_masks(clean_len, T_query, q.device)
+        if getattr(self, 'joint_attn', False):
+            return self._joint_forward(h, q, k, v, m_intra, m_cross, m_frame,
+                                       clean_len, partner_keep)
         out_intra = F.scaled_dot_product_attention(q, k, v, attn_mask=m_intra)
         out_cross = F.scaled_dot_product_attention(qx, kx, vx, attn_mask=m_cross)
         # Empty-row guard for mask_frame: clean tokens at frame 0 have only
@@ -518,6 +532,35 @@ class M2CDuetBlockLayer(nn.Module):
         out_flat[:, clean_len::2] = o_m[:, clean_len // 2:]
         out_flat[:, clean_len+1::2] = o_c[:, clean_len // 2:]
 
+        return self._ffn_block(h, out_flat, clean_len)
+
+    def _joint_forward(self, h, q, k, v, m_intra, m_cross, m_frame,
+                       clean_len, partner_keep):
+        """joint_attn: one SDPA over the union of the three masks (see
+        the class docstring), then the per-stream output projections."""
+        assert self.cross_lora_rank == 0, 'joint_attn has no cross-pair projections'
+        B, L, _ = h.shape
+        diag = torch.eye(L, dtype=torch.bool, device=q.device)
+        m_all = m_intra | m_cross | m_frame | diag
+        am = m_all
+        if partner_keep is not None:
+            alone = (partner_keep.to(q.device) <= 0).view(B, 1, 1, 1)
+            am = torch.where(alone, (m_intra | diag).view(1, 1, L, L),
+                             m_all.view(1, 1, L, L))
+        u = self._merge_heads(F.scaled_dot_product_attention(q, k, v, attn_mask=am))
+        o_m = self.o_m(torch.cat([u[:, 0:clean_len:2], u[:, clean_len::2]], dim=1))
+        o_c = self.o_c(torch.cat([u[:, 1:clean_len:2], u[:, clean_len+1::2]], dim=1))
+        out_flat = torch.zeros_like(h)
+        out_flat[:, 0:clean_len:2] = o_m[:, :clean_len // 2]
+        out_flat[:, 1:clean_len:2] = o_c[:, :clean_len // 2]
+        out_flat[:, clean_len::2] = o_m[:, clean_len // 2:]
+        out_flat[:, clean_len+1::2] = o_c[:, clean_len // 2:]
+        return self._ffn_block(h, out_flat, clean_len)
+
+    def _ffn_block(self, h, out_flat, clean_len):
+        """Residual + LN over the attention output, then the shared MoE
+        FFN (+ residual + LN). Returns (h_out, aux_loss)."""
+        L = h.shape[1]
         h = self.ln_attn(h + self.drop(out_flat))
 
         # Shared MoE FFN over the flat L-length sequence.

@@ -180,6 +180,15 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
             joint_frame = {v: n for n, v in JF_ORDERS.items()}.get(code, '')
             break
     print(f'[load_model] joint_frame={joint_frame or "off"}')
+    # global_joint_attn: buffer VALUE; the global layers read the same
+    # weights through one joint softmax instead of the gated passes.
+    global_joint_attn = False
+    for k in state_dict_keys:
+        if k.endswith('global_joint_attn_flag'):
+            sd_tmp = ck['state_dict'] if 'state_dict' in ck else ck
+            global_joint_attn = bool(int(sd_tmp[k].item()))
+            break
+    print(f'[load_model] global_joint_attn={global_joint_attn}')
     print(f'[load_model] residual_refine={residual_refine}'
           f'{" (slot = AR row + correction)" if residual_refine else ""}')
     # A.3c: conditional-slot training share, informational (decode is
@@ -247,6 +256,7 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
         residual_refine=residual_refine,
         hold_tokens=hold_tokens,
         joint_frame=joint_frame,
+        global_joint_attn=global_joint_attn,
         moe_modality_bias=moe_modality_bias,
         moe_modality_gates=moe_modality_gates,
         moe_modality_hard_route=moe_modality_hard_route,

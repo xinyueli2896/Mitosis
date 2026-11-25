@@ -153,6 +153,8 @@ GROUPS = [
         ('A3jfmd',    'Diffusion Mask-Frame +PD', 'Diff\nMaskFrame'),
         ('A3jfmd15',  'Diffusion Mask-Frame +PD, guidance 1.5', 'Diff\nMaskFrame w1.5'),
         ('A3jfmd15c', 'Diffusion Mask-Frame +PD, guidance 1.5, confident first', 'Diff\nMaskFrame w1.5 conf'),
+        ('A3jfmdj',   'Diffusion Mask-Frame, joint attention', 'Diff\nMaskFrame joint'),
+        ('A3jfmdj15', 'Diffusion Mask-Frame, joint attention, guidance 1.5', 'Diff\nMaskFrame joint w1.5'),
         ('A3v3rK0',   'Duet v3r, AR heads only',    'Duet\nv3r K0'),
         ('A3v3rr3',   'Duet v3r, 3 refine rounds',  'Duet\nv3r r3'),
         ('A3jt',      'Duet, joint decode',         'Duet\njoint'),
