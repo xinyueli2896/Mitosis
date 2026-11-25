@@ -267,6 +267,22 @@ def load_model(ckpt_path, model_size='large', with_velocity=False,
     )
     state = ck['state_dict'] if isinstance(ck, dict) and 'state_dict' in ck else ck
     missing, unexpected = net.load_state_dict(state, strict=False)
+    # EMA weights (--ema_decay runs): decoded by default, as validation
+    # (and so best-ckpt selection) ran on them; A3_EMA=0 decodes the
+    # live weights instead.
+    ema = ck.get('ema_state_dict') if isinstance(ck, dict) else None
+    if ema and _os.environ.get('A3_EMA', '1') != '0':
+        params = dict(net.named_parameters())
+        n_ema = 0
+        with torch.no_grad():
+            for k, v in ema.items():
+                if k in params and params[k].shape == v.shape:
+                    params[k].copy_(v.to(params[k].dtype))
+                    n_ema += 1
+        print(f'[load_model] EMA weights loaded ({n_ema}/{len(ema)} tensors, '
+              f'decay {ck.get("ema_decay")}); A3_EMA=0 for the live weights')
+    elif ema:
+        print('[load_model] A3_EMA=0: live weights (the checkpoint also has EMA ones)')
     if missing:
         print(f'[load_model] missing keys ({len(missing)}): {missing[:5]}'
               f'{"..." if len(missing) > 5 else ""}')

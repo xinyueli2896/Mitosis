@@ -422,6 +422,43 @@ def split_joint_frame(joint, types, S, tokenizer):
 
 
 
+def drop_upcycle_experts(net, ratio, seed=0):
+    """Drop-Upcycling (2026-11-25): the experts are copies of one
+    pretrained FFN, so they start identical and only routing noise can
+    make them differ. In every expert of every global layer, re-draw a
+    random `ratio` of the d_ff neurons -- fc1 rows (+ bias) and fc2
+    columns, a different subset per expert -- from a normal with the
+    pretrained matrix's mean and std. Warm start only."""
+    if not 0.0 < ratio < 1.0:
+        raise ValueError('moe_drop_upcycle must be in (0, 1)')
+    g = torch.Generator().manual_seed(int(seed) + 7919)
+    n_done = 0
+    with torch.no_grad():
+        for li, layer in enumerate(getattr(net, 'global_layers', [])):
+            ffn = getattr(layer, 'ffn', None)
+            if ffn is None or not hasattr(ffn, 'fc1'):
+                if getattr(ffn, 'expert_lora_rank', 0):
+                    raise ValueError('moe_drop_upcycle needs full-copy experts')
+                continue
+            for e in range(len(ffn.fc1)):
+                w1, b1, w2 = ffn.fc1[e].weight, ffn.fc1[e].bias, ffn.fc2[e].weight
+                d_ff = w1.shape[0]
+                k = max(1, int(round(ratio * d_ff)))
+                idx = torch.randperm(d_ff, generator=g)[:k].to(w1.device)
+
+                def _draw(ref, shape):
+                    r = ref.float()
+                    return (torch.randn(shape, generator=g) * r.std() + r.mean()).to(ref)
+
+                w1[idx] = _draw(w1, (k, w1.shape[1]))
+                if b1 is not None:
+                    b1[idx] = _draw(b1, (k,))
+                w2[:, idx] = _draw(w2, (w2.shape[0], k))
+                n_done += 1
+    print(f'[init] drop-upcycling: re-drew {ratio:.0%} of the neurons in '
+          f'{n_done} experts')
+
+
 class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
     """DuetBlock with discrete-diffusion training at the query slots.
 
@@ -446,7 +483,8 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                  query_onset_weight=0.0, joint_frame='',
                  partner_drop_prob=0.0, jm_edit_prob=0.0,
                  jm_edit_weight=1.0, jm_separable=False, jm_diffusion=False,
-                 jm_t_min=0.0, jm_t_max=1.0, global_joint_attn=False, **kwargs):
+                 jm_t_min=0.0, jm_t_max=1.0, global_joint_attn=False,
+                 ema_decay=0.0, moe_z_loss_weight=0.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.diffusion_K = int(diffusion_K)
         # --- stale-snapshot drafts ---------------------------------------
@@ -890,6 +928,24 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.register_buffer(
             'jm_diffusion_flag', torch.tensor(int(bool(jm_diffusion)), dtype=torch.long))
         self._jm_t = None          # [B, T] noise level of the last train mask
+        # ema_decay (2026-11-25): an exponential moving average of the
+        # trainable weights, updated after every optimizer step (warmup
+        # min(d, (1+n)/(10+n)) as is standard), used for validation (so
+        # best-val selects on the EMA) and saved in the checkpoint as
+        # 'ema_state_dict', which the decode loads by default (A3_EMA).
+        # Kept outside the module tree: not in state_dict, not in DDP.
+        self.ema_decay = float(ema_decay)
+        self.__dict__['_ema'] = None
+        self.__dict__['_ema_backup'] = None
+        # moe_z_loss_weight: router z-loss weight (see SimpleMoEFFN);
+        # rides on the aux term, so it needs aux_loss_weight > 0.
+        self.moe_z_loss_weight = float(moe_z_loss_weight)
+        if self.moe_z_loss_weight > 0:
+            if self.aux_loss_weight <= 0:
+                raise ValueError('moe_z_loss_weight needs aux_loss_weight > 0')
+            for layer in self.global_layers:
+                if hasattr(layer.ffn, 'z_coef'):
+                    layer.ffn.z_coef = self.moe_z_loss_weight / self.aux_loss_weight
         self.jm_solo = False       # decode each stream alone (A3_SOLO)
         # masked-frame decode knobs, set by the inference script
         # (A3_MASK_ORDER / _REFINE / _REFINE_MODE / _EDIT / _EDIT_MARGIN);
@@ -1176,6 +1232,78 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
                           f'filling in with this run\'s value '
                           f'{buf.tolist()}')
         super().on_load_checkpoint(checkpoint)
+        ema = checkpoint.get('ema_state_dict')
+        if self.ema_decay > 0 and isinstance(ema, dict):
+            self.__dict__['_ema'] = {k: v.clone() for k, v in ema.items()}
+            print(f'[ema] restored {len(ema)} EMA tensors from the checkpoint')
+
+    def on_save_checkpoint(self, checkpoint):
+        hook = getattr(super(), 'on_save_checkpoint', None)
+        if callable(hook):
+            hook(checkpoint)
+        if self._ema is not None:
+            checkpoint['ema_state_dict'] = {k: v.detach().cpu().clone()
+                                            for k, v in self._ema.items()}
+            checkpoint['ema_decay'] = self.ema_decay
+
+    def _ema_params(self):
+        return [(n, p) for n, p in self.named_parameters() if p.requires_grad]
+
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        hook = getattr(super(), 'on_train_batch_end', None)
+        if callable(hook):
+            hook(outputs, batch, batch_idx)
+        if self.ema_decay <= 0:
+            return
+        step = int(self.global_step)
+        if self.__dict__.get('_ema_step') == step:
+            return                    # accumulated micro-batch, no update yet
+        self.__dict__['_ema_step'] = step
+        with torch.no_grad():
+            if self._ema is None:
+                self.__dict__['_ema'] = {n: p.detach().clone() for n, p in self._ema_params()}
+                return
+            d = min(self.ema_decay, (1.0 + step) / (10.0 + step))
+            for n, p in self._ema_params():
+                e = self._ema.get(n)
+                if e is None:
+                    self._ema[n] = p.detach().clone()
+                else:
+                    if e.device != p.device:
+                        e = self._ema[n] = e.to(p.device)
+                    e.mul_(d).add_(p.detach().to(e.dtype), alpha=1.0 - d)
+
+    def _ema_swap(self, to_ema):
+        """Validation runs on the EMA weights; the live ones come back
+        after it, before any checkpoint is written."""
+        if self._ema is None:
+            return
+        with torch.no_grad():
+            if to_ema:
+                self.__dict__['_ema_backup'] = {}
+                for n, p in self._ema_params():
+                    if n in self._ema:
+                        self._ema_backup[n] = p.detach().clone()
+                        p.copy_(self._ema[n].to(p.device, p.dtype))
+            elif self._ema_backup is not None:
+                for n, p in self._ema_params():
+                    if n in self._ema_backup:
+                        p.copy_(self._ema_backup[n])
+                self.__dict__['_ema_backup'] = None
+
+    def on_validation_epoch_start(self):
+        hook = getattr(super(), 'on_validation_epoch_start', None)
+        if callable(hook):
+            hook()
+        if self.ema_decay > 0:
+            self._ema_swap(True)
+
+    def on_validation_epoch_end(self):
+        hook = getattr(super(), 'on_validation_epoch_end', None)
+        if callable(hook):
+            hook()
+        if self.ema_decay > 0:
+            self._ema_swap(False)
 
     def _init_frame_mask_row(self):
         """A.4 FIX 1: give the MASK id a trained-model-like embedding.
@@ -2831,6 +2959,11 @@ class M2CDuetBlockDiffusion(M2CDuetBlockAttn):
         self.log('train_ar_loss_eos', self._last_ar_loss_eos)
         self.log('train_query_loss', self._last_query_loss)
         self.log('train_moe_aux_loss', aux_loss.detach())
+        if self.moe_z_loss_weight > 0:
+            zs = [l.ffn._last_z_loss for l in self.global_layers
+                  if getattr(l.ffn, '_last_z_loss', None) is not None]
+            if zs:
+                self.log('train_moe_z_loss', torch.stack(zs).mean())
         self.log('train_T_query', float(self._last_T_query))
         self.log('train_mean_k_m', self._last_mean_k_m)
         self.log('train_mean_k_c', self._last_mean_k_c)
@@ -3238,6 +3371,19 @@ if __name__ == '__main__':
                              'partner\'s keys. 2: the same, with the cross '
                              'and frame gates as log-biases on the partner\'s '
                              'keys inside the softmax (closed at init)')
+    parser.add_argument('--ema_decay', type=float, default=0.0,
+                        help='EMA of the weights (e.g. 0.9999), used for '
+                             'validation and saved as ema_state_dict, which '
+                             'the decode loads (A3_EMA=0 to decode the live '
+                             'weights); 0 = off')
+    parser.add_argument('--moe_z_loss_weight', type=float, default=0.0,
+                        help='router z-loss weight (ST-MoE, e.g. 1e-3); 0 = off')
+    parser.add_argument('--moe_drop_upcycle', type=float, default=0.0,
+                        help='warm start only: in every expert re-initialise '
+                             'this share of the FFN neurons (a different '
+                             'random subset per expert, drawn from the '
+                             'pretrained matrix statistics), so the copied '
+                             'experts start different (Drop-Upcycling); 0 = off')
     parser.add_argument('--jm_t_min', type=float, default=0.0,
                         help='--jm_diffusion noise range (BD3-LM clipping; '
                              '0..1 is the plain NELBO)')
@@ -3529,6 +3675,8 @@ if __name__ == '__main__':
         jm_t_min=args.jm_t_min,
         jm_t_max=args.jm_t_max,
         global_joint_attn=args.global_joint_attn,
+        ema_decay=args.ema_decay,
+        moe_z_loss_weight=args.moe_z_loss_weight,
         agree_head=bool(args.agree_head),
         cross_lora_rank=args.cross_lora_rank,
         moe_expert_lora_rank=args.moe_expert_lora_rank,
@@ -3570,7 +3718,9 @@ if __name__ == '__main__':
           f'jm_edit_prob={args.jm_edit_prob}  jm_separable={bool(args.jm_separable)}  '
           f'jm_diffusion={bool(args.jm_diffusion)}'
           f'{f" (t in [{args.jm_t_min}, {args.jm_t_max}])" if args.jm_diffusion else ""}  '
-          f'global_joint_attn={args.global_joint_attn}'
+          f'global_joint_attn={args.global_joint_attn}  ema_decay={args.ema_decay}  '
+          f'moe_z_loss_weight={args.moe_z_loss_weight}  '
+          f'moe_drop_upcycle={args.moe_drop_upcycle}'
           f'{f" (weight {args.jm_edit_weight})" if args.jm_edit_prob > 0 else ""}'
           f'{" (A.12)" if args.sc_ar_frac > 0 or args.sc_k_consistent else ""}  '
           f'aux_loss_weight={args.aux_loss_weight}  '
@@ -3760,6 +3910,9 @@ if __name__ == '__main__':
                     'jm_t_min': args.jm_t_min,
                     'jm_t_max': args.jm_t_max,
                     'global_joint_attn': args.global_joint_attn,
+                    'ema_decay': args.ema_decay,
+                    'moe_z_loss_weight': args.moe_z_loss_weight,
+                    'moe_drop_upcycle': args.moe_drop_upcycle,
                     'agree_head': bool(args.agree_head),
                     'cross_lora_rank': args.cross_lora_rank,
                     'moe_expert_lora_rank': args.moe_expert_lora_rank,
@@ -3829,6 +3982,8 @@ if __name__ == '__main__':
                 print(f'[init] {len(missing)} missing keys (first few: {missing[:3]})')
             if unexpected:
                 print(f'[init] {len(unexpected)} unexpected keys (first few: {unexpected[:3]})')
+            if args.moe_drop_upcycle > 0:
+                drop_upcycle_experts(net, args.moe_drop_upcycle)
     print(f'[scheme] effective: slot_rope_aligned={net.slot_rope_aligned} '
           f'time_rope_aligned={net.time_rope_aligned} '
           '(after any warm-start load)')

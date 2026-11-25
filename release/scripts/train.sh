@@ -160,8 +160,15 @@ duet|duet_stale|duet_v2|duet_v2c48|duet_prev|duet_v3|duet_v3r|duet_v3h|duet_v3o|
             # discrete diffusion, block = one frame, AR across frames
             # (BD3-LM): t ~ U[JM_T_MIN, JM_T_MAX] per frame, each slot
             # masked with prob t, masked CE weighted 1/t (the NELBO)
+            # and, for the whole diffusion family, three robustness
+            # tricks: an EMA of the weights for validation and decoding
+            # (EMA_DECAY), the router z-loss (MOE_Z_LOSS), and experts
+            # made different at the warm start by re-drawing a share of
+            # each one's neurons (DROP_UPCYCLE, Drop-Upcycling)
             if [[ "$SYSTEM" == duet_diffusion* ]]; then
-                DRAFT+=(--jm_diffusion 1 --jm_t_min "${JM_T_MIN:-0}" --jm_t_max "${JM_T_MAX:-1}")
+                DRAFT+=(--jm_diffusion 1 --jm_t_min "${JM_T_MIN:-0}" --jm_t_max "${JM_T_MAX:-1}"
+                        --ema_decay "${EMA_DECAY:-0.9999}" --moe_z_loss_weight "${MOE_Z_LOSS:-0.001}"
+                        --moe_drop_upcycle "${DROP_UPCYCLE:-0.1}")
             fi
             # duet_diffusion_joint: duet_diffusion whose global layers attend with ONE
             # softmax over both streams (per-stream Q/K/V/O, MM-DiT /
