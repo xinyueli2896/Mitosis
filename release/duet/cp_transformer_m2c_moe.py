@@ -463,6 +463,7 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         h_alt=None,
         alt_weight: float = 0.0,
         mix_mode: str = 'linear',
+        prefix=None,
     ):
         """Sample one frame's sub-tokens from the global hidden state h.
 
@@ -474,9 +475,20 @@ class RoFormerSymbolicTransformer(L.LightningModule):
         the follower's denoised distribution keep a share of its own
         autoregressive draft instead of discarding it. Off by default
         (alt_weight 0 is byte-identical to the plain path).
+        cfg (2026-10-21, partner guidance): h_alt is the same row with
+        the other stream cut off, and alt_weight the guidance weight w;
+        the step samples softmax(alt + w * (h - alt)) over the valid
+        tokens, so w=1 is the plain path and w>1 leans on the partner.
+
+        prefix ([B, P] tokens, optional): forced tokens -- wherever
+        prefix[:, step] is not pad, that token is emitted instead of a
+        sample (the held-note prefix of a hold_tokens frame). Without an
+        argument, a decode can set self._hold_prefix = {type_id: [B, S]}.
         """
         batch_size, _ = h.shape
         device = h.device
+        if prefix is None:
+            prefix = (getattr(self, '_hold_prefix', None) or {}).get(token_type_id)
         y = torch.zeros((batch_size, 0), dtype=torch.long, device=device)
         emb = h[:, None, :]   # [B, 1, H]
         use_alt = h_alt is not None and alt_weight > 0.0
@@ -514,6 +526,14 @@ class RoFormerSymbolicTransformer(L.LightningModule):
                         # non-drum side samples 0..126. Constraining
                         # further would re-introduce the squash.
                         valid[:, 0:128] = True
+                        # decode-time program lock (A3_LOCK_PROGRAM in the
+                        # duet diffusion decode): [B] program per item for
+                        # this stream, -1 = unconstrained
+                        lock = (getattr(self, '_program_lock', None) or {}).get(token_type_id)
+                        if lock is not None:
+                            rows = lock >= 0
+                            valid[rows, 0:128] = False
+                            valid[rows, lock[rows]] = True
                     elif token_type_id == 0:      # melody
                         valid[:, 24] = True
                     elif token_type_id == 1:    # chord
@@ -549,6 +569,11 @@ class RoFormerSymbolicTransformer(L.LightningModule):
                 if not use_alt:
                     return F.softmax(logits / temp, dim=-1)
                 w = float(alt_weight)
+                if mix_mode == 'cfg':
+                    # invalid tokens are -inf in both; keep them -inf
+                    guided = torch.where(
+                        valid, logits_alt + w * (logits - logits_alt), logits)
+                    return F.softmax(guided / temp, dim=-1)
                 if mix_mode == 'geo':
                     return F.softmax(((1.0 - w) * logits + w * logits_alt) / temp,
                                      dim=-1)
@@ -588,6 +613,10 @@ class RoFormerSymbolicTransformer(L.LightningModule):
                 probs = probs / probs_sum
                 y_next = torch.multinomial(probs, 1)
 
+            if prefix is not None and step < prefix.shape[1]:
+                forced = prefix[:, step:step + 1]
+                y_next = torch.where(forced != self.tokenizer.pad_token,
+                                     forced, y_next)
             y_next[eos_triggered] = self.tokenizer.pad_token
             eos_triggered = eos_triggered | (
                 y_next.squeeze(1) == self.tokenizer.eos_token

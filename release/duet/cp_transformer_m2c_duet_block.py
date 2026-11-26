@@ -134,6 +134,27 @@ class M2CDuetBlockLayer(nn.Module):
                     query slots -> the OTHER query slot only.
 
     Clean tokens never see the query slots (no info leak).
+
+    JOINT ATTENTION (joint_attn, set by the model, 2026-11-25). The three
+    passes become ONE softmax over the union of the three masks, still
+    with the per-stream Q/K/V/O (the MM-DiT / Mixture-of-Transformers
+    shape): every row weighs its own stream's keys and the partner's in
+    one distribution, instead of reading each through its own softmax
+    and adding the partner's through a gate. The gates are unused. A
+    query slot also sees itself (the union's diagonal), so no row is
+    empty. partner_keep 0 removes the partner's keys from the row
+    (mask_intra | diagonal), so a dropped item is exactly two
+    single-stream models; the mask is binary, keep > 0 is a full keep.
+
+    GATED JOINT ATTENTION (joint_attn='gated'). The same single softmax,
+    but the gates move inside it: a row's score on every partner key is
+    biased by log sigmoid(gate), gate_m / gate_c on the partner's past
+    rows (the cross pass's keys) and gate_fm / gate_fc on its same-frame
+    rows (the frame pass's keys), read from the querying row. At the
+    -10 init the partner is all but masked, so each stream starts as its
+    pretrained self, as in the gated three-pass block; opened, the
+    partner's keys compete with the stream's own in one distribution.
+    partner_keep scales the gates (log 0 = -inf: an exact cut).
     """
 
     def __init__(self, hidden_size, num_heads, intermediate_size,
@@ -383,10 +404,16 @@ class M2CDuetBlockLayer(nn.Module):
         self._mask_frame = mask_frame
         return mask_intra, mask_cross, mask_frame
 
-    def forward(self, h, T_query, cos, sin, clean_len):
+    def forward(self, h, T_query, cos, sin, clean_len, partner_keep=None):
         """h: [B, L, H] with L = clean_len + 2*Q. The trailing 2Q
         positions are Q query pairs; pair j is (m-query, c-query) for
         frame T_query[j]. T_query may be an int (Q=1).
+
+        partner_keep ([B] float, optional): per-item scale on the four
+        cross-stream gates. 0 cuts every reading of the other stream
+        (the same-stream pass never reaches it), so the item runs as
+        two single-stream models -- the unconditional branch of
+        partner guidance. None (default) leaves the gates as they are.
 
         Returns (h_out, aux_loss).
         """
@@ -454,6 +481,9 @@ class M2CDuetBlockLayer(nn.Module):
         # projections; both cross-stream passes read the (possibly
         # corrected) cross tensors, identical to q/k/v at rank 0.
         m_intra, m_cross, m_frame = self._build_masks(clean_len, T_query, q.device)
+        if getattr(self, 'joint_attn', False):
+            return self._joint_forward(h, q, k, v, m_intra, m_cross, m_frame,
+                                       clean_len, partner_keep)
         out_intra = F.scaled_dot_product_attention(q, k, v, attn_mask=m_intra)
         out_cross = F.scaled_dot_product_attention(qx, kx, vx, attn_mask=m_cross)
         # Empty-row guard for mask_frame: clean tokens at frame 0 have only
@@ -492,6 +522,9 @@ class M2CDuetBlockLayer(nn.Module):
         g_c_c = torch.sigmoid(self.gate_c(h_c_for_gate))
         g_f_m = torch.sigmoid(self.gate_fm(h_m_for_gate))
         g_f_c = torch.sigmoid(self.gate_fc(h_c_for_gate))
+        if partner_keep is not None:
+            keep = partner_keep.to(g_c_m.dtype).view(B, 1, 1)
+            g_c_m, g_c_c, g_f_m, g_f_c = (g * keep for g in (g_c_m, g_c_c, g_f_m, g_f_c))
 
         # Cache for diagnostics.
         self._last_gate_c_m = g_c_m.detach()
@@ -509,6 +542,71 @@ class M2CDuetBlockLayer(nn.Module):
         out_flat[:, clean_len::2] = o_m[:, clean_len // 2:]
         out_flat[:, clean_len+1::2] = o_c[:, clean_len // 2:]
 
+        return self._ffn_block(h, out_flat, clean_len)
+
+    def _joint_forward(self, h, q, k, v, m_intra, m_cross, m_frame,
+                       clean_len, partner_keep):
+        """joint_attn: one SDPA over the union of the three masks (see
+        the class docstring), then the per-stream output projections."""
+        assert self.cross_lora_rank == 0, 'joint_attn has no cross-pair projections'
+        B, L, _ = h.shape
+        diag = torch.eye(L, dtype=torch.bool, device=q.device)
+        m_all = m_intra | m_cross | m_frame | diag
+        am = m_all
+        if self.joint_attn == 'gated':
+            # per-row log-gates on the partner's keys: [B, L, 1] each
+            h_m_all = torch.cat([h[:, 0:clean_len:2], h[:, clean_len::2]], dim=1)
+            h_c_all = torch.cat([h[:, 1:clean_len:2], h[:, clean_len+1::2]], dim=1)
+
+            def _rows(t_m, t_c):
+                out = torch.zeros(B, L, 1, device=h.device, dtype=t_m.dtype)
+                out[:, 0:clean_len:2] = t_m[:, :clean_len // 2]
+                out[:, 1:clean_len:2] = t_c[:, :clean_len // 2]
+                out[:, clean_len::2] = t_m[:, clean_len // 2:]
+                out[:, clean_len+1::2] = t_c[:, clean_len // 2:]
+                return out
+
+            lg_x = _rows(F.logsigmoid(self.gate_m(h_m_all)), F.logsigmoid(self.gate_c(h_c_all)))
+            lg_f = _rows(F.logsigmoid(self.gate_fm(h_m_all)), F.logsigmoid(self.gate_fc(h_c_all)))
+            if partner_keep is not None:
+                keep = partner_keep.to(lg_x.dtype).view(B, 1, 1)
+                lk = torch.where(keep > 0, keep.clamp_min(1e-30).log(),
+                                 torch.full_like(keep, float('-inf')))
+                lg_x, lg_f = lg_x + lk, lg_f + lk
+            own = (m_intra | diag).view(1, L, L)
+            x_only = (m_cross & ~diag).view(1, L, L)
+            f_only = m_frame.view(1, L, L)
+            neg = torch.full((B, L, L), float('-inf'), device=h.device, dtype=q.dtype)
+            bias = torch.where(f_only, lg_f.to(q.dtype).expand(B, L, L), neg)
+            bias = torch.where(x_only, lg_x.to(q.dtype).expand(B, L, L), bias)
+            bias = torch.where(own, torch.zeros_like(bias), bias)
+            self._last_gate_c_m = lg_x.detach().exp()
+            u = self._merge_heads(F.scaled_dot_product_attention(
+                q, k, v, attn_mask=bias.unsqueeze(1)))
+            return self._joint_out(h, u, clean_len)
+        if partner_keep is not None:
+            alone = (partner_keep.to(q.device) <= 0).view(B, 1, 1, 1)
+            am = torch.where(alone, (m_intra | diag).view(1, 1, L, L),
+                             m_all.view(1, 1, L, L))
+        u = self._merge_heads(F.scaled_dot_product_attention(q, k, v, attn_mask=am))
+        return self._joint_out(h, u, clean_len)
+
+    def _joint_out(self, h, u, clean_len):
+        """Per-stream output projections of the joint attention output,
+        then the residual and FFN block."""
+        o_m = self.o_m(torch.cat([u[:, 0:clean_len:2], u[:, clean_len::2]], dim=1))
+        o_c = self.o_c(torch.cat([u[:, 1:clean_len:2], u[:, clean_len+1::2]], dim=1))
+        out_flat = torch.zeros_like(h)
+        out_flat[:, 0:clean_len:2] = o_m[:, :clean_len // 2]
+        out_flat[:, 1:clean_len:2] = o_c[:, :clean_len // 2]
+        out_flat[:, clean_len::2] = o_m[:, clean_len // 2:]
+        out_flat[:, clean_len+1::2] = o_c[:, clean_len // 2:]
+        return self._ffn_block(h, out_flat, clean_len)
+
+    def _ffn_block(self, h, out_flat, clean_len):
+        """Residual + LN over the attention output, then the shared MoE
+        FFN (+ residual + LN). Returns (h_out, aux_loss)."""
+        L = h.shape[1]
         h = self.ln_attn(h + self.drop(out_flat))
 
         # Shared MoE FFN over the flat L-length sequence.
@@ -620,18 +718,22 @@ class M2CDuetBlockAttn(RoFormerSymbolicTransformer):
         sos = torch.cat([sos_m, sos_c], dim=1).expand(batch_size, -1, -1)
         return sos.to(device=device, dtype=dtype)
 
-    def _run_global_stack(self, h, T_query):
+    def _run_global_stack(self, h, T_query, partner_keep=None):
         """h: [B, L, H] with L = clean_len + 2*Q (trailing query pairs).
+        partner_keep: see M2CDuetBlockLayer.forward; defaults to the
+        model's _partner_keep (set by the training loss).
 
         Returns (h_global, aux_loss).
         """
+        if partner_keep is None:
+            partner_keep = getattr(self, '_partner_keep', None)
         B, L, H = h.shape
         clean_len = L - 2 * len(normalize_T_query(T_query))
         head_dim = H // self.num_attention_heads
         cos, sin = _rope_freqs(L, head_dim, device=h.device, dtype=h.dtype)
         total_aux = torch.zeros((), device=h.device, dtype=h.dtype)
         for layer in self.global_layers:
-            h, aux = layer(h, T_query, cos, sin, clean_len)
+            h, aux = layer(h, T_query, cos, sin, clean_len, partner_keep=partner_keep)
             total_aux = total_aux + aux
         return h, total_aux / max(len(self.global_layers), 1)
 

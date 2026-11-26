@@ -214,6 +214,13 @@ class SimpleMoEFFN(nn.Module):
 
     Any of these features makes forward() REQUIRE modality_ids; callers
     that do not know the layout cannot enable them.
+
+    z_coef (router z-loss, ST-MoE, 2026-11-25; set by the model): adds
+    z_coef * mean(logsumexp(router logits)^2) to the returned aux loss,
+    over the same tokens as the balance loss, so the router logits stay
+    small (no saturated, collapsing routes). The model sets z_coef =
+    moe_z_loss_weight / aux_loss_weight, so the trainer's single
+    aux_loss_weight multiply gives the z term its own weight. 0 = off.
     """
 
     def __init__(self, hidden_size, intermediate_size, num_experts, topk,
@@ -226,6 +233,7 @@ class SimpleMoEFFN(nn.Module):
         self.num_experts = num_experts
         self.topk = topk
         self.expert_lora_rank = int(expert_lora_rank)
+        self.z_coef = 0.0
         self.modality_gates = bool(modality_gates)
         self.modality_hard_route = bool(modality_hard_route)
         if self.modality_hard_route:
@@ -428,6 +436,12 @@ class SimpleMoEFFN(nn.Module):
             f = f / max(N_aux, 1)
             P = probs_aux.mean(dim=0) if N_aux > 0 else probs.mean(dim=0) * 0.0
             aux_loss = self.num_experts * (f * P).sum()
+        if self.z_coef > 0:
+            lz = logits if aux_mask is None else logits[sel_all]
+            z = torch.logsumexp(lz.float(), dim=-1).pow(2).mean() if lz.numel() \
+                else logits.sum() * 0.0
+            self._last_z_loss = z.detach()
+            aux_loss = aux_loss + self.z_coef * z.to(aux_loss.dtype)
 
         return out_flat.view(B, L, H), aux_loss
 
