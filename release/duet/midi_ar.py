@@ -244,9 +244,10 @@ def sample(args):
     """N pieces as MIDI: <out>/<n>_{gen,prompt_orig}.mid; with --prompt_seconds, continuations of EVAL pieces."""
     from preprocess_time_grid import write_midi
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = MidiAR.load_from_checkpoint(args.ckpt, map_location='cpu', weights_only=False).to(device).eval()
-    if args.codec:  # the codec weights travel in the AR checkpoint; this only overrides its read-out source
-        model.codec = midi_rvq.load(args.codec, device)
+    # the codec's weights travel in the AR checkpoint; --codec only names a file to build it from when the
+    # path recorded at training time does not exist here (e.g. on another machine)
+    over = {'codec_ckpt': args.codec} if args.codec else {}
+    model = MidiAR.load_from_checkpoint(args.ckpt, map_location='cpu', weights_only=False, **over).to(device).eval()
     os.makedirs(args.out, exist_ok=True)
     n_frames = int(args.seconds * 1000 / CODEC_MS)
     P = int(args.prompt_seconds * 1000 / CODEC_MS)
@@ -264,7 +265,8 @@ def sample(args):
                      int(a['velocity']), 0) for a in notes
                     if a['program'] != 127 and a['onset_ms'] < n_frames * CODEC_MS]
             write_midi(orig, os.path.join(args.out, f'{n:02d}_piece{i}_orig.mid'))
-        with torch.autocast(device, dtype=torch.bfloat16, enabled=device == 'cuda'):
+        half = torch.bfloat16 if device == 'cuda' and torch.cuda.is_bf16_supported() else torch.float16
+        with torch.autocast(device, dtype=half, enabled=device == 'cuda'):
             codes = model.generate(n_frames, prompt, temperature=args.temperature, top_k=args.top_k)
         est = midi_rvq.decode_piece(model.codec, codes[0].cpu().numpy(), device, threshold=args.threshold,
                                     min_gap=args.min_gap, frame_threshold=args.frame_threshold)
@@ -301,7 +303,7 @@ def main():
     t.add_argument('--wandb', type=int, default=0)
     s = sub.add_parser('sample')
     s.add_argument('--ckpt', required=True)
-    s.add_argument('--codec', default=None, help='use this codec checkpoint instead of the one inside --ckpt')
+    s.add_argument('--codec', default=None, help='codec checkpoint to build the model from when the training-time path is missing (weights still come from --ckpt)')
     s.add_argument('--data', default=None, help='corpus for prompts (with --prompt_seconds)')
     s.add_argument('--out', required=True)
     s.add_argument('--n', type=int, default=8)
